@@ -21,6 +21,7 @@ package pzopt;
  *       square re-derives its light from the native's values, every chunk texture bakes again); memoryTintPct is read
  *       every frame; colorGrading, colorGradingPct, colorGradingNightPct: {@link Grade#reconfigure} (a new LUT).</li>
  *   <li>pplTorchFeetGlow: read every frame by {@link PixelLight} (the only per-pixel lighting key that is live).</li>
+ *   <li>occludedOutlineColour: read every frame by {@link OccludedOutline}; no shader or cache rebuild.</li>
  * </ul>
  */
 final class Enhancements {
@@ -29,7 +30,7 @@ final class Enhancements {
 
    /** Is this key one of the Enhancements tab's (as opposed to the Profiler tab's overlay keys)? */
    static boolean owns(String key) {
-      return key.startsWith("upscaler") || key.startsWith("dlss") || key.startsWith("fsr") || key.startsWith("hdr")
+      return key.startsWith("occluded") || key.startsWith("upscaler") || key.startsWith("dlss") || key.startsWith("fsr") || key.startsWith("hdr")
          || key.equals("ambientOcclusion") || key.startsWith("ao") || key.startsWith("sunShadow") || key.startsWith("reflection")
          || key.startsWith("darknessFloor") || key.startsWith("memory") || key.startsWith("colorGrading")
          || key.startsWith("moonShadow") || key.startsWith("cloud") || key.equals("pplTorchFeetGlow")
@@ -40,7 +41,7 @@ final class Enhancements {
    static void apply(String key) {
       switch (key) {
          case "fsrSharpnessPct", "upscalerObjectMv", "dlssWaterCurrent", "dlssWaterHistoryPct", "reflections", "reflectionStrengthPct", "reflectionPuddles",
-               "bloodWet", "bloodWetMinutes", "bloodReflectPct", "bloodSheenPct", "bloodGlintPct" -> {
+               "bloodWet", "bloodWetMinutes", "bloodReflectPct", "bloodSheenPct", "bloodGlintPct", "occludedOutlineColour" -> {
             // read every frame
          }
          case "upscaler", "upscalerQuality", "upscalerScalePct", "dlssPreset", "dlssOutputPct", "dlssOutputFilter", "dlssSharpen" ->

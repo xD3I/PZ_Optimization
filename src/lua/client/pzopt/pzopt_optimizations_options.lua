@@ -858,6 +858,39 @@ local ENHANCEMENT_SECTIONS = {
         },
     },
     {
+        title = "Occluded zombie outlines",
+        entries = {
+            {
+                key = "occludedZombieOutlines",
+                label = "Outline hidden parts of visible zombies",
+                tip = "Outlines only the parts hidden from the camera by opaque scenery. Your character must currently see the zombie; this does not reveal unseen or remembered zombies. Transparent glass and standard vehicle-window materials do not count as opaque occluders; opaque custom glass artwork needs material support. Windows and translucent tiles use their per-frame rendering path while this is enabled. Requires OpenGL 4.3 and the modern chunk renderer; adds GPU work and render buffers. Restart to apply.",
+            },
+            {
+                key = "occludedOutlineIgnorePlants",
+                label = "Hidden outline: ignore grass and bushes",
+                tip = "On by default. Grass and bushes do not trigger hidden zombie outlines. Trees, walls and vehicles still do. Keeps vegetation cached and stores separate occlusion depth, including solid scenery behind plants. Adds 4 bytes per cached terrain texel and intermediate scene texel, plus GPU work during bakes and chunk compositing. Off preserves the existing behaviour. Restart to apply.",
+            },
+            {
+                key = "occludedOutlineWidth",
+                label = "Hidden outline: width (render pixels)",
+                choices = { "1", "2", "3", "4" },
+                tip = "Contour width at the world rendering resolution. Upscaling enlarges these pixels. Only hidden contours are drawn, not a line across the obstruction's edge. Restart to apply.",
+            },
+            {
+                key = "occludedOutlineColour",
+                label = "Hidden outline: colour",
+                colour = true,
+                tip = "Choose the hidden contour colour with the colour picker, then press Apply. The colour updates immediately, without restarting. Opacity is controlled separately. Weapon-target and interaction outline settings are unchanged.",
+            },
+            {
+                key = "occludedOutlineOpacityPct",
+                label = "Hidden outline: opacity (%)",
+                choices = { "25", "50", "70", "100" },
+                tip = "Maximum opacity; the character's own fading still applies. Restart to apply.",
+            },
+        },
+    },
+    {
         title = "Wet blood (fresh blood reflects and catches the light)", clip = "hdr",
         entries = {
             { key = "bloodWet", label = "Wet blood",
@@ -987,6 +1020,9 @@ local ENHANCEMENT_SECTIONS = {
 -- The Enhancements tab's keys apply as soon as Apply is pressed (Java: Config's live reload, pzopt.Enhancements), except
 -- the two HDR output switches: on Linux they pick the window the game is started with.
 local NEXT_LAUNCH_ONLY = { hdr = true, hdrAuto = true,
+    -- Outline colour is live; the other outline controls still require startup configuration.
+    occludedZombieOutlines = true, occludedOutlineIgnorePlants = true,
+    occludedOutlineWidth = true, occludedOutlineOpacityPct = true,
     -- per-pixel lighting: read once at start-up (the chunk composite shader is patched when the game loads it)
     pixelLight = true, pplAnalytic = true, pplPointLights = true, pplNormals = true, pplWrapPct = true, pplSmooth = true,
     pplWetSpecular = true, pplSpecPct = true, pplShadows = true,
@@ -1455,6 +1491,11 @@ local EFFECTS = {
     sunShadowRate = { render = 1, gpu = 1 },
     cloudShadows = { gpu = 1 },
     reflections = { gpu = 1, vram = 1 },
+    occludedZombieOutlines = { gpu = 1, cpu = 1, vram = 1 },
+    occludedOutlineIgnorePlants = { gpu = 1, vram = 1 },
+    occludedOutlineWidth = { gpu = 1 },
+    occludedOutlineColour = {},
+    occludedOutlineOpacityPct = {},
     bloodWet = { gpu = 1, cpu = 1 },
     bloodWetMinutes = { gpu = 1 },
     bloodReflectPct = {},
@@ -2480,6 +2521,120 @@ local function addBoolOption(self, entry, splitpoint, y, BUTTON_HGT)
     return option
 end
 
+-- Colour controls store RGB hex; opacity remains a separate setting.
+local function colourHex(value)
+    return string.upper((value or ""):match("^%s*#?(%x%x%x%x%x%x)%s*$") or "FFC740")
+end
+
+local function colourRGB(value)
+    local hex = colourHex(value)
+    return {
+        r = tonumber(hex:sub(1, 2), 16) / 255,
+        g = tonumber(hex:sub(3, 4), 16) / 255,
+        b = tonumber(hex:sub(5, 6), 16) / 255,
+        a = 1,
+    }
+end
+
+local function addColourOption(self, entry, splitpoint, y)
+    local p = perf()
+    local pinnedBy = p:getPzoptOptionPinnedBy(entry.key)
+    local option
+    local function setValue(value)
+        local button = option.control
+        button.pzoptValue = value == "" and "" or colourHex(value)
+        button.backgroundColor = colourRGB(value ~= "" and value or p:getPzoptOptionDefault(entry.key))
+        button.backgroundColorMouseOver = button.backgroundColor
+    end
+    local function openPicker(screen, button)
+        if pinnedBy ~= "" then
+            return
+        end
+        require("ISUI/ISSliderPanel")
+        require("ISUI/ISColorPickerHSB")
+        if screen.pzoptColourPicker then
+            screen.pzoptColourPicker:removeSelf()
+        end
+        local rgb = button.backgroundColor
+        local picker = ISColorPickerHSB:new(0, 0, ColorInfo.new(rgb.r, rgb.g, rgb.b, 1))
+        picker:initialise()
+        picker.resetFocusTo = button.parent
+        picker:setPickedFunc(function(_, colour)
+            local function channel(value)
+                return math.floor(math.max(0, math.min(1, value)) * 255 + 0.5)
+            end
+            setValue(string.format("%02X%02X%02X", channel(colour.r), channel(colour.g), channel(colour.b)))
+            option:invokeOnChangeEvent()
+            if picker.parent then
+                picker:removeSelf()
+            end
+        end)
+        local removeSelf = picker.removeSelf
+        picker.removeSelf = function(o)
+            screen.pzoptColourPicker = nil
+            removeSelf(o)
+        end
+        -- The popup belongs to the options screen, not the scrolling settings panel.
+        local prerender = picker.prerender
+        picker.prerender = function(o)
+            if not button:getIsVisible() or not button.parent:getIsVisible() then
+                o:removeSelf()
+                return
+            end
+            prerender(o)
+        end
+        screen:addChild(picker)
+        local x = button:getAbsoluteX() - screen:getAbsoluteX()
+        local top = button:getAbsoluteY() - screen:getAbsoluteY()
+        local py = top + button:getHeight() + 1
+        if py + picker:getHeight() > screen:getHeight() then
+            py = top - picker:getHeight() - 1
+        end
+        picker:setX(math.max(0, math.min(x, screen:getWidth() - picker:getWidth())))
+        picker:setY(math.max(0, py))
+        picker:setCapture(true)
+        picker:setVisible(true)
+        picker:bringToTop()
+        screen.pzoptColourPicker = picker
+        local joypad = JoypadState.getMainMenuJoypad()
+        if joypad then
+            joypad.focus = picker
+        end
+    end
+    local button = self:addColorButton(splitpoint, y, entry.label, colourRGB(""), openPicker)
+    button.tooltip = tooltipFor(entry, pinnedBy)
+    button:setEnable(pinnedBy == "")
+    option = GameOption:new("pzopt." .. entry.key, button)
+    function option.toUI()
+        setValue(pinnedBy ~= "" and p:getPzoptOption(entry.key) or p:getPzoptOptionSaved(entry.key))
+    end
+    function option.apply(o)
+        if pinnedBy ~= "" then
+            return
+        end
+        local value = o.control.pzoptValue
+        p:setPzoptOption(entry.key, value)
+        afterStore(o, entry, value ~= "" and value or p:getPzoptOptionDefault(entry.key))
+    end
+    function option.pzoptReset()
+        if pinnedBy == "" then
+            setValue("")
+        end
+    end
+    function option.pzoptSet(_, value)
+        if pinnedBy == "" then
+            setValue(value or "")
+        end
+    end
+    function option.pzoptCurrent(o)
+        return o.control.pzoptValue ~= "" and ("#" .. o.control.pzoptValue)
+            or ("#" .. colourHex(p:getPzoptOptionDefault(entry.key)) .. " (default)")
+    end
+    option.pzoptKey = entry.key
+    self.gameOptions:add(option)
+    return option
+end
+
 local function addIntOption(self, entry, splitpoint, y, comboWidth)
     local p = perf()
     local pinnedBy = p:getPzoptOptionPinnedBy(entry.key)
@@ -3245,6 +3400,9 @@ local function buildSettingsPage(self, page)
                     if entry.bezier then
                         return addBezierOption(self, entry, splitpoint, y, comboWidth, BUTTON_HGT)
                     end
+                    if entry.colour then
+                        return addColourOption(self, entry, splitpoint, y)
+                    end
                     if entry.choices then
                         return addIntOption(self, entry, splitpoint, y, comboWidth)
                     end
@@ -3482,6 +3640,7 @@ local function install()
         end
         stockSetVisible(self, bVisible, ...)
         if not bVisible then
+            if self.pzoptColourPicker then self.pzoptColourPicker:removeSelf() end
             pcall(function() getPerformance():releasePzoptGifs() end)
         end
     end

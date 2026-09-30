@@ -1017,6 +1017,7 @@ public final class AnimatedModel extends AnimationVariableSource implements IAni
       GL11.glAlphaFunc(516, 0.0F);
       GL11.glDisable(3089);
       GL11.glDepthMask(true);
+      if (pzopt.OccludedOutline.isAtlasLighting()) GL11.glDisable(3042); // pzopt: store surface light independently of material alpha; native depth/discard still select the surface
    }
 
    private void EndCharacter() {

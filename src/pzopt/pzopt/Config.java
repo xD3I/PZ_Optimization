@@ -1181,6 +1181,12 @@ public final class Config {
    public static final String HDR_ENCODE = string("hdrEncode", "auto").toLowerCase(java.util.Locale.ROOT); // on: ext_linear description + encode pass at the swap (standard, exact roll-off); off: no description, the compositor's own SDR decode shows the FP16 values above 1.0 (KWin; ~0.3 ms a frame cheaper at 4K); auto: off on KDE Plasma, on elsewhere
    public static volatile boolean SSR; // screen-space reflections of the scene in the water and the puddles (pzopt.Ssr)
    public static volatile int SSR_STRENGTH_PCT; // how strongly the water mirrors the scene, % (a deep river at the camera's angle reflects ~6 % physically)
+   // Outline shader/bake policy, width and opacity require restart; colour reloads live below.
+   public static final boolean OCCLUDED_OUTLINES = bool("occludedZombieOutlines", false);
+   public static final boolean OCCLUDED_OUTLINE_IGNORE_PLANTS = bool("occludedOutlineIgnorePlants", true); // cached depth without grass/bushes; trees retain their sway metadata
+   public static final int OCCLUDED_OUTLINE_WIDTH = Math.max(1, Math.min(4, integer("occludedOutlineWidth", 1)));
+   public static final int OCCLUDED_OUTLINE_OPACITY = Math.max(0, Math.min(100, integer("occludedOutlineOpacityPct", 70)));
+   public static volatile String OCCLUDED_OUTLINE_COLOUR; // RGB hex; read by the outline composite each frame
    public static volatile boolean BLOOD_WET; // wet blood (pzopt.BloodWet): fresh floor splats reflect the scene (with reflections on) and catch the sun and the lamps (a GGX sheen; with HDR output, glints above white) until they dry (live)
    public static volatile int BLOOD_WET_MINUTES; // wet blood: game minutes a splat stays wet (drying from its edges in) (live)
    public static volatile int BLOOD_REFLECT_PCT; // wet blood: strength of the reflection in the film, % of the water's Fresnel (live)
@@ -1334,6 +1340,7 @@ public final class Config {
       SSR = bool("reflections", false);
       SSR_STRENGTH_PCT = Math.max(0, Math.min(100, integer("reflectionStrengthPct", 45)));
       SSR_PUDDLES = bool("reflectionPuddles", true);
+      OCCLUDED_OUTLINE_COLOUR = string("occludedOutlineColour", "FFC740");
       BLOOD_WET = bool("bloodWet", false);
       BLOOD_WET_MINUTES = Math.max(1, integer("bloodWetMinutes", 120));
       BLOOD_REFLECT_PCT = Math.max(0, Math.min(200, integer("bloodReflectPct", 100)));
@@ -1488,7 +1495,7 @@ public final class Config {
       String[][] groups = {
          // the switch of each feature on the Enhancements tab; the rest of each section only tunes it
          {"enhancementsEnabled", "upscaler", "off", "spriteFilter", "stock", "hdr", "false", "hdrAuto", "false",
-            "ambientOcclusion", "false", "sunShadows", "false", "reflections", "false", "bloodWet", "false", "darknessFloorPct", "0",
+            "ambientOcclusion", "false", "sunShadows", "false", "reflections", "false", "bloodWet", "false", "occludedZombieOutlines", "false", "darknessFloorPct", "0",
             "memoryTint", "false", "colorGrading", "false", "pixelLight", "false", "godRays", "false", "foliageSway", "false", "relief", "false"},
          // everything that makes the overlay measure or show (Overlay.configure; harness runs still measure)
          {"profilerEnabled", "overlaySampling", "false", "overlay", "false", "overlayLog", "false"},

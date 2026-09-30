@@ -101,10 +101,14 @@ public final class FogPass {
     * On any failure the renderbuffer is put back. Textures of FBOs that no longer exist are deleted here.
     */
    public static void sceneDepthAsTexture(zombie.core.textures.TextureFBO fbo, Texture tex) {
-      if (!Overrides.enabled() || !(Config.FOG_PASS || Config.AO && "screen".equals(Config.AO_MODE) || Config.PIXEL_LIGHT || Config.SSR || Config.GOD_RAYS) || Config.FOG_DEPTH_COPY || fbo == null) { // ambient occlusion reads it in place too
+      boolean ordinaryDepth = !Config.FOG_DEPTH_COPY && (Config.FOG_PASS || Config.AO && "screen".equals(Config.AO_MODE)
+         || Config.PIXEL_LIGHT || Config.SSR || Config.GOD_RAYS);
+      if (!Overrides.enabled() || (!ordinaryDepth && !OccludedOutline.depthTextureNeeded()) || fbo == null) {
          return;
       }
       zombie.core.opengl.RenderThread.invokeOnRenderContext(() -> {
+         // FBO construction can originate on the game thread. Query capabilities only on the render thread.
+         if (!ordinaryDepth && !org.lwjgl.opengl.GL.getCapabilities().OpenGL43) return;
          int id = fboId(fbo);
          if (id <= 0) {
             return;

@@ -429,6 +429,11 @@ Heat haze is the same UV perturbation as [screen-space refraction](https://devel
 a depth-greater pass on the character models is enough for a silhouette; screen-door dithering under TAA converges
 to real translucency and could replace the hard cutaway pops. Shows what stock hides, so opt-in and out of parity.
 
+The [occluded zombie outlines plan](plan-occluded-zombie-outlines.md) develops the outline portion:
+character-visible zombies only, hidden contours rather than whole-body highlighting, and glass excluded
+as an occluder in the first version. It requires verification of the renderer's depth and material paths;
+dithered cutaways are outside that feature's scope.
+
 *Visual example.* Silhouettes through occluders (The Last of Us enemy outline) and comic outlines in Alexander Ameye's
 [outline survey](https://ameye.dev/notes/rendering-outlines/); screen-door dither instead of a pop in Cesium's
 [smoother LOD transitions](https://cesium.com/blog/2022/10/20/smoother-lod-transitions-in-cesium-for-unreal/) (Fig 1.0 vs 2.0 GIFs).

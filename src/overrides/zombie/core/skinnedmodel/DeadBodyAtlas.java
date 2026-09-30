@@ -586,6 +586,7 @@ public final class DeadBodyAtlas {
       public final int entryHeight;
       public Texture tex;
       public Texture depth;
+      public int pzoptLighting; // pzopt: albedo-independent per-pixel lighting, owned by this atlas
       public final ArrayList<DeadBodyAtlas.AtlasEntry> entryList = new ArrayList<>();
       public boolean clear = true;
 
@@ -651,6 +652,8 @@ public final class DeadBodyAtlas {
          }
 
          this.depth = null;
+         pzopt.OccludedOutline.deleteAtlasLighting(this.pzoptLighting); // pzopt: release with the native atlas
+         this.pzoptLighting = 0; // pzopt
       }
    }
 
@@ -989,6 +992,18 @@ public final class DeadBodyAtlas {
          }
       }
 
+      /** pzopt: queues an ordinary atlas draw with an independent, already-snapshotted outline eligibility bit. */
+      public void pzoptRenderWithOutline(boolean outline, float ox, float oy, float oz, float x, float y, float r, float g, float b, float a) { // pzopt
+         if (!outline || !PerformanceSettings.fboRenderChunk) { // pzopt
+            this.render(ox, oy, oz, x, y, r, g, b, a); // pzopt
+            return; // pzopt
+         } // pzopt
+         DeadBodyAtlas.BodyTextureDepthDrawer drawer = DeadBodyAtlas.s_BodyTextureDepthDrawerPool.alloc(); // pzopt
+         drawer.init(this, ox, oy, oz, x, y, r, g, b, a); // pzopt
+         drawer.pzoptOutline = true; // pzopt
+         SpriteRenderer.instance.drawGeneric(drawer); // pzopt
+      } // pzopt
+
       public void renderObjectPicker(float sx, float sy, ColorInfo lightInfo, IsoGridSquare square, IsoObject object) {
          if (this.entry.ready) {
             IsoObjectPicker.Instance
@@ -998,6 +1013,7 @@ public final class DeadBodyAtlas {
    }
 
    private static final class BodyTextureDepthDrawer extends GenericDrawer {
+      boolean pzoptOutline; // pzopt: belongs to this queued draw, not the shared atlas entry
       DeadBodyAtlas.BodyTexture bodyTexture;
       float ox;
       float oy;
@@ -1012,6 +1028,7 @@ public final class DeadBodyAtlas {
       DeadBodyAtlas.BodyTextureDepthDrawer init(
          DeadBodyAtlas.BodyTexture bodyTexture, float originX, float originY, float originZ, float x, float y, float r, float g, float b, float a
       ) {
+         this.pzoptOutline = false; // pzopt: pooled corpse/character draws must not inherit a previous zombie's outline
          this.bodyTexture = bodyTexture;
          this.ox = originX;
          this.oy = originY;
@@ -1076,6 +1093,7 @@ public final class DeadBodyAtlas {
                vbor.cmdShader1f("zDepthBlendZ", depthNear);
                vbor.cmdShader1f("zDepthBlendToZ", depthFar);
                vbor.addQuad(x1, y1, tex.getXStart(), tex.getYStart(), x1 + w, y1 + h, tex.getXEnd(), tex.getYEnd(), 0.0F, this.r, this.g, this.b, this.a);
+               if (this.pzoptOutline) pzopt.OccludedOutline.atlas(tex, entry.atlas.depth, entry.atlas.pzoptLighting, this.r, this.g, this.b, x1, y1, w, h, depthNear, depthFar, this.a); // pzopt: retain exact atlas mapping for the contour pass
                vbor.endRun();
                vbor.flush();
                GL13.glActiveTexture(33985);
@@ -1428,9 +1446,23 @@ public final class DeadBodyAtlas {
             if (this.animatedModel.isRendered()) {
                DeadBodyAtlas.instance.assignEntryToAtlas(this.entry, this.entryW, this.entryH);
                DeadBodyAtlas.instance.toBodyAtlas(this);
+               this.entry.atlas.pzoptLighting = pzopt.OccludedOutline.captureAtlasLighting( // pzopt: reuse the prepared pose, never sample foreground scenery
+                  this.entry.atlas.pzoptLighting, this.entry.atlas.tex.getWidth(), this.entry.atlas.tex.getHeight(), // pzopt
+                  this.entry.x, this.entry.y, this.entry.w, this.entry.h, ModelManager.instance.bitmap, this::pzoptRenderLighting); // pzopt
             }
          }
       }
+
+      private void pzoptRenderLighting() { // pzopt: lighting-only atlas replay; normal diffuse/depth were already copied
+         TextureFBO bitmap = ModelManager.instance.bitmap; // pzopt
+         bitmap.startDrawing(true, true); // pzopt
+         try { // pzopt
+            GL11.glViewport(0, 0, bitmap.getWidth(), bitmap.getHeight()); // pzopt
+            this.animatedModel.DoRender(0, 0, bitmap.getTexture().getWidth(), bitmap.getTexture().getHeight(), 42.75F, this.animPlayerAngle); // pzopt
+         } finally { // pzopt
+            bitmap.endDrawing(); // pzopt
+         } // pzopt
+      } // pzopt
 
       public void postRender() {
          if (this.animatedModel != null) {

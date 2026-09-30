@@ -2270,7 +2270,7 @@ public final class Sway {
       GL20.glShaderSource(vs, TREE_VERT);
       GL20.glCompileShader(vs);
       int fs = GL20.glCreateShader(GL20.GL_FRAGMENT_SHADER);
-      GL20.glShaderSource(fs, TREE_FRAG);
+      GL20.glShaderSource(fs, OutlinePlantDepth.patchShader("pzoptPlantTree.frag", TREE_FRAG));
       GL20.glCompileShader(fs);
       int p = GL20.glCreateProgram();
       GL20.glAttachShader(p, vs);
@@ -2345,6 +2345,7 @@ public final class Sway {
       }
       b.flip();
       GL20.glUseProgram(treeProgram);
+      OutlinePlantDepth.material(true); // Tree batches bypass VBORenderer; keep them in cached occlusion depth.
       org.joml.Matrix4f prj = Core.getInstance().projectionMatrixStack.isEmpty() ? null : Core.getInstance().projectionMatrixStack.peek();
       org.joml.Matrix4f mv = Core.getInstance().modelViewMatrixStack.isEmpty() ? null : Core.getInstance().modelViewMatrixStack.peek();
       if (prj == null || mv == null) {

@@ -347,6 +347,7 @@ public final class Model extends Asset {
    }
 
    public void DrawChar(ModelSlotRenderData slotData, ModelInstanceRenderData instData) {
+      pzopt.OccludedOutline.modelMaterial(slotData); // pzopt: only world draws contribute opaque depth, never atlas/imposter renders
       if (!DebugOptions.instance.character.debug.render.skipCharacters.getValue()) {
          if (!(slotData.alpha < 0.01F)) {
             if (slotData.animPlayer != null) {
@@ -516,6 +517,7 @@ public final class Model extends Asset {
    }
 
    public void DrawVehicle(ModelSlotRenderData slotData, ModelInstanceRenderData instData) {
+      pzopt.OccludedOutline.modelMaterial(slotData); // pzopt: reject offscreen vehicle thumbnail and shadow draws
       if (!DebugOptions.instance.model.render.skipVehicles.getValue()) {
          ModelInstance inst = instData.modelInstance;
          float ambientR = slotData.ambientR;

@@ -831,6 +831,7 @@ public final class VBORenderer {
          this.commandsReady.invoke();
          this.commandsReady.clear();
       }
+      pzopt.OccludedOutline.framebuffer(zombie.core.textures.TextureFBO.lastID); // pzopt: restore world capture after the VBO batch
    }
 
    private void useShaderProgram(ShaderProgram shaderProgram) {
@@ -892,6 +893,7 @@ public final class VBORenderer {
          GL11.glEnable(2929);
       }
 
+      pzopt.OccludedOutline.vboMaterial(this.forceDepthTest == Boolean.TRUE || run.depthTest); // pzopt: screen-space overlays are not opaque world geometry
       this.useShaderProgram(run.shaderProgram);
       if (run.shaderProgram != null) {
          run.shaderProgram.setValue("userDepth", this.forceUserDepth == null ? run.userDepth : this.forceUserDepth);

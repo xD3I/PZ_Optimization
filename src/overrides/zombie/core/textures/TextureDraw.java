@@ -51,6 +51,7 @@ public final class TextureDraw {
    }
 
    public static float nextZ;
+   public boolean pzoptOccludedOutline; // pzopt: this player's current zombie visibility, snapshotted on the game thread
    public int pzoptShadowTile = -1; // pzopt: sunShadowMeshes, DrawModel: the caster's tile of the sun shadow atlas (-1: none)
    public float pzoptShadowX, pzoptShadowY, pzoptShadowZ, pzoptShadowHalf; // pzopt: its centre (world, z metric) and half size
    public int pzoptLampN; // pzopt: sunShadowLampMeshes, DrawModel: the caster's lamp views to draw (ShadowAtlas.renderLamps)
@@ -295,6 +296,7 @@ public final class TextureDraw {
    public static void drawModel(TextureDraw texd, ModelSlot modelSlot) {
       texd.type = TextureDraw.Type.DrawModel;
       texd.a = modelSlot.id;
+      texd.pzoptOccludedOutline = pzopt.OccludedOutline.eligible(modelSlot.character, zombie.iso.IsoCamera.frameState.playerIndex); // pzopt: do not read mutable visibility on the render thread
       texd.b = pzopt.ObjectMotion.record(modelSlot); // pzopt: upscaler, the stencil id of the model's object motion (0 = none)
       pzopt.CapsuleShadow.tileFor(modelSlot, texd); // pzopt: sunShadowMeshes, the caster's atlas tile for its sun draw (-1 none)
       // pzopt: charDrawPrep. The draw data of a zombie the workers already built and initialised this frame
@@ -570,6 +572,7 @@ public final class TextureDraw {
                   uniforms.invokeAll();
                } // pzopt
             }
+            pzopt.OutlinePlantDepth.program(this); // pzopt: bind the filtered input only after native shader remapping and uniforms
             break;
          case glLoadIdentity:
             GL11.glLoadIdentity();
@@ -613,7 +616,13 @@ public final class TextureDraw {
                   pzopt.ObjectMotion.beginStencil(pzoptMotionId);
                }
                synchronized (this.drawer) {
-                  this.drawer.render(this);
+                  boolean pzoptCharacter = this.drawer instanceof ModelSlotRenderData slot && slot.character != null; // pzopt: characters are outline candidates, not occluders
+                  if (pzoptCharacter) pzopt.OccludedOutline.pauseCapture(); // pzopt: keep attached models and framebuffer restores inside the exclusion
+                  try { // pzopt
+                     this.drawer.render(this);
+                  } finally { // pzopt: restore capture for subsequent world items and vehicles, even after a failed draw
+                     if (pzoptCharacter) pzopt.OccludedOutline.resumeCapture(); // pzopt
+                  } // pzopt
                }
                if (pzoptMotionId > 0) {
                   pzopt.ObjectMotion.endStencil();
@@ -625,6 +634,7 @@ public final class TextureDraw {
                   pzopt.ShadowAtlas.renderLamps(this); // pzopt
                } // pzopt
                pzopt.RenderScale.afterModelDraw(); // pzopt: upscaler, an imposter card render restores an integer viewport: put the jittered one back
+               pzopt.OccludedOutline.model(this); // pzopt: retain the prepared pose until the frame's pre-fog contour pass
             }
             break;
          case DrawSkyBox:
@@ -758,7 +768,12 @@ public final class TextureDraw {
             }
             break;
          case RenderQueued:
-            RenderList.RenderOpaque();
+            pzopt.OccludedOutline.pauseCapture(); // pzopt: queued character instances must not occlude other characters
+            try { // pzopt
+               RenderList.RenderOpaque();
+            } finally { // pzopt: later scenery and vehicles still contribute opaque depth
+               pzopt.OccludedOutline.resumeCapture(); // pzopt
+            } // pzopt
             RenderList.Reset();
             break;
          case DrawImGui:

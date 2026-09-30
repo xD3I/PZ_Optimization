@@ -61,6 +61,12 @@ public class UserOptionsTest {
       Check.check(Config.FSR_SHARPNESS_PCT == 40, "fsrSharpnessPct applied now: " + Config.FSR_SHARPNESS_PCT);
       UserOptions.set("fsrSharpnessPct", "");
       Check.check(Config.FSR_SHARPNESS_PCT == 80, "fsrSharpnessPct default back now");
+      // The same save path used by Apply updates the colour consumed by the next composite.
+      UserOptions.set("occludedOutlineColour", "12ABEF");
+      Check.check(OccludedOutline.currentColour() == 0x12ABEF, "outline colour applied without restart");
+      UserOptions.set("occludedOutlineColour", "345678");
+      Check.check(OccludedOutline.currentColour() == 0x345678, "cached outline colour follows a second Apply");
+      UserOptions.set("occludedOutlineColour", "");
       System.out.println("UserOptionsTest: ok");
    }
 }

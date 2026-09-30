@@ -5539,3 +5539,124 @@ patched.
   `Relief.defines()`), not through a patch.
 - `pzopt.CloudShadow.chunkDraw`: the per-texture direct-sun share uniforms are also set while no cloud shades
   (`Relief.wantsSunShare`, composite mode only; clear sky left them at 0).
+
+## Cached outline depth without grass and bushes
+
+`ShaderUnit.compile` applies `OutlinePlantDepth.recordAndPatch` after recording the uninstrumented
+sway source. The optional cache shader writes independent packed depth/tree attributes during bakes
+and filtered depth during chunk composites. GLSL extension directives remain before generated
+uniform declarations. `OccludedOutlineShaders.ownsUniform` recognizes the cache's three exact private
+uniform names in addition to the original outline uniforms.
+
+`TextureFBO.startDrawing` and `endDrawing` maintain owner/clear scope, and both destruction paths
+release paired caches. `TextureDraw.run` binds the filtered input after final program remapping and
+uniform uploads. The existing VBORenderer hook also sets cached material scope. The raw sway tree
+shader/batch is covered separately because it bypasses VBORenderer.
+
+`FBORenderCell` brackets low-vegetation object rendering with balanced queued capture pauses and
+marks composite begin/end. Trees take precedence over vegetation flags. Native object rendering and
+bake routing are not changed. `OccludedOutline` seeds from the filtered scene when the restart-required
+`occludedOutlineIgnorePlants` setting is enabled, and otherwise retains the previous scene input.
+See [cache layout, state ownership, costs and tests](outline-low-vegetation.md).
+
+## Character occlusion and carried-corpse eligibility
+
+`TextureDraw.run` pauses outline depth capture around immediate character model draws and the queued
+character-instance flush, restoring capture in `finally` blocks so subsequent scenery/vehicle draws
+and failure paths retain the correct state. Characters and their attached models still render normal
+colour and scene depth. `DeadBodyAtlas` is excluded from material instrumentation; its candidate
+silhouette and lighting paths are unchanged. Shared basic model shaders still support world items.
+
+`OccludedOutline.eligible` also rejects `IsoZombie.isReanimatedForGrappleOnly()`. Vanilla temporarily
+reanimates a corpse into a living zombie when carrying/dragging it, so checking only `isDead()` was
+insufficient. This is separate from deciding which foreground objects can trigger an outline.
+
+Regression checks cover character colour/depth preservation without opaque capture, scenery capture
+behind a nearer character, atlas exclusion, and the native carried-corpse flag in compiled eligibility.
+
+## KI5 vehicle outline capture and daylight calibration
+
+The material filter now recognizes DAMNLib's three exact body/wheel shader names used by KI5.
+For its body shaders, glass exclusion uses only the six window zones: DAMNLib's `windowAlpha`
+also includes an opaque roof zone for colour/reflection purposes. Actual mod-source GPU tests
+cover opaque bodywork, roofs, wheels, glass and fading. The earlier runtime diagnostic was never
+installed and has been removed. No additional game-class override is needed for this correction.
+
+The contour fade is normalized to the native shader's 0.45 ambient scale, so ordinary daylight
+no longer counts as 55% darkness. This remains a per-pixel fade with zero output at zero light.
+See [the confirmed cause and checks](findings-vehicle-outline-capture.md). This correction did not
+alter carried-corpse eligibility; the subsequent character-policy fix is documented above.
+The two-file correction was installed with user authorization; runtime checksums and
+protected files were verified, and original backups were retained. In-game confirmation is pending.
+
+## Outline lighting regression correction (2026-09-30)
+
+- Apply local brightness once to premultiplied colour and alpha. The earlier extra multiplication
+  squared attenuation: at light 0.05 and native alpha 0.7, RG8 stored zero colour but nonzero alpha.
+  A GPU regression reproduces this loss and verifies that the corrected contour retains intensity.
+- Export lighting from both `basicEffect` output layouts. Instanced shaders write `colour` directly,
+  without the `fragCol` declaration previously required by the patch; their lighting capture was
+  therefore still contaminated by clothing RGB. Both layouts now have mode-toggle GPU coverage.
+- Reset scissoring and colour/depth write masks before clearing the lighting replay bitmap. The
+  preceding native atlas copy leaves world draw state active; capture must not inherit its clear region.
+
+## Per-pixel outline lighting and legacy vehicles (2026-09-30)
+
+- **DeadBodyAtlas:** Atlas owns a separate GPU lighting texture, released on reset. After the native
+  diffuse/depth bake has been copied, RenderJob replays the same prepared pose in lighting-only mode
+  and copies it with the native atlas scale, crop and vertical orientation. BodyTextureDepthDrawer
+  supplies that texture and its current world-light RGB with the candidate. No foreground colour is
+  sampled and no atlas zombie is promoted into a per-frame 3D draw.
+- **AnimatedModel.StartCharacter:** disables blending only during the private lighting-only replay,
+  so material opacity cannot attenuate the stored illumination. Native depth tests and alpha discard
+  still select the surface; the ordinary model path is unchanged.
+- **OccludedOutline helpers/shaders:** model capture shades each fragment from its surface normal and
+  native light inputs, excluding clothing/tint RGB. Full coverage and brightness are stored separately.
+  Hidden contours dim and fade per pixel; a lighting boundary cannot become a contour boundary.
+- **Vehicle source instrumentation:** the legacy vehicle and vehicle_noreflect programs lack the
+  multi-UV shader's named windowAlpha. Derive it from their six verified window-mask assignments rather
+  than rejecting the stock shader and disabling outlines. Real-material GPU tests now cover both.
+  Whether this accounts for the user's missing car outlines still needs an in-game check.
+
+Repository-only changes; installation and profile settings have not been updated.
+
+## Occluded outline model-loader fix (2026-09-30)
+
+- **ShaderBufferData constructor:** the stock model loader enumerates every active uniform, including
+  the outline renderer's image and control-block members. Its property factory does not support their
+  types and returns null, causing startup to fail after a successful shader link. Exclude only the
+  three uniforms explicitly owned by `OccludedOutlineShaders.ownsUniform` before constructing model
+  parameters. Ordinary uniforms and instance-buffer members retain their stock handling. This also
+  prevents later model-property pushes from changing the private image binding.
+- Registered the new override in `scripts/build.sh`. No blanket null suppression or parameter-type
+  fallback is used. The headless EGL loader probe reproduces the stock failure and exercises the real
+  constructor and property upload with patched/unpatched, instanced/non-instanced programs.
+
+## Occluded zombie outlines (2026-09-29)
+
+Optional, off by default; `occludedZombieOutlines` and its width/colour/opacity controls require a restart.
+See [the feature design](plan-occluded-zombie-outlines.md) for the depth/material contract and verification limits.
+
+- **FBORenderCell:** `performRenderTiles` queues opaque-depth seeding after the static composite and finishes
+  contours after moving/translucent geometry, before fog. The window/translucent-tile layer predicates and
+  curtain helpers retain the existing per-frame path while this startup feature is enabled, so glass is not
+  irreversibly combined with the static opaque depth. Normal rendering remains available after a pass failure.
+- **ShaderUnit:** `compile` applies the optional material instrumentation after the other source patches and
+  before Sway records its source. Primary colour/depth output is preserved; opaque fragments independently
+  record depth, and vehicle window material is excluded. MRT output from HDR and sway is supported.
+- **TextureDraw:** `drawModel` snapshots native zombie visibility for the current player. The DrawModel command
+  retains prepared draw data for silhouette replay; RenderQueued restores the world capture scope before the
+  instanced model batch. Targeting/interaction outline state is not modified.
+- **IsoZombie:** `renderAtlasTexture` passes the same visibility decision with its ordinary atlas draw.
+- **DeadBodyAtlas:** BodyTexture has a separate queueing entry point for this eligibility bit. The pooled depth
+  drawer clears the bit on initialization and records the exact UV, transform and depth conversion only for
+  eligible draws. Corpses and ordinary atlas callers retain their existing behaviour.
+- **Model:** `DrawChar` and `DrawVehicle` identify world versus off-screen/imposter model draws for capture.
+- **TextureFBO:** `startDrawing` and `endDrawing` notify the capture controller of the actual tracked target,
+  preventing atlas-cache draws from contaminating the world-depth image.
+- **VBORenderer:** `startRun` excludes non-depth-tested screen-space work; `flush` restores the surrounding
+  framebuffer capture scope after its batch.
+
+The helper changes include explicit suspension around ShadowAtlas's raw-FBO model replays and a guarded
+world-depth-texture requirement in FogPass. All override edits carry `pzopt` markers; no gameplay, AI, audio,
+save or native-library behaviour is changed by this feature. The personal installation is not overwritten.

@@ -296,6 +296,7 @@ public final class ShadowAtlas {
       ModelCamera prev = ModelCamera.instance;
       GL11.glPushAttrib(GL11.GL_VIEWPORT_BIT | GL11.GL_SCISSOR_BIT);
       Tracked saved = Tracked.save();
+      OccludedOutline.pauseCapture(); // Shadow-view depths are not world-camera occluders.
       try {
          GL30.glBindFramebuffer(GL30.GL_FRAMEBUFFER, fbo);
          GLStateRenderThread.ScissorTest.set(false);
@@ -360,6 +361,7 @@ public final class ShadowAtlas {
          ModelCamera.instance = prev;
          saved.restore();
          GL30.glBindFramebuffer(GL30.GL_FRAMEBUFFER, previousFbo);
+         OccludedOutline.resumeCapture();
          GL11.glPopAttrib();
          GL11.glDepthRange(0.0, 1.0);
          recycle();

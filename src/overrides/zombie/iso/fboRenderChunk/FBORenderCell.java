@@ -1629,6 +1629,7 @@ public final class FBORenderCell {
       pzopt.SpriteFilter.beforeComposite(playerIndex); // pzopt: sprite filter, this frame's composite program for the zoom
       pzopt.CloudShadow.beforeComposite(playerIndex); // pzopt: cloudShadows, the drift and the camera of this frame, ahead of the chunk composite
       pzopt.GodRays.beforeComposite(playerIndex); // pzopt: god rays, the camera of this frame for the haze in the chunk composite
+      pzopt.OutlinePlantDepth.beforeComposite(); // pzopt: new intermediate/world filtered-depth generation
       pzopt.Sway.beforeComposite(playerIndex); // pzopt: foliage sway, this frame's wind for the chunk composite
       pzopt.RenderPrep.start(); // pzopt: renderPrepParallel, the characters' sun share and water search on the frame workers while the composite and the players go
       pzopt.GpuSections.begin(pzopt.Relief.section(pzopt.Sway.section(pzopt.SpriteFilter.section("composite")))); /* pzopt: GPU section: chunk textures into the combined FBO and onto the screen; foliage sway's and relief's alternations split it */
@@ -1641,9 +1642,11 @@ public final class FBORenderCell {
       pzopt.GpuSections.end(pzopt.Relief.section(pzopt.Sway.section(pzopt.SpriteFilter.section("composite")))); // pzopt: sprite filter, devSpriteFilterAlternate splits the section; foliage sway, devSwayAlternate too
       pzopt.Ssr.afterComposite(); // pzopt: reflections, dev timing of the composite with its scatter
       pzopt.Sway.afterComposite(); // pzopt: foliage sway, the motion-vector attachment off the world framebuffer
+      pzopt.OutlinePlantDepth.afterComposite(); // pzopt: filtered terrain is complete; release its temporary GL bindings
       pzopt.CloudShadow.afterComposite(); // pzopt: cloudShadows, dev timing of the composite
       pzopt.AmbientOcclusion.queue(playerIndex); // pzopt: ambient occlusion on the static world, before anything else is drawn over it
       pzopt.PixelLight.afterComposite(playerIndex); // pzopt: pixelLight, the per-pixel light pass (pass mode) and the dev dumps, before anything else is drawn over the static world
+      pzopt.OccludedOutline.begin(playerIndex); // pzopt: seed opaque depth before players/moving objects; glass stays per frame
       pzopt.CapsuleShadow.queue(playerIndex); // pzopt: sunShadows, the characters' sun shadows onto the static world (they add themselves below)
       FBORenderShadows.getInstance().clear();
       boolean pzoptFloorOnly = pzopt.ResumeShot.noMoving; // pzopt: resumeShot's exit capture (below "full"): no players, shadows, corpses
@@ -1859,6 +1862,7 @@ public final class FBORenderCell {
       AbstractPerformanceProfileProbe var33 = fog.profile();
 
       try {
+         pzopt.OccludedOutline.finish(playerIndex); // pzopt: hidden contours after every occluder, before fog; restores borrowed image binding
          pzopt.CapsuleShadow.beforeFog(playerIndex); // pzopt: sunShadowPassLate, the casters' shadows, their depth read beside the god rays' and the fog's
          pzopt.GodRays.queue(playerIndex); // pzopt: god rays, this frame's light, volume updates and screen mapping (the scene depth is complete here)
          this.renderFog(playerIndex);
@@ -2897,7 +2901,7 @@ public final class FBORenderCell {
       if (!(object instanceof IsoCurtain curtain) || !pzopt.Overrides.enabled()) {
          return null;
       }
-      if (!pzopt.Config.WINDOWS_IN_CHUNK_TEXTURE && !pzopt.Config.TRANSLUCENT_TILES_IN_CHUNK_TEXTURE) {
+      if (pzopt.OccludedOutline.separateTransparent() || !pzopt.Config.WINDOWS_IN_CHUNK_TEXTURE && !pzopt.Config.TRANSLUCENT_TILES_IN_CHUNK_TEXTURE) { // pzopt: outlines use the stock per-frame glass/curtain order
          return null;
       }
       IsoObjectType type = curtain.getType();
@@ -3036,7 +3040,7 @@ public final class FBORenderCell {
          // pzopt: with windowsInChunkTexture, windows and glass doors bake like walls; they are still drawn per
          // frame while fading / obscuring the player (the clause below), and the obscuring set invalidates their
          // chunk level (flag 8192) when it changes
-         boolean pzoptBake = pzopt.Config.WINDOWS_IN_CHUNK_TEXTURE && pzopt.Overrides.enabled();
+         boolean pzoptBake = pzopt.Config.WINDOWS_IN_CHUNK_TEXTURE && pzopt.Overrides.enabled() && !pzopt.OccludedOutline.separateTransparent(); // pzopt: exclude glass from baked opaque depth
          boolean bTranslucent = !pzoptBake && object instanceof IsoWindow;
          IsoDoor door = (IsoDoor)Type.tryCastTo(object, IsoDoor.class);
          bTranslucent |= !pzoptBake && door != null && door.getProperties() != null && door.getProperties().has("doorTrans");
@@ -3136,7 +3140,7 @@ public final class FBORenderCell {
       if (sprite == null || (sprite.depthFlags & 2) == 0) {
          return false;
       }
-      if (!(pzopt.Config.TRANSLUCENT_TILES_IN_CHUNK_TEXTURE && pzopt.Overrides.enabled())) {
+      if (!(pzopt.Config.TRANSLUCENT_TILES_IN_CHUNK_TEXTURE && pzopt.Overrides.enabled()) || pzopt.OccludedOutline.separateTransparent()) { // pzopt: capture translucent materials before their pixels are flattened into chunk depth
          return true;
       }
       return pzopt.Config.TRANSLUCENT_LIGHTS_PER_FRAME && sprite.getProperties().has(IsoFlagType.HasLightOnSprite);
@@ -4421,9 +4425,15 @@ public final class FBORenderCell {
          return;
       }
 
-      boolean pzoptSway = pzopt.Sway.begin(object, this.renderTranslucentOnly); // pzopt: foliage sway, a baked plant writes its sway attributes
-      object.render(square.x, square.y, square.z, lightInfo, true, false, null);
-      if (pzoptSway) pzopt.Sway.end(); // pzopt
+      boolean pzoptPlant = pzopt.OutlinePlantDepth.beginObject(object); // pzopt: low vegetation draws normally but does not enter filtered depth
+      boolean pzoptSway = false; // pzopt: foliage sway, a baked plant writes its sway attributes
+      try { // pzopt: balance both queued scopes if rendering fails
+         pzoptSway = pzopt.Sway.begin(object, this.renderTranslucentOnly); // pzopt
+         object.render(square.x, square.y, square.z, lightInfo, true, false, null);
+      } finally { // pzopt
+         if (pzoptSway) pzopt.Sway.end(); // pzopt
+         if (pzoptPlant) pzopt.OutlinePlantDepth.endObject(); // pzopt
+      } // pzopt
    }
 
    /**
@@ -4441,7 +4451,7 @@ public final class FBORenderCell {
       if (pzopt.Config.CURTAIN_DEPTH_NUDGE <= 0.0F || !pzopt.Overrides.enabled()) {
          return 0.0F;
       }
-      if (!pzopt.Config.WINDOWS_IN_CHUNK_TEXTURE && !pzopt.Config.TRANSLUCENT_TILES_IN_CHUNK_TEXTURE) {
+      if (pzopt.OccludedOutline.separateTransparent() || !pzopt.Config.WINDOWS_IN_CHUNK_TEXTURE && !pzopt.Config.TRANSLUCENT_TILES_IN_CHUNK_TEXTURE) { // pzopt: per-frame curtains need no baked depth nudge
          return 0.0F;
       }
       IsoObjectType type = curtain.getType();

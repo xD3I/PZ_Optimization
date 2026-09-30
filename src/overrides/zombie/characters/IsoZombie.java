@@ -1642,7 +1642,7 @@ public final class IsoZombie extends IsoGameCharacter implements IHumanVisual {
             this.getCurrentSquare().interpolateLight(col, x - this.getCurrentSquare().getX(), y - this.getCurrentSquare().getY());
          }
 
-         this.atlasTex.render(x, y, z, (int)ssx, (int)ssy, col.r, col.g, col.b, col.a);
+         this.atlasTex.pzoptRenderWithOutline(pzopt.OccludedOutline.eligible(this, IsoCamera.frameState.playerIndex), x, y, z, (int)ssx, (int)ssy, col.r, col.g, col.b, col.a); // pzopt: current visibility accompanies the atlas draw without forcing a 3D model
       }
    }
 

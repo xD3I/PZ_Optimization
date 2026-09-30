@@ -301,6 +301,7 @@ public final class TextureFBO {
 
          IGLFramebufferObject funcs = getFuncs();
          if (this.id != 0) {
+            pzopt.OutlinePlantDepth.destroyed(this.id); // pzopt: release the paired filtered-depth cache
             pzopt.Sway.fboDestroyed(this.id); // pzopt: foliage sway, the FBO's sway attribute texture goes with it
             funcs.glDeleteFramebuffers(this.id);
             this.id = 0;
@@ -319,6 +320,7 @@ public final class TextureFBO {
          this.depthTexture = null;
          IGLFramebufferObject funcs = getFuncs();
          if (this.id != 0) {
+            pzopt.OutlinePlantDepth.destroyed(this.id); // pzopt: retained native textures no longer own an outline cache
             funcs.glDeleteFramebuffers(this.id);
             this.id = 0;
          }
@@ -345,6 +347,8 @@ public final class TextureFBO {
 
       IGLFramebufferObject funcs = getFuncs();
       funcs.glBindFramebuffer(funcs.GL_FRAMEBUFFER(), lastID);
+      pzopt.OccludedOutline.framebuffer(lastID); // pzopt: resume opaque capture only when returning to the world framebuffer
+      pzopt.OutlinePlantDepth.framebuffer(); // pzopt: restore filtered bake capture for the enclosing target
    }
 
    public ITexture getTexture() {
@@ -372,6 +376,8 @@ public final class TextureFBO {
       lastID = this.id;
       IGLFramebufferObject funcs = getFuncs();
       funcs.glBindFramebuffer(funcs.GL_FRAMEBUFFER(), this.id);
+      pzopt.OccludedOutline.framebuffer(this.id); // pzopt: atlas/cache draws must not contaminate world opaque depth
+      pzopt.OutlinePlantDepth.start(this, clear); // pzopt: filtered depth shares the native clear/append lifecycle
       ITexture mainTexture = this.texture != null ? this.texture : this.depthTexture;
       if (mainTexture != null) {
          if (clear) {
