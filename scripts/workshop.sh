@@ -83,6 +83,10 @@ chmod +x "$MOD/install.bash"
 
 # the install helper, the item's only Lua (the pzopt Lua files under pzopt-classes/ reach the game with the classes)
 cp -r src/workshop/42/. "$MOD/"
+# The install helper uses the same translations before the game-side files are installed.
+mkdir -p "$MOD/media/lua/shared/pzopt"
+cp src/lua/shared/pzopt/pzopt_text*.lua "$MOD/media/lua/shared/pzopt/"
+cp -r src/lua/shared/Translate "$MOD/media/lua/shared/"
 
 # mod.info: id, name, description lines (<LINE> is the in-game line break)
 {

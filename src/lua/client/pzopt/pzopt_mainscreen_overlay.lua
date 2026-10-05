@@ -1,3 +1,5 @@
+require "pzopt/pzopt_text"
+
 -- pzopt: "Show / Hide performance overlay" item in the main menu and in the pause menu.
 --  The same toggle as the key binding (Options > Key Bindings, default F9) and the controller chord
 --  L3 + R3, through the overridden
@@ -69,7 +71,7 @@ local function addItem(self)
             child:setY(child:getY() + labelHgt)
         end
     end
-    local label = ISLabel:new(options:getX(), y, labelHgt, itemText(false), 1, 1, 1, 1, UIFont.Large, true)
+    local label = ISLabel:new(options:getX(), y, labelHgt, PzoptText.text(itemText(false)), 1, 1, 1, 1, UIFont.Large, true)
     label.internal = "PZOPT_OVERLAY"
     label:initialise()
     label.onMouseDown = onItemClick
@@ -78,8 +80,8 @@ local function addItem(self)
     label.prerender = MainScreen.prerenderBottomPanelLabel
     label:setVisible(options:isVisible())
     self.bottomPanel:setHeight(self.bottomPanel:getHeight() + labelHgt)
-    local textW = math.max(getTextManager():MeasureStringX(UIFont.Large, itemText(false)),
-        getTextManager():MeasureStringX(UIFont.Large, itemText(true)))
+    local textW = math.max(getTextManager():MeasureStringX(UIFont.Large, PzoptText.text(itemText(false))),
+        getTextManager():MeasureStringX(UIFont.Large, PzoptText.text(itemText(true))))
     self.maxMenuItemWidth = math.max(self.maxMenuItemWidth or 0, textW)
     label:setWidth(math.max(self.bottomPanel:getWidth(), textW))
     self.bottomPanel:addChild(label)
@@ -134,10 +136,11 @@ end
 local function syncItem(self)
     local label = self.pzoptOverlayOption
     local text = itemText(overlayVisible())
+    text = PzoptText.text(text)
     if label.name ~= text then
         local w = label:getWidth()
-        label:setNameWithoutMoving(text)
-        label:setWidth(math.max(w, getTextManager():MeasureStringX(UIFont.Large, text)))
+        label:setNameWithoutMoving(PzoptText.text(text))
+        label:setWidth(math.max(w, getTextManager():MeasureStringX(UIFont.Large, PzoptText.text(text))))
     end
     label:setVisible(self.optionsOption:isVisible())
     if self.joyfocus then syncJoypadRow(self) end

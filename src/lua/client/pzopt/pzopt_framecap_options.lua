@@ -1,3 +1,5 @@
+require "pzopt/pzopt_text"
+
 -- pzopt: frame-rate combos in Display options.
 --  * The stock "Framerate" combo gains 500, 430, 400, 330 and 300 fps entries above the stock 244.
 --    Core.setFramerate only knows the stock indices and options.ini cannot hold a cap above 244
@@ -66,8 +68,8 @@ local function install()
         local uncappedLabel = getText("UI_optionscreen_Uncapped")
         local extended = fpsLabels({ uncappedLabel })
         local combo = stockAddCombo(self, x, y, w, h, name, extended, selected, target, onchange)
-        local menu = stockAddCombo(self, x, y, w, h, "Menu framerate",
-                                   fpsLabels({ "Same as in-game", uncappedLabel }), 1, target, onchange)
+        local menu = stockAddCombo(self, x, y, w, h, PzoptText.text("Menu framerate"),
+                                   fpsLabels({ PzoptText.text("Same as in-game"), uncappedLabel }), 1, target, onchange)
         self.pzoptMenuCombo = menu
         -- The stock code creates the 'framerate' GameOption after this returns; catch it on add.
         local stockAdd = self.gameOptions.add

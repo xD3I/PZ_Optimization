@@ -516,7 +516,8 @@ public final class Overlay {
          laidOut = false;
          return;
       }
-      boolean relayout = !laidOut;
+      boolean chinese = LocalizedText.chinese();
+      boolean relayout = !laidOut || chinese != layoutChinese;
       if (now - lastStatsNs >= refreshNs) {
          lastStatsNs = now;
          refreshStats(now);
@@ -530,6 +531,7 @@ public final class Overlay {
          if (relayout) {
             laidOutW = core.getScreenWidth();
             laidOutH = core.getScreenHeight();
+            layoutChinese = chinese;
             layout();
             laidOut = true;
             textureValid = useTexture && !textureFailed && renderToTexture();
@@ -856,7 +858,9 @@ public final class Overlay {
     */
    private static UIFont font() {
       int screenH = Core.getInstance().getScreenHeight();
-      if (font == null || (fontAuto && screenH != fontScreenH)) {
+      boolean chinese = LocalizedText.chinese();
+      if (font == null || chinese != fontChinese || (fontAuto && screenH != fontScreenH)) {
+         fontChinese = chinese;
          fontScreenH = screenH;
          String name = Config.OVERLAY_FONT.trim();
          fontAuto = name.equalsIgnoreCase("auto");
@@ -869,12 +873,15 @@ public final class Overlay {
                font = UIFont.CodeMedium;
             }
          }
-         labelWidths.clear(); // measured in the previous font
+         font = LocalizedText.font(font);
+         labelWidths.clear(); // measured in the previous font or language
          steadyLeftW = 0;
       }
       return font;
    }
 
+   private static boolean layoutChinese;
+   private static boolean fontChinese;
    private static boolean fontAuto;
    private static int fontScreenH;
 
@@ -887,7 +894,7 @@ public final class Overlay {
       int pad = 8;
       int textW = 0;
       for (String line : lines) {
-         textW = Math.max(textW, tm.MeasureStringX(font, line));
+         textW = Math.max(textW, tm.MeasureStringX(font, LocalizedText.text(line)));
       }
       int w = textW + pad * 2;
       int h = lines.length * lineH + pad * 2;
@@ -898,7 +905,7 @@ public final class Overlay {
       int ty = y + pad;
       for (int i = 0; i < lines.length; i++) {
          float[] c = i == 0 ? AMBER : WHITE;
-         tm.DrawString(font, x + pad, ty, lines[i], c[0], c[1], c[2], 1.0);
+         tm.DrawString(font, x + pad, ty, LocalizedText.text(lines[i]), c[0], c[1], c[2], 1.0);
          ty += lineH;
       }
    }
@@ -1002,6 +1009,7 @@ public final class Overlay {
 
    /** {@code text} cut with "..." so it measures at most {@code maxW}; empty when even a few characters do not fit. */
    private static String fit(TextManager tm, UIFont font, String text, int maxW) {
+      text = LocalizedText.text(text);
       if (maxW <= 0) {
          return "";
       }
@@ -1063,6 +1071,7 @@ public final class Overlay {
    }
 
    private static void text(double x, double y, String s, double r, double g, double b) {
+      s = LocalizedText.text(s);
       if (s == null || s.isEmpty()) {
          return;
       }
@@ -1273,7 +1282,7 @@ public final class Overlay {
          if (labelWidths.size() > 4096) {
             labelWidths.clear();
          }
-         w = tm.MeasureStringX(font, text);
+         w = tm.MeasureStringX(font, LocalizedText.text(text));
          labelWidths.put(text, w);
       }
       return w;
@@ -1319,11 +1328,11 @@ public final class Overlay {
       }
       int graphH = lineH * 4;
       int textW = 0;
-      int fpsW = fpsText.isEmpty() ? 0 : tm.MeasureStringX(font, fpsText);
+      int fpsW = fpsText.isEmpty() ? 0 : tm.MeasureStringX(font, LocalizedText.text(fpsText));
       for (int i = 0; i < lines.length; i++) {
-         textW = Math.max(textW, (i == 0 ? fpsW : 0) + tm.MeasureStringX(font, lines[i]));
+         textW = Math.max(textW, (i == 0 ? fpsW : 0) + tm.MeasureStringX(font, LocalizedText.text(lines[i])));
       }
-      textW = Math.max(textW, tm.MeasureStringX(font, verdict));
+      textW = Math.max(textW, tm.MeasureStringX(font, LocalizedText.text(verdict)));
       // the game-thread tree: header, then one row per phase / sub-phase with a bar, the name, the share, the hint
       String header = profileHeader;
       java.util.List<GameThreadProfile.Row> tree = profileRows;
@@ -1336,7 +1345,7 @@ public final class Overlay {
       String[] treeHint = new String[tree.size()];
       int[] treeX = new int[tree.size()]; // x of the name relative to the panel's text start
       if (!header.isEmpty()) {
-         textW = Math.max(textW, tm.MeasureStringX(font, header));
+         textW = Math.max(textW, tm.MeasureStringX(font, LocalizedText.text(header)));
       }
       // a tree row never grows past this: the hint is cut to fit, so the panel width does not follow the names
       int treeRowMax = Math.min(treeRowWidth(tm, font, indent, barW, pctW, pad), maxTextW);
@@ -1346,7 +1355,7 @@ public final class Overlay {
          treePct[i] = String.format(java.util.Locale.ROOT, "%.0f %%", r.pct);
          treeWait[i] = r.waitPct >= 0.5f ? String.format(java.util.Locale.ROOT, "  waiting %.0f %%", r.waitPct) : "";
          treeX[i] = indent * (r.depth + 1) + barW + pad;
-         int used = treeX[i] + tm.MeasureStringX(font, r.name) + indent + pctW + tm.MeasureStringX(font, treeWait[i]);
+         int used = treeX[i] + tm.MeasureStringX(font, LocalizedText.text(r.name)) + indent + pctW + tm.MeasureStringX(font, LocalizedText.text(treeWait[i]));
          treeHint[i] = r.hint.isEmpty() ? "" : fit(tm, font, r.hint, treeRowMax - used - indent);
       }
       if (profileSubs >= 0) {
@@ -1357,7 +1366,7 @@ public final class Overlay {
       for (int i = 0; i < 4; i++) {
          yTicks[i] = i == 0 ? "0" : String.format(java.util.Locale.ROOT, i == 3 ? "%.1f ms" : "%.1f", budgetMs * i);
       }
-      int axisW = tm.MeasureStringX(font, yTicks[3]) + pad;
+      int axisW = tm.MeasureStringX(font, LocalizedText.text(yTicks[3])) + pad;
       // a narrow screen shows fewer frames (2 px each) rather than a graph past the screen edge; under 60 none
       int graphBars = Math.min(graphFrames, (maxTextW - axisW) / 2);
       if (graphBars < 60) {
@@ -1376,19 +1385,19 @@ public final class Overlay {
       String legend1 = String.format(java.util.Locale.ROOT, "bars: frame ms, green under 1.1x the %.2f ms budget, amber under 2x, red above; blue: GPU ms; line: the budget", budgetMs);
       String legend2 = "";
       boolean graphOn = graphBars > 0;
-      int legendW = graphOn ? tm.MeasureStringX(font, legend1) : 0;
+      int legendW = graphOn ? tm.MeasureStringX(font, LocalizedText.text(legend1)) : 0;
       int graphBlockW = axisW + graphW;
       if (graphOn && legendW > Math.min(Math.max(graphBlockW, textW), maxTextW)) {
          int cut = legend1.indexOf("; blue");
          legend2 = legend1.substring(cut + 2);
          legend1 = legend1.substring(0, cut);
-         legendW = Math.max(tm.MeasureStringX(font, legend1), tm.MeasureStringX(font, legend2));
+         legendW = Math.max(tm.MeasureStringX(font, LocalizedText.text(legend1)), tm.MeasureStringX(font, LocalizedText.text(legend2)));
       }
       if (graphOn) {
-         textW = Math.max(textW, Math.max(graphBlockW, Math.max(axisW + tm.MeasureStringX(font, "last 9999 frames (99.99 s), oldest to newest"), legendW)));
+         textW = Math.max(textW, Math.max(graphBlockW, Math.max(axisW + tm.MeasureStringX(font, LocalizedText.text("last 9999 frames (99.99 s), oldest to newest")), legendW)));
       }
       if (flameRows > 0 && !flameRight) {
-         textW = Math.max(textW, tm.MeasureStringX(font, fTitle));
+         textW = Math.max(textW, tm.MeasureStringX(font, LocalizedText.text(fTitle)));
       }
       // the stats lines vary by a digit or two between refreshes: measure them against widest-digit templates,
       // and keep the widest left column seen while the overlay is visible (reset when it is toggled) so
@@ -1488,12 +1497,12 @@ public final class Overlay {
          }
          int tx = x + pad + treeX[i];
          text(tx, ty, treeName[i], c[0], c[1], c[2]);
-         tx += tm.MeasureStringX(font, treeName[i]) + indent;
+         tx += tm.MeasureStringX(font, LocalizedText.text(treeName[i])) + indent;
          text(tx, ty, treePct[i], 1.0, 1.0, 1.0);
          tx += pctW;
          if (!treeWait[i].isEmpty()) {
             text(tx, ty, treeWait[i], GameThreadProfile.C_WAIT[0], GameThreadProfile.C_WAIT[1], GameThreadProfile.C_WAIT[2]);
-            tx += tm.MeasureStringX(font, treeWait[i]) + indent;
+            tx += tm.MeasureStringX(font, LocalizedText.text(treeWait[i])) + indent;
          }
          if (!treeHint[i].isEmpty()) {
             text(tx, ty, treeHint[i], 0.7, 0.7, 0.7);
@@ -1520,7 +1529,7 @@ public final class Overlay {
             graphLineY[i - 1] = tickY;
          }
          int labelY = Math.max(gy - lineH / 2, Math.min(gy + graphH - lineH / 2, tickY - lineH / 2));
-         text(gx - 6 - tm.MeasureStringX(font, yTicks[i]), labelY, yTicks[i], 0.8, 0.8, 0.8);
+         text(gx - 6 - tm.MeasureStringX(font, LocalizedText.text(yTicks[i])), labelY, yTicks[i], 0.8, 0.8, 0.8);
       }
       // the bars themselves move every frame: emit() draws them from the ring (see emitBars)
       barsX = gx;

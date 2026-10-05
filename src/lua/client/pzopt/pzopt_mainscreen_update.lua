@@ -1,3 +1,5 @@
+require "pzopt/pzopt_text"
+
 -- pzopt: the "PZ Optimization update" and "PZ Optimization mod compatibility check" items in the main menu.
 --  The Java side (pzopt.Updater, reached through the overridden PerformanceSettings) asks the GitHub
 --  releases once per boot whether a newer build for this game revision exists. The main menu (never
@@ -132,52 +134,52 @@ function PzoptUpdateDialog:refresh(force)
                 .. "replaces the installed files that changed (the ones listed in "
                 .. "pzopt-installed.txt; the game's own files are never touched) and offers to restart the game: the new classes load "
                 .. "on the next start. Saves and options stay as they are."
-            self.primary:setTitle("Update now")
-            self.secondary:setTitle("Later")
+            self.primary:setTitle(PzoptText.text("Update now"))
+            self.secondary:setTitle(PzoptText.text("Later"))
         else
             body = head .. " <LINE> <LINE> "
                 .. "This copy was not installed by install.sh / install.ps1 (no pzopt-installed.txt in the game folder), "
                 .. "so it cannot replace its own files. "
                 .. (local_ and "Run install.ps1 / install.bash from the Workshop item's folder once; later updates then install from here."
                     or "Get the new zip from the release page and unpack it by hand, or install it once with the installer.")
-            self.primary:setTitle(pageTitle)
-            self.secondary:setTitle("Close")
+            self.primary:setTitle(PzoptText.text(pageTitle))
+            self.secondary:setTitle(PzoptText.text("Close"))
         end
         local notes = richNotes(p:getPzoptUpdateNotes())
         if notes ~= "" then body = body .. " <LINE> <LINE> <RGB:0.8,0.8,0.8> " .. notes end
     elseif s == "downloading" then
         body = head .. " <LINE> <LINE> Downloading the files that changed..."
-        self.primary:setTitle("Hide")
+        self.primary:setTitle(PzoptText.text("Hide"))
         self.secondary:setTitle("")
     elseif s == "installing" then
         body = head .. " <LINE> <LINE> " .. (local_ and "Copying the Steam Workshop files over the installed ones..." or "Replacing the installed files...")
-        self.primary:setTitle("Hide")
+        self.primary:setTitle(PzoptText.text("Hide"))
         self.secondary:setTitle("")
     elseif s == "installed" then
         body = head .. " <LINE> <LINE> <RGB:0.6,1,0.6> " .. p:getPzoptUpdateMessage() .. " <RGB:1,1,1> <LINE> <LINE> "
             .. "The game keeps running the previous build until it restarts. Restart game closes it and starts it again with the update."
-        self.primary:setTitle("Restart game")
-        self.secondary:setTitle("Later")
+        self.primary:setTitle(PzoptText.text("Restart game"))
+        self.secondary:setTitle(PzoptText.text("Later"))
     elseif s == "error" then
         body = head .. " <LINE> <LINE> <RGB:1,0.6,0.6> " .. (p:getPzoptUpdateMessage():gsub("[<>]", "")) .. " <RGB:1,1,1> <LINE> <LINE> "
             .. "Nothing was changed if the " .. (local_ and "copy" or "download") .. " failed; if the file swap failed, run the installer again "
             .. "(install.sh / install.ps1, --uninstall first). "
             .. (local_ and "The Workshop item's folder has the installers." or "The release page has the zip.")
-        self.primary:setTitle(pageTitle)
-        self.secondary:setTitle("Close")
+        self.primary:setTitle(PzoptText.text(pageTitle))
+        self.secondary:setTitle(PzoptText.text("Close"))
     else
         body = "No update is offered right now."
-        self.primary:setTitle("Close")
+        self.primary:setTitle(PzoptText.text("Close"))
         self.secondary:setTitle("")
     end
-    self.text.text = body
+    self.text.text = PzoptText.text(body)
     self.text:paginate()
 
     -- buttons centred, the second one only when it has a title
-    local w1 = math.max(150, getTextManager():MeasureStringX(UIFont.Small, self.primary:getTitle()) + 24)
+    local w1 = math.max(150, getTextManager():MeasureStringX(UIFont.Small, PzoptText.text(self.primary:getTitle())) + 24)
     self.primary:setWidth(w1)
     if self.secondary:getTitle() ~= "" then
-        local w2 = math.max(110, getTextManager():MeasureStringX(UIFont.Small, self.secondary:getTitle()) + 24)
+        local w2 = math.max(110, getTextManager():MeasureStringX(UIFont.Small, PzoptText.text(self.secondary:getTitle())) + 24)
         self.secondary:setWidth(w2)
         self.secondary:setVisible(true)
         local total = w1 + PAD + w2
@@ -237,7 +239,7 @@ end
 function PzoptUpdateDialog:prerender()
     ISPanelJoypad.prerender(self)
     self:refresh(false)
-    self:drawText("PZ Optimization update", PAD, PAD, 1, 1, 1, 1, UIFont.Medium)
+    self:drawText(PzoptText.text("PZ Optimization update"), PAD, PAD, 1, 1, 1, 1, UIFont.Medium)
     -- progress bar above the buttons: the download share, full while the files swap, green when done
     local s = self.shownState
     local barY = self.height - PAD - BTN_HGT - PAD - BAR_HGT
@@ -263,8 +265,8 @@ function PzoptUpdateDialog:prerender()
         label = "installing"
     end
     if label then
-        local lw = getTextManager():MeasureStringX(UIFont.Small, label)
-        self:drawText(label, self.width / 2 - lw / 2, barY + (BAR_HGT - FONT_HGT_SMALL) / 2 - 1, 1, 1, 1, 1, UIFont.Small)
+        local lw = getTextManager():MeasureStringX(UIFont.Small, PzoptText.text(label))
+        self:drawText(PzoptText.text(label), self.width / 2 - lw / 2, barY + (BAR_HGT - FONT_HGT_SMALL) / 2 - 1, 1, 1, 1, 1, UIFont.Small)
     end
 end
 
@@ -401,7 +403,7 @@ local function itemPrerender(self)
     self.height = fullHgt
     if self.pzoptVersion then
         local a = self.pzoptEnabled and 0.75 or 0.45
-        self:drawText(self.pzoptVersion, 0, self.pzoptRowHgt - 6, a, a, a, 1, UIFont.Small)
+        self:drawText(PzoptText.text(self.pzoptVersion), 0, self.pzoptRowHgt - 6, a, a, a, 1, UIFont.Small)
     end
 end
 
@@ -413,7 +415,7 @@ local function addItem(self)
     if self.inGame or not self.creditOption or not self.exitOption or self.pzoptUpdateOption then return end
     local rowHgt = getTextManager():getFontHeight(UIFont.Large) + 8 * 2
     local labelHgt = rowHgt + FONT_HGT_SMALL   -- the version line starts 6 px above the stock row's bottom
-    local label = ISLabel:new(0, self.creditOption:getBottom(), labelHgt, ITEM_TEXT, 1, 1, 1, 1, UIFont.Large, true)
+    local label = ISLabel:new(0, self.creditOption:getBottom(), labelHgt, PzoptText.text(ITEM_TEXT), 1, 1, 1, 1, UIFont.Large, true)
     label.internal = "PZOPT_UPDATE"
     label:initialise()
     label.onMouseDown = onItemClick
@@ -422,7 +424,7 @@ local function addItem(self)
     label.pzoptEnabled = false
     label:setColor(0.45, 0.45, 0.45)
     label:setVisible(false)
-    local compat = ISLabel:new(0, label:getBottom(), rowHgt, COMPAT_TEXT, 1, 1, 1, 1, UIFont.Large, true)
+    local compat = ISLabel:new(0, label:getBottom(), rowHgt, PzoptText.text(COMPAT_TEXT), 1, 1, 1, 1, UIFont.Large, true)
     compat.internal = "PZOPT_COMPAT"
     compat:initialise()
     compat.onMouseDown = onCompatClick
@@ -432,8 +434,8 @@ local function addItem(self)
     compat:setVisible(false)
     self.exitOption:setY(self.exitOption:getY() + labelHgt + rowHgt)
     self.bottomPanel:setHeight(self.bottomPanel:getHeight() + labelHgt + rowHgt)
-    self.maxMenuItemWidth = math.max(self.maxMenuItemWidth or 0, getTextManager():MeasureStringX(UIFont.Large, ITEM_RESTART),
-        getTextManager():MeasureStringX(UIFont.Large, COMPAT_TEXT))
+    self.maxMenuItemWidth = math.max(self.maxMenuItemWidth or 0, getTextManager():MeasureStringX(UIFont.Large, PzoptText.text(ITEM_RESTART)),
+        getTextManager():MeasureStringX(UIFont.Large, PzoptText.text(COMPAT_TEXT)))
     label:setWidth(self.maxMenuItemWidth)
     compat:setWidth(self.maxMenuItemWidth)
     self.bottomPanel:addChild(label)
@@ -529,8 +531,9 @@ local function syncItem(self)
     elseif s == "error" and enabled then
         text = "UPDATE FAILED"
     end
+    text = PzoptText.text(text)
     if label.name ~= text then
-        label:setNameWithoutMoving(text)
+        label:setNameWithoutMoving(PzoptText.text(text))
         label:setWidth(self.maxMenuItemWidth or label:getWidth())
     end
     label.pzoptVersion = versionText()
