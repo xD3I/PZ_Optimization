@@ -104,17 +104,22 @@ public class CombinedDispatchTest {
       UpdateBatch.latchFrame(true);
       gt.perObjectMultiplier = 1.0F;
       int n = 64;
+      java.util.concurrent.CountDownLatch started = new java.util.concurrent.CountDownLatch(1);
       for (int i = 0; i < n; i++) {
-         UpdateBatch.add(new Probe("r" + i, 200_000L), 0); // ~0.2 ms each: enough for workers to bite
+         UpdateBatch.add(new Probe("r" + i, 200_000L) {
+            @Override
+            public void update() {
+               super.update();
+               started.countDown();
+            }
+         }, 0);
       }
       UpdateBatch.dispatchCombined();
-      long busyUntil = System.nanoTime() + 3_000_000L; // the inline phase stand-in: 3 ms of game-thread work
-      while (System.nanoTime() < busyUntil) {
-         Thread.onSpinWait();
-      }
+      // Require actual progress before joining, not a scheduler timeslice within an arbitrary 3 ms.
+      boolean ranBeforeJoin = started.await(10, java.util.concurrent.TimeUnit.SECONDS);
       long preClaimedBefore = UpdateBatch.getPreClaimed();
       UpdateBatch.joinPending();
-      Check.check(FrameBatch.lastPreClaimed() > 0,
+      Check.check(ranBeforeJoin && FrameBatch.lastPreClaimed() > 0,
             "workers claimed tasks before the join (preClaimed=" + FrameBatch.lastPreClaimed() + ") — today's shape never achieves this");
       // and the flight owns that number itself: FrameBatch's is the last join's, whoever joined last (the shared pool
       // lands AnimBatch and friends later in the same frame), so the entity flight accumulates its own at its own join

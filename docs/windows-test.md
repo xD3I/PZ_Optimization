@@ -335,6 +335,140 @@ For per-frame numbers add `instrument=true` to that file (or to an otherwise
 empty one): the game then writes `pzopt-frames.out` and `pzopt-chunks.out` in
 `%USERPROFILE%\Zomboid`, which `harness/analyze.py` can read back on Linux.
 
+#### Repeatable Windows worker / dual-CCD benchmark
+
+`harness/run-win.ps1` now launches the installed bundled JVM with a **fresh private
+profile under its unique result directory**, rather than replacing the player's
+`pzopt-bench` save or harness mod. Existing saves, mods/default.txt, harness flags,
+console/pzopt outputs, options and caches are never moved, removed or restored over.
+The installed classes, properties and launcher JSON are read-only inputs; per-run
+properties use `-Dpzopt.*`. Only the options seed (`options.ini`, `pzopt/options.ini`,
+`pzopt/framecap.ini`) is copied; the private `options.ini` sets
+`showSurvivalGuide=false` before launch. Stock Survival Guide opens on world load
+with this option enabled and calls `setGameSpeed(0)`, so an unattended route would
+wait for someone to dismiss the F1 help window. The player's setting stays intact.
+The harness disables updater checks and launcher/AOT rewrites for this process,
+redirects crash logs into the result directory, and
+retains its entire owned profile for diagnosis. There is no cleanup of preexisting
+directories. A timeout stops only the JVM this invocation launched.
+
+Results default to `%LOCALAPPDATA%\pzopt-benchmark\runs`, not the repository:
+the checkout can be a junction onto a nearly-full Steam volume. `-OutputRoot`
+overrides this for both scripts; ensure that destination has room for a fresh
+private save and caches on every run.
+
+The game must be closed **for the supplied `-PZ` installation**. Steam itself and
+games from other installations are not killed or attached to. When no game process
+exists, the script starts `jre64/bin/java.exe` using that installation's launcher
+classpath and Windows JVM settings, with Steam integration off and `-cachedir` set
+to the private profile. A named install lock refuses concurrent benchmark runs.
+This is a direct-launch benchmark, not a measurement of Steam launch time.
+
+To benchmark new code before installation, pass `-Classes .\build\classes` to
+`run-win.ps1` or `sweep-win.ps1`. The compiled classes are prepended to the
+installed loose-class/jar classpath and fingerprinted with each run; neither
+the installed override files nor the player's profile is changed. Use the same
+`-Classes` setting for every run in a comparison.
+
+Prerequisites: installed loose overrides and their file manifest, launcher
+classpath beginning with `"."`, a user options seed whose native first-run terms
+screen has already been completed, and Windows `tar` with zstd support. The fixture
+is always `harness/bench-save/pzopt-bench-template.tar.zst`, extracted only into the
+new private profile; user-owned templates and caches are never used. Preflight
+rejects unsafe archive entries, unexpected fixture mod dependencies and a dictionary
+containing non-vanilla mod IDs, naming the blocker instead of silently disabling a
+required mod. PZDashboard is removed from the private save by default; explicit
+`-Dashboard -DashboardMod <source>` copies only that mod into the private profile.
+
+Run safe preparation before any measured launch:
+
+```powershell
+$PZ = 'C:\Program Files (x86)\Steam\steamapps\common\ProjectZomboid' # your Steam library's game folder
+.\harness\run-win.ps1 -PZ $PZ -Label preflight -PrepareOnly
+```
+
+`-PrepareOnly` creates owned evidence/profile directories but never starts a game;
+it is not a valid measured run. `-RouteSeconds` is the **expected** duration checked
+by analysis, not a route-control flag: bench duration comes from `route`, `speed`
+and optional `hold`. Coordinates and multi-leg routes remain intact in `-Flag`.
+For a direct default-vs-6/8 comparison, use the same flags and fresh private
+profiles for each run; alternate the order and repeat both configurations:
+
+```powershell
+$flags = @('start=12450,1280','population=max','settle=20',
+           'route=S:150','speed=6','turn=90','zoom=max')
+$baseline = .\harness\run-win.ps1 -PZ $PZ -Label defaults -RouteSeconds 25 `
+  -Flag $flags -Prop @('instrument=true')
+.\harness\analyze-win.ps1 $baseline.RunDirectory
+$run = .\harness\run-win.ps1 -PZ $PZ -Label f6-d6-dual-ccd -RouteSeconds 25 `
+  -Flag $flags -Prop @('frameThreads=6','charDrawThreads=6','fileThreads=8','corePlacement=dual-ccd')
+.\harness\analyze-win.ps1 $run.RunDirectory
+```
+
+The repeatable sweep tests **one worker-count axis at a time**: frame workers with
+draw fixed, then draw workers with frame fixed. Each round rotates/reverses the
+configuration order and alternates adjacent `off`/`dual-ccd` placement pairs. Options
+are frozen once, the installed build/fixture/mod/seed bytes are fingerprinted,
+and changes during a sweep are refused. Every run starts with fresh private
+optimization caches; these are consistently cold, not the player's warmed caches.
+
+```powershell
+.\harness\sweep-win.ps1 -PZ $PZ -Scenario louisville -Repeats 3 -BaselineFrameThreads 6 `
+  -BaselineCharDrawThreads 6 -FrameThreads 2,4,6 -CharDrawThreads 2,4,6 -CorePlacement off,dual-ccd
+
+# Seeded nearby crowd, natural population off, 1-tile motion + 24-second hold:
+.\harness\sweep-win.ps1 -PZ $PZ -Scenario crowd -Crowd 40 -Repeats 3
+# After choosing a measured frame count, isolate the draw axis at that count:
+.\harness\sweep-win.ps1 -PZ $PZ -BaselineFrameThreads 6 -FrameThreads 6 `
+  -CharDrawThreads 2,4,6,8,12,14 -Repeats 3
+```
+
+Keep the game foreground during the entire route; do not run other workloads.
+`run.json` records CPU core/logical counts, requested settings, command/provenance
+and lifecycle; `analysis.json` captures `Config.describe`, effective worker-pool
+startup counts, actual placement summary, route/zoom/resolution, p99/p99.9, FPS,
+zombie counts, sampled focus, waits and route CPU evidence. A requested count that
+is clamped is invalid rather than mislabeled: with `dual-ccd` the frame and draw
+pools are capped at the main CCD's physical cores minus two (6 on this 9950X3D,
+4 on a 6+6 part), so larger counts are not valid points of a `dual-ccd` sweep.
+The Java placement implementation detects the cache and physical-core topology;
+the scripts never assume CPUs 0–7 are the main CCD. With `corePlacement=dual-ccd`
+the main CCD is the larger L3 (the 96 MiB V-Cache CCD here), or CCD0 when both
+L3 are equal (7950X/9950X, 9950X3D2). Game, render, frame, character-draw and the
+other known critical threads share all of its cores; known background workers use
+the other CCD. 6+6 and 8+8 parts work with SMT on or off. ZGC stop-the-world
+workers stay wide; unknown/unlabeled native threads remain allowed on both CCDs.
+The unpinned default on Windows is `corePlacement=auto`, `frameThreads=8`,
+`charDrawThreads=14` and, on this 16-logical-CPU host, `fileThreads=8`. It is the
+appropriate no-overrides comparison.
+
+The same mode is selectable in **Options > Optimizations > CPU cores and power >
+Which CPU cores run the game's threads (hybrid / dual-CCD)**; worker threads above
+the main CCD's limit are clamped automatically. Apply and restart for it to take
+effect. This does not change the Windows default mode or the CPU placement of
+unproved native threads.
+
+Louisville's scripted camera route is deterministic, but native zombie population
+generation is not. The crowd scenario seeds placement selection, not every aspect
+of zombie simulation. Both record route-start/end zombie counts; crowd also checks
+the actual spawned count. Sweep comparison excludes count outliers versus the
+reference configuration's median (default ±10%, `-ZombieTolerancePct`), differing
+zoom/resolution/builds, incomplete routes, missing route markers/frames, lost focus,
+missing wait/CPU evidence or crashes. There must be at least two usable repeats
+for a configuration **and** the reference before a comparison is eligible.
+
+`sweep.json` retains all individual valid/invalid runs and exclusion reasons;
+`comparison.csv` gives medians, valid/invalid repeat counts and FPS/p99/p99.9 deltas
+against the fixed baseline with the first placement mode (default `off`). No invalid
+run contributes to an eligible comparison. Inspect individual tails and count
+dispersion, not just FPS: a 25-second run can have very few p99.9-tail samples.
+Frame and character-draw wait counters are cumulative since boot at route end,
+**not route deltas**; slower runs must not depend on periodic console snapshots.
+Route-only frame times, thread CPU and raw counter evidence remain available.
+`analyze-win.ps1 <run-dir> ...` to regenerate the per-run JSON; it never falls back
+to whole-game frames when route markers are missing. No worker-count winner or
+9950X3D performance improvement is claimed without measured eligible repeats.
+
 ### 5. If the game crashes
 
 Bring back `%USERPROFILE%\Zomboid\console.txt` and any `hs_err_pid*.log` from

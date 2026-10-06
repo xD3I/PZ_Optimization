@@ -54,13 +54,15 @@ public final class InputLatch {
    /** Game thread, GameWindow.logic just before the Mouse / GameKeyboard / GameInput swaps. */
    public static void beforeInputSwap() {
       LowLatency.beforeInputSample();
-      if (!LATCH && !GATE) {
+      if (InputThread.active()) {
+         if (GATE) gate();
+         Display.dispatchInputFocusEvents();
+         SubframeInput.beginFrame();
          return;
       }
+      if (!LATCH && !GATE) return;
       long t0 = System.nanoTime();
-      if (GATE) {
-         gate();
-      }
+      if (GATE) gate();
       long t1 = System.nanoTime();
       boolean ok = true;
       if (LATCH && !broken && RenderThread.renderThread != null && renderIdle) { // a busy render thread (drawing, blocked in a vsync swap) serves it after its swap anyway
@@ -111,20 +113,20 @@ public final class InputLatch {
    }
 
    /**
-    * Render thread: in its wait for a game frame (pumps events itself) and after its own post-swap polls (the events
-    * were just pumped). Serves a pending latch request: fresh OS events, then every input cache polled again.
+    * Legacy render-thread poll path. With the input owner enabled, native sampling occurs on the owner thread and the
+    * game thread consumes the subframe producer ring at beforeInputSwap.
     */
    public static void serve(boolean pumpEvents) {
+      if (InputThread.active()) {
+         if (!pumpEvents) renderIdle = true;
+         return;
+      }
       if (!pumpEvents) {
          renderIdle = true; // the render loop finished a frame and its polls; next it waits for the game
       }
-      if (!LATCH || broken) {
-         return;
-      }
+      if (!LATCH || broken) return;
       long r = requested.get();
-      if (served.get() >= r) {
-         return;
-      }
+      if (served.get() >= r) return;
       try {
          if (pumpEvents) {
             Display.processMessages();

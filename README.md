@@ -2,6 +2,9 @@
 
 # PZ_Optimization
 
+This working tree includes a **Windows owner-thread input fork** (details under Input latency below).
+The upstream performance charts are not measurements of this fork's input changes.
+
 Performance patches for **Project Zomboid Build 42**, on the Java side of the game.
 Not a Lua mod: a set of drop-in `.class` files that shadow 41 game classes and remove
 the worst stalls from the chunk streamer, the renderer, the weather and the loading path.
@@ -324,8 +327,9 @@ every route (the game's own G1 never paused longer than 21 ms).
 Measured end to end: a virtual keyboard, mouse and Xbox pad (uinput) press, the game's own stage stamps, and the flip
 that put the frame on screen (X Present). Stock reads the keyboard one frame late (`GameKeyboard` used the previous
 poll), and every frame used input polled right after the previous frame was shown, however long the frame limiter then
-idled. Two fixes are on by default: **fresh keyboard** (`keyboardFresh`) and **input latch** (`inputLatch`: the game asks
-the render thread for a fresh poll the moment its frame starts). Three are options in Options > Optimizations > Input
+idled. **Fresh keyboard** (`keyboardFresh`) and **input latch** (`inputLatch`) are on by default. On the original
+non-Windows path, the latch asks the render thread for a fresh poll when a frame starts. This Windows fork instead
+uses the independent owner-thread collector described below. Three other options in Options > Optimizations > Input
 latency:
 
 - **Low-latency mode** (`reflexSleep` + `reflexCapFps=-1`): what NVIDIA Reflex does. Each frame measures how long it
@@ -344,6 +348,53 @@ NVIDIA Reflex itself is an SDK for Direct3D and Vulkan; there is none for OpenGL
 Reflex's methods rebuilt with OpenGL and NVML. Every run and the techniques that did not help (the driver's
 `__GL_MaxFramesAllowed`, adaptive vsync, a vblank-locked start under XWayland):
 [docs/archive/2026-09-24/findings-input-latency-2026-09-24.md](docs/archive/2026-09-24/findings-input-latency-2026-09-24.md).
+
+**Windows input-thread fork** (`inputThread`, enabled by default on Windows; restart required).
+The original GLFW/Win32 window-owner thread runs `pzopt-input`; OpenGL rendering moves to `pzopt-render`.
+Mouse collection uses foreground-only `RegisterRawInputDevices` and `GetRawInputBuffer` on that owner.
+GLFW mouse callbacks do not publish while raw input is active; keyboard and native window messages still run.
+An already-dispatched `WM_INPUT` is read with `GetRawInputData` before draining the remaining buffered records.
+Collection continues while simulation or rendering stalls. Before simulation/UI, the game drains a finite prefix
+of a preallocated 32,768-record SPSC buffer. Records keep collection timestamps (not hardware timestamps),
+button transitions, wheel deltas and action coordinates. Relative raw counts advance a shared desktop cursor:
+by default one pixel per count, without Windows pointer speed/acceleration. Under **Options → Optimizations →
+Input latency**, **Raw mouse sensitivity** is a numeric field (0.10–4.00×, default 1×, rounded to 0.05).
+It scales cursor pixel displacement from raw counts; this is not camera rotation, so **cm/360 has no meaning**
+here. **Raw mouse acceleration** is optional and off by default. Its onset (0–8,000 counts/s), slope (0–200%
+gain per 1,000 counts/s) and cap (100–300% of linear) are integer fields, not presets. Invalid entries keep the
+previous value on Apply; an empty field restores the default. With acceleration enabled, these numbers control
+a continuous curve applied after sensitivity. Speed uses raw counts and their collection-time 8 ms windows,
+not hardware timestamps; short batches and scheduling stalls can affect the measured speed. Settings apply
+immediately. Absolute devices still map to the primary or virtual desktop, and wheel counts are unscaled.
+The visible pointer is synchronized to that raw cursor after each batch. Action point B is captured before later
+movement to C; UI dispatch restores C afterward. Accepted combat actions retain B's world-space reticle and direction.
+Native animated muzzle geometry, attack admission and cooldowns remain in charge: buffered clicks do not grant extra
+attacks or rewind the world.
+Focus loss or buffer overflow cancels pending gestures and suppresses held buttons through release, rather than
+manufacturing a click. Keyboard/controller polling and native window operations remain on the owner thread.
+Other platforms and `inputThread=false` retain the existing polling path.
+Java mods that request a synchronous extra `Display.processMessages()` pass from the render thread
+(including ZombieBuddy's approval dialog) are routed to the GLFW owner; approvals still require the player's
+decision. If a Java mod aborts loading, do not load or save a modded world until its approval issue is resolved:
+unregistered mod items and traits can be lost when that world is saved.
+
+Windows verification uses `harness/input-thread-win.ps1 -Classes build/classes -PZ <game> -CacheDir <disposable-profile>`.
+It launches the actual game with a private profile and jar copy, checks OS-driven UI callbacks, and saves screenshots,
+logs and (with `-Jdk <JDK>`) a thread dump under `input-thread-evidence`. `-Combat` creates a new disposable solo world
+for ranged/melee checks with native aim settled before each buffered press; `-ImGui` separately checks menu UI inside
+the native debug viewport using measured cursor-coordinate mapping and a private layout; `-Manual` leaves the game interactive.
+`-Sensitivity` checks the live options row and exact signed fractional relative counts; `-Acceleration` checks
+live enable/cap/disable in the actual game. Automated runs also require actual records returned by `GetRawInputBuffer`;
+the UI modes check relative raw counts against the game cursor, not merely legacy callbacks. Injected records
+still do not establish a physical device rate.
+For a new private profile, first use `-Manual`, complete the game's native first-run terms screen yourself, and
+close the game normally. Automated runs require that existing acceptance; the harness never accepts legal terms.
+Automated runs use a composed window and a 60 fps cap to leave CPU time for the synthetic injector.
+The private `launcher_read_only=1` harness flag disables automatic AOT/GC launcher edits; no installed launcher,
+user saves, options or mod approvals are copied or changed. Physical input is not blocked.
+Do not use the physical mouse/keyboard during automated scenarios. The synthetic load submits 8,000 move records
+in batches of eight at a requested average 8,000 records/s and reports the measured submission rate. It is not a
+physical 8 kHz mouse measurement, a callback-rate guarantee, or a latency/FPS benchmark.
 
 ### Variable refresh: G-SYNC, FreeSync, ProMotion
 

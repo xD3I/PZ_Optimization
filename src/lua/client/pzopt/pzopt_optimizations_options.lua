@@ -1,12 +1,13 @@
 -- pzopt: the "PZ Optimization" tab in the options screen, right after Display (one tab since 2026-10-04; before, three:
 --  Optimizations, Enhancements, Profiler).
---  Every pzopt.Config key is a control here: booleans are tick boxes, integers are combos whose first
+--  Every pzopt.Config key is a control here: booleans are tick boxes, numeric/string settings are combos whose first
 --  entry is the build's default on this machine. The values live in Java: the overridden
 --  PerformanceSettings forwards to pzopt.Config (what is in force since boot) and pzopt.UserOptions
 --  (Zomboid/pzopt/options.ini, what the next launch will read). The Performance settings (SECTIONS) apply on the
 --  next launch, so a change away from the boot value raises the stock "restart required" dialog; the
---  Tools (PROFILER_SECTIONS) and most Visuals (ENHANCEMENT_SECTIONS, entry.live) apply at once when saved
---  (pzopt.Config.reloadLive, then pzopt.Overlay.reconfigure / pzopt.Enhancements.apply).
+--  Tools (PROFILER_SECTIONS), most Visuals (ENHANCEMENT_SECTIONS, entry.live) and the live RawMouse sensitivity /
+--  acceleration settings apply at once when saved (pzopt.Config.reloadLive, then pzopt.Overlay.reconfigure /
+--  pzopt.Enhancements.apply; RawMouse resets its velocity estimate and fractional remainders).
 --  A key set in the install dir's pzopt.properties or as -Dpzopt.<key> (harness runs) wins over the
 --  file; its control shows that value, is disabled, and the tooltip says what pins it.
 --  Each group has a master switch on the home page (keys `enabled`, `enhancementsEnabled`, `profilerEnabled`): off,
@@ -248,7 +249,7 @@ local SECTIONS = {
             { key = "animBonesParallel", label = "Zombie animation bone math on other cores",
               tip = "After the object update loop the zombies' animation blending (bone, twist, model and skin matrices, 9 % of the game thread in a horde) runs on worker threads and is joined before rendering; off, it runs inline like stock." },
             { key = "frameThreads", label = "Worker threads for the zombie batches",
-              choices = { "2", "4", "8", "15" }, tip = "Threads of the per-frame zombie batches (bone math, transition evaluation, lighting reads; the game thread joins in); more than cores - 1 is clamped." },
+              choices = { "2", "4", "6", "8", "15" }, tip = "Threads of the per-frame zombie batches (bone math, transition evaluation, lighting reads; the game thread joins in). More than cores - 1 is clamped; with Windows dual-CCD placement also to the main CCD's physical cores - 2 (6 on an eight-core CCD, 4 on a six-core one)." },
             { key = "actionEvalParallel", label = "Zombie decision rules evaluated on other cores",
               tip = "Each zombie's action-state transition rules (dozens of variable tests per zombie per frame, 7-10 % of the game thread in a horde) are evaluated on worker threads after the object loop; the state changes, the animator and the model update then run on the game thread in the stock order. Rules that call Lua or a zombie mid-grapple stay on the game thread." },
             { key = "animatorParallel", label = "Zombie animators on other cores",
@@ -292,7 +293,7 @@ local SECTIONS = {
             { key = "charDrawPrep", label = "Zombie draw data built on other cores",
               tip = "The draw data of every zombie model on screen (its lights, one render record and matrix palette per body and clothing model, the depth and light setup) is built on worker threads before the game thread queues the draws in the stock order; stock built it one zombie at a time on the game thread (13 % of it in a Louisville horde). Same pixels." },
             { key = "charDrawThreads", label = "Zombie draw data threads",
-              choices = { "4", "8", "12", "14" }, tip = "Threads of the zombie draw-data pool; the data has to be ready before the zombies are queued, so on a 16-core machine 14 keep the game thread from waiting. More than cores - 2 is clamped." },
+              choices = { "4", "6", "8", "12", "14" }, tip = "Threads of the separate zombie draw-data pool; its work must finish before zombies are queued. The frame and draw pools are separate, so this does not cap the total number of runnable workers. More than cores - 2 is clamped; with Windows dual-CCD placement also to the main CCD's physical cores - 2." },
             { key = "zombieAtlasFast", label = "Flat draw call for far zombies",
               tip = "A zombie too far for a 3D model is drawn as a small pre-rendered sprite; its draw goes through a flat copy of the game's render chain (the same tests, the same sprite call) instead of five nested virtual calls per zombie. ~1,100 such zombies per frame in a Louisville horde. Same pixels." },
             { key = "actionSnapshotFilter", label = "Read only the animation variables that need it",
@@ -403,8 +404,25 @@ local SECTIONS = {
         entries = {
             { key = "keyboardFresh", label = "Keyboard read in the frame it was polled",
               tip = "The game read the keyboard one frame behind the mouse and the controller: it filled its key table from the previous poll and swapped the new one in afterwards. With this on it reads the new one. One frame less for every key (4 ms at 240 fps, 17 ms at 60). Applies on the next launch." },
+            { key = "inputThread", label = "Windows: independent input thread and subframe events",
+              tip = "Keeps the GLFW window/event pump on its owner thread and moves OpenGL rendering to a separate thread. Mouse actions are drained before simulation with their original order and coordinates, including press/release pairs between frames. High-rate mouse collection no longer runs in the render loop. Windows only; applies on the next launch." },
+            { key = "mouseSensitivity", label = "Raw mouse sensitivity (×)",
+              number = { min = 0.1, max = 4, twentieths = true }, live = true,
+              tip = "Scales relative Windows Raw Input movement counts only; 1.0 preserves the original counts and OS acceleration is never applied. Enter 0.10–4.00 (rounded to 0.05 steps). This moves a cursor in pixels, not a camera through degrees, so cm/360 does not apply. Applies when you press Apply while Raw Input is active; curve changes reset its estimator and fractional remainders." },
+            { key = "mouseAcceleration", label = "Raw mouse speed acceleration",
+              live = true,
+              tip = "Optional bounded acceleration of relative Windows Raw Input only. Off preserves the existing sensitivity-scaled counts exactly; it does not use Windows pointer acceleration. On estimates speed from packets collected over 8 ms, then applies the gain to the next batch; this is collect-time speed, not the device's hardware report rate. A gap over 50 ms resets the estimate and gain to 1×. Applies when you press Apply while Raw Input is active." },
+            { key = "mouseAccelerationOnsetCps", label = "Acceleration onset (counts/s)",
+              number = { min = 0, max = 8000 }, live = true,
+              tip = "Enter an integer from 0 to 8,000. The collect-time relative-count speed where extra gain begins; below it gain is exactly 1×. The fixed 8 ms estimate is not a hardware-timestamped rate. Applies live when acceleration is on." },
+            { key = "mouseAccelerationSlopePctPerKcps", label = "Acceleration slope (% gain per 1,000 counts/s)",
+              number = { min = 0, max = 200 }, live = true,
+              tip = "Enter an integer from 0 to 200. Extra gain percentage for each 1,000 counts/s above onset, before the cap. With the default 1,000 onset, rate 2,000 counts/s gives 1.5× at the default slope. Applies live when acceleration is on." },
+            { key = "mouseAccelerationCapPct", label = "Acceleration cap (% of linear)",
+              number = { min = 100, max = 300 }, live = true,
+              tip = "Enter an integer from 100 to 300. Maximum total movement as a percentage of the sensitivity-scaled linear result; 200 caps the curve at 2×. Applies live when acceleration is on." },
             { key = "inputLatch", label = "Read the newest input when a frame starts",
-              tip = "The game polled input once, right after the previous frame was shown, and used that until its next frame started (the frame limiter's idle time later). With this on, the game asks for a fresh poll the moment its frame starts: mouse and controller reach the game in ~2 ms instead of ~5.5 at 240 fps, and up to a frame sooner at low frame caps. Applies on the next launch." },
+              tip = "Without the independent input thread, asks the render thread for a fresh poll when the game frame starts. The independent input thread instead drains its already-collected events at this boundary without waiting for a render-thread poll. Applies on the next launch." },
             { key = "reflexSleep", label = "Low-latency mode (Reflex-style pacing)",
               tip = "What NVIDIA Reflex does, built with OpenGL (Reflex itself has no OpenGL version): each frame measures how long it waited in the queue to the screen (the hand-off to the render thread, a vsync swap that blocks, the driver's queue), and the next frame starts that much later so it arrives just in time, carrying newer input. With vsync on and an uncapped game, together with the cap below: 25-28 ms from input to screen became 5-10 ms. Does nothing when nothing queues (a frame cap below the refresh, vsync off). Applies on the next launch." },
             { key = "reflexBoost", label = "Low-latency boost: keep the GPU clocks up (NVIDIA)",
@@ -524,12 +542,12 @@ local SECTIONS = {
         },
     },
     {
-        title = "CPU cores and power (laptops and handhelds)", clip = "spin",
+        title = "CPU cores and power (hybrid and dual-CCD CPUs)", clip = "spin",
         entries = {
-            { key = "corePlacement", label = "Which cores the game's threads run on (hybrid CPUs)",
-              choices = { "auto", "efficient", "performance", "off" },
-              note = { auto = "background work on the efficient cores, the game and render threads there too while they keep the frame cap", efficient = "every thread on the efficient cores", performance = "game and render threads on the fast cores, the rest on the efficient ones", off = "stock: the operating system decides" },
-              tip = "CPUs such as the Ryzen AI 300 series (Zen 5 + Zen 5c), Intel's P + E core chips and Apple silicon have fast cores that cost several times the power of their efficient ones for the same work: one busy thread drew 9.2 W on a Zen 5 core and 2.2 W on a Zen 5c core of an Ayaneo Flip. Linux put the game's lighting, compiler, audio and loader threads on the fast cores as often as not. Auto keeps all of that on the efficient cores and moves the game and render threads to the fast cores only while they would otherwise miss the frame cap. Linux sets the cores directly; macOS gets the matching quality-of-service classes. Applies on the next launch." },
+            { key = "corePlacement", label = "Which CPU cores run the game's threads (hybrid / dual-CCD)",
+              choices = { "auto", "efficient", "performance", "dual-ccd", "off" },
+              note = { auto = "hybrid CPUs: move game/render to fast cores only when needed", efficient = "all threads on efficient cores", performance = "game/render on fast cores, background on efficient cores", ["dual-ccd"] = "Windows dual-CCD: game, render and workers on the main CCD, background on the other", off = "stock: the operating system decides" },
+              tip = "On Linux hybrid CPUs (Zen 5 + Zen 5c or Intel P + E), Auto keeps background work on efficient cores and moves game/render to fast cores when they would miss the frame cap; macOS uses QoS classes. Windows Auto, Efficient and Performance leave placement to the OS. Windows Dual-CCD works on any dual-CCD Ryzen (6+6 or 8+8 cores, SMT on or off, with or without V-Cache): the main CCD is the one with the larger L3 (V-Cache), or CCD0 when both are equal. The game, render, lighting, input and frame/draw worker threads share the whole main CCD; known background work runs on the other one. Frame and draw worker threads are capped at the main CCD's physical cores - 2. Unknown/native and stop-the-world GC threads stay on both CCDs. Unsupported topology disables placement. Applies on the next launch." },
             { key = "gpuPstate", label = "AMD GPU clock level while playing (Linux)",
               choices = { "auto", "off", "standard", "min_sclk" },
               note = { auto = "the lowest fixed clock whose frame time fits the cap, automatic clocks otherwise", off = "stock: the driver's automatic clocks", standard = "a fixed ~1 GHz", min_sclk = "the lowest shader clock (~640 MHz)" },
@@ -2594,6 +2612,77 @@ local function addIntOption(self, entry, splitpoint, y, comboWidth)
     return option
 end
 
+-- Text fields use the same value/pinning/profile contract as combos. Normalize to the effective
+-- sensitivity step before saving, so the menu reflects what Config actually applies.
+local function numericValue(entry, text)
+    local raw = string.gsub(string.match(text or "", "^%s*(.-)%s*$"), ",", ".")
+    if not string.match(raw, "^%d+%.?%d*$") then return nil end
+    local value = tonumber(raw)
+    local spec = entry.number
+    if not value or value < spec.min or value > spec.max then return nil end
+    if spec.twentieths then
+        return string.format("%.2f", math.floor(value * 20 + 0.5) / 20)
+    end
+    if value ~= math.floor(value) then return nil end
+    return tostring(value)
+end
+
+local function addNumericOption(self, entry, splitpoint, y, width, height)
+    local p = perf()
+    local pinnedBy = p:getPzoptOptionPinnedBy(entry.key)
+    local label = ISLabel:new(splitpoint, y + self.addY, height, entry.label, 1, 1, 1, 1, UIFont.Small)
+    label:initialise()
+    self.mainPanel:addChild(label)
+    local box = ISTextEntryBox:new(nextValue(entry), splitpoint + 20, y + self.addY, width, height)
+    box:initialise()
+    box:instantiate()
+    box.tooltip = tooltipFor(entry, pinnedBy) .. " Empty input restores the default; invalid input keeps the previous value on Apply."
+    if pinnedBy ~= "" then box:setEditable(false) end
+    self.mainPanel:addChild(box)
+    self.mainPanel:insertNewLineOfButtons(box)
+    self.addY = self.addY + height + MainOptions.style.borderSpacing
+
+    local option = GameOption:new("pzopt." .. entry.key, box)
+    function option.toUI(self)
+        self.pzoptShown = nextValue(entry)
+        self.control:setText(self.pzoptShown)
+    end
+    function option.apply(self)
+        if pinnedBy ~= "" then return end
+        local text = self.control:getText()
+        local default = perf():getPzoptOptionDefault(entry.key)
+        local value = text:match("^%s*$") and default or numericValue(entry, text)
+        if not value then
+            self.control:setText(nextValue(entry))
+            return
+        end
+        self.control:setText(value)
+        if compatDecides(entry.key) then
+            if value == numericValue(entry, self.pzoptShown) then return end
+            perf():setPzoptOption(entry.key, value)
+        elseif tonumber(value) == tonumber(default) then
+            perf():setPzoptOption(entry.key, "")
+        else
+            perf():setPzoptOption(entry.key, value)
+        end
+        afterStore(self, entry, value)
+    end
+    function option.pzoptReset(self)
+        if pinnedBy == "" then self.control:setText(perf():getPzoptOptionDefault(entry.key)) end
+    end
+    function option.pzoptSet(self, value)
+        if pinnedBy == "" then self.control:setText(value or perf():getPzoptOptionDefault(entry.key)) end
+    end
+    function option.pzoptCurrent(self)
+        local text = self.control:getText()
+        local value = text:match("^%s*$") and perf():getPzoptOptionDefault(entry.key) or numericValue(entry, text)
+        return value or nextValue(entry)
+    end
+    option.pzoptKey = entry.key
+    self.gameOptions:add(option)
+    return option
+end
+
 -- The zoom curve (`bezier` entries, key zoomEase; 2026-09-22): the preset combo, then one slider per control-point
 -- coordinate (x1, y1, x2, y2 as in CSS cubic-bezier(), each 0..1 so the zoom never overshoots its target) with a
 -- plot of the curve in the label column beside them. A slider move selects the preset it matches, else "custom";
@@ -3288,7 +3377,7 @@ end
 PAGES = {
     { tab = "Optimizations", sections = SECTIONS, master = MASTER, masterField = "pzoptMaster", masterClip = "drive",
       options = "pzoptOptions",
-      footer = "Performance settings take effect on the next launch. File: Zomboid/pzopt/options.ini" },
+      footer = "Performance settings take effect on the next launch; Raw mouse settings apply as soon as you press Apply. File: Zomboid/pzopt/options.ini" },
     { tab = ENHANCEMENTS_TAB, sections = ENHANCEMENT_SECTIONS, master = ENHANCEMENTS_MASTER, masterField = "pzoptEnhancementMaster",
       masterClip = "upscale", options = "pzoptEnhancementOptions",
       footer = "Visuals apply as soon as you press Apply; HDR output, per-pixel lighting, reflections, car glass, mirrors and relief on the next launch. File: Zomboid/pzopt/options.ini" },
@@ -4644,6 +4733,7 @@ local function buildPage(self)
         local item, option, top = capture(function()
             if entry.bezier then return addBezierOption(self, entry, split, 0, G.ctrlW, BH) end
             if entry.colour then return addColourOption(self, entry, split, 0) end
+            if entry.number then return addNumericOption(self, entry, split, 0, G.ctrlW, BH) end
             if entry.choices then return addIntOption(self, entry, split, 0, G.ctrlW) end
             return addBoolOption(self, entry, split, 0, BH)
         end)

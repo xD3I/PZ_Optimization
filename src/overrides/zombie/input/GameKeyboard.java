@@ -1,5 +1,8 @@
 package zombie.input;
 
+import java.util.concurrent.atomic.AtomicIntegerArray;
+import org.lwjgl.glfw.GLFW;
+
 import org.lwjglx.input.KeyEventQueue;
 import zombie.GameWindow;
 import zombie.UsedFromLua;
@@ -18,6 +21,7 @@ public final class GameKeyboard {
    public static boolean noEventsWhileLoading;
    public static boolean doLuaKeyPressed = true;
    private static final KeyboardStateCache s_keyboardStateCache = new KeyboardStateCache();
+   private static final AtomicIntegerArray pzoptKeyBits = new AtomicIntegerArray(org.lwjglx.input.Keyboard.KEYBOARD_SIZE);
 
    public static void update() {
       if (!s_keyboardStateCache.getState().isCreated()) {
@@ -105,6 +109,54 @@ public final class GameKeyboard {
 
    public static void poll() {
       s_keyboardStateCache.poll();
+   }
+
+   public static void pzoptKeyEvent(int key, int action) {
+      if (Core.isUseGameViewport() && !zombie.debug.DebugContext.instance.focusedGameViewport) return;
+      int lwjglKey = org.lwjglx.input.KeyCodes.toLwjglKey(key);
+      if (lwjglKey >= 0 && lwjglKey < org.lwjglx.input.Keyboard.KEYBOARD_SIZE) {
+         if (action == GLFW.GLFW_RELEASE) pzoptKeyBits.set(lwjglKey, 0);
+         else if (action == GLFW.GLFW_PRESS || action == GLFW.GLFW_REPEAT) pzoptKeyBits.set(lwjglKey, 1);
+      }
+      s_keyboardStateCache.pzoptKeyEvent(key, action);
+      pzopt.InputThread.requestSample();
+   }
+
+   public static void pzoptCharEvent(char value) {
+      if (Core.isUseGameViewport() && !zombie.debug.DebugContext.instance.focusedGameViewport) return;
+      s_keyboardStateCache.pzoptCharEvent(value);
+      pzopt.InputThread.requestSample();
+   }
+
+   /** Seeded by Display on the GLFW owner immediately before it publishes InputThread.active(). */
+   public static void pzoptSeedKeyState() {
+      if (!pzopt.InputThread.isOwnerThread()) throw new IllegalStateException("Keyboard seed requires GLFW owner");
+      long window = org.lwjglx.opengl.Display.getWindow();
+      boolean focused = GLFW.glfwGetWindowAttrib(window, GLFW.GLFW_FOCUSED) == GLFW.GLFW_TRUE;
+      for (int key = 0; key < org.lwjglx.input.Keyboard.KEYBOARD_SIZE; key++) {
+         int glfwKey = org.lwjglx.input.KeyCodes.toGlfwKey(key);
+         pzoptKeyBits.set(key, focused && glfwKey >= 0 && GLFW.glfwGetKey(window, glfwKey) == GLFW.GLFW_PRESS ? 1 : 0);
+      }
+   }
+
+   public static boolean pzoptIsKeyDown(int key) {
+      return !(Core.isUseGameViewport() && !zombie.debug.DebugContext.instance.focusedGameViewport)
+         && key >= 0 && key < org.lwjglx.input.Keyboard.KEYBOARD_SIZE && pzoptKeyBits.get(key) != 0;
+   }
+
+   public static boolean pzoptNextEvent() { return s_keyboardStateCache.pzoptNextEvent(); }
+   public static int pzoptEventKey() { return s_keyboardStateCache.pzoptEventKey(); }
+   public static char pzoptEventCharacter() { return s_keyboardStateCache.pzoptEventCharacter(); }
+   public static boolean pzoptEventKeyState() { return s_keyboardStateCache.pzoptEventKeyState(); }
+   public static long pzoptEventNanoseconds() { return s_keyboardStateCache.pzoptEventNanoseconds(); }
+
+   public static void pzoptFocusLost() {
+      for (int key = 0; key < org.lwjglx.input.Keyboard.KEYBOARD_SIZE; key++) pzoptKeyBits.set(key, 0);
+      s_keyboardStateCache.pzoptFocusLost();
+   }
+
+   public static void pzoptPollDevices() {
+      s_keyboardStateCache.pzoptPollDevices();
    }
 
    public static boolean isKeyDownRaw(int key) {

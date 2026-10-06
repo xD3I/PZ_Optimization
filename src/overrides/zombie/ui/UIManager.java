@@ -3,6 +3,7 @@ package zombie.ui;
 import java.util.ArrayList;
 import java.util.logging.Level;
 import java.util.logging.Logger;
+import pzopt.SubframeInput;
 import se.krka.kahlua.vm.KahluaTable;
 import se.krka.kahlua.vm.KahluaThread;
 import zombie.GameProfiler;
@@ -109,6 +110,11 @@ public final class UIManager {
    private static final UIManager.BlinkInfo[] playerBlinkInfo = new UIManager.BlinkInfo[4];
    private static boolean rendering;
    private static boolean updating;
+   private static boolean subframeEdges;
+   private static boolean subframeHeld;
+   private static boolean subframeEventDispatch;
+   private static boolean subframeFrameMouseMove;
+   private static boolean subframeLastMoveConsumed;
    public static final int DEBUGGER_FPS = 60;
 
    public static void AddUI(UIElementInterface el) {
@@ -551,6 +557,7 @@ public final class UIManager {
    }
 
    public static void update() {
+      if (SubframeInput.active() && SubframeInput.inEvent()) return; // pzopt: a Lua input callback cannot recursively drain/replay its frame
       if (!suspend) {
          if (!toRemove.isEmpty()) {
             UI.removeAll(toRemove);
@@ -637,7 +644,11 @@ public final class UIManager {
 
          int consumed;
          try {
-            consumed = updateMouseButtons(mx, my);
+            if (SubframeInput.active()) {
+               consumed = updateSubframeMouse(mx, my);
+            } else {
+               consumed = updateMouseButtons(mx, my);
+            }
          } catch (Throwable var23) {
             if (var34 != null) {
                try {
@@ -659,7 +670,7 @@ public final class UIManager {
          boolean consumedRClick = (consumed & 2) == 2;
          boolean consumedMove = false;
          int attackclick = GameKeyboard.whichKeyPressed("Attack/Click");
-         if (attackclick > 0 && checkPicked()) {
+         if (!SubframeInput.active() && attackclick > 0 && checkPicked()) {
             if ((attackclick != 10000 || !consumedClick) && (attackclick != 10001 || !consumedRClick)) {
                LuaEventManager.triggerEvent("OnObjectLeftMouseButtonDown", picked.tile, BoxedStaticValues.toDouble(mx), BoxedStaticValues.toDouble(my));
             }
@@ -675,29 +686,47 @@ public final class UIManager {
                getPicked().tile.onMouseLeftClick(getPicked().lx, getPicked().ly);
             }
          }
+         if (SubframeInput.active() && attackclick > 0 && attackclick < 10000 && checkPicked()) {
+            LuaEventManager.triggerEvent("OnObjectLeftMouseButtonDown", picked.tile, BoxedStaticValues.toDouble(mx), BoxedStaticValues.toDouble(my));
+            GameKeyboard.whichKeyPressed("Attack/Click");
+            if (IsoWorld.instance.currentCell != null
+               && !IsoWorld.instance.currentCell.DoBuilding(0, false)
+               && getPicked() != null
+               && !GameTime.isGamePaused()
+               && IsoPlayer.getInstance() != null
+               && !IsoPlayer.getInstance().isAiming()
+               && !IsoPlayer.getInstance().isAsleep()) {
+               getPicked().tile.onMouseLeftClick(getPicked().lx, getPicked().ly);
+            }
+         }
 
          attackclick = GameKeyboard.whichKeyWasDown("Attack/Click");
-         if (attackclick > 0 && checkPicked() && (attackclick != 10000 || !consumedClick) && (attackclick != 10001 || !consumedRClick)) {
+         if (!SubframeInput.active() && attackclick > 0 && checkPicked() && (attackclick != 10000 || !consumedClick) && (attackclick != 10001 || !consumedRClick)) {
+            LuaEventManager.triggerEvent("OnObjectLeftMouseButtonUp", picked.tile, BoxedStaticValues.toDouble(mx), BoxedStaticValues.toDouble(my));
+         }
+         if (SubframeInput.active() && attackclick > 0 && attackclick < 10000 && checkPicked()) {
             LuaEventManager.triggerEvent("OnObjectLeftMouseButtonUp", picked.tile, BoxedStaticValues.toDouble(mx), BoxedStaticValues.toDouble(my));
          }
 
-         lastwheel = 0;
-         wheel = Mouse.getWheelState();
-         boolean bWheelConsumed = false;
-         if (wheel != lastwheel) {
-            int del = wheel - lastwheel < 0 ? 1 : -1;
+         if (!SubframeInput.active()) {
+            lastwheel = 0;
+            wheel = Mouse.getWheelState();
+            boolean bWheelConsumed = false;
+            if (wheel != lastwheel) {
+               int del = wheel - lastwheel < 0 ? 1 : -1;
 
-            for (int i = UI.size() - 1; i >= 0; i--) {
-               UIElementInterface ui = UI.get(i);
-               if ((ui.isPointOver(mx, my) || ui.isCapture()) && ui.onConsumeMouseWheel(del, mx - ui.getX(), my - ui.getY())) {
-                  bWheelConsumed = true;
-                  break;
+               for (int i = UI.size() - 1; i >= 0; i--) {
+                  UIElementInterface ui = UI.get(i);
+                  if ((ui.isPointOver(mx, my) || ui.isCapture()) && ui.onConsumeMouseWheel(del, mx - ui.getX(), my - ui.getY())) {
+                     bWheelConsumed = true;
+                     break;
+                  }
                }
-            }
 
-            LuaEventManager.triggerEvent("OnMouseWheel", BoxedStaticValues.toDouble(wheel));
-            if (!bWheelConsumed) {
-               Core.getInstance().doZoomScroll(0, del);
+               LuaEventManager.triggerEvent("OnMouseWheel", BoxedStaticValues.toDouble(wheel));
+               if (!bWheelConsumed) {
+                  Core.getInstance().doZoomScroll(0, del);
+               }
             }
          }
 
@@ -705,7 +734,11 @@ public final class UIManager {
          ProfileArea var38 = profiler.profile("updateMouseMove");
 
          try {
-            consumedMove = updateMouseMove(mx, my, consumedMove);
+            if (SubframeInput.active()) {
+               consumedMove = false;
+            } else {
+               consumedMove = updateMouseMove(mx, my, consumedMove);
+            }
          } catch (Throwable var22) {
             if (var38 != null) {
                try {
@@ -723,7 +756,7 @@ public final class UIManager {
          }
 
          pzopt.UiProfile.updateMark(3); // pzopt: uiProfile (mouse move)
-         if (!consumedMove && IsoPlayer.players[0] != null) {
+         if (!SubframeInput.active() && !consumedMove && IsoPlayer.players[0] != null) {
             setPicked(IsoObjectPicker.Instance.ContextPick(mx, my));
             if (IsoCamera.getCameraCharacter() != null) {
                setPickedTile(getTileFromMouse(mxw, myw, PZMath.fastfloor(IsoPlayer.players[0].getZ())));
@@ -786,13 +819,199 @@ public final class UIManager {
       }
    }
 
+   private static int updateSubframeMouse(int mx, int my) {
+      int result = 0;
+      subframeFrameMouseMove = false;
+      subframeLastMoveConsumed = false;
+      if (SubframeInput.reset || SubframeInput.hasPendingReset()) {
+         cancelSubframeInteraction();
+      } else {
+         int pendingMove = -1;
+         for (int i = 0; i < SubframeInput.count; i++) {
+            if (SubframeInput.hasPendingReset()) {
+               cancelSubframeInteraction();
+               break;
+            }
+            boolean action = SubframeInput.pressed[i] != 0
+               || SubframeInput.released[i] != 0
+               || SubframeInput.wheelSteps[i] != 0;
+            if (!action) {
+               pendingMove = i;
+               continue;
+            }
+
+            if (pendingMove >= 0) {
+               SubframeInput.beginEvent(pendingMove);
+               try {
+                  updateSubframePosition(Mouse.getXA(), Mouse.getYA());
+               } finally {
+                  SubframeInput.endEvent();
+               }
+               pendingMove = -1;
+            }
+
+            SubframeInput.beginEvent(i);
+            try {
+               int x = Mouse.getXA();
+               int y = Mouse.getYA();
+               updateSubframePosition(x, y);
+               subframeEventDispatch = true;
+               subframeEdges = true;
+               subframeHeld = false;
+               int consumed = updateMouseButtons(x, y);
+               result |= consumed;
+               if ((consumed & SubframeInput.eventPressed()) != 0 || (consumed & SubframeInput.eventReleased()) != 0) {
+                  SubframeInput.consume(i);
+               }
+               if (SubframeInput.pressed[i] != 0 || SubframeInput.released[i] != 0) {
+                  dispatchSubframeAttackClick(x, y, consumed);
+               }
+               // Whole notches only: a high-resolution wheel's partial records accumulate like the stock per-frame sum.
+               int wheelSteps = SubframeInput.eventWheelSteps();
+               if (wheelSteps != 0) {
+                  int delta = wheelSteps < 0 ? 1 : -1;
+                  boolean wheelConsumed = false;
+                  for (int uiIndex = UI.size() - 1; uiIndex >= 0; uiIndex--) {
+                     UIElementInterface ui = UI.get(uiIndex);
+                     if ((ui.isPointOver(x, y) || ui.isCapture()) && ui.onConsumeMouseWheel(delta, x - ui.getX(), y - ui.getY())) {
+                        wheelConsumed = true;
+                        break;
+                     }
+                  }
+                  LuaEventManager.triggerEvent("OnMouseWheel", BoxedStaticValues.toDouble(wheelSteps));
+                  if (!wheelConsumed) {
+                     Core.getInstance().doZoomScroll(0, delta);
+                  } else {
+                     SubframeInput.consume(i);
+                  }
+               }
+            } finally {
+               subframeEdges = false;
+               subframeHeld = false;
+               subframeEventDispatch = false;
+               for (int button = 0; button < Mouse.getButtonCount(); button++) {
+                  if ((SubframeInput.released[i] & (1 << button)) != 0) Mouse.uiCaptured[button] = false;
+               }
+               SubframeInput.capture(i);
+               SubframeInput.endEvent();
+            }
+         }
+         if (SubframeInput.hasPendingReset()) {
+            cancelSubframeInteraction();
+         } else {
+            if (pendingMove >= 0) {
+               SubframeInput.beginEvent(pendingMove);
+               try {
+                  updateSubframePosition(Mouse.getXA(), Mouse.getYA());
+               } finally {
+                  SubframeInput.endEvent();
+               }
+            }
+            updateSubframePosition(mx, my, true);
+            subframeEventDispatch = true;
+            subframeEdges = false;
+            subframeHeld = true;
+            try {
+               result |= updateMouseButtons(mx, my);
+            } finally {
+               subframeHeld = false;
+               subframeEventDispatch = false;
+            }
+         }
+      }
+      return result;
+   }
+
+   private static void updateSubframePosition(int mx, int my) {
+      updateSubframePosition(mx, my, false);
+   }
+
+   private static void updateSubframePosition(int mx, int my, boolean frameHover) {
+      int oldX = lastMouseX;
+      int oldY = lastMouseY;
+      boolean moved = oldX != mx || oldY != my;
+      boolean consumedMove = updateMouseMove(mx, my, false);
+      if (moved) {
+         subframeLastMoveConsumed = consumedMove;
+      }
+      if (!consumedMove && IsoPlayer.players[0] != null) {
+         setPicked(IsoObjectPicker.Instance.ContextPick(mx, my));
+         int mouseX = Mouse.getX();
+         int mouseY = Mouse.getY();
+         if (IsoCamera.getCameraCharacter() != null) {
+            setPickedTile(getTileFromMouse(mouseX, mouseY, PZMath.fastfloor(IsoPlayer.players[0].getZ())));
+         }
+         if (moved || frameHover && !subframeFrameMouseMove && !subframeLastMoveConsumed) {
+            LuaEventManager.triggerEvent(
+               "OnMouseMove",
+               BoxedStaticValues.toDouble(mx),
+               BoxedStaticValues.toDouble(my),
+               BoxedStaticValues.toDouble(mouseX),
+               BoxedStaticValues.toDouble(mouseY)
+            );
+            subframeFrameMouseMove = true;
+         }
+      }
+      setLastMouseX(mx);
+      setLastMouseY(my);
+   }
+
+   private static void dispatchSubframeAttackClick(int mx, int my, int consumed) {
+      int attackclick = GameKeyboard.whichKeyPressed("Attack/Click");
+      if (attackclick >= 10000 && checkPicked() && (consumed & (1 << (attackclick - 10000))) == 0) {
+         LuaEventManager.triggerEvent("OnObjectLeftMouseButtonDown", picked.tile, BoxedStaticValues.toDouble(mx), BoxedStaticValues.toDouble(my));
+         if (IsoWorld.instance.currentCell != null
+            && !IsoWorld.instance.currentCell.DoBuilding(0, false)
+            && getPicked() != null
+            && !GameTime.isGamePaused()
+            && IsoPlayer.getInstance() != null
+            && !IsoPlayer.getInstance().isAiming()
+            && !IsoPlayer.getInstance().isAimControlActive()
+            && !IsoPlayer.getInstance().isAsleep()) {
+            getPicked().tile.onMouseLeftClick(getPicked().lx, getPicked().ly);
+         }
+      }
+      attackclick = GameKeyboard.whichKeyWasDown("Attack/Click");
+      if (attackclick >= 10000 && checkPicked()
+         && (SubframeInput.eventReleased() & (1 << (attackclick - 10000))) != 0
+         && (consumed & (1 << (attackclick - 10000))) == 0) {
+         LuaEventManager.triggerEvent("OnObjectLeftMouseButtonUp", picked.tile, BoxedStaticValues.toDouble(mx), BoxedStaticValues.toDouble(my));
+      }
+   }
+
+   private static void cancelSubframeInteraction() {
+      Mouse.pzoptButtonState(0, 0);
+      Mouse.wheelDelta = 0;
+      if (Mouse.uiCaptured != null) {
+         for (int i = 0; i < Mouse.uiCaptured.length; i++) {
+            Mouse.uiCaptured[i] = false;
+         }
+      }
+      for (int i = 0; i < UI.size(); i++) {
+         if (UI.get(i) instanceof UIElement element) {
+            element.cancelMouseInteraction();
+         }
+      }
+      if (LuaManager.env != null && LuaManager.env.rawget("ISMouseDrag") instanceof KahluaTable drag) {
+         drag.rawset("dragView", null);
+         drag.rawset("tabPanel", null);
+      }
+      setRightDownObject(null);
+      IsoPlayer player = IsoPlayer.getInstance();
+      if (player != null) {
+         player.setDragObject(null);
+      }
+   }
+
    private static int updateMouseButtons(int mx, int my) {
       boolean consumedClick = false;
       boolean consumedRClick = false;
+      int consumedButtons = 0; // pzopt: keep consumption for remapped extra mouse buttons too
 
       for (int btn = 0; btn < Mouse.getButtonCount(); btn++) {
          boolean consumed = btn == 0 && Gizmos.getInstance().hitTest(mx, my);
-         if (Mouse.isButtonPressed(btn)) {
+         boolean capturedRelease = SubframeInput.active() && Mouse.uiCaptured[btn] && Mouse.isButtonReleased(btn);
+         if ((!subframeEventDispatch || subframeEdges) && Mouse.isButtonPressed(btn)) {
             if (btn == 0) {
                Core.UnfocusActiveTextEntryBox();
             }
@@ -809,7 +1028,7 @@ public final class UIManager {
                      }
                }
             }
-         } else if (Mouse.isButtonReleased(btn)) {
+         } else if ((!subframeEventDispatch || subframeEdges) && Mouse.isButtonReleased(btn)) {
             for (int i = UI.size() - 1; i >= 0 && !consumed; i--) {
                UIElementInterface ui = UI.get(i);
                switch (isOverElement(ui, mx, my)) {
@@ -823,6 +1042,11 @@ public final class UIManager {
                }
             }
          }
+         consumed |= capturedRelease;
+         if (consumed) {
+            consumedButtons |= 1 << btn;
+            if (SubframeInput.active() && Mouse.isButtonPressed(btn)) Mouse.UIBlockButtonDown(btn);
+         }
 
          if (btn == 0) {
             consumedClick = consumed;
@@ -832,15 +1056,16 @@ public final class UIManager {
       }
 
       for (int btn = 2; btn < Mouse.getButtonCount(); btn++) {
-         if (Mouse.isButtonPressed(btn)) {
+         if (SubframeInput.active() && ((consumedButtons & (1 << btn)) != 0 || Mouse.uiCaptured[btn])) continue;
+         if ((!subframeEventDispatch || subframeEdges) && Mouse.isButtonPressed(btn)) {
             LuaEventManager.triggerEvent("OnKeyStartPressed", 10000 + btn);
             LuaEventManager.triggerEvent("OnKeyPressed", 10000 + btn);
-         } else if (!Mouse.isButtonReleased(btn) && Mouse.isButtonDown(btn)) {
+         } else if ((!subframeEventDispatch || subframeHeld) && !subframePressedThisFrame(btn) && !Mouse.isButtonReleased(btn) && Mouse.isButtonDown(btn)) {
             LuaEventManager.triggerEvent("OnKeyKeepPressed", 10000 + btn);
          }
       }
 
-      if (Mouse.isLeftPressed()) {
+      if ((!subframeEventDispatch || subframeEdges) && Mouse.isLeftPressed()) {
          if (!consumedClick) {
             LuaEventManager.triggerEvent("OnMouseDown", BoxedStaticValues.toDouble(mx), BoxedStaticValues.toDouble(my));
             LuaEventManager.triggerEvent("OnKeyStartPressed", 10000);
@@ -849,15 +1074,16 @@ public final class UIManager {
          } else {
             Mouse.UIBlockButtonDown(0);
          }
-      } else if (Mouse.isLeftReleased()) {
+      } else if ((!subframeEventDispatch || subframeEdges) && Mouse.isLeftReleased()) {
          if (!consumedClick) {
             LuaEventManager.triggerEvent("OnMouseUp", BoxedStaticValues.toDouble(mx), BoxedStaticValues.toDouble(my));
          }
-      } else if (Mouse.isLeftDown() && !consumedClick) {
+      } else if ((!subframeEventDispatch || subframeHeld) && !subframePressedThisFrame(0) && Mouse.isLeftDown() && !consumedClick
+         && (!SubframeInput.active() || !Mouse.uiCaptured[0])) {
          LuaEventManager.triggerEvent("OnKeyKeepPressed", 10000);
       }
 
-      if (Mouse.isRightPressed()) {
+      if ((!subframeEventDispatch || subframeEdges) && Mouse.isRightPressed()) {
          if (!consumedRClick) {
             LuaEventManager.triggerEvent("OnRightMouseDown", BoxedStaticValues.toDouble(mx), BoxedStaticValues.toDouble(my));
             if (checkPicked()) {
@@ -867,7 +1093,7 @@ public final class UIManager {
             Mouse.UIBlockButtonDown(1);
          }
 
-         if (IsoWorld.instance.currentCell != null
+         if ((!SubframeInput.active() || !consumedRClick) && IsoWorld.instance.currentCell != null
             && getPicked() != null
             && getSpeedControls() != null
             && !IsoPlayer.getInstance().isAiming()
@@ -877,7 +1103,7 @@ public final class UIManager {
             getPicked().tile.onMouseRightClick(getPicked().lx, getPicked().ly);
             setRightDownObject(getPicked().tile);
          }
-      } else if (Mouse.isRightReleased()) {
+      } else if ((!subframeEventDispatch || subframeEdges) && Mouse.isRightReleased()) {
          if (!consumedRClick) {
             LuaEventManager.triggerEvent("OnRightMouseUp", BoxedStaticValues.toDouble(mx), BoxedStaticValues.toDouble(my));
             if (checkPicked()) {
@@ -889,7 +1115,7 @@ public final class UIManager {
             IsoPlayer.getInstance().setDragObject(null);
          }
 
-         if (IsoWorld.instance.currentCell != null
+         if ((!SubframeInput.active() || !consumedRClick) && IsoWorld.instance.currentCell != null
             && getRightDownObject() != null
             && IsoPlayer.getInstance() != null
             && !IsoPlayer.getInstance().isAiming()
@@ -897,7 +1123,8 @@ public final class UIManager {
             getRightDownObject().onMouseRightReleased();
             setRightDownObject(null);
          }
-      } else if (Mouse.isRightDown()) {
+         if (SubframeInput.active()) setRightDownObject(null);
+      } else if ((!subframeEventDispatch || subframeHeld) && Mouse.isRightDown()) {
          for (int i = UI.size() - 1; i >= 0; i--) {
             UIElementInterface ui = UI.get(i);
             if (isOverElement(ui, mx, my) == 1) {
@@ -906,17 +1133,20 @@ public final class UIManager {
             }
          }
 
-         if (!consumedRClick) {
+         if (!consumedRClick && !subframePressedThisFrame(1) && (!SubframeInput.active() || !Mouse.uiCaptured[1])) {
             LuaEventManager.triggerEvent("OnKeyKeepPressed", 10001);
          }
       }
 
-      if (!consumedRClick && Mouse.isRightDelay()) {
+      if ((!subframeEventDispatch || subframeHeld) && !consumedRClick && Mouse.isRightDelay()) {
          LuaEventManager.triggerEvent("OnKeyStartPressed", 10001);
          LuaEventManager.triggerEvent("OnKeyPressed", 10001);
       }
 
-      return (consumedClick ? 1 : 0) + (consumedRClick ? 2 : 0);
+      return consumedButtons | (consumedClick ? 1 : 0) | (consumedRClick ? 2 : 0);
+   }
+   private static boolean subframePressedThisFrame(int button) {
+      return subframeEventDispatch && subframeHeld && (SubframeInput.framePressed() & 1 << button) != 0;
    }
 
    private static boolean updateMouseMove(int mx, int my, boolean consumedMove) {
@@ -1459,7 +1689,8 @@ public final class UIManager {
       } else if (Math.abs(y2 - y1) > getDoubleClickDist()) {
          return false;
       } else {
-         return System.currentTimeMillis() - clickTime > getDoubleClickInterval() ? Boolean.FALSE : Boolean.TRUE;
+         long now = SubframeInput.inEvent() ? SubframeInput.eventMillis() : System.currentTimeMillis();
+         return now - clickTime > getDoubleClickInterval() ? Boolean.FALSE : Boolean.TRUE;
       }
    }
 

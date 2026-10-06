@@ -44,27 +44,33 @@ public final class Mouse {
    private static Texture mouseCursorTexture;
 
    public static int getWheelState() {
+      if (pzopt.InputThread.active() && pzopt.SubframeInput.inEvent()) {
+         return pzopt.SubframeInput.eventWheelSteps();
+      }
       return wheelDelta;
    }
 
    public static int getButtonCount() {
+      if (pzopt.InputThread.active()) return 8;
       return s_mouseStateCache.getState().getButtonCount();
    }
 
    public static synchronized int getXA() {
+      if (pzopt.InputThread.active() && pzopt.SubframeInput.inEvent()) return pzoptGameX(pzopt.SubframeInput.eventX());
       return pzopt.Showcase.aimOverride ? pzopt.Showcase.aimXA : x; // pzopt: harness showcase=horde aims the game's mouse at a zombie
    }
 
    public static synchronized int getYA() {
+      if (pzopt.InputThread.active() && pzopt.SubframeInput.inEvent()) return pzoptGameY(pzopt.SubframeInput.eventY());
       return pzopt.Showcase.aimOverride ? pzopt.Showcase.aimYA : y; // pzopt: harness showcase=horde aims the game's mouse at a zombie
    }
 
    public static synchronized int getX() {
-      return (int)((pzopt.Showcase.aimOverride ? pzopt.Showcase.aimXA : x) * Core.getInstance().getZoom(0)); // pzopt: harness showcase aim
+      return (int)(getXA() * Core.getInstance().getZoom(0)); // pzopt: same event/frame position as unscaled UI input
    }
 
    public static synchronized int getY() {
-      return (int)((pzopt.Showcase.aimOverride ? pzopt.Showcase.aimYA : y) * Core.getInstance().getZoom(0)); // pzopt: harness showcase aim
+      return (int)(getYA() * Core.getInstance().getZoom(0)); // pzopt: same event/frame position as unscaled UI input
    }
 
    public static boolean isButtonKey(int key) {
@@ -107,6 +113,10 @@ public final class Mouse {
    }
 
    public static boolean isRightDelay() {
+      if (pzopt.InputThread.active() && !pzopt.Showcase.holdButtons) {
+         return !uiCaptured[1] && isButtonDown(1)
+            && pzopt.SubframeInput.rightHeldNanos() >= (long)(pzopt.InputLatch.AIM_HOLD_S * 1_000_000_000L);
+      }
       return !uiCaptured[1] && buttonDownStates != null && buttonDownStates[1] ? timeRightPressed >= pzopt.InputLatch.AIM_HOLD_S : false; // pzopt: aimHoldMs (stock 0.15 s)
    }
 
@@ -159,6 +169,10 @@ public final class Mouse {
    }
 
    public static synchronized void update() {
+      if (pzopt.InputThread.active()) {
+         pzoptUpdateFrame();
+         return;
+      }
       MouseState state = s_mouseStateCache.getState();
       if (!state.isCreated()) {
          s_mouseStateCache.swap();
@@ -216,7 +230,55 @@ public final class Mouse {
       }
    }
 
+   private static void pzoptUpdateFrame() {
+      int previous = 0;
+      if (buttonDownStates != null) {
+         for (int i = 0; i < buttonDownStates.length; i++) if (buttonDownStates[i]) previous |= 1 << i;
+      }
+      boolean cancelled = pzopt.SubframeInput.reset || pzopt.SubframeInput.hasPendingReset();
+      pzoptButtonState(cancelled ? 0 : pzopt.SubframeInput.buttons(), cancelled ? 0 : previous);
+      if (pzopt.SubframeInput.hasPosition()) {
+         x = pzoptGameX(pzopt.SubframeInput.x());
+         y = pzoptGameY(pzopt.SubframeInput.y());
+      }
+      wheelDelta = cancelled ? 0 : pzopt.SubframeInput.wheel();
+      if (cancelled) {
+         java.util.Arrays.fill(uiCaptured, false);
+      } else if (pzopt.Showcase.holdButtons) {
+         buttonDownStates[0] = pzopt.Showcase.fireDown;
+         buttonDownStates[1] = true;
+      }
+      if (buttonDownStates[1]) {
+         timeRightPressed += GameTime.getInstance().getRealworldSecondsSinceLastUpdate();
+      } else {
+         timeRightPressed = 0.0F;
+      }
+      if (pzopt.SubframeInput.count != 0) lastActivity = System.currentTimeMillis();
+      AimingReticle.update();
+   }
+
+   private static int pzoptGameX(int px) {
+      return zombie.debug.DebugContext.isUsingGameViewportWindow()
+         ? (int)zombie.debug.DebugContext.instance.viewport.transformXToGame(pzopt.ImGuiInput.eventScreenX(px)) : px;
+   }
+
+   private static int pzoptGameY(int py) {
+      return zombie.debug.DebugContext.isUsingGameViewportWindow()
+         ? (int)zombie.debug.DebugContext.instance.viewport.transformYToGame(pzopt.ImGuiInput.eventScreenY(py)) : py;
+   }
+
+   /** Game-thread event scopes also expose the stock arrays to Lua/native game bindings. */
+   public static void pzoptButtonState(int down, int previous) {
+      if (buttonDownStates == null) buttonDownStates = new boolean[8];
+      if (buttonPrevStates == null) buttonPrevStates = new boolean[8];
+      for (int i = 0; i < buttonDownStates.length; i++) {
+         buttonDownStates[i] = (down & (1 << i)) != 0;
+         buttonPrevStates[i] = (previous & (1 << i)) != 0;
+      }
+   }
+
    public static void poll() {
+      if (pzopt.InputThread.active()) return;
       s_mouseStateCache.poll();
    }
 
@@ -238,7 +300,17 @@ public final class Mouse {
                   break label50;
                }
 
-               var8 = new Cursor(image.width(), image.height(), 1, 1, 1, image.pixels().asIntBuffer(), null);
+               if (pzopt.InputThread.active() && !pzopt.InputThread.isOwnerThread()) {
+                  var8 = pzopt.InputThread.call(() -> {
+                     try {
+                        return new Cursor(image.width(), image.height(), 1, 1, 1, image.pixels().asIntBuffer(), null);
+                     } catch (LWJGLException ex) {
+                        throw new IllegalStateException("Creating native cursor", ex);
+                     }
+                  });
+               } else {
+                  var8 = new Cursor(image.width(), image.height(), 1, 1, 1, image.pixels().asIntBuffer(), null);
+               }
             } catch (Throwable var6) {
                if (image != null) {
                   try {

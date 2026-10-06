@@ -10,9 +10,9 @@ import java.util.Properties;
  * game install directory (next to projectzomboid.jar, so scripts/pzopt.sh
  * status can show it) with -Dpzopt.<key> system properties overriding. Below both sits the
  * player's Zomboid/pzopt/options.ini, written by the Options > Optimizations tab
- * (pzopt.UserOptions); every key is exposed there (booleans as tick boxes, ints as combos) and
- * takes effect on the next launch, except the Profiler tab's (the overlay's), which apply at once
- * ({@link #reloadLive}). A key set in pzopt.properties or -D is shown pinned in the tab.
+ * (pzopt.UserOptions); every key is exposed there (booleans as tick boxes, numeric/string settings as combos) and
+ * takes effect on the next launch except Profiler, Enhancements and RawMouse sensitivity/acceleration settings, which apply
+ * at once ({@link #reloadLive}).
  *
  * Keys:
  *   enabled     true/false   master switch: false makes every override take its stock path, exactly as a build
@@ -817,7 +817,8 @@ public final class Config {
    public static final boolean SAVE_CELL_ASYNC = bool("saveCellAsync", true); // no effect since 42.21 (its requestSaveCell only queues the cell key, the MapCollisionData thread saves throttled); on 42.20 ZombiePopulationManager.requestSaveCell snapshots without saveLock (held by the MapCollisionData thread through each native cell write) and keeps one pending write per cell (a drive unloads dozens of chunks of the same cell)
    public static final boolean WORLD_SOUND_FAST = bool("worldSoundFast", true); // addSound walks only the loaded chunk grid; FishSchoolManager.addSoundNoise skips a repeat of an identical call in the same game minute (the house alarm adds its sound every frame)
    public static final boolean KEYBOARD_FRESH = bool("keyboardFresh", true); // GameKeyboard reads the keyboard poll it swaps in (stock: the previous one, a frame behind mouse and pad)
-   public static final boolean INPUT_LATCH = bool("inputLatch", true); // the game thread gets a fresh event pump + input poll from the render thread right before its input swap (pzopt.InputLatch)
+   public static final boolean INPUT_THREAD = bool("inputThread", System.getProperty("os.name", "").startsWith("Windows")); // Windows: GLFW window/event owner independent of rendering, subframe drain before simulation
+   public static final boolean INPUT_LATCH = bool("inputLatch", true); // without inputThread, request a fresh render-thread event/input poll before the game input swap (pzopt.InputLatch)
    public static final int INPUT_LATCH_WAIT_US = integer("inputLatchWaitUs", 1500); // longest the game thread waits for that poll
    public static final boolean FRAME_START_GATE = bool("frameStartGate", false); // the game thread waits for pipeline room before it reads input, not after building the frame
    public static final int GPU_MAX_FRAMES = integer("gpuMaxFrames", 0); // frames the render thread lets queue behind the GPU (GL fence after the swap), 0 = the driver's own limit
@@ -951,6 +952,12 @@ public final class Config {
     * off (stock: the OS decides) | auto (background threads on the efficient cores; the game and render threads there too
     * while they keep the frame cap, moved to the fast cores when they fall short) | efficient (everything on the efficient
     * cores) | performance (game and render threads on the fast cores, everything else on the efficient ones).
+    * Windows: existing modes remain stock; opt-in dual-ccd needs a dual-CCD CPU (two disjoint shared L3 groups, any sizes, 6+6
+    * or 8+8 cores, SMT on or off). The primary CCD (the larger L3, else CCD0) runs game/render and synchronous
+    * frame/draw/lighting/input/visibility work together; the other CCD runs known background workers. frameThreads and
+    * charDrawThreads are capped at the primary CCD's physical cores minus two. STW GC and unknown/ambiguous OS
+    * descriptions retain access to both CCDs. Requires one unrestricted processor group. No process pinning. Unnamed
+    * native GL threads stay wide; unsupported topology or native API failure disables placement.
     */
    public static final String CORE_PLACEMENT = string("corePlacement", "auto");
    /**
@@ -971,11 +978,11 @@ public final class Config {
    public static final boolean LIGHTING_SYNC_PARK = bool("lightingSyncPark", true);
    /**
     * corePlacement: the CPUs background threads may use instead of every efficient core (a list like "4-7,16-19"; empty =
-    * the efficient class). Packing them onto fewer cores lets the others reach their deepest idle state.
+    * the efficient class). Linux only; rejected rather than misinterpreted by Windows dual-ccd placement.
     */
    public static final int CORE_ISOLATE = Math.max(0, integer("coreIsolate", 0)); // corePlacement on a CPU whose cores are alike: reserve this many physical cores (best boost rank first) for the game and render threads, their SMT siblings idle, every other thread on the rest (0 = off)
    public static final String CORE_BACKGROUND_CPUS = string("coreBackgroundCpus", "");
-   /** corePlacement: the CPUs the game / render / GL threads use when they are on the fast class (a list; empty = the fast class). */
+   /** Linux only: CPUs the game / render / GL threads use on the fast class (a list; empty = the fast class). Rejected by Windows dual-ccd. */
    public static final String CORE_CRITICAL_CPUS = string("coreCriticalCpus", "");
    /** corePlacement=auto: the game step's p90 (share of the frame interval) above which the game and render threads move to the fast cores. */
    public static final int CORE_PROMOTE_PCT = Math.max(30, Math.min(100, integer("corePromotePct", 85)));
@@ -1538,9 +1545,12 @@ public final class Config {
    public static final int DEV_FOG_DEPTH_VIEW = integer("devFogDepthView", 0); // measurement: the composite shows 1 = the scene depth, 2 = the fog texel depth, 3 = the fog buffer alpha (R/G = depth * 255 integer / fraction)
    public static final boolean FOG_DEPTH_COPY = bool("fogDepthCopy", false); // keep the offscreen depth a renderbuffer and copy it for the fog pass (measurement / driver fallback) // measurement: the rectangles with a flat fragment shader (no noise fetches)
    public static final int FOG_MASK_FRAMES = integer("fogMaskFrames", 20); // a chunk's fog masks (which squares take fog) are refreshed this often; 0 = read every square every frame
-   // The Profiler tab's keys (the overlay and its game-thread profiler): they apply while the game runs. loadLive()
-   // reads them at init and again from reloadLive() when the player changes one (UserOptions.set); pzopt.Overlay and
-   // pzopt.GameThreadProfile read them per use or re-derive their state (Overlay.reconfigure). 2026-09-24.
+   // Live RawMouse settings: changing any of them resets its collect-time velocity and signed fractional motion.
+   public static volatile int MOUSE_SENSITIVITY_TWENTIETHS; // option key: mouseSensitivity; 2..80 units of 0.05, default 20 = 1.0
+   public static volatile boolean MOUSE_ACCELERATION; // option key: mouseAcceleration; default off
+   public static volatile int MOUSE_ACCELERATION_ONSET_CPS; // option key: mouseAccelerationOnsetCps; counts per collect-time second
+   public static volatile int MOUSE_ACCELERATION_SLOPE_PCT_PER_KCPS; // option key: mouseAccelerationSlopePctPerKcps; gain percent per 1,000 counts/s
+   public static volatile int MOUSE_ACCELERATION_CAP_PCT; // option key: mouseAccelerationCapPct; max gain percent of linear
    public static volatile int DARKNESS_FLOOR_PCT; // luminance floor of seen squares, % of full light (0 = off)
    public static volatile boolean DARKNESS_FLOOR_BASEMENTS; // the floor also below ground
    public static volatile boolean MEMORY_TINT; // remembered places: out of sight desaturated / dimmed, remembered rooms kept
@@ -1608,7 +1618,11 @@ public final class Config {
 
    private static void loadLive() {
       loadingLive = true;
-      // the two tabs' master switches (2026-09-28): off, their feature keys read as off (GATED, raw)
+      MOUSE_SENSITIVITY_TWENTIETHS = mouseSensitivityUnits();
+      MOUSE_ACCELERATION = bool("mouseAcceleration", false);
+      MOUSE_ACCELERATION_ONSET_CPS = Math.max(0, Math.min(8000, integer("mouseAccelerationOnsetCps", 1000)));
+      MOUSE_ACCELERATION_SLOPE_PCT_PER_KCPS = Math.max(0, Math.min(200, integer("mouseAccelerationSlopePctPerKcps", 50)));
+      MOUSE_ACCELERATION_CAP_PCT = Math.max(100, Math.min(300, integer("mouseAccelerationCapPct", 200)));
       ENHANCEMENTS_ENABLED = bool("enhancementsEnabled", true);
       PROFILER_ENABLED = bool("profilerEnabled", true);
       // The Enhancements tab's keys (2026-09-25): upscaling, the HDR sliders (not hdr / hdrAuto: on Linux they pick the
@@ -1937,6 +1951,23 @@ public final class Config {
          Log.warn("bad integer for " + key + ": " + v + "; using " + def);
          return register(key, def, def);
       }
+   }
+   /** mouseSensitivity: finite scale in 0.10..4.00, rounded to the nearest 0.05 for signed integer accumulation. */
+   private static int mouseSensitivityUnits() {
+      String value = raw("mouseSensitivity");
+      int units = 20;
+      if (value != null) {
+         try {
+            double parsed = Double.parseDouble(value.trim());
+            if (!Double.isFinite(parsed)) throw new NumberFormatException("non-finite");
+            units = (int)Math.round(Math.max(0.1, Math.min(4.0, parsed)) * 20.0);
+         } catch (NumberFormatException e) {
+            Log.warn("bad number for mouseSensitivity: " + value + "; using 1.0");
+         }
+      }
+      double effective = units / 20.0;
+      register("mouseSensitivity", Double.toString(effective), "1.0");
+      return units;
    }
 
    // --- options tab (Options > Optimizations; see UserOptions) --------------------------------
