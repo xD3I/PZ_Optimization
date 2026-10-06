@@ -1,3 +1,5 @@
+require "pzopt/pzopt_text"
+
 -- pzopt: the main menu's "PZ Optimization mod compatibility check" dialog (2026-10-02).
 --  What pzopt.ModCompat found at this launch, one block per jar file it read (the -javaagent jars and every jar of the
 --  enabled mods): the mod it belongs to, each place of a class we ship that it patches (a method we edited, an unedited
@@ -296,20 +298,20 @@ function PzoptCompatDialog:createChildren()
     local x = PAD
     for _, value in ipairs({ "performance", "compatibility" }) do
         local title = PROFILE_NAMES[value] .. (value == perf():getPzoptOptionDefault(PROFILE_KEY) and " (default)" or "")
-        local w = math.max(150, getTextManager():MeasureStringX(UIFont.Small, title) + 24)
-        local btn = ISButton:new(x, rowY, w, BTN_HGT, title, self, function(dlg) dlg:choose(value) end)
+        local w = math.max(150, getTextManager():MeasureStringX(UIFont.Small, PzoptText.text(title)) + 24)
+        local btn = ISButton:new(x, rowY, w, BTN_HGT, PzoptText.text(title), self, function(dlg) dlg:choose(value) end)
         btn:initialise()
         btn:instantiate()
-        btn.tooltip = value == "performance"
+        btn.tooltip = PzoptText.text(value == "performance"
             and "Java mods are checked and listed here but switch nothing off; windows a mod draws in are reused like the game's own (a mod's display can lag by up to a second)."
-            or "The settings a Java mod patches are switched off so the mod meets the game code its author tested; windows a mod draws in are redrawn at the game's own rate."
+            or "The settings a Java mod patches are switched off so the mod meets the game code its author tested; windows a mod draws in are redrawn at the game's own rate.")
         self:addChild(btn)
         self.profileButtons[value] = btn
         x = x + w + PAD
     end
     self.profileStatusX = x
-    local rw = math.max(130, getTextManager():MeasureStringX(UIFont.Small, "Restart game") + 24)
-    self.restart = ISButton:new(self.width - PAD - rw, rowY, rw, BTN_HGT, "Restart game", self, PzoptCompatDialog.onRestart)
+    local rw = math.max(130, getTextManager():MeasureStringX(UIFont.Small, PzoptText.text("Restart game")) + 24)
+    self.restart = ISButton:new(self.width - PAD - rw, rowY, rw, BTN_HGT, PzoptText.text("Restart game"), self, PzoptCompatDialog.onRestart)
     self.restart:initialise()
     self.restart:instantiate()
     self.restart:enableAcceptColor()
@@ -332,7 +334,7 @@ function PzoptCompatDialog:createChildren()
         print("[pzopt] mod compatibility check: " .. tostring(t))
         t = "The check's result could not be read; see Zomboid/pzopt/mod-compat.txt."
     end
-    self.text.text = t
+    self.text.text = PzoptText.text(t)
     self.text:paginate()
     -- the panel shrinks to the text (a short result is a small dialog), at most the height it was opened with
     local fit = math.min(textHgt, self.text:getScrollHeight() + 4)
@@ -342,8 +344,8 @@ function PzoptCompatDialog:createChildren()
         self:setY((getCore():getScreenHeight() - self.height) / 2)
     end
 
-    local w = math.max(110, getTextManager():MeasureStringX(UIFont.Small, "Close") + 24)
-    self.close_ = ISButton:new((self.width - w) / 2, self.height - PAD - BTN_HGT, w, BTN_HGT, "Close", self, PzoptCompatDialog.close)
+    local w = math.max(110, getTextManager():MeasureStringX(UIFont.Small, PzoptText.text("Close")) + 24)
+    self.close_ = ISButton:new((self.width - w) / 2, self.height - PAD - BTN_HGT, w, BTN_HGT, PzoptText.text("Close"), self, PzoptCompatDialog.close)
     self.close_:initialise()
     self.close_:instantiate()
     self:addChild(self.close_)
@@ -352,10 +354,10 @@ end
 
 function PzoptCompatDialog:prerender()
     ISPanelJoypad.prerender(self)
-    self:drawText("PZ Optimization mod compatibility check", PAD, PAD, 1, 1, 1, 1, UIFont.Medium)
+    self:drawText(PzoptText.text("PZ Optimization mod compatibility check"), PAD, PAD, 1, 1, 1, 1, UIFont.Medium)
     if self.profileStatus then
         local a = self.restart:isVisible() and 1 or 0.65
-        self:drawText(self.profileStatus, self.profileStatusX, PAD + FONT_HGT_MEDIUM + PAD + (BTN_HGT - FONT_HGT_SMALL) / 2,
+        self:drawText(PzoptText.text(self.profileStatus), self.profileStatusX, PAD + FONT_HGT_MEDIUM + PAD + (BTN_HGT - FONT_HGT_SMALL) / 2,
             a, a, a * (self.restart:isVisible() and 0.6 or 1), 1, UIFont.Small)
     end
 end

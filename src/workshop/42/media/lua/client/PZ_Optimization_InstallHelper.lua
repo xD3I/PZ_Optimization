@@ -1,3 +1,5 @@
+require "pzopt/pzopt_text"
+
 -- PZ_Optimization's Steam Workshop item: the install helper, the only Lua the item itself loads (the optimizations are
 -- class files the installer copies into the game folder; scripts/workshop.sh stages this file under 42/media/).
 --
@@ -69,7 +71,7 @@ end
 function PZOptInstallHelper:new(command)
     local small = getTextManager():getFontHeight(UIFont.Small)
     local medium = getTextManager():getFontHeight(UIFont.Medium)
-    local code = getTextManager():getFontHeight(UIFont.Code)
+    local code = getTextManager():getFontHeight(PzoptText.font(UIFont.Code))
     local lines = {
         "The optimizations are class files for the game folder; Steam downloaded them with",
         "this item, and one command copies them in. The game does not load them from here.",
@@ -98,9 +100,9 @@ function PZOptInstallHelper:new(command)
         local k = getCore():getScreenHeight() >= 1000 and 0.75 or 0.55   -- 480 x 300 from the 640 x 400 frames
         aw, ah = math.floor(640 * k), math.floor(400 * k)
     end
-    local w = math.max(aw, getTextManager():MeasureStringX(UIFont.Medium, "PZ Optimization is not installed yet"))
-    for _, l in ipairs(lines) do w = math.max(w, getTextManager():MeasureStringX(UIFont.Small, l)) end
-    if command then w = math.max(w, getTextManager():MeasureStringX(UIFont.Code, command) + 16) end
+    local w = math.max(aw, getTextManager():MeasureStringX(UIFont.Medium, PzoptText.text("PZ Optimization is not installed yet")))
+    for _, l in ipairs(lines) do w = math.max(w, getTextManager():MeasureStringX(UIFont.Small, PzoptText.text(l))) end
+    if command then w = math.max(w, getTextManager():MeasureStringX(PzoptText.font(UIFont.Code), PzoptText.text(command)) + 16) end
     w = math.min(w + 2 * pad, getCore():getScreenWidth() - 40)
     local h = pad + medium + 12 + (frames and (ah + 12) or 0) + #lines * small + (command and (code + 24) or 0) + 12 + 25 + pad
     local o = ISPanelJoypad.new(self, (getCore():getScreenWidth() - w) / 2, (getCore():getScreenHeight() - h) / 2, w, h)
@@ -120,7 +122,7 @@ function PZOptInstallHelper:createChildren()
     local y = self.height - self.pad - 25
     local x = self.pad
     local function add(title, onclick, width)
-        local b = ISButton:new(x, y, width, 25, title, self, onclick)
+        local b = ISButton:new(x, y, width, 25, PzoptText.text(title), self, onclick)
         b:initialise()
         b:setWidthToTitle(width)
         self:addChild(b)
@@ -139,7 +141,7 @@ function PZOptInstallHelper:prerender()
     ISPanelJoypad.prerender(self)
     local small = getTextManager():getFontHeight(UIFont.Small)
     local y = self.pad
-    self:drawText("PZ Optimization is not installed yet", self.pad, y, 1, 0.85, 0.4, 1, UIFont.Medium)
+    self:drawText(PzoptText.text("PZ Optimization is not installed yet"), self.pad, y, 1, 0.85, 0.4, 1, UIFont.Medium)
     y = y + getTextManager():getFontHeight(UIFont.Medium) + 12
     if self.frames then
         local now = getTimestampMs()
@@ -154,14 +156,14 @@ function PZOptInstallHelper:prerender()
         y = y + self.ah + 12
     end
     for i, l in ipairs(self.lines) do
-        self:drawText(l, self.pad, y, 1, 1, 1, 1, UIFont.Small)
+        self:drawText(PzoptText.text(l), self.pad, y, 1, 1, 1, 1, UIFont.Small)
         y = y + small
         if self.command and i == 4 then
-            local code = getTextManager():getFontHeight(UIFont.Code)
+            local code = getTextManager():getFontHeight(PzoptText.font(UIFont.Code))
             y = y + 6
             self:drawRect(self.pad, y, self.width - 2 * self.pad, code + 12, 1, 0.12, 0.12, 0.12)
             self:drawRectBorder(self.pad, y, self.width - 2 * self.pad, code + 12, 0.6, 0.5, 0.5, 0.5)
-            self:drawText(self.command, self.pad + 8, y + 6, 0.6, 1, 0.6, 1, UIFont.Code)
+            self:drawText(PzoptText.text(self.command), self.pad + 8, y + 6, 0.6, 1, 0.6, 1, UIFont.Code)
             y = y + code + 18
         end
     end
@@ -169,7 +171,7 @@ end
 
 function PZOptInstallHelper:onCopy()
     Clipboard.setClipboard(self.command)
-    self.copyButton:setTitle("Copied")
+    self.copyButton:setTitle(PzoptText.text("Copied"))
 end
 
 function PZOptInstallHelper:onPage()
@@ -198,7 +200,7 @@ end
 local function showInstalledNote()
     local text = "PZ Optimization is installed.\n\nThis Workshop mod only shows the install command,\nso you can disable it in the Mods list."
     local modal = ISModalDialog:new(getCore():getScreenWidth() / 2 - 180, getCore():getScreenHeight() / 2 - 60, 360, 120,
-        text, false, nil, nil)
+        PzoptText.text(text), false, nil, nil)
     modal:initialise()
     modal:setCapture(true)
     modal:setAlwaysOnTop(true)

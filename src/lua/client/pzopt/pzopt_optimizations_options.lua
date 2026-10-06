@@ -1,3 +1,5 @@
+require "pzopt/pzopt_text"
+
 -- pzopt: the "PZ Optimization" tab in the options screen, right after Display (one tab since 2026-10-04; before, three:
 --  Optimizations, Enhancements, Profiler).
 --  Every pzopt.Config key is a control here: booleans are tick boxes, integers are combos whose first
@@ -25,7 +27,7 @@
 -- Installed by scripts/pzopt.sh into <game dir>/media/lua/client/pzopt/ (loose game-dir Lua is
 -- loaded like any other, no mod to enable).
 
-local TAB = "PZ Optimization"
+local TAB = PzoptText.text("PZ Optimization")
 local ENHANCEMENTS_TAB = "Enhancements"
 local PROFILER_TAB = "Profiler"
 local RESTART_NOTE = "Takes effect on the next launch."
@@ -1943,7 +1945,7 @@ function PzoptPreview:layoutSlots()
     local lines = 1
     local function count(tip)
         local n = 0
-        for _ in string.gmatch(getTextManager():WrapText(self.fontS, tip, cw), "[^\n]+") do n = n + 1 end
+        for _ in string.gmatch(getTextManager():WrapText(PzoptText.font(self.fontS), PzoptText.text(tip), cw), "[^\n]+") do n = n + 1 end
         if n > lines then lines = n end
     end
     for _, row in ipairs(self.rows) do count(row.entry.tip) end
@@ -2010,7 +2012,7 @@ function PzoptPreview:pick()
 end
 
 function PzoptPreview:text(str, x, y, col, font, alpha)
-    self:drawText(str, x, y, col.r, col.g, col.b, alpha or 1, font or self.fontS)
+    self:drawText(PzoptText.text(str), x, y, col.r, col.g, col.b, alpha or 1, font or self.fontS)
 end
 
 -- One clip box: caption, the current frame (or why there is none), a hairline frame.
@@ -2025,14 +2027,14 @@ function PzoptPreview:drawClip(x, y, w, h, caption, path, now, col)
         local state = ok and perf():getPzoptGifState(path) or "error"
         local msg = "no clip for this setting yet"
         if state == "loading" then msg = "loading..." elseif state == "error" then msg = "clip could not be decoded" end
-        self:drawTextCentre(msg, x + w / 2, y + h / 2 - self.hS / 2, C_DIM.r, C_DIM.g, C_DIM.b, 1, self.fontS)
+        self:drawTextCentre(PzoptText.text(msg), x + w / 2, y + h / 2 - self.hS / 2, C_DIM.r, C_DIM.g, C_DIM.b, 1, self.fontS)
     end
     self:drawRectBorder(x, y, w, h, 1, 0.31, 0.31, 0.35)
     return y + h
 end
 
 function PzoptPreview:drawWrapped(str, x, y, w, col, font)
-    local wrapped = getTextManager():WrapText(font or self.fontS, str, w)
+    local wrapped = getTextManager():WrapText(PzoptText.font(font or self.fontS), PzoptText.text(str), w)
     local h = font == self.fontM and self.hM or self.hS
     for line in string.gmatch(wrapped, "[^\n]+") do
         self:text(line, x, y, col, font)
@@ -2055,7 +2057,7 @@ function PzoptPreview:drawBars(x, y, w, fx)
     for _, axis in ipairs(AXES) do
         local v = fx[axis.id] or 0
         if v > 3 then v = 3 elseif v < -3 then v = -3 end
-        self:drawTextRight(axis.label, x + labW, y + textY, C_GREY.r, C_GREY.g, C_GREY.b, 1, self.fontS)
+        self:drawTextRight(PzoptText.text(axis.label), x + labW, y + textY, C_GREY.r, C_GREY.g, C_GREY.b, 1, self.fontS)
         self:drawRect(barX, y + 3, barW, rowH - 6, 1, 0.11, 0.11, 0.13)
         local word, wcol = LEVELS[0], C_DIM
         if v ~= 0 then
@@ -2081,14 +2083,14 @@ function PzoptPreview:drawBars(x, y, w, fx)
         local tx = mid + math.floor(half * t / 3)
         self:drawRect(tx, y, 1, 5, 1, 0.55, 0.55, 0.60)
         local label = LEVELS[t]
-        local lw = getTextManager():MeasureStringX(self.fontS, label)
+        local lw = getTextManager():MeasureStringX(PzoptText.font(self.fontS), PzoptText.text(label))
         local lx = tx - math.floor(lw / 2)
         if lx < barX then lx = barX elseif lx + lw > barX + barW then lx = barX + barW - lw end
         local col = t < 0 and C_OPT or (t > 0 and C_STOCK or C_GREY)
         self:text(label, lx, y + 6, col, self.fontS)
     end
     y = y + 6 + self.hS + 2
-    self:drawTextCentre(AXIS_TITLE, mid, y, C_DIM.r, C_DIM.g, C_DIM.b, 1, self.fontS)
+    self:drawTextCentre(PzoptText.text(AXIS_TITLE), mid, y, C_DIM.r, C_DIM.g, C_DIM.b, 1, self.fontS)
     return y + self.hS
 end
 
@@ -2107,7 +2109,7 @@ function PzoptPreview:prerender()
     local entry = row.entry
     local p = perf()
     -- title and values: one line each, cut with "..." rather than wrapped
-    self:text(getTextManager():WrapText(self.fontM, entry.label, w, 1, "..."), x, y, C_TEXT, self.fontM)
+    self:text(getTextManager():WrapText(PzoptText.font(self.fontM), PzoptText.text(entry.label), w, 1, "..."), x, y, C_TEXT, self.fontM)
     y = y + self.hM + 2
     local pinnedBy = p:getPzoptOptionPinnedBy(entry.key)
     local values = entry.live
@@ -2116,12 +2118,12 @@ function PzoptPreview:prerender()
     if pinnedBy ~= "" then values = values .. "   (pinned by " .. pinnedBy .. ")" end
     local reason = compatReason(entry.key)
     if reason ~= "" then values = values .. "   (off for mod compatibility: " .. reason .. ")" end
-    self:text(getTextManager():WrapText(self.fontS, values, w, 1, "..."), x, y, C_GREY)
+    self:text(getTextManager():WrapText(PzoptText.font(self.fontS), PzoptText.text(values, entry.key), w, 1, "..."), x, y, C_GREY)
     y = y + self.hS + 2
     local classes = optionClasses(entry.key)
     local java = #classes > 0 and ("Java: " .. table.concat(classes, ", ")) or "Java: read by pzopt.Config only"
     java = (optionDate(entry.key) and ("Released " .. optionDate(entry.key)) or "New in this version") .. "   " .. java
-    self:text(getTextManager():WrapText(self.fontS, java, w, 1, "..."), x, y, C_DIM)
+    self:text(getTextManager():WrapText(PzoptText.font(self.fontS), PzoptText.text(java), w, 1, "..."), x, y, C_DIM)
     y = y + self.hS + 8
     -- the two clips, centred in the column (with the header's "Before / after clips" ticked)
     if self.clips then
@@ -2133,7 +2135,7 @@ function PzoptPreview:prerender()
         y = self:drawClip(cx + iw + gap, y, iw, ih, sides[2], clipPath(row.clip, "opt"), now, C_OPT) + 4
         local same = sides == CLIP_SIDES.overlay and ". Same save, route and machine, a crop of the top-left corner at the Large overlay font."
             or CLIP_NOTES[row.clip] or ". Same save, route and machine; the number is that run's live frame rate."
-        self:text(getTextManager():WrapText(self.fontS, (CLIP_TITLES[row.clip] or row.clip) .. same, w, 1, "..."), x, y, C_DIM)
+        self:text(getTextManager():WrapText(PzoptText.font(self.fontS), PzoptText.text((CLIP_TITLES[row.clip] or row.clip) .. same), w, 1, "..."), x, y, C_DIM)
         y = y + self.hS + 8
     end
     -- what it does, in a slot tall enough for the longest description
@@ -2298,6 +2300,7 @@ end
 -- Scores every row for a query: { [row] = score } of the rows every query word matched (all words must match;
 -- if no row has them all, the rows matching any word), and how many matched.
 local function search(index, query)
+    query = PzoptText.search(query)
     local units = {}
     for word in string.gmatch(query, "[%w%.]+") do
         local ps = parts(word)
@@ -2357,14 +2360,15 @@ local function comboLabels(entry, default, saved)
         table.insert(labels, saved)
         table.insert(values, saved)
     end
+    for i, label in ipairs(labels) do labels[i] = PzoptText.text(label, entry.key) end
     return labels, values
 end
 
 local function addBoolOption(self, entry, splitpoint, y, BUTTON_HGT)
     local p = perf()
     local pinnedBy = p:getPzoptOptionPinnedBy(entry.key)
-    local box = self:addYesNo(splitpoint, y, BUTTON_HGT, BUTTON_HGT, entry.label)
-    box.tooltip = tooltipFor(entry, pinnedBy)
+    local box = self:addYesNo(splitpoint, y, BUTTON_HGT, BUTTON_HGT, PzoptText.text(entry.label))
+    box.tooltip = PzoptText.text(tooltipFor(entry, pinnedBy))
     if pinnedBy ~= "" then
         box.enable = false
     end
@@ -2494,8 +2498,8 @@ local function addColourOption(self, entry, splitpoint, y)
             joypad.focus = picker
         end
     end
-    local button = self:addColorButton(splitpoint, y, entry.label, colourRGB(""), openPicker)
-    button.tooltip = tooltipFor(entry, pinnedBy)
+    local button = self:addColorButton(splitpoint, y, PzoptText.text(entry.label), colourRGB(""), openPicker)
+    button.tooltip = PzoptText.text(tooltipFor(entry, pinnedBy))
     button:setEnable(pinnedBy == "")
     option = GameOption:new("pzopt." .. entry.key, button)
     function option.toUI()
@@ -2532,8 +2536,8 @@ local function addIntOption(self, entry, splitpoint, y, comboWidth)
     local p = perf()
     local pinnedBy = p:getPzoptOptionPinnedBy(entry.key)
     local labels, values = comboLabels(entry, p:getPzoptOptionDefault(entry.key), p:getPzoptOptionSaved(entry.key))
-    local combo = self:addCombo(splitpoint, y, comboWidth, 20, entry.label, labels, 1)
-    combo:setToolTipMap({ defaultTooltip = tooltipFor(entry, pinnedBy) })
+    local combo = self:addCombo(splitpoint, y, comboWidth, 20, PzoptText.text(entry.label), labels, 1)
+    combo:setToolTipMap({ defaultTooltip = PzoptText.text(tooltipFor(entry, pinnedBy)) })
     if pinnedBy ~= "" then
         combo.disabled = true
     end
@@ -2574,7 +2578,7 @@ local function addIntOption(self, entry, splitpoint, y, comboWidth)
             if value ~= nil and value ~= perf():getPzoptOptionDefault(entry.key) then
                 table.insert(labels, value)
                 table.insert(values, value)
-                self.control:addOption(value)
+                self.control:addOption(PzoptText.text(value, entry.key))
                 index = #values + 1
             else
                 index = 1
@@ -2660,24 +2664,24 @@ local function addBezierOption(self, entry, splitpoint, y, comboWidth, BUTTON_HG
     local pinnedBy = p:getPzoptOptionPinnedBy(entry.key)
     local default = p:getPzoptOptionDefault(entry.key)
     local labels, values = comboLabels(entry, default, "")
-    table.insert(labels, "custom (the sliders below)")
+    table.insert(labels, PzoptText.text("custom (the sliders below)"))
     local customIndex = #labels
-    local combo = self:addCombo(splitpoint, y, comboWidth, 20, entry.label, labels, 1)
-    combo:setToolTipMap({ defaultTooltip = tooltipFor(entry, pinnedBy) })
+    local combo = self:addCombo(splitpoint, y, comboWidth, 20, PzoptText.text(entry.label), labels, 1)
+    combo:setToolTipMap({ defaultTooltip = PzoptText.text(tooltipFor(entry, pinnedBy)) })
     if pinnedBy ~= "" then
         combo.disabled = true
     end
     local spacing = MainOptions.style.borderSpacing
     local top = y + self.addY
-    local valueW = getTextManager():MeasureStringX(UIFont.Small, "0.00") + 8
+    local valueW = getTextManager():MeasureStringX(UIFont.Small, PzoptText.text("0.00")) + 8
     local labelW = 0
     local sliders = {}
     for i, name in ipairs(BEZIER_AXES) do
         local rowY = y + self.addY
-        local label = ISLabel:new(splitpoint, rowY, BUTTON_HGT, name, C_GREY.r, C_GREY.g, C_GREY.b, 1, UIFont.Small)
+        local label = ISLabel:new(splitpoint, rowY, BUTTON_HGT, PzoptText.text(name), C_GREY.r, C_GREY.g, C_GREY.b, 1, UIFont.Small)
         label:initialise()
         self.mainPanel:addChild(label)
-        labelW = math.max(labelW, getTextManager():MeasureStringX(UIFont.Small, name))
+        labelW = math.max(labelW, getTextManager():MeasureStringX(UIFont.Small, PzoptText.text(name)))
         local value = ISLabel:new(splitpoint + 20, rowY, BUTTON_HGT, "", 1, 1, 1, 1, UIFont.Small, true)
         value:initialise()
         self.mainPanel:addChild(value)
@@ -2708,7 +2712,7 @@ local function addBezierOption(self, entry, splitpoint, y, comboWidth, BUTTON_HG
         for i = 1, 4 do
             local s = sliders[i]
             s.currentValue = math.max(0, math.min(1, v[i]))
-            s.valueLabel:setName(string.format("%.2f", s.currentValue))
+            s.valueLabel:setName(PzoptText.text(string.format("%.2f", s.currentValue)))
             s.disabled = pinnedBy ~= ""
         end
     end
@@ -2729,7 +2733,7 @@ local function addBezierOption(self, entry, splitpoint, y, comboWidth, BUTTON_HG
     for _, slider in ipairs(sliders) do
         slider.target = option
         slider.onValueChange = function(opt, value, s)
-            s.valueLabel:setName(string.format("%.2f", value))
+            s.valueLabel:setName(PzoptText.text(string.format("%.2f", value)))
             syncCombo()
             opt:invokeOnChangeEvent()
         end
@@ -2916,7 +2920,7 @@ local UNINSTALL_CONFIRM = "Uninstall PZ Optimization?\n\n"
 
 local function showUninstallResult(text)
     local modal = ISModalDialog:new(getCore():getScreenWidth() / 2 - 200, getCore():getScreenHeight() / 2 - 60, 400, 120,
-        text, false, nil, nil)
+        PzoptText.text(text), false, nil, nil)
     modal:initialise()
     modal:setCapture(true)
     modal:setAlwaysOnTop(true)
@@ -2942,7 +2946,7 @@ local function setupUninstallButton(self, b)
         if MainScreen.instance and MainScreen.instance.inGame then return end
         local w, h = 420, 200
         local modal = ISModalDialog:new(getCore():getScreenWidth() / 2 - w / 2, getCore():getScreenHeight() / 2 - h / 2, w, h,
-            UNINSTALL_CONFIRM, true, self, onUninstallConfirm)
+            PzoptText.text(UNINSTALL_CONFIRM), true, self, onUninstallConfirm)
         modal:initialise()
         modal:setCapture(true)
         modal:setAlwaysOnTop(true)
@@ -2963,9 +2967,9 @@ local function setupUninstallButton(self, b)
     end
     if why ~= "" then
         b:setEnable(false)
-        b.tooltip = UNINSTALL_TIP .. " Not available now: " .. why .. "."
+        b.tooltip = PzoptText.text(UNINSTALL_TIP .. " Not available now: " .. why .. ".")
     else
-        b.tooltip = UNINSTALL_TIP
+        b.tooltip = PzoptText.text(UNINSTALL_TIP)
     end
 end
 
@@ -3048,9 +3052,9 @@ local IMPORT_TIP = "Sets the controls of the Optimizations, Enhancements and Pro
 -- The open dialog is kept in self.pzoptTransferModal (the harness's options_io rig closes it).
 local function showMessage(self, text)
     local w = 480
-    local shown = getTextManager():WrapText(UIFont.Small, text, w - 40)
+    local shown = getTextManager():WrapText(UIFont.Small, PzoptText.text(text), w - 40)
     local modal = ISModalDialog:new(getCore():getScreenWidth() / 2 - w / 2, getCore():getScreenHeight() / 2 - 80, w, 160,
-        shown, false, nil, nil)
+        PzoptText.text(shown), false, nil, nil)
     modal:initialise()
     modal:setCapture(true)
     modal:setAlwaysOnTop(true)
@@ -3214,7 +3218,7 @@ local function openImportDialog(self)
     -- ISTextBox puts the box at half the starting height, below the title bar
     local w, h = math.min(720, getCore():getScreenWidth() - 40), 2 * (MainOptions.style.buttonHeight + 20)
     local modal = ISTextBox:new(getCore():getScreenWidth() / 2 - w / 2, getCore():getScreenHeight() / 2 - 200, w, h,
-        "Paste exported settings (settings not listed go back to the defaults):", text, self, onImportOk)
+        PzoptText.text("Paste exported settings (settings not listed go back to the defaults):"), text, self, onImportOk)
     modal:setMultipleLine(true)
     modal:setNumberOfLines(12)
     modal:setMaxLines(100000)
@@ -3258,14 +3262,15 @@ local function setupUpscalerDepsButton(self, b)
         if s == "downloading" then
             title = "Downloading the DLSS files " .. tostring(perf():getPzoptUpscalerDepsProgress()) .. " %"
         end
+        title = PzoptText.text(title)
         if o.title ~= title then
-            o:setTitle(title)
+            o:setTitle(PzoptText.text(title))
             o:setWidthToTitle()
         end
         local enable = s == "missing" or s == "error"
         if o.enable ~= enable then o:setEnable(enable) end
         local msg = perf():getPzoptUpscalerDepsMessage()
-        o.tooltip = msg ~= "" and (DEPS_TIP .. " Now: " .. msg .. ".") or DEPS_TIP
+        o.tooltip = PzoptText.text(msg ~= "" and (DEPS_TIP .. " Now: " .. msg .. ".") or DEPS_TIP)
     end
 end
 
@@ -3324,10 +3329,12 @@ local C_EXPERT = { r = 0.95, g = 0.45, b = 0.40 }
 local C_ADV = { r = 0.45, g = 0.68, b = 0.98 }
 
 local function rgb(t) return { r = t[1], g = t[2], b = t[3] } end
-local function fontH(font) return getTextManager():getFontHeight(font) end
-local function textW(font, s) return getTextManager():MeasureStringX(font, s) end
+local function fontH(font) return getTextManager():getFontHeight(PzoptText.font(font)) end
+local function textW(font, s) return getTextManager():MeasureStringX(PzoptText.font(font), PzoptText.text(s)) end
 
 local function clipText(font, s, w)
+    s = PzoptText.text(s)
+    if PzoptText.chinese() then return PzoptText.clip(font, s, w) end
     if textW(font, s) <= w then return s end
     while #s > 1 and textW(font, s .. "...") > w do s = string.sub(s, 1, #s - 1) end
     return s .. "..."
@@ -3336,6 +3343,7 @@ end
 -- greedy word wrap measured with MeasureStringX (the game's WrapText sometimes left a line wider than `w`, so a wrapped
 -- setting name still came out cut with "..." at 1920 x 1080)
 local function wrapLines(font, s, w)
+    if PzoptText.chinese() then return PzoptText.wrapLines(font, s, w) end
     local out, line = {}, ""
     for word in string.gmatch(s or "", "%S+") do
         local t = line == "" and word or (line .. " " .. word)
@@ -3351,7 +3359,8 @@ local function wrapLines(font, s, w)
 end
 
 local function firstSentence(s)
-    s = s or ""
+    s = PzoptText.text(s or "")
+    if PzoptText.chinese() then return PzoptText.firstSentence(s) end
     local i = string.find(s, "%. ")
     if i then return string.sub(s, 1, i) end
     return s
@@ -3423,16 +3432,16 @@ local function drawPill(o, x, y, text, c, filled)
     o:drawRect(x, y, w, h, filled and 0.9 or 0.18, c.r, c.g, c.b)
     o:drawRectBorder(x, y, w, h, 0.55, c.r, c.g, c.b)
     if filled then
-        o:drawText(text, x + 6, y + 1, 0.05, 0.05, 0.05, 1, UIFont.Small)
+        o:drawText(PzoptText.text(text), x + 6, y + 1, 0.05, 0.05, 0.05, 1, UIFont.Small)
     else
-        o:drawText(text, x + 6, y + 1, c.r, c.g, c.b, 1, UIFont.Small)
+        o:drawText(PzoptText.text(text), x + 6, y + 1, c.r, c.g, c.b, 1, UIFont.Small)
     end
     return w
 end
 
 -- three squares filled to `n` (0..3), after a label; returns the x after them
 local function drawDots(o, x, y, label, n, c)
-    o:drawText(label, x, y, C_GREY.r, C_GREY.g, C_GREY.b, 1, UIFont.Small)
+    o:drawText(PzoptText.text(label), x, y, C_GREY.r, C_GREY.g, C_GREY.b, 1, UIFont.Small)
     local dx = x + textW(UIFont.Small, label) + 6
     local s = fontH(UIFont.Small) - 6
     for i = 1, 3 do
@@ -3466,7 +3475,7 @@ function PzoptRowInfo:render()
     local y = 0
     -- the rest of a name that did not fit on its label's line
     for _, l in ipairs(row.labelMore or {}) do
-        self:drawText(l, 0, y + 1, C_TEXT.r, C_TEXT.g, C_TEXT.b, 1, UIFont.Small)
+        self:drawText(PzoptText.text(l), 0, y + 1, C_TEXT.r, C_TEXT.g, C_TEXT.b, 1, UIFont.Small)
         y = y + lineH
     end
     local x = 0
@@ -3482,11 +3491,11 @@ function PzoptRowInfo:render()
         local where = clipText(UIFont.Small, row.cat.title .. "  >  " .. row.sub.title, math.max(40, right - x - 120))
         local c = row.cat.group.c
         local ww = textW(UIFont.Small, where)
-        self:drawText(where, right - ww, y + 1, c.r, c.g, c.b, 1, UIFont.Small)
+        self:drawText(PzoptText.text(where), right - ww, y + 1, c.r, c.g, c.b, 1, UIFont.Small)
         right = right - ww - 16
     end
     if right - x > 30 then
-        self:drawText(clipText(UIFont.Small, firstSentence(row.entry.tip), right - x), x, y + 1,
+        self:drawText(PzoptText.text(clipText(UIFont.Small, firstSentence(row.entry.tip), right - x)), x, y + 1,
             C_GREY.r * 0.8, C_GREY.g * 0.8, C_GREY.b * 0.8, 1, UIFont.Small)
     end
 end
@@ -3662,8 +3671,8 @@ function PzoptSidebar:build(target)
             if o.joypadFocused then o:drawRectBorder(0, 0, o.width, o.height, 0.9, c.r, c.g, c.b) end
             local countW = count and (textW(UIFont.Small, count) + pad) or 0
             local col = (sel or hot) and C_TEXT or { r = 0.8, g = 0.8, b = 0.82 }
-            o:drawText(clipText(UIFont.Small, label, o.width - 2 * pad - countW), pad + 2, 5, col.r, col.g, col.b, 1, UIFont.Small)
-            if count then o:drawTextRight(count, o.width - pad + 4, 5, C_DIM.r, C_DIM.g, C_DIM.b, 1, UIFont.Small) end
+            o:drawText(PzoptText.text(clipText(UIFont.Small, label, o.width - 2 * pad - countW)), pad + 2, 5, col.r, col.g, col.b, 1, UIFont.Small)
+            if count then o:drawTextRight(PzoptText.text(count), o.width - pad + 4, 5, C_DIM.r, C_DIM.g, C_DIM.b, 1, UIFont.Small) end
         end
         self:addChild(b)
         table.insert(self.buttons, b)
@@ -3690,12 +3699,12 @@ function PzoptSidebar:render()
     local pad = 12
     for _, h in ipairs(self.headings) do
         if h.help then
-            self:drawText("HELP", pad, h.y, C_HELP.r, C_HELP.g, C_HELP.b, 1, UIFont.Small)
+            self:drawText(PzoptText.text("HELP"), pad, h.y, C_HELP.r, C_HELP.g, C_HELP.b, 1, UIFont.Small)
         else
             local g = h.g
-            self:drawText(string.upper(g.title), pad, h.y, g.c.r, g.c.g, g.c.b, 1, UIFont.Small)
+            self:drawText(PzoptText.text(string.upper(g.title)), pad, h.y, g.c.r, g.c.g, g.c.b, 1, UIFont.Small)
             if groupOff(g) then
-                self:drawTextRight("off", self.width - pad, h.y, C_STOCK.r, C_STOCK.g, C_STOCK.b, 1, UIFont.Small)
+                self:drawTextRight(PzoptText.text("off"), self.width - pad, h.y, C_STOCK.r, C_STOCK.g, C_STOCK.b, 1, UIFont.Small)
             end
         end
     end
@@ -3851,7 +3860,7 @@ relayout = function(S)
     elseif kind == "home" then
         status = #S.searchRows .. " settings"
     end
-    S.status:setName(status)
+    S.status:setName(PzoptText.text(status))
     local statusW = status ~= "" and (S.status:getWidth() + 16) or 0
     local clipsOnTitle = G.searchW + 24 + viewsW + statusW + 24 + clipsW > w
     local y = G.m
@@ -4092,7 +4101,7 @@ function layoutPage.cat(C, y)
                 y = y + SP * 2
                 local next = NAV.level == "simple" and "Advanced" or "Everything"
                 local el = at(S.moreButton, x0, y)
-                el:setTitle("Show " .. hidden .. " more " .. (hidden == 1 and "setting" or "settings") .. " (" .. next .. " view)")
+                el:setTitle(PzoptText.text("Show " .. hidden .. " more " .. (hidden == 1 and "setting" or "settings") .. " (" .. next .. " view)"))
                 el:setWidthToTitle()
                 line(el)
                 y = y + BH + SP
@@ -4103,7 +4112,7 @@ function layoutPage.cat(C, y)
     rule(y)
     y = y + SP * 2
     local rb = at(S.catReset, x0, y)
-    rb:setTitle("Reset " .. cat.title .. " to defaults")
+    rb:setTitle(PzoptText.text("Reset " .. cat.title .. " to defaults"))
     rb:setWidthToTitle()
     line(rb)
     S.catNote.elems[1].el.text = PAGES[g.page].footer
@@ -4204,12 +4213,12 @@ function pageBuild.header(B)
     S.homeButton = buttonItem("<  Home", "Back to the start page: presets, every category, export / import.",
         function() navigate(S, "home") end)
     S.title = single(drawPanel(function(o)
-        o:drawText("PZ OPTIMIZATION", 0, 0, 1, 1, 1, 1, UIFont.Large)
+        o:drawText(PzoptText.text("PZ OPTIMIZATION"), 0, 0, 1, 1, 1, 1, UIFont.Large)
         local x = textW(UIFont.Large, "PZ OPTIMIZATION") + 24
         -- where we are; left out when only a stub of it would fit (1920 x 1080: the sidebar and the heading say it too)
         local crumb = clipText(UIFont.Medium, S.crumb or "", math.max(20, o.width - x))
         if #crumb >= 12 or crumb == (S.crumb or "") then
-            o:drawText(crumb, x, math.floor((hL - hM) / 2) + 2, C_GREY.r, C_GREY.g, C_GREY.b, 1, UIFont.Medium)
+            o:drawText(PzoptText.text(crumb), x, math.floor((hL - hM) / 2) + 2, C_GREY.r, C_GREY.g, C_GREY.b, 1, UIFont.Medium)
         end
     end))
     -- the search box takes what the view switch leaves on the search line (the text box cannot resize later)
@@ -4220,9 +4229,9 @@ function pageBuild.header(B)
     entry:initialise()
     entry:instantiate()
     entry:setClearButton(true)
-    entry.tooltip = "Type words from a setting's name, description or key, a resource (gpu, vram, game thread, "
+    entry.tooltip = PzoptText.text("Type words from a setting's name, description or key, a resource (gpu, vram, game thread, "
         .. "load time...) or a Java class that reads it (FBORenderCell, IsoChunk, pzopt.FogPass...). Typos and "
-        .. "partial words are fine; the best matches of every category come first."
+        .. "partial words are fine; the best matches of every category come first.")
     S.typed, S.lastText, S.typedAt = "", "", 0
     -- polled each frame (the clear button and pasting do not all go through onTextChange) and searched once the
     -- text has been still for 120 ms, so typing a word runs one search, not one per letter
@@ -4244,7 +4253,7 @@ function pageBuild.header(B)
             local room = o.width - 16
             local hint = "Search all " .. #S.searchRows .. " settings: name, what it does, gpu, load time..."
             if textW(UIFont.Small, hint) > room then hint = "Search " .. #S.searchRows .. " settings..." end
-            o:drawText(clipText(UIFont.Small, hint, room), 8, math.floor((o.height - hS) / 2), C_DIM.r, C_DIM.g, C_DIM.b, 1, UIFont.Small)
+            o:drawText(PzoptText.text(clipText(UIFont.Small, hint, room)), 8, math.floor((o.height - hS) / 2), C_DIM.r, C_DIM.g, C_DIM.b, 1, UIFont.Small)
         end
     end
     S.entry = entry
@@ -4263,19 +4272,19 @@ function pageBuild.header(B)
             end
             o:drawRectBorder(0, 0, o.width, o.height, 0.3, 1, 1, 1)
             local c = sel and 0.05 or (hot and 1 or 0.7)
-            o:drawTextCentre(v.title, o.width / 2, math.floor((o.height - hS) / 2), c, c, c, 1, UIFont.Small)
+            o:drawTextCentre(PzoptText.text(v.title), o.width / 2, math.floor((o.height - hS) / 2), c, c, c, 1, UIFont.Small)
         end)
         b:setWidth(textW(UIFont.Small, v.title) + 28)
         b:setHeight(BH)
         b.pzoptLabel = v.title
-        b.tooltip = VIEW_TIPS[id] .. " Search and Fix a problem always show every match."
+        b.tooltip = PzoptText.text(VIEW_TIPS[id] .. " Search and Fix a problem always show every match.")
         table.insert(S.viewButtons, single(b))
     end
     local status = ISLabel:new(0, 0, BH, "", C_GREY.r, C_GREY.g, C_GREY.b, 1, UIFont.Small, true)
     status:initialise()
     S.status, S.statusItem = status, single(status)
     -- "Before / after clips": the preview's GIFs, off by default; saved at once
-    local clipsLabel = ISLabel:new(0, 0, BH, "Before / after clips", 1, 1, 1, 1, UIFont.Small, true)
+    local clipsLabel = ISLabel:new(0, 0, BH, PzoptText.text("Before / after clips"), 1, 1, 1, 1, UIFont.Small, true)
     clipsLabel:initialise()
     S.clipsLabel = clipsLabel
     S.clipsLabelItem = single(clipsLabel)
@@ -4286,9 +4295,9 @@ function pageBuild.header(B)
     clips:initialise()
     clips:addOption("")
     clips:setSelected(1, clipsOn())
-    clips.tooltip = "Plays a short clip of the stock game and one with the setting on, side by side, above the "
+    clips.tooltip = PzoptText.text("Plays a short clip of the stock game and one with the setting on, side by side, above the "
         .. "description of the setting under the mouse. Off saves the memory the clips take (up to ~100 MB of video "
-        .. "memory while this screen is open). Applies at once and is remembered."
+        .. "memory while this screen is open). Applies at once and is remembered.")
     S.clips = clips
     S.clipsItem = single(clips)
     S.rule = single(drawPanel(function(o) o:drawRect(0, 0, o.width, 1, 1, 0.35, 0.35, 0.38) end))
@@ -4324,25 +4333,25 @@ function pageBuild.home(B)
         for _, item in ipairs(S.presetButtons) do
             local b = item.elems[1].el
             b:setEnable(false)
-            b.tooltip = "Pinned by " .. p:getPzoptOptionPinnedBy(MASTER.key) .. " for this install."
+            b.tooltip = PzoptText.text("Pinned by " .. p:getPzoptOptionPinnedBy(MASTER.key) .. " for this install.")
         end
     end
     S.helpHeading = single(drawPanel(function(o)
-        o:drawText("HELP", 0, 0, C_HELP.r, C_HELP.g, C_HELP.b, 1, UIFont.Medium)
+        o:drawText(PzoptText.text("HELP"), 0, 0, C_HELP.r, C_HELP.g, C_HELP.b, 1, UIFont.Medium)
         local x = textW(UIFont.Medium, "HELP") + 16
-        o:drawText(clipText(UIFont.Small, "Not sure what to change? Start from what you notice.", math.max(20, o.width - x)), x,
+        o:drawText(PzoptText.text(clipText(UIFont.Small, "Not sure what to change? Start from what you notice.", math.max(20, o.width - x))), x,
             math.floor((hM - hS) / 2), C_GREY.r, C_GREY.g, C_GREY.b, 1, UIFont.Small)
     end))
     S.problemTile = single(drawButton(self, function() navigate(S, "problems") end, function(o, hot)
         o:drawRect(0, 0, o.width, o.height, 1, 0.115, 0.10, 0.13)
         o:drawRectBorder(0, 0, o.width, o.height, hot and 0.9 or 0.15, hot and C_HELP.r or 1, hot and C_HELP.g or 1, hot and C_HELP.b or 1)
         o:drawRect(0, 0, 5, o.height, 1, C_HELP.r, C_HELP.g, C_HELP.b)
-        o:drawText("Fix a problem", 16, 8, 1, 1, 1, 1, UIFont.Medium)
+        o:drawText(PzoptText.text("Fix a problem"), 16, 8, 1, 1, 1, 1, UIFont.Medium)
         local yy = 10 + hM
         for i, l in ipairs(wrapLines(UIFont.Small, "Stutter while driving, low fps in a horde, slow loading, laggy input... "
             .. "Pick what you notice: why it happens, and the settings that help.", o.width - 32)) do
             if i > 2 then break end
-            o:drawText(l, 16, yy, C_GREY.r, C_GREY.g, C_GREY.b, 1, UIFont.Small)
+            o:drawText(PzoptText.text(l), 16, yy, C_GREY.r, C_GREY.g, C_GREY.b, 1, UIFont.Small)
             yy = yy + hS
         end
     end))
@@ -4358,7 +4367,7 @@ function pageBuild.home(B)
     S.homeNote = single(drawPanel(function(o)
         local yy = 0
         for _, l in ipairs(wrapLines(UIFont.Small, S.homeNoteText, o.width)) do
-            o:drawText(l, 0, yy, C_DIM.r, C_DIM.g, C_DIM.b, 1, UIFont.Small)
+            o:drawText(PzoptText.text(l), 0, yy, C_DIM.r, C_DIM.g, C_DIM.b, 1, UIFont.Small)
             yy = yy + hS
         end
     end))
@@ -4371,9 +4380,9 @@ function pageBuild.decorations(B)
     for _, g in ipairs(tree.groups) do
         local group = g
         g.heading = single(drawPanel(function(o)
-            o:drawText(string.upper(group.title), 0, 0, group.c.r, group.c.g, group.c.b, 1, UIFont.Medium)
+            o:drawText(PzoptText.text(string.upper(group.title)), 0, 0, group.c.r, group.c.g, group.c.b, 1, UIFont.Medium)
             local x = textW(UIFont.Medium, string.upper(group.title)) + 16
-            o:drawText(clipText(UIFont.Small, group.count .. " settings.  " .. group.note, math.max(20, o.width - x)), x,
+            o:drawText(PzoptText.text(clipText(UIFont.Small, group.count .. " settings.  " .. group.note, math.max(20, o.width - x))), x,
                 math.floor((hM - hS) / 2), C_GREY.r, C_GREY.g, C_GREY.b, 1, UIFont.Small)
         end))
         if g.page ~= 1 then
@@ -4394,18 +4403,18 @@ function pageBuild.decorations(B)
                     o:drawRectBorder(0, 0, o.width, o.height, 0.15, 1, 1, 1)
                 end
                 o:drawRect(0, 0, 5, o.height, 1, col.r, col.g, col.b)
-                o:drawText(c.title, 16, 8, 1, 1, 1, 1, UIFont.Medium)
+                o:drawText(PzoptText.text(c.title), 16, 8, 1, 1, 1, 1, UIFont.Medium)
                 local yy = 10 + hM
                 for i, l in ipairs(wrapLines(UIFont.Small, c.blurb, o.width - 32)) do
                     if i > 2 then break end
-                    o:drawText(l, 16, yy, C_GREY.r, C_GREY.g, C_GREY.b, 1, UIFont.Small)
+                    o:drawText(PzoptText.text(l), 16, yy, C_GREY.r, C_GREY.g, C_GREY.b, 1, UIFont.Small)
                     yy = yy + hS
                 end
                 local st, sc = catStatus(c)
                 local pw = textW(UIFont.Small, st) + 12
                 local fy = o.height - hS - 10
                 drawPill(o, o.width - 12 - pw, fy - 1, st, sc)
-                o:drawText(clipText(UIFont.Small, #c.rows .. " settings:  " .. c.subList, o.width - 44 - pw), 16, fy,
+                o:drawText(PzoptText.text(clipText(UIFont.Small, #c.rows .. " settings:  " .. c.subList, o.width - 44 - pw)), 16, fy,
                     C_DIM.r, C_DIM.g, C_DIM.b, 1, UIFont.Small)
             end))
             -- the subcategory tabs, Overview first
@@ -4422,13 +4431,13 @@ function pageBuild.decorations(B)
                         o:drawRect(0, 0, o.width, o.height, 0.07, 1, 1, 1)
                     end
                     local t = (sel or hot) and 1 or 0.65
-                    o:drawText(title, 12, math.floor((o.height - hM) / 2), t, t, t, 1, UIFont.Medium)
+                    o:drawText(PzoptText.text(title), 12, math.floor((o.height - hM) / 2), t, t, t, 1, UIFont.Medium)
                     if list then
                         local n = tostring(#visibleRows(list, NAV.level))
                         local nx = 12 + textW(UIFont.Medium, title) + 8
                         local nw = textW(UIFont.Small, n) + 12
                         o:drawRect(nx, math.floor((o.height - hS - 2) / 2), nw, hS + 2, sel and 0.4 or 0.1, sel and col.r or 1, sel and col.g or 1, sel and col.b or 1)
-                        o:drawTextCentre(n, nx + nw / 2, math.floor((o.height - hS) / 2), t, t, t, 1, UIFont.Small)
+                        o:drawTextCentre(PzoptText.text(n), nx + nw / 2, math.floor((o.height - hS) / 2), t, t, t, 1, UIFont.Small)
                     end
                 end)
                 b:setWidth(bw)
@@ -4445,13 +4454,13 @@ function pageBuild.decorations(B)
                         o:drawRect(0, 0, o.width, o.height, 1, 0.10, 0.10, 0.11)
                         o:drawRectBorder(0, 0, o.width, o.height, 0.18, 1, 1, 1)
                         o:drawRect(0, 0, 4, o.height, 1, col.r, col.g, col.b)
-                        o:drawText(s.title, 16, 8, 1, 1, 1, 1, UIFont.Medium)
+                        o:drawText(PzoptText.text(s.title), 16, 8, 1, 1, 1, 1, UIFont.Medium)
                         local fx = (s.rows[1] and EFFECTS[s.rows[1].entry.key]) or {}
                         local dx = 16 + textW(UIFont.Medium, s.title) + 24
                         dx = drawDots(o, dx, 8 + math.floor((hM - hS) / 2), "GPU", math.max(0, math.min(3, (fx.gpu or 0) + 1)), C_AMBER)
                         drawDots(o, dx, 8 + math.floor((hM - hS) / 2), "VRAM", math.max(0, math.min(3, fx.vram or 0)), C_AMBER)
                         local text = s.blurb or (s.rows[1] and firstSentence(s.rows[1].entry.tip)) or ""
-                        o:drawText(clipText(UIFont.Small, text, o.width - 32), 16, 10 + hM, C_GREY.r, C_GREY.g, C_GREY.b, 1, UIFont.Small)
+                        o:drawText(PzoptText.text(clipText(UIFont.Small, text, o.width - 32)), 16, 10 + hM, C_GREY.r, C_GREY.g, C_GREY.b, 1, UIFont.Small)
                     end))
                     s.card.background = true
                     s.open = buttonItem("All " .. #s.rows .. " settings  >", "Opens the " .. s.title .. " tab.",
@@ -4460,17 +4469,17 @@ function pageBuild.decorations(B)
                     s.head = single(drawButton(self, function() navigate(S, "cat", c.id, index) end, function(o, hot)
                         local col = c.group.c
                         o:drawRect(0, 0, o.width, 1, 1, 0.3, 0.3, 0.33)
-                        o:drawText(s.title, 0, 6, col.r, col.g, col.b, 1, UIFont.Medium)
+                        o:drawText(PzoptText.text(s.title), 0, 6, col.r, col.g, col.b, 1, UIFont.Medium)
                         local hidden = s.headHidden or 0
                         local more = hidden > 0 and (hidden .. " more in its tab  >") or "Open its tab  >"
                         local t = hot and 1 or 0.6
-                        o:drawText(more, textW(UIFont.Medium, s.title) + 16, 6 + math.floor((hM - hS) / 2), t, t, t, 1, UIFont.Small)
+                        o:drawText(PzoptText.text(more), textW(UIFont.Medium, s.title) + 16, 6 + math.floor((hM - hS) / 2), t, t, t, 1, UIFont.Small)
                     end))
                 end
             end
             cat.resultHead = single(drawPanel(function(o)
                 local col = c.group.c
-                o:drawText(string.upper(c.group.title) .. "  >  " .. c.title, 0, 2, col.r, col.g, col.b, 1, UIFont.Small)
+                o:drawText(PzoptText.text(string.upper(c.group.title) .. "  >  " .. c.title), 0, 2, col.r, col.g, col.b, 1, UIFont.Small)
             end))
         end
     end
@@ -4488,15 +4497,15 @@ function pageBuild.decorations(B)
             else
                 o:drawRectBorder(0, 0, o.width, o.height, 0.15, 1, 1, 1)
             end
-            o:drawText(problem.title, 12, 6, 1, 1, 1, 1, UIFont.Medium)
-            o:drawText(clipText(UIFont.Small, problem.cause, o.width - 24), 12, 8 + hM, C_GREY.r, C_GREY.g, C_GREY.b, 1, UIFont.Small)
+            o:drawText(PzoptText.text(problem.title), 12, 6, 1, 1, 1, 1, UIFont.Medium)
+            o:drawText(PzoptText.text(clipText(UIFont.Small, problem.cause, o.width - 24)), 12, 8 + hM, C_GREY.r, C_GREY.g, C_GREY.b, 1, UIFont.Small)
             local on = 0
             for _, row in ipairs(problem.rows) do
                 local v = row.option:pzoptCurrent()
                 if v ~= "false" and v ~= "off" and v ~= "0" and v ~= "off (default)" and v ~= "false (default)" then on = on + 1 end
             end
             local c = on == #problem.rows and C_OPT or C_AMBER
-            o:drawText(#problem.rows .. " settings, " .. on .. " on", 12, o.height - hS - 8, c.r, c.g, c.b, 1, UIFont.Small)
+            o:drawText(PzoptText.text(#problem.rows .. " settings, " .. on .. " on"), 12, o.height - hS - 8, c.r, c.g, c.b, 1, UIFont.Small)
         end))
     end
 end
@@ -4558,10 +4567,10 @@ local function buildPage(self)
         return item
     end
     local function button(title, tip, onclick, h)
-        local b = ISButton:new(0, 0, 100, h or BH, title, self, onclick)
+        local b = ISButton:new(0, 0, 100, h or BH, PzoptText.text(title), self, onclick)
         b:initialise()
         b:setWidthToTitle()
-        b.tooltip = tip
+        b.tooltip = PzoptText.text(tip)
         return b, single(b)
     end
     local function buttonItem(title, tip, onclick)
@@ -4570,7 +4579,7 @@ local function buildPage(self)
     end
     local function label(text, col, font)
         col = col or C_TEXT
-        local l = ISLabel:new(0, 0, BH, text, col.r, col.g, col.b, 1, font or UIFont.Small, true)
+        local l = ISLabel:new(0, 0, BH, PzoptText.text(text), col.r, col.g, col.b, 1, font or UIFont.Small, true)
         l:initialise()
         return l, single(l)
     end
@@ -4585,15 +4594,15 @@ local function buildPage(self)
         local cat = o.cat
         if not cat then return end
         local c = cat.group.c
-        o:drawText(cat.title, 0, 0, 1, 1, 1, 1, UIFont.Large)
-        o:drawText(clipText(UIFont.Small, cat.blurb, o.width), 0, hL + 4, C_GREY.r, C_GREY.g, C_GREY.b, 1, UIFont.Small)
+        o:drawText(PzoptText.text(cat.title), 0, 0, 1, 1, 1, 1, UIFont.Large)
+        o:drawText(PzoptText.text(clipText(UIFont.Small, cat.blurb, o.width)), 0, hL + 4, C_GREY.r, C_GREY.g, C_GREY.b, 1, UIFont.Small)
         local count = #cat.rows .. " settings in " .. #cat.subs .. " subcategories"
         if textW(UIFont.Large, cat.title) + 24 + textW(UIFont.Small, count) <= o.width then
-            o:drawTextRight(count, o.width, math.floor((hL - hS) / 2), c.r, c.g, c.b, 1, UIFont.Small)
+            o:drawTextRight(PzoptText.text(count), o.width, math.floor((hL - hS) / 2), c.r, c.g, c.b, 1, UIFont.Small)
         end
         if groupOff(cat.group) then
-            o:drawText(clipText(UIFont.Small, "Switched off: the " .. cat.group.title .. " master switch on the home page is off, so these "
-                .. "settings are ignored.", o.width), 0, hL + hS + 8, C_STOCK.r, C_STOCK.g, C_STOCK.b, 1, UIFont.Small)
+            o:drawText(PzoptText.text(clipText(UIFont.Small, "Switched off: the " .. cat.group.title .. " master switch on the home page is off, so these "
+                .. "settings are ignored.", o.width)), 0, hL + hS + 8, C_STOCK.r, C_STOCK.g, C_STOCK.b, 1, UIFont.Small)
         end
     end))
     S.tabRule = single(drawPanel(function(o) o:drawRect(0, 0, o.width, 1, 1, 0.3, 0.3, 0.33) end))
@@ -4610,13 +4619,13 @@ local function buildPage(self)
         resetOptions(list)
     end)
     S.catNote = single(drawPanel(function(o)
-        o:drawText(clipText(UIFont.Small, o.text or "", o.width), 0, 0, C_DIM.r, C_DIM.g, C_DIM.b, 1, UIFont.Small)
+        o:drawText(PzoptText.text(clipText(UIFont.Small, o.text or "", o.width)), 0, 0, C_DIM.r, C_DIM.g, C_DIM.b, 1, UIFont.Small)
     end))
 
     -- problems
     S.probHead = single(drawPanel(function(o)
-        o:drawText("Fix a problem", 0, 0, 1, 1, 1, 1, UIFont.Large)
-        o:drawText(clipText(UIFont.Small, "Pick what you notice: why it happens, and the settings that help, wherever they live.", o.width),
+        o:drawText(PzoptText.text("Fix a problem"), 0, 0, 1, 1, 1, 1, UIFont.Large)
+        o:drawText(PzoptText.text(clipText(UIFont.Small, "Pick what you notice: why it happens, and the settings that help, wherever they live.", o.width)),
             0, hL + 4, C_GREY.r, C_GREY.g, C_GREY.b, 1, UIFont.Small)
     end))
     S.probWhy = single(drawPanel(function(o)
@@ -4624,16 +4633,16 @@ local function buildPage(self)
         if not pr then return end
         o:drawRect(0, 0, o.width, o.height, 1, 0.115, 0.10, 0.13)
         o:drawRectBorder(0, 0, o.width, o.height, 0.6, C_HELP.r, C_HELP.g, C_HELP.b)
-        o:drawText(pr.title, 16, 8, 1, 1, 1, 1, UIFont.Medium)
+        o:drawText(PzoptText.text(pr.title), 16, 8, 1, 1, 1, 1, UIFont.Medium)
         local yy = 12 + hM
         for _, l in ipairs(o.lines or {}) do
-            o:drawText(l, 16, yy, 0.85, 0.85, 0.87, 1, UIFont.Small)
+            o:drawText(PzoptText.text(l), 16, yy, 0.85, 0.85, 0.87, 1, UIFont.Small)
             yy = yy + hS
         end
     end))
     -- search
     S.searchHead = single(drawPanel(function(o)
-        o:drawText(clipText(UIFont.Medium, o.text or "", o.width), 0, 0, 1, 1, 1, 1, UIFont.Medium)
+        o:drawText(PzoptText.text(clipText(UIFont.Medium, o.text or "", o.width)), 0, 0, 1, 1, 1, 1, UIFont.Medium)
     end))
 
     -- the settings: master switches first, then every section's entries (in tab order)
