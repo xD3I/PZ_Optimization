@@ -41,11 +41,52 @@ import java.util.Map;
  * or the top clock; a CPU whose cores are all alike turns the placement off. macOS has no affinity: threads we own ask
  * for a quality-of-service class instead ({@link #background()}), which is what steers Apple's scheduler between its P
  * and E clusters.
+
+ * <p>Windows remains stock in every existing mode. Opt-in {@code dual-ccd} needs any dual-CCD CPU: two disjoint, complete
+ * shared L3 cache groups and the physical cores of each, as reported by Win32 (6+6 or 8+8 cores, SMT on or off). The
+ * primary CCD is the larger L3 (V-Cache), or CCD0 when both are equal; the game, render and
+ * frame/character-draw/slot-init/lighting/input/visibility threads share all of it, and known background work uses the
+ * other CCD. The frame and character-draw pools are capped at the primary CCD's physical cores minus two
+ * ({@link #workerLimit}). STW GC and unproved native thread descriptions stay on both CCDs. OS thread IDs, creation
+ * times and descriptions are revisited every 250 ms; an unknown description is never treated as background.
+ * Unnamed/ambiguous vendor GL workers cannot be mapped reliably and remain wide. No process-wide affinity is set;
+ * Config.CPUS is read before pinning.
  */
 public final class CorePlacement {
    public static final String MODE = Config.CORE_PLACEMENT.toLowerCase(Locale.ROOT);
    private static final boolean LINUX = new File("/proc/self/task").isDirectory();
    private static final boolean MAC = System.getProperty("os.name", "").toLowerCase(Locale.ROOT).contains("mac");
+   private static final boolean WINDOWS = System.getProperty("os.name", "").toLowerCase(Locale.ROOT).startsWith("win");
+   private static volatile WindowsCorePlacement windows;
+   private static volatile boolean windowsReady;
+   private static volatile String windowsFailure = "";
+   private static WindowsCorePolicy.Topology windowsTopology;
+   private static Throwable windowsTopologyFailure;
+   private static boolean windowsTopologyRead;
+
+   /** Windows corePlacement=dual-ccd: the validated dual-CCD topology, detected once (before any pool is sized), else null. */
+   private static synchronized WindowsCorePolicy.Topology windowsTopology() {
+      if (windowsTopologyRead) return windowsTopology;
+      windowsTopologyRead = true;
+      if (!WINDOWS || !MODE.equals("dual-ccd") || !Overrides.enabled()) return null;
+      if (!Config.CORE_BACKGROUND_CPUS.isBlank() || !Config.CORE_CRITICAL_CPUS.isBlank()) {
+         windowsTopologyFailure = new IllegalArgumentException("manual Linux CPU lists are not supported in Windows dual-ccd mode");
+         return null;
+      }
+      try {
+         windowsTopology = WindowsCorePlacement.detect();
+         Log.info("corePlacement=dual-ccd: " + windowsTopology);
+      } catch (Throwable t) {
+         windowsTopologyFailure = t;
+      }
+      return windowsTopology;
+   }
+
+   /** The worker-pool cap on the primary CCD in Windows dual-ccd mode (its physical cores minus game and render), else none. */
+   public static int workerLimit() {
+      WindowsCorePolicy.Topology topology = windowsTopology();
+      return topology == null ? Integer.MAX_VALUE : topology.workerLimit();
+   }
 
    private static final int CLASS_CRITICAL = 0, CLASS_PAUSE = 1, CLASS_BACKGROUND = 2;
 
@@ -91,7 +132,7 @@ public final class CorePlacement {
 
    /** Anything to do on this machine and in this mode. */
    public static boolean active() {
-      return started && !broken;
+      return started && !broken && (!WINDOWS || windowsReady);
    }
 
    /** Is the frame limiter allowed to sleep (no spinning core while the placement is managing the cores). */
@@ -112,6 +153,9 @@ public final class CorePlacement {
       if (broken) {
          return;
       }
+      if (WINDOWS) {
+         return; // Windows dual-ccd is fixed per-class CCD placement, not the Linux cap/speed governor.
+      }
       // the game thread's own CPU per frame (step + limiter wait): a step that is long because it waited for the render
       // thread, the GPU or a worker batch is not a reason for faster cores
       long cpu = MX.getCurrentThreadCpuTime();
@@ -129,17 +173,33 @@ public final class CorePlacement {
    /**
     * The calling thread is background work (pools, lighting, streaming): on macOS it asks for the utility QoS class, which
     * Apple's scheduler runs on the E cores first. Linux sorts threads by name instead, so this is a no-op there.
+    * Windows dual-ccd uses this as an unambiguous current-thread registration: frame/draw/visibility names still override the
+    * historical background label, and unproved names stay wide. Before topology/startup validation this is a no-op.
     */
    public static void background() {
       if (MAC && qos(0x11)) { // QOS_CLASS_UTILITY
          return;
       }
+      if (WINDOWS && windowsReady) {
+         try {
+            windows.registerCurrent(false); // critical worker names override this historical background hook
+         } catch (Throwable t) {
+            windowsFailed(t);
+         }
+      }
    }
 
-   /** The calling thread is the game or the render thread: user-interactive QoS on macOS. */
+   /** The calling game/render thread: user-interactive QoS on macOS, direct OS-thread registration in Windows dual-ccd mode. */
    public static void interactive() {
       if (MAC) {
          qos(0x21); // QOS_CLASS_USER_INTERACTIVE
+      }
+      if (WINDOWS && windowsReady) {
+         try {
+            windows.registerCurrent(true);
+         } catch (Throwable t) {
+            windowsFailed(t);
+         }
       }
    }
 
@@ -179,6 +239,10 @@ public final class CorePlacement {
          }
          broken = true; // nothing else to run on macOS: the pools call background() themselves
          Log.info("corePlacement: macOS QoS classes (game / render threads user-interactive, pools utility)");
+         return;
+      }
+      if (WINDOWS) {
+         startWindows();
          return;
       }
       if (!LINUX) {
@@ -229,6 +293,75 @@ public final class CorePlacement {
       } catch (Throwable t) {
          Log.warn("corePlacement: render gettid failed (" + t + ")");
       }
+   }
+
+   private static void startWindows() {
+      if (!MODE.equals("dual-ccd")) {
+         broken = true; // auto/performance/efficient on Windows remain the OS scheduler's stock behavior
+         return;
+      }
+      if (!zombie.core.opengl.RenderThread.isRunning()) {
+         started = false; // Retry on a later game step; never pin before the real render owner exists.
+         return;
+      }
+      WindowsCorePolicy.Topology topology = windowsTopology();
+      if (topology == null) {
+         windowsFailed(windowsTopologyFailure != null ? windowsTopologyFailure
+               : new IllegalStateException("no Windows dual-CCD topology"));
+         return;
+      }
+      try {
+         windows = new WindowsCorePlacement(topology);
+         windows.registerCurrent(true); // game thread: actual Win32 tid, never a Java thread id
+         boolean[] renderRegistered = {false};
+         zombie.core.opengl.RenderThread.invokeOnRenderContext(() -> {
+            try {
+               windows.registerCurrent(true); // active GL/context owner, including the input-thread render handoff
+               renderRegistered[0] = true;
+            } catch (Throwable t) {
+               throw new IllegalStateException("Windows render thread registration failed", t);
+            }
+         });
+         if (!renderRegistered[0]) {
+            throw new IllegalStateException("render context callback did not register its OS thread");
+         }
+         windows.scan();
+         windowsReady = true;
+         Log.info("corePlacement=dual-ccd: " + windows.describe() + "; Config.CPUS=" + Config.CPUS
+               + "; per-thread group affinity only; unknown native/ambiguous descriptions and STW GC stay wide");
+         Thread th = new Thread(CorePlacement::windowsLoop, "pzopt-cores");
+         th.setDaemon(true);
+         th.start();
+      } catch (Throwable t) {
+         windowsFailed(t);
+      }
+   }
+
+   private static void windowsLoop() {
+      while (windowsReady && !broken) {
+         try {
+            Thread.sleep(250);
+            windows.scan();
+         } catch (InterruptedException e) {
+            windowsFailed(e);
+            Thread.currentThread().interrupt();
+            return;
+         } catch (Throwable t) {
+            windowsFailed(t);
+            return;
+         }
+      }
+   }
+
+   private static void windowsFailed(Throwable t) {
+      windowsReady = false;
+      broken = true;
+      windowsFailure = t.toString();
+      WindowsCorePlacement placement = windows;
+      if (placement != null) {
+         placement.disable();
+      }
+      Log.warn("corePlacement=dual-ccd: " + t + "; off (no process affinity changed)");
    }
 
    /** Fast / slow classes of logical CPUs (Linux sysfs). */
@@ -662,7 +795,10 @@ public final class CorePlacement {
    /** One line for the periodic FBORenderCell log and the harness summary. */
    public static String describe() {
       if (!active()) {
-         return "cores=" + MODE + " (inactive)";
+         return "cores=" + MODE + " (inactive)" + (WINDOWS && !windowsFailure.isEmpty() ? " reason=" + windowsFailure : "");
+      }
+      if (WINDOWS) {
+         return "cores=" + MODE + " active " + windows.describe();
       }
       return "cores=" + MODE + " critical=" + (criticalFast ? "fast" : "efficient") + " fast_ms=" + fastMs + " slow_ms=" + slowMs
             + " promotions=" + promotions + " demotions=" + demotions + " wide_ms=" + wideMs + String.format(Locale.ROOT, " ratio=%.2f", ratio);

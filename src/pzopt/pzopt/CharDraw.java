@@ -80,8 +80,11 @@ public final class CharDraw {
    }
 
    private static final boolean ENABLED = Config.CHAR_DRAW_PREP && Config.effectiveWorkers() > 1;
-   /** Build threads: the key, clamped to cores - 2 (the game and render threads keep theirs); the walk uses one of them too. */
-   static final int THREADS = Math.max(1, Math.min(Config.CHAR_DRAW_THREADS, Config.CPUS - 2));
+   /**
+    * Build threads: the key, clamped to cores - 2 (the game and render threads keep theirs) and, in Windows dual-ccd placement,
+    * to the primary CCD's physical cores - 2; the walk uses one of them too.
+    */
+   static final int THREADS = Math.max(1, Math.min(Config.CHAR_DRAW_THREADS, Math.min(Config.CPUS - 2, CorePlacement.workerLimit())));
    private static ExecutorService pool; // game thread creates it on first use
 
    private static final ArrayList<IsoMovingObject> onScreen = new ArrayList<>(2048);

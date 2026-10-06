@@ -8,6 +8,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.FutureTask;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import zombie.GameWindow;
 import zombie.core.logger.ExceptionLogger;
 import zombie.fileSystem.FileSystem.TexturePackTextures;
@@ -51,7 +52,10 @@ public final class FileSystemImpl extends FileSystem {
          this.maxInFlight = 16;
       }
       pzopt.Log.info("file system: " + numThreads + " worker threads, " + this.maxInFlight + " tasks in flight");
-      this.executor = Executors.newFixedThreadPool(numThreads);
+      // Keep I/O workers distinguishable from the render slot-init executor's generic pool threads:
+      // corePlacement=dual-ccd may place only this known background pool on the background CCD.
+      AtomicInteger threadId = new AtomicInteger();
+      this.executor = Executors.newFixedThreadPool(numThreads, r -> new Thread(r, "pzopt-file-" + threadId.getAndIncrement()));
    }
 
    public boolean mount(IFileDevice device) {

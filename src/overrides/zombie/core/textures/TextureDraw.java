@@ -5,6 +5,7 @@ import imgui.ImDrawData;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 import org.lwjgl.opengl.GL11;
 import org.lwjgl.opengl.GL13;
@@ -153,7 +154,10 @@ public final class TextureDraw {
    public PerformanceProfileProbe probe;
    public TextureDraw.GenericDrawer drawer;
    public Future<?> future;
-   private static final ExecutorService slotInitExec = Executors.newFixedThreadPool(8);
+   // Model slot initialization is awaited by the render path; keep it distinct from background file I/O.
+   private static final AtomicInteger slotInitNext = new AtomicInteger();
+   private static final ExecutorService slotInitExec = Executors.newFixedThreadPool(8,
+         r -> new Thread(r, "pzopt-slotinit-" + slotInitNext.getAndIncrement()));
 
    public static void glStencilFunc(TextureDraw texd, int a, int b, int c) {
       texd.type = TextureDraw.Type.glStencilFunc;
