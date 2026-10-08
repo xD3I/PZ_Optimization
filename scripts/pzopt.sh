@@ -90,6 +90,9 @@ check() {
 # A launcher JSON in pzopt's AOT-cache form (pzopt.AotCache: the overrides from pzopt/aot/pzopt.jar, -XX:AOTCache*)
 # goes back to the loose classes, and the jar and cache go: the loose files are about to change.
 reset_aot() {
+  # A launcher edit pzopt staged while the game ran (ProjectZomboid64.json.pzopt-pending, Windows: the running game holds
+  # the JSON) or a leftover .pzopt-tmp goes first, so neither can land over this reset afterwards.
+  rm -f -- "$LAUNCHER_JSON.pzopt-pending" "$LAUNCHER_JSON.pzopt-tmp"
   if [[ -f "$LAUNCHER_JSON" ]]; then
     python3 - "$LAUNCHER_JSON" <<'PYEOF'
 import json,sys
@@ -116,16 +119,10 @@ def fix(a):
     if MP in a: a=[x for x in a if not x.startswith("-XX:MaxGCPauseMillis=")]
     a=[x for x in a if x not in (M,MP)]
     ch[0]=True; return ["-XX:+UseZGC" if x=="-XX:+UseG1GC" else x for x in a]
-if "vmArgs" in j: j["vmArgs"]=fix(j["vmArgs"])
-for v in j.values():
-    if isinstance(v,dict) and "vmArgs" in v: v["vmArgs"]=fix(v["vmArgs"])
 J="-Dpzopt.jit=steady"; JP=("-XX:PerMethodTrapLimit=","-XX:PerBytecodeTrapLimit=")
 def fixj(a):
     if J not in a: return a
     ch[0]=True; return [x for x in a if x!=J and not x.startswith(JP)]
-if "vmArgs" in j: j["vmArgs"]=fixj(j["vmArgs"])
-for v in j.values():
-    if isinstance(v,dict) and "vmArgs" in v: v["vmArgs"]=fixj(v["vmArgs"])
 H="-Dpzopt.heap="
 def fixh(a):
     m=[x for x in a if x.startswith(H)]
@@ -139,9 +136,12 @@ def fixh(a):
         else: a.append(f+o)
     if old[2]=="1" and "-XX:+AlwaysPreTouch" in a: a.remove("-XX:+AlwaysPreTouch")
     ch[0]=True; return a
-if "vmArgs" in j: j["vmArgs"]=fixh(j["vmArgs"])
-for v in j.values():
-    if isinstance(v,dict) and "vmArgs" in v: v["vmArgs"]=fixh(v["vmArgs"])
+def walk(o):  # every vmArgs array at any depth: the switch lands where ZGC was, on Windows in windows."10.0.17134"; each undo needs its marker
+    if isinstance(o,dict):
+        if isinstance(o.get("vmArgs"),list): o["vmArgs"]=fixh(fixj(fix(o["vmArgs"])))
+        for k,v in o.items():
+            if k!="vmArgs": walk(v)
+walk(j)
 if ch[0]: json.dump(j,open(p,"w"),indent="\t"); print("launcher: pzopt's G1 switch / JIT flags / heap size undone (back to the launcher's own)")
 PYEOF
 }

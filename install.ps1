@@ -168,6 +168,11 @@ function Find-WorkshopCopy([switch]$AnyRevision) {
 # A launcher JSON that pzopt's AOT-cache mode (pzopt.AotCache) switched to its jar form goes back to the loose
 # classes ("." first, no AOT options), and the jar and cache go: the loose files are about to change.
 function Reset-Aot {
+  # The game is closed here. A launcher edit pzopt staged while it ran (ProjectZomboid64.json.pzopt-pending: the running
+  # game holds the JSON) or a leftover .pzopt-tmp goes first, so neither can land over this reset afterwards.
+  foreach ($f in @("$Json.pzopt-pending", "$Json.pzopt-tmp")) {
+    if (Test-Path -LiteralPath $f) { Remove-Item -LiteralPath $f -Force; Write-Host "launcher: removed $(Split-Path $f -Leaf)" }
+  }
   if (Test-Path -LiteralPath $Json) {
     $j = Get-Content -LiteralPath $Json -Raw | ConvertFrom-Json
     $jar = 'pzopt/aot/pzopt.jar'
@@ -228,10 +233,15 @@ function Reset-Gc {
     return ,@($a)
   }
   $script:gcChanged = $false
-  if ($j.vmArgs) { $j.vmArgs = & $fixHeap (& $fixJit (& $fix $j.vmArgs)) }
-  foreach ($p in $j.PSObject.Properties) {
-    if ($p.Value -is [psobject] -and $p.Value.PSObject.Properties['vmArgs']) { $p.Value.vmArgs = & $fixHeap (& $fixJit (& $fix $p.Value.vmArgs)) }
+  # every vmArgs array at any depth: the switch lands where ZGC was, on Windows in windows."10.0.17134".vmArgs
+  $walk = {
+    param($o)
+    foreach ($p in @($o.PSObject.Properties)) {
+      if ($p.Name -eq 'vmArgs') { $p.Value = & $fixHeap (& $fixJit (& $fix $p.Value)) }
+      elseif ($p.Value -is [System.Management.Automation.PSCustomObject]) { & $walk $p.Value }
+    }
   }
+  & $walk $j
   if ($script:gcChanged) {
     [IO.File]::WriteAllText($Json, ($j | ConvertTo-Json -Depth 10), (New-Object Text.UTF8Encoding $false))
     Write-Host "launcher: pzopt's G1 switch / JIT flags / heap size undone (back to the launcher's own)"

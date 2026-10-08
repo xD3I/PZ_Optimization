@@ -6110,7 +6110,7 @@ public final class IsoZombie extends IsoGameCharacter implements IHumanVisual {
          return false; // pzopt
       } // pzopt
       zombie.ai.State state = this.getCurrentState(); // pzopt
-      if (state != ZombieIdleState.instance() && state != WalkTowardState.instance() && state != PathFindState.instance()) { // pzopt
+      if (!pzopt.UpdateBatch.safeState(state, GameServer.server, pzopt.Config.ENTITY_UPDATE_SERVER)) { // pzopt: the server's equivalent calm walk is WalkTowardNetworkState
          return false; // pzopt
       } // pzopt
       for (int i = 0; i < IsoPlayer.numPlayers; i++) { // pzopt

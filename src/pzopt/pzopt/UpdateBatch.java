@@ -547,7 +547,21 @@ public final class UpdateBatch {
    /** True while a bucket should hand its scheduled entities over instead of walking them itself. */
    public static boolean enabled() {
       return Config.ENTITY_UPDATE_PARALLEL && !failed && Config.effectiveWorkers() > 1
-            && !GameClient.client && !GameServer.server && Overrides.enabled() && GtAb.on(GtAb.ZOMBIE_UPDATE); // devGtAlternate: the within-run A/B
+            && multiplayerAllowed(GameClient.client, GameServer.server, Config.ENTITY_UPDATE_SERVER)
+            && Overrides.enabled() && GtAb.on(GtAb.ZOMBIE_UPDATE); // devGtAlternate: the within-run A/B
+   }
+
+   /** The authoritative server may opt in; an MP client never owns this simulation work. */
+   static boolean multiplayerAllowed(boolean client, boolean server, boolean serverEnabled) {
+      return !client && (!server || serverEnabled);
+   }
+
+   /** Calm states accepted by the safe-state filter; the network walk exists only in the authoritative server loop. */
+   public static boolean safeState(zombie.ai.State state, boolean server, boolean serverEnabled) {
+      return state == zombie.ai.states.ZombieIdleState.instance()
+            || state == zombie.ai.states.WalkTowardState.instance()
+            || state == zombie.ai.states.PathFindState.instance()
+            || server && serverEnabled && state == zombie.ai.states.WalkTowardNetworkState.instance();
    }
 
    /**
@@ -633,7 +647,8 @@ public final class UpdateBatch {
    // itself. On a combined frame every bucket only QUEUES: batchables here with their bucket's multiplier and
    // simulation level stamped at queue time, everything else into the inline queue. After the last bucket the
    // scheduler dispatches the whole frame at once and runs the inline entities while the flight is airborne —
-   // that game-thread work is the runway — then joins at its tail, before updateZombieVocals().
+   // that game-thread work is the runway: then joins at its tail, before updateZombieVocals(). Animals are the
+   // exception since animalsAfterJoin: their own queue, run after that join (see runAnimalPhase).
    private static boolean combinedFrame; // latched once per frame (scheduler.update entry); never read from the wall clock mid-frame
    private static float[] queuePom = new float[4096];   // per-entity: its bucket's perObjectMultiplier at add()
    private static int[] queueLevel = new int[4096];     // per-entity: its bucket's simulationLevel ordinal
@@ -646,6 +661,22 @@ public final class UpdateBatch {
    private static int[] inlineLevel = new int[1024];
    private static int inlineCount;
    private static long nestedJoins, combinedFrames, inlineQueued;
+
+   // ── animalsAfterJoin (2026-09-28): the frame's animals update after the landing, not under the flight ──
+   //
+   // With a herd near the horde the inline phase cost more than the overlap gained (docs/findings-gt-offload-2026-09-27.md,
+   // "PR #35 update"): an animal's sight walk reads every zombie through getX / getY / getZ / getCurrentSquare, each of
+   // those went through frozen() and the snapshot while the workers wrote the same objects, and animal LOS with 60 cows
+   // grew by 1.3 (flip), 1.6 (desktop) and 4.9 ms (Mac). So on a combined frame queueInline sends an animal here instead,
+   // stamped exactly like the inline queue, and runAnimalPhase updates them after joinPending: the zombies are settled,
+   // the reads are direct, and no worker writes what the herd reads. The routing is this class's policy, so the bucket
+   // override is unchanged. The key is final; the field below is read instead so the off arm is reachable from a test.
+   private static boolean animalsAfterJoin = Config.ANIMALS_AFTER_JOIN;
+   private static IsoMovingObject[] animalQueue = new IsoMovingObject[256];
+   private static float[] animalPom = new float[256];
+   private static int[] animalLevel = new int[256];
+   private static int animalCount;
+   private static long animalsRun; // animals updated by runAnimalPhase this session: `animalsAfterJoin=` on the status line
 
    // The runway metric, summed per ENTITY flight instead of read out of FrameBatch when describe() prints.
    // FrameBatch.lastPreClaimed() is a single value published by whichever join ran last, and the pool is shared:
@@ -672,6 +703,13 @@ public final class UpdateBatch {
     */
    public static void latchFrame(boolean combined) {
       combinedFrame = combined;
+      // A frame that threw before its animal phase (a bucket, the inline phase or the join) leaves its herd queued.
+      // Dropped on either arm, not only on a combined frame like the inline queue below: after such a frame a combined
+      // one may never come again (the failure latch, a multiplayer session), and the slots would pin those animals and
+      // their world for the rest of the process. Empty on every frame that queued nothing, so a no-op there.
+      if (animalCount > 0) {
+         dropAnimals();
+      }
       if (combinedFrame) {
          clear();
          // The abandoned inline entities are nulled, not just forgotten: a frame that threw between queueInline and
@@ -716,8 +754,16 @@ public final class UpdateBatch {
       queue[count++] = entity;
    }
 
-   /** Combined mode: an inline (non-batchable) entity, deferred to runInlinePhase under the flight (spec 3.4). */
+   /**
+    * Combined mode: an inline (non-batchable) entity, deferred to runInlinePhase under the flight (spec 3.4). An animal
+    * goes to runAnimalPhase after the landing instead ({@code animalsAfterJoin}), with the same two stamps.
+    */
    public static void queueInline(IsoMovingObject entity, int simulationLevelOrdinal) {
+      if (animalsAfterJoin && entity instanceof IsoAnimal) {
+         queueAnimal(entity, simulationLevelOrdinal);
+         return;
+      }
+
       if (inlineCount == inlineQueue.length) {
          inlineQueue = java.util.Arrays.copyOf(inlineQueue, inlineCount * 2);
          inlinePom = java.util.Arrays.copyOf(inlinePom, inlineCount * 2);
@@ -728,6 +774,25 @@ public final class UpdateBatch {
       inlineLevel[inlineCount] = simulationLevelOrdinal;
       inlineQueue[inlineCount++] = entity;
       inlineQueued++;
+   }
+
+   /** queueInline's animal arm: the inline queue's stamping, into the queue runAnimalPhase walks after the join. */
+   private static void queueAnimal(IsoMovingObject entity, int simulationLevelOrdinal) {
+      if (animalCount == animalQueue.length) {
+         animalQueue = java.util.Arrays.copyOf(animalQueue, animalCount * 2);
+         animalPom = java.util.Arrays.copyOf(animalPom, animalCount * 2);
+         animalLevel = java.util.Arrays.copyOf(animalLevel, animalCount * 2);
+      }
+
+      animalPom[animalCount] = zombie.GameTime.getInstance().perObjectMultiplier; // the bucket just set it: its frame mod
+      animalLevel[animalCount] = simulationLevelOrdinal;
+      animalQueue[animalCount++] = entity;
+   }
+
+   /** Null the animal queue's used slots and empty it: after the phase (thrown or not) and at every frame latch. */
+   private static void dropAnimals() {
+      java.util.Arrays.fill(animalQueue, 0, animalCount, null);
+      animalCount = 0;
    }
 
    /** The nested-batch guard's landing (spec 3.4): full bookkeeping, counted, dev-logged once. */
@@ -753,6 +818,16 @@ public final class UpdateBatch {
    /** Test seam: undo the failure latch between CombinedDispatchTest sections. */
    public static void resetFailedForTest() {
       failed = false;
+   }
+
+   /** Test seam: route animals as {@code animalsAfterJoin=on} would (the key is final, read once at class init). */
+   public static void setAnimalsAfterJoinForTest(boolean on) {
+      animalsAfterJoin = on;
+   }
+
+   /** How many animals the after-join phase has updated this session. */
+   public static long getAnimalsAfterJoin() {
+      return animalsRun;
    }
 
    private static long altWindow = Long.MIN_VALUE; // devPipelineAlternate: last logged window index
@@ -1081,6 +1156,44 @@ public final class UpdateBatch {
    }
 
    /**
+    * Game thread, after joinPending ({@code animalsAfterJoin}): the frame's animals, per entry the stock four calls under
+    * its bucket's multiplier and simulation level (stamped at queueInline), in queue order; global back to 1.0 after,
+    * stock's guarantee. No stampInline: nothing is airborne to publish into, which is the point: every zombie is settled,
+    * frozen() is false, and an animal's reads of the horde are direct.
+    *
+    * <p>The scheduler calls this after the pipeline's try/finally, never from a finally, so it runs only when the buckets,
+    * the inline phase and the join all returned normally and cannot replace an exception from any of them. On such a
+    * frame every queued animal updates exactly once, before the scheduler's update returns (the postupdate loop and the
+    * vocal walks read animals). An animal that throws ends the phase there, as it ends stock's bucket loop: the exception
+    * propagates, the rest of this frame's herd is dropped, and the finally puts the multiplier back to 1.0 and nulls every
+    * slot, so nothing is pinned. A frame with no animal queued (every non-combined frame) returns before touching anything.
+    */
+   public static void runAnimalPhase() {
+      if (animalCount == 0) {
+         return;
+      }
+
+      zombie.GameTime gt = zombie.GameTime.getInstance();
+      try {
+         // A no-op on the scheduler's path (it just landed the flight). Here so that no caller can update an animal
+         // under an airborne flight: the invariant belongs to this method, not to its call site.
+         joinPending();
+         for (int i = 0; i < animalCount; i++) {
+            IsoMovingObject entity = animalQueue[i];
+            gt.perObjectMultiplier = animalPom[i];
+            entity.setCurrentSimulationLevel(LEVELS[animalLevel[i]]);
+            entity.preupdate();
+            entity.frameStep();
+            entity.update();
+            animalsRun++;
+         }
+      } finally {
+         gt.perObjectMultiplier = 1.0F; // cannot throw, so this finally never masks the exception it runs under
+         dropAnimals();
+      }
+   }
+
+   /**
     * Game thread: wait for the airborne batch, then land its window — deferred tile updates, the Lua replay
     * under ITS dispatch-time multiplier (the game thread's global may already be the next bucket's), the
     * failure latch. No-op without a pending batch.
@@ -1260,7 +1373,7 @@ public final class UpdateBatch {
             + " luaSuppressed=" + luaSuppressed.get() + " lightEffectsDeferred=" + LightingDefer.deferred + " pathfindRaceEscaped=" + pathfindRaceEscaped.get()
             + " surfacePropertyRaceSkipped=" + surfacePropertyRaceSkipped.get()
             + " movingSquareDeferred=" + movingSquareDeferred
-            + " combinedFrames=" + combinedFrames + " inlineQueued=" + inlineQueued
+            + " combinedFrames=" + combinedFrames + " inlineQueued=" + inlineQueued + " animalsAfterJoin=" + animalsRun
             + " nestedJoins=" + nestedJoins + " preClaimed=" + preClaimed
             + (failed ? " FAILED" : "");
    }

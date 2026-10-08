@@ -5,7 +5,6 @@ import java.lang.management.ManagementFactory;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.StandardCopyOption;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
@@ -15,11 +14,13 @@ import org.json.JSONObject;
  * over 100 ms (ZGC's concurrent threads compete with the game on few cores). "stock" leaves the JSON alone and undoes our
  * switch, "g1" switches (the default), "auto" switches only on machines with {@code gcG1Cores} cores or fewer.
  *
- * The edit replaces -XX:+UseZGC with -XX:+UseG1GC in the top-level and per-platform vmArgs, adds -XX:MaxGCPauseMillis
+ * The edit replaces -XX:+UseZGC with -XX:+UseG1GC in every vmArgs array that holds it, at any depth (the real Windows
+ * launcher keeps its collector in windows."10.0.17134".vmArgs), adds -XX:MaxGCPauseMillis to that array
  * when {@code gcPauseMs} > 0, and the marker -Dpzopt.gc=g1 (also listing the pause flag it added, -Dpzopt.gc=g1,pause),
- * which is how this class, scripts/pzopt.sh and the installers recognise and undo it. It takes effect on the next
- * launch. Harness runs own the JSON (run.sh --gc) and are left alone. Backed up once and written atomically, as AotCache.
- * The macOS app bundle (Info.plist) is not changed.
+ * which is how this class, scripts/pzopt.sh and the installers recognise and undo it, in vmArgs arrays at any depth
+ * (tests/pzopt/InstallerLauncherTest runs the scripts' undo on the real Windows layout). It takes effect on the next
+ * launch. Harness runs own the JSON (run.sh --gc) and are left alone. Read and written through pzopt.LauncherJson, as
+ * AotCache. The macOS app bundle (Info.plist) is not changed.
  *
  * gcHeap / gcHeapFixed / gcPreTouch (2026-10-05): the heap the next launch gets. The effective -Xmx (the last one) is
  * replaced by gcHeap: auto (default) = gcHeapAutoMb (4 GB), or gcHeapAutoModsMb (8 GB) when gcHeapAutoMods or more mods
@@ -65,17 +66,9 @@ public final class GcChoice {
          if (!Files.isRegularFile(json)) {
             return;
          }
-         JSONObject j = new JSONObject(Files.readString(json, StandardCharsets.UTF_8));
+         JSONObject j = LauncherJson.read(game);
          String before = j.toString();
-         boolean want = Overrides.enabled() && wantG1();
-         toStock(j); // from a clean stock form, so a changed gcPauseMs or mode is applied exactly
-         if (want) {
-            toG1(j, Config.GC_PAUSE_MS);
-         }
-         jitToStock(j);
-         if (Overrides.enabled() && Config.JIT_STEADY) {
-            jitToSteady(j);
-         }
+         String next = apply(j, Overrides.enabled() && wantG1(), Config.GC_PAUSE_MS, Overrides.enabled() && Config.JIT_STEADY);
          heapToStock(j);
          int mods = enabledMods();
          int heapMb = heapMb(wantMb(Config.GC_HEAP, mods));
@@ -83,19 +76,34 @@ public final class GcChoice {
             heapToPzopt(j, heapMb, Config.GC_HEAP_FIXED, Config.GC_PRE_TOUCH);
          }
          boolean changed = !j.toString().equals(before);
+         String written = "";
+         if (changed) {
+            written = LauncherJson.save(game, j) ? " (launcher JSON updated)" : " (launcher JSON staged until the game exits)";
+         }
          Log.info("gc: running " + currentGc() + "; gcMode=" + Config.GC_MODE + " gcPauseMs=" + Config.GC_PAUSE_MS + " ("
-               + Runtime.getRuntime().availableProcessors() + " cores) -> next launch " + (want ? "G1" : "the launcher's own collector")
+               + Runtime.getRuntime().availableProcessors() + " cores) -> next launch " + next
                + "; heap now " + (Runtime.getRuntime().maxMemory() >> 20) + " MB max, gcHeap=" + Config.GC_HEAP + " (" + mods + " mods) -> "
                + (heapMb > 0 ? heapMb + " MB" : "the launcher's own")
                + (heapMb > 0 && heapMb != wantMb(Config.GC_HEAP, mods) ? " (clamped to half of " + (physicalMb() >> 10) + " GB RAM)" : "")
                + " gcHeapFixed=" + Config.GC_HEAP_FIXED + " gcPreTouch=" + Config.GC_PRE_TOUCH
-               + (changed ? " (launcher JSON updated)" : ""));
-         if (changed) {
-            save(game, j);
-         }
+               + written);
       } catch (Throwable e) {
          Log.warn("gc: " + e);
       }
+   }
+
+   /** A boot's edit of the launcher JSON; returns the next launch's collector for the log line. */
+   static String apply(JSONObject j, boolean want, int pauseMs, boolean jit) {
+      toStock(j); // from a clean stock form, so a changed gcPauseMs or mode is applied exactly
+      boolean g1 = want && toG1(j, pauseMs);
+      jitToStock(j);
+      if (jit) {
+         jitToSteady(j);
+      }
+      if (g1) {
+         return "G1";
+      }
+      return want ? "the launcher's own collector (no -XX:+UseZGC in the launcher JSON to switch)" : "the launcher's own collector";
    }
 
    private static String currentGc() {
@@ -126,9 +134,9 @@ public final class GcChoice {
       return changed[0];
    }
 
-   /** jitSteady: the marker and the flags, in every vmArgs array (the flags a user set himself stay: we only add ours). */
+   /** jitSteady: the marker and the flags, in the jit arrays (the flags a user set himself stay: we only add ours). */
    static void jitToSteady(JSONObject j) {
-      forEachVmArgs(j, args -> {
+      forEachTopVmArgs(j, args -> {
          if (indexOf(args, JIT_MARKER) >= 0) {
             return;
          }
@@ -146,7 +154,7 @@ public final class GcChoice {
 
    /** Undo jitToSteady where our marker is. */
    static void jitToStock(JSONObject j) {
-      forEachVmArgs(j, args -> {
+      forEachTopVmArgs(j, args -> {
          if (indexOf(args, JIT_MARKER) < 0) {
             return;
          }
@@ -199,7 +207,7 @@ public final class GcChoice {
       if (!Files.isRegularFile(json)) {
          return false;
       }
-      JSONObject j = new JSONObject(Files.readString(json, StandardCharsets.UTF_8));
+      JSONObject j = LauncherJson.read(game);
       String before = j.toString();
       toStock(j);
       jitToStock(j);
@@ -207,7 +215,7 @@ public final class GcChoice {
       if (j.toString().equals(before)) {
          return false;
       }
-      save(game, j);
+      LauncherJson.save(game, j);
       return true;
    }
 
@@ -280,7 +288,7 @@ public final class GcChoice {
 
    /** gcHeap / gcHeapFixed / gcPreTouch into every vmArgs array, with the marker recording the flags they replaced. */
    static void heapToPzopt(JSONObject j, int heapMb, boolean fixed, boolean preTouch) {
-      forEachVmArgs(j, args -> {
+      forEachTopVmArgs(j, args -> {
          if (prefixIndex(args, HEAP_MARKER) >= 0) {
             return;
          }
@@ -309,7 +317,7 @@ public final class GcChoice {
 
    /** Undo heapToPzopt where its marker is: the old -Xmx / -Xms back (or gone), our pre-touch flag removed. */
    static void heapToStock(JSONObject j) {
-      forEachVmArgs(j, args -> {
+      forEachTopVmArgs(j, args -> {
          int m = lastPrefixIndex(args, HEAP_MARKER);
          if (m < 0) {
             return;
@@ -377,8 +385,31 @@ public final class GcChoice {
       return -1;
    }
 
-   /** The top-level vmArgs and every per-platform section's ("windows": {"vmArgs": ...}). */
+   /**
+    * Every vmArgs array at any depth: the top level, a per-platform section's ("windows": {"vmArgs": ...}) and a per-OS
+    * version one's ("windows": {"10.0.17134": {"vmArgs": ...}}, where the real Windows launcher keeps its collector and
+    * which the native launcher appends to the top-level vmArgs). toG1 / toStock work per array, so a stock collector in
+    * another version's section (the G1 of "6.1") carries no marker and stays as it is.
+    */
    private static void forEachVmArgs(JSONObject j, java.util.function.Consumer<JSONArray> f) {
+      JSONArray a = j.optJSONArray("vmArgs");
+      if (a != null) {
+         f.accept(a);
+      }
+      for (String k : j.keySet()) {
+         JSONObject sec = j.optJSONObject(k);
+         if (sec != null) {
+            forEachVmArgs(sec, f);
+         }
+      }
+   }
+
+   /**
+    * jitSteady's and the heap's arrays: the top-level vmArgs and every per-platform section's, not the per-OS version
+    * sections below them. A version section is appended to the top level, so flags there would come twice and after a
+    * player's own.
+    */
+   private static void forEachTopVmArgs(JSONObject j, java.util.function.Consumer<JSONArray> f) {
       JSONArray top = j.optJSONArray("vmArgs");
       if (top != null) {
          f.accept(top);
@@ -390,21 +421,5 @@ public final class GcChoice {
             f.accept(a);
          }
       }
-   }
-
-   private static void save(Path game, JSONObject j) throws java.io.IOException {
-      Path json = game.resolve("ProjectZomboid64.json");
-      Path backup = game.resolve("ProjectZomboid64.json.pzopt-backup");
-      if (!Files.exists(backup)) {
-         Files.copy(json, backup);
-      }
-      Path tmp = game.resolve("ProjectZomboid64.json.pzopt-tmp");
-      Files.writeString(tmp, j.toString(1) + "\n", StandardCharsets.UTF_8);
-      JSONObject check = new JSONObject(Files.readString(tmp, StandardCharsets.UTF_8));
-      if (!check.has("mainClass") || check.getJSONArray("classpath").length() == 0 || check.getJSONArray("vmArgs").length() == 0) {
-         Files.deleteIfExists(tmp);
-         throw new java.io.IOException("launcher JSON check failed; left unchanged");
-      }
-      Files.move(tmp, json, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
    }
 }

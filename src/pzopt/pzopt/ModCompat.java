@@ -9,7 +9,14 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.FileVisitOption;
+import java.nio.file.FileVisitResult;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.SimpleFileVisitor;
+import java.nio.file.attribute.BasicFileAttributes;
 import java.util.ArrayList;
+import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -31,8 +38,9 @@ import java.util.zip.ZipFile;
  * tested; a patch of an edited method can wrap or replace half of one of our features.
  *
  * <p>At Config's class init (before any key is read) this scans the launch's Java mods: the {@code -javaagent} jars of
- * the JVM's arguments and every jar inside the mods {@code Zomboid/mods/default.txt} enables (Zomboid/mods, the game's
- * mods folder, the Workshop folder beside the game). For each class file it reads ZombieBuddy's {@code @Patch}
+ * the JVM's arguments and the jars of the mods {@code Zomboid/mods/default.txt} enables (Zomboid/mods, the game's
+ * mods folder, the Workshop folder beside the game; {@link #modJars}), each jar's result cached until it changes
+ * ({@link JarCache}). For each class file it reads ZombieBuddy's {@code @Patch}
  * annotations, and, for transformer-style agents, string constants naming one of our shadowed classes plus string
  * constants naming one of that class's edited methods. A hit on an edited method switches off the boolean keys that
  * method reads (scripts/override-methods.py writes the map), unless the mod is on the {@link #KNOWN} list (tested
@@ -101,6 +109,8 @@ public final class ModCompat {
    private static int enabledCount;
    private static String mode = "auto";
    private static long scanMs;
+   private static long dirsMs; // modDirectories inside sources()
+   private static String split = ""; // where the scan's time went, for the report
    private static boolean logged;
 
    /**
@@ -121,13 +131,20 @@ public final class ModCompat {
          List<Hit> hits = new ArrayList<>();
          Map<String, String> policy = knownPolicies();
          editedSeen = edited;
+         JarCache cache = JarCache.load(new File(UserOptions.file().getParentFile(), JarCache.FILE_NAME), stamp(edited, shadowed));
+         long t1 = System.nanoTime();
          scanned.putAll(sources());
+         long t2 = System.nanoTime();
          for (Map.Entry<String, List<File>> src : scanned.entrySet()) {
             for (File jar : src.getValue()) {
-               scanJar(src.getKey(), jar, shadowed, edited, hits);
+               scanJar(src.getKey(), jar, shadowed, edited, hits, cache);
             }
          }
          found.addAll(hits);
+         cache.save();
+         split = String.format("; mod folders %d ms, %d jar(s) found in %d ms, scanned in %d ms (%d from the cache)", dirsMs,
+               scanned.values().stream().mapToInt(List::size).sum(), (t2 - t1) / 1_000_000L - dirsMs, (System.nanoTime() - t2) / 1_000_000L,
+               cache.fromCache);
          apply(hits, edited, policy, out);
       } catch (Throwable t) {
          problem("mod compat: scan failed (" + t + "); nothing switched");
@@ -351,10 +368,12 @@ public final class ModCompat {
 
    // ── what the launch loads ──────────────────────────────────────────────────────────────────────────────────
 
-   /** source name -> jars: the -javaagent jars, then every jar of each enabled mod. */
+   /** source name -> jars: the -javaagent jars, then the jars of each enabled mod ({@link #modJars}). */
    static Map<String, List<File>> sources() {
       Map<String, List<File>> out = new LinkedHashMap<>();
+      long t0 = System.nanoTime();
       Map<String, File> modDirs = modDirectories();
+      dirsMs = (System.nanoTime() - t0) / 1_000_000L;
       try {
          for (String arg : java.lang.management.ManagementFactory.getRuntimeMXBean().getInputArguments()) {
             if (arg.startsWith("-javaagent:")) {
@@ -372,15 +391,19 @@ public final class ModCompat {
       }
       List<String> enabled = enabledMods();
       enabledCount = enabled.size();
+      List<String> ids = new ArrayList<>();
+      List<File> dirs = new ArrayList<>();
       for (String id : enabled) {
          File dir = modDirs.get(id);
-         if (dir == null) {
-            continue;
+         if (dir != null) {
+            ids.add(id);
+            dirs.add(dir);
          }
-         List<File> jars = new ArrayList<>();
-         collectJars(dir, jars, 0);
-         for (File j : jars) {
-            List<File> list = out.computeIfAbsent(id, k -> new ArrayList<>());
+      }
+      List<List<File>> jars = inParallel(dirs, ModCompat::modJars);
+      for (int i = 0; i < ids.size(); i++) {
+         for (File j : jars.get(i)) {
+            List<File> list = out.computeIfAbsent(ids.get(i), k -> new ArrayList<>());
             if (!list.contains(j)) {
                list.add(j);
             }
@@ -389,18 +412,304 @@ public final class ModCompat {
       return out;
    }
 
-   private static void collectJars(File dir, List<File> out, int depth) {
-      File[] files = dir.listFiles();
-      if (files == null || depth > 6) {
-         return;
+   /**
+    * fn of every item on a few daemon threads, the results in the items' order. The folder reads are ~60 us a
+    * directory on Windows; 330 mods' jar walks took 160 ms on one thread, 45 on four, 32 on eight (warm, 2026-10-01).
+    */
+   static <T, R> List<R> inParallel(List<T> items, java.util.function.Function<T, R> fn) {
+      int threads = Math.min(items.size(), Math.min(8, Runtime.getRuntime().availableProcessors()));
+      List<R> out = new ArrayList<>(items.size());
+      if (threads <= 1) {
+         for (T it : items) {
+            out.add(fn.apply(it));
+         }
+         return out;
       }
-      for (File f : files) {
-         if (f.isDirectory()) {
-            collectJars(f, out, depth + 1);
-         } else if (f.getName().toLowerCase(Locale.ROOT).endsWith(".jar") && f.length() < 64L << 20) {
-            out.add(f);
+      java.util.concurrent.atomic.AtomicInteger n = new java.util.concurrent.atomic.AtomicInteger();
+      java.util.concurrent.ExecutorService pool = java.util.concurrent.Executors.newFixedThreadPool(threads, r -> {
+         Thread t = new Thread(r, "pzopt-modcompat-" + n.incrementAndGet());
+         t.setDaemon(true);
+         return t;
+      });
+      try {
+         List<java.util.concurrent.Future<R>> futures = new ArrayList<>(items.size());
+         for (T it : items) {
+            futures.add(pool.submit(() -> fn.apply(it)));
+         }
+         for (java.util.concurrent.Future<R> f : futures) {
+            out.add(f.get());
+         }
+         return out;
+      } catch (InterruptedException e) {
+         Thread.currentThread().interrupt();
+         throw new IllegalStateException(e);
+      } catch (java.util.concurrent.ExecutionException e) {
+         throw new IllegalStateException(e.getCause());
+      } finally {
+         pool.shutdownNow();
+      }
+   }
+
+   /**
+    * The jars of one mod folder: the declared ones ({@link #declaredJars}), then any other jar the walk finds (a jar a
+    * mod ships for installing by hand). Inside a folder named media the walk enters only java/: media holds 98 % of the
+    * 343k files of 470 Workshop mods (2026-10-01), and its other folders (textures, models, sounds, Lua, scripts) held
+    * none of their 6 jars. An undeclared jar there is missed; nothing loads one from there (ZombieBuddy loads the
+    * declared jar, an agent comes through -javaagent).
+    */
+   static List<File> modJars(File dir) {
+      List<File> out = declaredJars(dir);
+      // same reach as before: the folder's files and 6 levels of subfolders, links followed, jars under 64 MB
+      walkJars(dir.toPath(), dir.toPath(), 7, out);
+      return out;
+   }
+
+   /**
+    * modJars' walk of start, the jars reported under dir (start is dir, or its real path when dir is a link). Links are
+    * followed by hand: FOLLOW_LINKS makes the JDK compare every folder with its ancestors (Windows has no file key),
+    * 1166 ms instead of 394 for the 472 mod folders on one thread.
+    */
+   private static void walkJars(Path dir, Path start, int maxDepth, List<File> out) {
+      try {
+         Files.walkFileTree(start, EnumSet.noneOf(FileVisitOption.class), maxDepth, new SimpleFileVisitor<>() {
+            @Override
+            public FileVisitResult preVisitDirectory(Path d, BasicFileAttributes a) {
+               return d.equals(start) || !art(dir.resolve(start.relativize(d))) ? FileVisitResult.CONTINUE : FileVisitResult.SKIP_SUBTREE;
+            }
+
+            @Override
+            public FileVisitResult visitFile(Path f, BasicFileAttributes a) {
+               int depth = f.equals(start) ? 0 : start.relativize(f).getNameCount();
+               Path at = depth == 0 ? dir : dir.resolve(start.relativize(f));
+               if (a.isRegularFile()) {
+                  addJar(at, a.size(), out);
+               } else if (Files.isDirectory(f)) { // a link or junction to a folder
+                  if (depth < maxDepth && (depth == 0 || !art(at))) {
+                     try {
+                        walkJars(at, f.toRealPath(), maxDepth - depth, out);
+                     } catch (IOException ignored) {
+                     }
+                  }
+               } else if (Files.isRegularFile(f)) { // a link to a file
+                  try {
+                     addJar(at, Files.size(f), out);
+                  } catch (IOException ignored) {
+                  }
+               }
+               return FileVisitResult.CONTINUE;
+            }
+
+            @Override
+            public FileVisitResult visitFileFailed(Path f, IOException e) {
+               return FileVisitResult.CONTINUE;
+            }
+         });
+      } catch (IOException ignored) {
+      }
+   }
+
+   /** A folder inside a folder named media, other than java: the mod's art, Lua and scripts. */
+   private static boolean art(Path d) {
+      Path parent = d.getParent();
+      return parent != null && parent.getFileName() != null && parent.getFileName().toString().equalsIgnoreCase("media")
+            && !d.getFileName().toString().equalsIgnoreCase("java");
+   }
+
+   private static void addJar(Path p, long size, List<File> out) {
+      if (p.getFileName().toString().toLowerCase(Locale.ROOT).endsWith(".jar") && size < 64L << 20) {
+         File j = p.toFile();
+         if (!out.contains(j)) {
+            out.add(j);
          }
       }
+   }
+
+   /**
+    * The jars a mod folder declares with ZombieBuddy's javaJarFile=. ZombieBuddy reads the version folder's mod.info
+    * (jar relative to it), else common/mod.info (jar relative to common/, then to the version folder); this tries the
+    * root's, common's and every version folder's, so a jar declared for another game version counts too.
+    */
+   static List<File> declaredJars(File dir) {
+      List<File> out = new ArrayList<>();
+      List<File> folders = new ArrayList<>();
+      folders.add(dir);
+      File[] sub = dir.listFiles(File::isDirectory);
+      if (sub != null) {
+         folders.addAll(List.of(sub));
+      }
+      for (File f : folders) {
+         String jar = javaJarFile(new File(f, "mod.info"));
+         if (jar == null) {
+            continue;
+         }
+         List<File> bases = new ArrayList<>();
+         bases.add(f);
+         if (f.getName().equalsIgnoreCase("common")) {
+            for (File v : folders) {
+               if (v != dir && v != f) {
+                  bases.add(v);
+               }
+            }
+         }
+         for (File base : bases) {
+            try {
+               File j = base.toPath().resolve(jar).normalize().toFile();
+               if (j.isFile() && j.length() < 64L << 20 && !out.contains(j)) {
+                  out.add(j);
+               }
+            } catch (RuntimeException e) { // a path this file system cannot name
+            }
+         }
+      }
+      return out;
+   }
+
+   /** A mod.info's first javaJarFile= that names a .jar (ZombieBuddy skips the others), or null. */
+   static String javaJarFile(File info) {
+      if (!info.isFile()) {
+         return null;
+      }
+      try (BufferedReader r = new BufferedReader(new InputStreamReader(new FileInputStream(info), StandardCharsets.UTF_8))) {
+         String line;
+         while ((line = r.readLine()) != null) {
+            line = line.trim();
+            if (line.toLowerCase(Locale.ROOT).startsWith("javajarfile=")) {
+               String v = line.substring("javajarfile=".length()).trim();
+               if (v.toLowerCase(Locale.ROOT).endsWith(".jar")) {
+                  return v;
+               }
+            }
+         }
+      } catch (IOException ignored) {
+      }
+      return null;
+   }
+
+   /**
+    * Scan results per jar, beside options.ini ({@link #FILE_NAME}): a jar whose path, size and time are unchanged is
+    * read back instead of scanned (ZombieBuddy.jar alone took 180 ms). The stamp ({@link #stamp}) names this build and
+    * the edited-method map; a file with another stamp counts as empty.
+    */
+   static final class JarCache {
+      static final String FILE_NAME = "mod-compat-cache.properties";
+      private final File file;
+      private final String stamp;
+      private final Properties old = new Properties();
+      private final Properties now = new Properties(); // the jars of this scan
+      private boolean changed;
+      int scanned;
+      int fromCache;
+
+      private JarCache(File file, String stamp) {
+         this.file = file;
+         this.stamp = stamp;
+      }
+
+      static JarCache load(File file, String stamp) {
+         JarCache c = new JarCache(file, stamp);
+         if (file.isFile()) {
+            try (InputStream in = new FileInputStream(file)) {
+               c.old.load(in);
+            } catch (IOException | IllegalArgumentException e) {
+               c.old.clear();
+            }
+         }
+         if (!stamp.equals(c.old.getProperty("stamp"))) {
+            c.old.clear();
+            c.changed = true;
+         }
+         return c;
+      }
+
+      private static String key(File jar) {
+         return jar.getAbsolutePath();
+      }
+
+      private static String version(File jar) {
+         return jar.length() + "," + jar.lastModified();
+      }
+
+      /** The jar's hits under this source, or null when the jar is not cached as it is now. */
+      List<Hit> get(String source, File jar) {
+         String v = this.old.getProperty(key(jar));
+         if (v == null) {
+            return null;
+         }
+         String[] lines = v.split("\n", -1);
+         if (!lines[0].equals(version(jar))) {
+            return null;
+         }
+         List<Hit> hits = new ArrayList<>();
+         for (int i = 1; i < lines.length; i++) {
+            String[] f = lines[i].split("\t", -1);
+            if (f.length != 3) {
+               return null;
+            }
+            hits.add(new Hit(source, jar.getName(), f[0], f[1].isEmpty() ? null : f[1].substring(1), f[2]));
+         }
+         this.now.setProperty(key(jar), v);
+         return hits;
+      }
+
+      void put(File jar, List<Hit> hits) {
+         StringBuilder v = new StringBuilder(version(jar));
+         for (Hit h : hits) {
+            v.append('\n').append(h.cls).append('\t').append(h.method != null ? "=" + h.method : "").append('\t').append(h.how);
+         }
+         this.now.setProperty(key(jar), v.toString());
+         this.changed = true;
+      }
+
+      /** Writes the jars of this scan when anything differs from the file (written beside, then moved over it). */
+      void save() {
+         Properties had = new Properties();
+         had.putAll(this.old);
+         had.remove("stamp");
+         if (!this.changed && had.equals(this.now)) {
+            return;
+         }
+         Properties out = new Properties();
+         out.putAll(this.now);
+         out.setProperty("stamp", this.stamp);
+         try {
+            this.file.getParentFile().mkdirs();
+            File tmp = new File(this.file.getPath() + ".tmp");
+            try (java.io.OutputStream o = new java.io.FileOutputStream(tmp)) {
+               out.store(o, "pzopt ModCompat: jar scan results (path = size,time, then class, =method or empty, how per hit)");
+            }
+            Files.move(tmp.toPath(), this.file.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+         } catch (IOException | RuntimeException ignored) {
+         }
+      }
+   }
+
+   /** This build and the inputs of a jar scan (shadowed classes, edited methods): the cache's validity. */
+   static String stamp(Map<String, Map<String, String[]>> edited, Set<String> shadowed) {
+      java.util.zip.CRC32 crc = new java.util.zip.CRC32();
+      for (String c : new java.util.TreeSet<>(shadowed)) {
+         crc.update((c + "\n").getBytes(StandardCharsets.UTF_8));
+      }
+      for (Map.Entry<String, Map<String, String[]>> e : new TreeMap<>(edited).entrySet()) {
+         for (Map.Entry<String, String[]> m : new TreeMap<>(e.getValue()).entrySet()) {
+            crc.update((e.getKey() + "#" + m.getKey() + "=" + String.join(",", m.getValue()) + "\n").getBytes(StandardCharsets.UTF_8));
+         }
+      }
+      return BuildInfo.get("commit") + " " + BuildInfo.get("built") + " " + Long.toHexString(crc.getValue());
+   }
+
+   /** {@link #scanJar}, through the cache: an unchanged jar's hits are read back, a scanned one is remembered. */
+   static void scanJar(String source, File jar, Set<String> shadowed, Map<String, Map<String, String[]>> edited, List<Hit> hits, JarCache cache) {
+      List<Hit> jarHits = cache.get(source, jar);
+      if (jarHits != null) {
+         cache.fromCache++;
+      } else {
+         jarHits = new ArrayList<>();
+         cache.scanned++;
+         if (scanJar(source, jar, shadowed, edited, jarHits)) {
+            cache.put(jar, jarHits);
+         }
+      }
+      hits.addAll(jarHits);
    }
 
    /** The mod ids of Zomboid/mods/default.txt (the main menu's active mods, the ones loaded at boot). */
@@ -435,34 +744,59 @@ public final class ModCompat {
 
    /** mod id -> its folder, in the order the game searches: Zomboid/mods, the game's mods, the Workshop downloads. */
    static Map<String, File> modDirectories() {
+      return modDirectories(UserOptions.zomboidDir(), new File("").getAbsoluteFile()); // the game dir: the launcher's working directory
+   }
+
+   /** ModCompatTest: the same search from a given Zomboid folder and game dir. */
+   static Map<String, File> modDirectories(File zomboidDir, File game) {
       Map<String, File> m = new LinkedHashMap<>();
       List<File> roots = new ArrayList<>();
-      roots.add(new File(UserOptions.zomboidDir(), "mods"));
-      File game = new File("").getAbsoluteFile(); // the game dir: the launcher's working directory
+      roots.add(new File(zomboidDir, "mods"));
       roots.add(new File(game, "mods"));
-      File steamapps = game.getParentFile() != null && game.getParentFile().getParentFile() != null
-            ? game.getParentFile().getParentFile().getParentFile() : null; // .../steamapps/common/ProjectZomboid/projectzomboid
-      File[] items = steamapps != null ? new File(steamapps, "workshop/content/108600").listFiles() : null;
+      File content = workshopContent(game);
+      File[] items = content != null ? content.listFiles() : null;
       if (items != null) {
          for (File item : items) {
             roots.add(new File(item, "mods"));
          }
       }
-      for (File root : roots) {
-         File[] dirs = root.listFiles();
-         if (dirs == null) {
-            continue;
-         }
-         for (File d : dirs) {
-            if (!d.isDirectory()) {
-               continue;
-            }
-            for (String id : modIds(d)) {
-               m.putIfAbsent(id, d);
+      for (List<Map.Entry<File, Set<String>>> folders : inParallel(roots, ModCompat::modFolders)) { // read in parallel, merged in order
+         for (Map.Entry<File, Set<String>> f : folders) {
+            for (String id : f.getValue()) {
+               m.putIfAbsent(id, f.getKey());
             }
          }
       }
       return m;
+   }
+
+   /** The mod folders of one root with their ids, in listing order. */
+   private static List<Map.Entry<File, Set<String>>> modFolders(File root) {
+      List<Map.Entry<File, Set<String>>> out = new ArrayList<>();
+      File[] dirs = root.listFiles();
+      if (dirs != null) {
+         for (File d : dirs) {
+            if (d.isDirectory()) {
+               out.add(Map.entry(d, modIds(d)));
+            }
+         }
+      }
+      return out;
+   }
+
+   /**
+    * The Workshop downloads: Steam keeps them in the library that holds the game, so under the nearest steamapps folder
+    * at or above the game dir. The game dir sits at a different depth per platform: Linux
+    * .../steamapps/common/ProjectZomboid/projectzomboid, Windows ...\steamapps\common\ProjectZomboid, macOS
+    * .../steamapps/common/ProjectZomboid/Project Zomboid.app/Contents/Java. Null outside a Steam library.
+    */
+   static File workshopContent(File game) {
+      for (File f = game; f != null; f = f.getParentFile()) {
+         if (f.getName().equalsIgnoreCase("steamapps")) {
+            return new File(f, "workshop/content/108600");
+         }
+      }
+      return null;
    }
 
    /** The id= of every mod.info in a mod folder (its root, common/ and the version folders). */
@@ -509,7 +843,8 @@ public final class ModCompat {
 
    // ── class files ────────────────────────────────────────────────────────────────────────────────────────────
 
-   static void scanJar(String source, File jar, Set<String> shadowed, Map<String, Map<String, String[]>> edited, List<Hit> hits) {
+   /** The hits of one jar's classes; false when the jar could not be opened. */
+   static boolean scanJar(String source, File jar, Set<String> shadowed, Map<String, Map<String, String[]>> edited, List<Hit> hits) {
       try (ZipFile zip = new ZipFile(jar)) {
          var entries = zip.entries();
          while (entries.hasMoreElements()) {
@@ -523,8 +858,10 @@ public final class ModCompat {
                // a class file we cannot read is not a patch we can see
             }
          }
+         return true;
       } catch (IOException e) {
          problem("mod compat: could not open " + jar + ": " + e);
+         return false;
       }
    }
 
@@ -720,7 +1057,7 @@ public final class ModCompat {
    // ── report ─────────────────────────────────────────────────────────────────────────────────────────────────
 
    private static void writeReport() {
-      report.add("mod compat: scan took " + scanMs + " ms (modCompat=" + mode + ")");
+      report.add("mod compat: scan took " + scanMs + " ms (modCompat=" + mode + ")" + split);
       File f = new File(UserOptions.file().getParentFile(), "mod-compat.txt");
       try {
          f.getParentFile().mkdirs();

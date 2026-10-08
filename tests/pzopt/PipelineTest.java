@@ -32,7 +32,9 @@ import zombie.iso.IsoMovingObject;
  * inline phase will run, {@code run} for a non-combined frame's synchronous arm — and never dispatches, while
  * the scheduler's update() latches the frame's shape once, sends the whole frame up in one flight, runs the
  * inline entities under it and lands it at the tail. The per-bucket overlap those pins used to describe was
- * measured empty (the game thread reached the join before the workers woke), which is why it is gone.
+ * measured empty (the game thread reached the join before the workers woke), which is why it is gone. Since
+ * {@code animalsAfterJoin} (2026-09-28) the frame's animals run after that landing, from the scheduler and outside
+ * every {@code finally}, so a throw from the join is never replaced by the animal phase.
  */
 public class PipelineTest {
 
@@ -139,7 +141,34 @@ public class PipelineTest {
       Check.check(invokes(sched, "runInlinePhase"), "the scheduler runs the inline entities WHILE that flight is airborne");
       Check.check(invokes(sched, "joinPending"), "the scheduler's update() holds the final join after the last bucket");
 
+      // ── animalsAfterJoin: the herd runs after the landing, from the scheduler, and never from a finally ──
+      Check.check(invokes(sched, "runAnimalPhase"), "the scheduler runs the frame's animals after the join");
+      java.util.List<Integer> animalCalls = invokeIndexes(sched, "runAnimalPhase");
+      java.util.List<Integer> joinCalls = invokeIndexes(sched, "joinPending");
+      Check.check(animalCalls.size() == 1,
+            "runAnimalPhase has one call site, i.e. it is in no finally (javac copies a finally body into every exit path): an "
+                  + "exception from the join propagates instead of being replaced by the animal phase, got " + animalCalls.size());
+      Check.check(joinCalls.stream().allMatch(j -> j < animalCalls.get(0)),
+            "the animal phase comes after every copy of the join: it is reached only once the flight has landed normally");
+      Check.check(!invokes(bucket, "runAnimalPhase"),
+            "the bucket does not run animals: where an inline entity goes is UpdateBatch's policy, inside queueInline");
+
       System.out.println("PipelineTest ok");
+   }
+
+   /** Code-order positions of every invocation of UpdateBatch.{@code name} in the method. */
+   private static java.util.List<Integer> invokeIndexes(MethodModel m, String name) {
+      java.util.List<Integer> at = new java.util.ArrayList<>();
+      int[] i = {0};
+      m.code().orElseThrow().forEach(el -> {
+         if (el instanceof InvokeInstruction inv
+               && inv.owner().name().stringValue().equals("pzopt/UpdateBatch")
+               && inv.name().stringValue().equals(name)) {
+            at.add(i[0]);
+         }
+         i[0]++;
+      });
+      return at;
    }
 
    private static MethodModel method(ClassModel model, String name, String desc) {

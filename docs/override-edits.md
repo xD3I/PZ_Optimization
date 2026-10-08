@@ -5026,6 +5026,12 @@ number for this change, and `batched` minus `preClaimed` is this path's own asyn
 the quantity whose near-equality with `batched` was the defect; the pool's global `async helped` line is
 shared with the other batches and must not be used for it.
 
+Key `entityUpdateServer`, default off: an authoritative dedicated or co-op server may use the safe-state entity
+batch and combined pipeline; an MP client is still always excluded. The safe-state whitelist also accepts
+`WalkTowardNetworkState` only in that opted-in server process, alongside the existing idle, walk and pathfind states.
+The player, animal, vehicle, physics, ragdoll, fire, grapple and near-player guards are unchanged. The first hosted
+run proved client-side frame workers while hosting, but a joining client's behavior is not yet covered.
+
 `tests/pzopt/CombinedDispatchTest` pins the machinery at runtime on real moving objects: per-entity
 multiplier and level across two queued groups in one flight, the inline queue's order and per-group
 multiplier with the global restored to one afterwards, the latch's own semantics including that it drops a
@@ -6416,3 +6422,86 @@ The player, zombies, animals and cars take the static world's sun shadow part by
 - `pzopt.GodRays`: the occupancy grid is kept in an occupancy-only frame when god rays are off and entity shadows want it; its
   uploads happen first in `Gl.frame` whatever the frame does next (a frame without light used to drop them); `Gl.occZ0Now` /
   `occMaxTop` publish the uploaded grid.
+## Animals update after the join (`animalsAfterJoin`, 2026-09-28; UpdateBatch + scheduler override)
+
+The maintainer's three-machine profile of the combined dispatch (`docs/findings-gt-offload-2026-09-27.md`, "PR #35
+update") found the pipeline giving its gain back on the desktop and the Mac as soon as a herd was near. Game-thread CPU
+a frame, entity updates on minus off, with 60 cows: the PR's filter alone gained 1.82 ms on the desktop, 1.96 on the
+flip and 3.05 on the Mac; with the pipeline on top it gained 0.36, 2.11 and minus 0.40, so on the Mac the frame got
+slower than with entity updates off. Without animals the pipeline was ahead on the two laptops. The section that grew
+was the animals' line of sight: 1.3 ms on the flip, 1.6 on the desktop and 4.9 on the Mac with the herd, and even a
+handful of wild animals cost 0.3 to 0.5 ms.
+
+The mechanism. On a combined frame the animals were in the inline queue, so they updated on the game thread while the
+zombie flight was airborne. An animal's sight update walks every zombie in range and asks each for its position and its
+square. During the flight every one of those getters first asks whether the zombie belongs to the flight's snapshot and
+answers from the snapshot when it does, reading fields of objects the workers are writing at that moment. Sixty animals
+walking a horde through that check, against workers moving the same zombies, is contention the synchronous shape never
+had, and it grows with the herd.
+
+What moved. `queueInline` now sends an animal to a queue of its own, with the same two stamps as the inline queue: its
+bucket's multiplier and its simulation level, taken at queue time. Every other inline entity (the player, the vehicles,
+the physics objects) still goes to the inline queue and still runs under the flight. The routing is `UpdateBatch`'s own
+policy, so the bucket override is unchanged; it tests the animal class itself, which in this build is a subclass of the
+player class. After the scheduler's join has landed the flight, the new animal phase runs the queued animals on the game
+thread in queue order, stock's four calls each under that animal's own stamps, and puts the global multiplier back to
+one. It publishes nothing into the snapshot, since no flight is airborne. At that point every zombie is settled, the
+snapshot check is false so the reads are direct, and nothing is writing what the herd reads. The phase still runs before
+the scheduler's update returns, so the walk over the animals' vocals and looping sounds, the zombie vocal walk and the
+postupdate loop that follow all see animals that have updated this frame.
+
+One ordering difference, stated plainly: the herd now updates after every zombie of the frame and after the player and
+the vehicles, where the inline phase ran animals interleaved with the player and the vehicles and concurrently with the
+zombies. What an animal sees of a zombie is its position after this frame's update instead of the position frozen at
+dispatch.
+
+The invariants and what holds them:
+
+- No animal updates while an entity flight is airborne. The phase lands any pending flight itself before its first
+  animal, so the rule belongs to the method rather than to its call site; on the scheduler's path that landing is a
+  no-op, because the join has just run.
+- On a normal frame every queued animal updates exactly once, in queue order, before the scheduler's update returns.
+- The phase sits in no `finally`. It follows the pipeline's try and finally, inside the zombie-statistics window, behind
+  the frame's combined latch, so it is reached only when the buckets, the inline phase and the join all returned
+  normally. A throw from any of them propagates exactly as before and the animal phase is skipped for that frame; had it
+  been in a `finally`, an exception from the herd would have replaced the one already in flight.
+- A throwing animal ends the phase the way a throwing entity ends stock's bucket loop: its exception propagates and the
+  rest of the frame's herd is dropped. The phase's own `finally` cannot throw; it puts the multiplier back to one and
+  nulls every slot.
+- A frame that threw before its animal phase leaves its herd queued, and the frame latch drops it at the next frame's
+  start. The inline queue is reset only on a combined frame; the animal queue is reset on every latch, because after
+  such a frame a combined one may never come again (the failure latch, a multiplayer session) and the slots would pin
+  those animals and their world for the rest of the process.
+- Frames without the pipeline are untouched: `queueInline` is only reached on a combined frame, the scheduler calls the
+  phase only on one, and with nothing queued the phase returns before it writes even the multiplier.
+
+A side benefit. With the herd out of the inline phase nothing updates an animal while the flight is airborne, so a
+batched zombie that reads an animal during its own update no longer races the game thread writing that animal: the
+animals hold still for the whole flight and move only once it has landed.
+
+Key `animalsAfterJoin`, default on, and inert unless the combined pipeline frame is active (`entityUpdateParallel` and
+`entityUpdatePipeline` both on). Off keeps the animals in the inline phase under the flight exactly as before, which is
+the control arm of an A/B. It is on the Options tab in the entity-update section and on the settings echo line. Counter
+`animalsAfterJoin` on the batch status line, beside `combinedFrames` and `inlineQueued`: the animals the after-join
+phase has updated this session. With the key on, `inlineQueued` no longer counts animals.
+
+`tests/pzopt/AnimalsAfterJoinTest` runs on a real animal: a probe subclass of the animal class allocated without running
+its constructors (they need a loaded world), because the routing tests that class and a stand-in would test nothing. It
+pins that an animal queued through `queueInline` does not run in the inline phase and does run in the animal phase while
+the player and vehicle stand-ins still run inline in queue order; that animals run in queue order, once each, with
+stock's four calls under their own multiplier and level, and the global is one afterwards; that the phase called with a
+combined flight still airborne lands it first, as seen from inside each animal's update (no flight pending, every
+batched task finished, a batched entity's position read directly); that a throwing animal propagates its own exception,
+leaves the multiplier at one and no slot held, and the animals after it never run; that the latch drops an abandoned
+herd on either arm; and that with the key off (through a narrow test seam, the key itself being read once at class
+initialisation) the animal runs in the inline phase under the flight as before. `tests/pzopt/PipelineTest` pins the
+scheduler in bytecode: its update body calls the animal phase exactly once (a `finally` body is copied into every exit
+path, so a single call site means it is in none) and after every copy of the join, and the bucket never calls it.
+
+No performance number is claimed. The change removes the contention the profile named; whether the pipeline with a herd
+now beats the synchronous shape, on which machines and by how much, is for an alternation run on the three machines to
+say.
+
+Open, and not acted on here: in the same table the pipeline was 0.14 ms behind the synchronous shape on the 8-worker
+desktop with no animals at all (a gain of 1.44 ms against 1.58). The player's own line-of-sight walk runs in the inline
+phase and reads the zombies through the same snapshot during the flight, so it is the obvious next suspect.

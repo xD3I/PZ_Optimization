@@ -244,12 +244,15 @@ public final class MovingObjectUpdateScheduler {
          try { // pzopt: entityUpdatePipeline
             if (pzoptCombined) { // pzopt: entityUpdatePipeline (combined dispatch, spec 2026-09-27)
                pzopt.UpdateBatch.dispatchCombined(); // pzopt: entityUpdatePipeline -- one workers-only flight for the whole frame
-               pzopt.UpdateBatch.runInlinePhase(); // pzopt: entityUpdatePipeline -- the player, vehicles and animals on the game thread WHILE that flight is airborne: this is the runway the per-bucket shape never had
+               pzopt.UpdateBatch.runInlinePhase(); // pzopt: entityUpdatePipeline -- the player and vehicles (animals too with animalsAfterJoin off) on the game thread WHILE that flight is airborne: this is the runway the per-bucket shape never had
             } // pzopt: entityUpdatePipeline
          } finally { // pzopt: entityUpdatePipeline
             pzopt.UpdateBatch.joinPending(); // pzopt: entityUpdatePipeline -- the batch is still airborne and nothing past this line may see a half-updated entity, so land it here before postupdate and the render read anything (the inner finally: a throwing inline entity must not leave a flight up for updateZombieVocals, which reads every zombie)
          } // pzopt: entityUpdatePipeline
       } // pzopt: entityUpdatePipeline
+      if (pzoptCombined) { // pzopt: animalsAfterJoin -- outside every finally on purpose: reached only when the buckets, the inline phase and the join returned normally, so an exception from any of them propagates instead of being replaced by one from the herd
+         pzopt.UpdateBatch.runAnimalPhase(); // pzopt: animalsAfterJoin -- the frame's animals, now that every zombie has landed: their sight walks read the horde directly instead of through the snapshot, and no worker writes what they read; still before postupdate and the vocal walks, which read animals
+      } // pzopt: animalsAfterJoin
       } finally { // pzopt
          pzopt.ZombieStats.end(); // pzopt: zombieStatsFold, written back after the batch landed, the achievement check once per statistic
       } // pzopt
