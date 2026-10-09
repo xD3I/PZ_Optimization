@@ -1,17 +1,13 @@
 package pzopt;
 
 import java.util.function.Consumer;
-import org.lwjgl.glfw.GLFW;
 import zombie.core.Core;
 import zombie.core.textures.TextureDraw;
 
 /**
- * Late-latched software cursor ({@code cursorLatch}, 2026-09-24). With "Lock cursor to window" the game hides the OS
- * cursor and draws its own (zombie.input.Mouse.renderCursorTexture) at the mouse position the game thread read at the
- * start of its frame, so the cursor trails the hand by the whole pipeline (7 ms at a 240 cap, ~26 ms with vsync and an
- * uncapped game). The cursor sprite is captured when it is recorded; just before the render thread replays that frame
- * it pumps the OS events and shifts the sprite to the newest pointer position (what VR runtimes and games do with
- * cursors and head poses: late latching). Only the drawn cursor moves; the game's own reads of the mouse are untouched.
+ * Late-latched software cursor ({@code cursorLatch}, 2026-09-24). The render thread shifts the captured cursor sprite
+ * to the latest safely published producer position just before replay; native events are pumped only by InputThread.
+ * This changes only the drawn cursor, not the simulation's frame snapshot.
  */
 public final class CursorLatch implements Consumer<TextureDraw> {
    public static final boolean ON = Config.CURSOR_LATCH && Overrides.enabled();
@@ -20,6 +16,9 @@ public final class CursorLatch implements Consumer<TextureDraw> {
    private static final Object[] slotState = new Object[SLOTS];
    private static final TextureDraw[] slotDraw = new TextureDraw[SLOTS];
    private static final int[] slotX = new int[SLOTS], slotY = new int[SLOTS];
+   private static final float[] slotScaleX = new float[SLOTS], slotScaleY = new float[SLOTS];
+   private static final float[] slotOffsetX = new float[SLOTS], slotOffsetY = new float[SLOTS];
+   private static float pendingScaleX, pendingScaleY, pendingOffsetX, pendingOffsetY;
    private static int next, pendingX, pendingY;
    private static long latched, lastLogNs;
    private static double shiftSum;
@@ -34,6 +33,15 @@ public final class CursorLatch implements Consumer<TextureDraw> {
       }
       pendingX = usedX;
       pendingY = usedY;
+      pendingScaleX = pendingScaleY = 1;
+      pendingOffsetX = pendingOffsetY = 0;
+      if (InputThread.active() && zombie.debug.DebugContext.isUsingGameViewportWindow()) {
+         var viewport = zombie.debug.DebugContext.instance.viewport;
+         pendingOffsetX = viewport.transformXToGame(ImGuiInput.eventScreenX(0));
+         pendingOffsetY = viewport.transformYToGame(ImGuiInput.eventScreenY(0));
+         pendingScaleX = viewport.transformXToGame(ImGuiInput.eventScreenX(1)) - pendingOffsetX;
+         pendingScaleY = viewport.transformYToGame(ImGuiInput.eventScreenY(1)) - pendingOffsetY;
+      }
       return INSTANCE;
    }
 
@@ -45,6 +53,8 @@ public final class CursorLatch implements Consumer<TextureDraw> {
          slotDraw[i] = texd;
          slotX[i] = pendingX;
          slotY[i] = pendingY;
+         slotScaleX[i] = pendingScaleX; slotScaleY[i] = pendingScaleY;
+         slotOffsetX[i] = pendingOffsetX; slotOffsetY[i] = pendingOffsetY;
       }
    }
 
@@ -55,12 +65,15 @@ public final class CursorLatch implements Consumer<TextureDraw> {
       }
       TextureDraw texd = null;
       int usedX = 0, usedY = 0;
+      float scaleX = 1, scaleY = 1, offsetX = 0, offsetY = 0;
       synchronized (slotState) {
          for (int i = 0; i < SLOTS; i++) {
             if (slotState[i] == renderState && slotDraw[i] != null) {
                texd = slotDraw[i];
                usedX = slotX[i];
                usedY = slotY[i];
+               scaleX = slotScaleX[i]; scaleY = slotScaleY[i];
+               offsetX = slotOffsetX[i]; offsetY = slotOffsetY[i];
                slotState[i] = null;
                slotDraw[i] = null;
             }
@@ -69,10 +82,17 @@ public final class CursorLatch implements Consumer<TextureDraw> {
       if (texd == null) {
          return;
       }
-      GLFW.glfwPollEvents(); // the newest pointer position into lwjglx
-      int x = org.lwjglx.input.Mouse.pzoptLatestX();
-      int y = Core.getInstance().getScreenHeight() - org.lwjglx.input.Mouse.pzoptLatestY() - 1;
-      float dx = x - usedX, dy = y - usedY;
+      int x;
+      int y;
+      if (InputThread.active()) {
+         long position = SubframeInput.latestPosition();
+         x = (int)(position >> 32);
+         y = (int)position;
+      } else {
+         x = org.lwjglx.input.Mouse.pzoptLatestX();
+         y = Core.getInstance().getScreenHeight() - org.lwjglx.input.Mouse.pzoptLatestY() - 1;
+      }
+      float dx = x * scaleX + offsetX - usedX, dy = y * scaleY + offsetY - usedY;
       texd.x0 += dx;
       texd.x1 += dx;
       texd.x2 += dx;

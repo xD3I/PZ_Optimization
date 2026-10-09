@@ -537,12 +537,78 @@ inner class). Edits:
    later index). The stock debug string is only built when
    `DebugType.Vehicle.isEnabled()`; one `[pzopt]` line reports the counts.
 
+## Windows owner-thread input fork (revision `4a0e9546ec`)
+
+- `MainScreenState` establishes the window owner before configuration is read. `RenderThread`
+  hands the GL context to `pzopt-render`; `InputThread` keeps the original thread as the Win32/GLFW owner.
+  `Display`, LWJGL mouse/keyboard, clipboard, controllers, cursor clipping and ImGui platform operations
+  marshal native window work to that owner. The active path bypasses the legacy mouse queue/pollers.
+- Mods may synchronously call `Display.processMessages()` from a render-context callback (ZombieBuddy's
+  Java-mod approval screen does this). While the input fork is active, the call executes on the GLFW owner
+  through `InputThread.invoke()` and returns only after the pump completes. Calling GLFW on the render
+  thread instead throws and aborts mod loading; bypassing the pump would leave approval input stale.
+- `RawMouse` registers foreground-only mouse usage 1:2 and waits through `MsgWaitForMultipleObjectsEx`.
+  It drains `GetRawInputBuffer` before GLFW dispatch. A subclassed `WM_INPUT` handler reads the already-removed
+  message with `GetRawInputData`, drains the remaining buffer, and calls `DefWindowProc` for native cleanup.
+  Native storage is preallocated; x64 `RAWINPUT` blocks are bounds-checked and walked at 8-byte alignment.
+  Per-pump work is bounded so keyboard/window events remain serviceable under continuous mouse input.
+  GLFW main/platform-window mouse callbacks are gated off, not replayed alongside raw events.
+  Legacy native messages remain enabled for activation/title bars; this does not register background input.
+- Raw relative counts drive one shared absolute cursor without Windows pointer acceleration. `mouseSensitivity`
+  applies exact signed fractional movement at 1/20-count resolution when acceleration is disabled. Optional
+  `mouseAcceleration` uses collection-time 8 ms windows of Euclidean relative raw counts; each completed window
+  sets the gain for subsequent batches. After the onset in counts/s, the gain rises by the configured percentage
+  per 1,000 counts/s up to the configured percentage cap, then multiplies sensitivity. A >50 ms collector stall,
+  lost foreground, absolute position, or setting change resets the estimate and fractional remainder. This is
+  not a physical hardware-timestamp speed curve. Absolute primary/virtual-desktop packets and signed wheel
+  transitions are unaffected. Button locations use the cursor at their packet, not the batch endpoint.
+  Native pointer synchronization happens after the batch; client origins and scale are sampled once, not per packet.
+  Focus regain reconciles physical releases missed while inactive without generating a press.
+  Raw Input reports physical buttons: packets from a real device (non-null `hDevice`) swap left/right when
+  `SM_SWAPBUTTON` is set, as window messages do; device-less packets (touchpads, injected input) arrive logical.
+  The focus reconciliation picks `VK_LBUTTON`/`VK_RBUTTON` the same way, since `GetAsyncKeyState` is physical too.
+  Raw timestamps are collection times: `RAWMOUSE` does not provide hardware timestamps.
+- ImGui's single-window coordinates are client-relative; desktop origins are added only for multi-viewport mode.
+  The game viewport moves only by its title bar, not by clicks inside its rendered UI.
+  `pzopt.imguiIniFile` lets the isolated harness use its own layout rather than the installed game's file.
+- `InputLatch` freezes `SubframeBuffer` before input swaps. `SubframeInput`, game `Mouse`, `UIManager`
+  and `UIElement` replay ordered actions at their raw-derived coordinates, then restore final cursor state.
+  Focus/overflow resets cancel captures and held gestures without an activating synthetic release.
+  Wheel records keep their raw fraction, but UI scroll/zoom, `OnMouseWheel` and `getWheelState` see whole notches:
+  1/120 units accumulate across records and frames (reset on direction reversal or a cancelled frame), so a
+  high-resolution wheel scrolls at the stock per-notch rate rather than one step per partial packet.
+  `CursorLatch` uses the published position rather than querying GLFW from the renderer.
+- `IsoPlayer` submits eligible buffered attack presses through native `AttemptAttack`; only an actual
+  `isAttackStarted` transition commits `SubframeCombat`'s snapshot. `BallisticsController` and scoped
+  `CombatManager` entry points preserve that aim through collision/damage evaluation. No stock attack
+  retry at final cursor C follows a handled buffered press.
+  Reticle projection is captured independently of weapon-model readiness. At emission, rotate the native muzzle pose
+  to the accepted aim, retaining its origin offset, elevation and animation error rather than freezing an idle pose.
+- Regenerate `CombatManager` and `BallisticsController` with their nested classes, not just the outer
+  `.class`. The shipped `CombatManager` decompile needs three default `yield`s after their conditional
+  branches in `processTargetedHit`, plus a distinct `lowerArm` local in the body-part switch.
+- `scripts/build.sh` and `scripts/test.sh` use javac response files; Windows paths/classpath separators
+  are converted explicitly under Git Bash. `SubframeBufferTest` covers publication, short clicks,
+  frozen prefixes, overflow/focus cancellation, held-button suppression and collector hold timestamps.
+  `RawMousePacketsTest` covers raw binary layout, signed deltas/wheels, record order/alignment, malformed bounds,
+  fractional signed motion and bounded acceleration/collector-window transitions. The real Windows UI/combat
+  smoke entry point is `harness/input-thread-win.ps1`; see README.
+  It now requires a nonempty native buffered read and verifies relative raw movement through the real game cursor.
+  Its text scenario waits for the native text-change callback before a later mouse scenario takes focus.
+  Foreground acquisition temporarily attaches the injector to the foreground input queue and always detaches;
+  the HWND guard remains, and physical input is never blocked.
+  Combat checks submit a second press at C in the same stalled batch: only B may receive one native attack.
+  The combat fixture uses free anchor squares and centers characters with `setForceX/Y`: B42's
+  `teleportTo(float, float, int)` floors coordinates and otherwise makes melee range depend on random spawn offsets.
+  `CombinedDispatchTest` waits for a worker's actual progress before joining instead of assuming a 3 ms timeslice;
+  the scheduler implementation is unchanged.
+
 ## org.lwjglx.opengl.Display and org.lwjglx.input.Mouse (added 2026-09-19)
 
 These two are The Indie Stone's LWJGL 2 compatibility shim over GLFW 3.4 (the
-window and mouse the whole game talks to), not `zombie.*` code. They are
-overridden for one reason: native Wayland on a scaled desktop. The game selects
-the Wayland GLFW platform only when the JVM property `zomboid.wayland=1` is set
+window and mouse the whole game talks to), not `zombie.*` code. Their overrides were
+originally added for native Wayland on a scaled desktop; the Windows input fork above also uses them.
+The game selects the Wayland GLFW platform only when the JVM property `zomboid.wayland=1` is set
 (otherwise the shim forces X11). On Wayland GLFW hands the window size out in
 screen coordinates while the framebuffer is scaled (`GLFW_SCALE_FRAMEBUFFER`
 is on by default), so on a 5120x2160 panel at KDE's 125 % scale the stock shim

@@ -53,7 +53,7 @@ public class RenderThread {
    private static volatile boolean renderingEnabled = true;
    private static volatile boolean waitForRenderState;
    private static volatile boolean hasContext;
-   private static boolean cursorVisible = true;
+   private static volatile boolean cursorVisible = true;
    private static long renderTime;
    private static long startWaitTime;
    private static long waitTime;
@@ -61,6 +61,7 @@ public class RenderThread {
    public static void init() throws IOException, LWJGLException {
       synchronized (m_initLock) {
          if (!isInitialized) {
+            pzopt.InputThread.initialize();
             renderThread = Thread.currentThread();
             displayWidth = Display.getWidth();
             displayHeight = Display.getHeight();
@@ -99,7 +100,24 @@ public class RenderThread {
       if (!isInitialized) {
          throw new IllegalStateException("RenderThread is not initialized.");
       }
+      if (pzopt.InputThread.shouldUse()) {
+         pzopt.InputThread.runOwnerLoop(() -> {
+            try {
+               Display.releaseContext();
+            } catch (LWJGLException e) {
+               throw new RuntimeException("Unable to release initial OpenGL context from GLFW owner", e);
+            }
+            renderThread = new Thread(ThreadGroups.Main, RenderThread::renderLoopWorker, "pzopt-render");
+            renderThread.setUncaughtExceptionHandler(RenderThread::uncaughtException);
+            renderThread.start();
+         });
+         return;
+      }
+      renderLoopWorker();
+   }
 
+   private static void renderLoopWorker() {
+      if (!isInitialized) throw new IllegalStateException("RenderThread is not initialized.");
       acquireContextReentrant();
       boolean isAlive = true;
 
@@ -136,7 +154,7 @@ public class RenderThread {
                if (var4 != null) {
                   var4.close();
                }
-            } else if (isDisplayCreated && hasContext) {
+            } else if (isDisplayCreated && hasContext && !pzopt.InputThread.active()) {
                Display.processMessages();
             }
 
@@ -144,26 +162,41 @@ public class RenderThread {
             if (!renderingEnabled) {
                isCloseRequested = false;
             } else {
-               pzopt.VirtualPad.poll(); // pzopt: harness virtual pad (--flag pad=<script>); GameWindow.GameInput.poll() otherwise
-               Mouse.poll();
-               GameKeyboard.poll();
-               pzopt.InputLag.afterPoll(); // pzopt: harness input-lag probe, the polling states the game swaps in next
-               pzopt.InputLatch.serve(false); // pzopt: inputLatch, a request that came in while this thread rendered
+               if (!pzopt.InputThread.active()) {
+                  pzopt.VirtualPad.poll(); // pzopt: harness virtual pad (--flag pad=<script>); stock input sampling
+                  Mouse.poll();
+                  GameKeyboard.poll();
+                  pzopt.InputLag.afterPoll();
+               }
+               pzopt.InputLatch.serve(false);
                isCloseRequested = isCloseRequested || Display.isCloseRequested();
             }
 
-            if (!GameServer.server) {
+            if (!GameServer.server && !pzopt.InputThread.active()) {
                Clipboard.updateMainThread();
             }
 
             DebugOptions.testThreadCrash(0);
             isAlive = !GameWindow.gameThreadExited;
+
          }
 
          renderTime = System.nanoTime() - startTime;
          Thread.yield();
       }
 
+      if (pzopt.InputThread.active()) {
+         shutdown();
+         pzopt.InputThread.invoke(pzopt.Hdr::beforeExit);
+         pzopt.InputThread.stop();
+         releaseContextReentrant();
+         synchronized (m_initLock) {
+            renderThread = null;
+            isInitialized = false;
+         }
+         System.exit(0);
+         return;
+      }
       releaseContextReentrant();
       synchronized (m_initLock) {
          renderThread = null;
@@ -323,11 +356,11 @@ public class RenderThread {
          return true;
       } else {
          notifyRenderStateQueue();
-         if (!waitForRenderState || LuaManager.thread != null && LuaManager.thread.step) {
+         if ((!pzopt.InputThread.active()) && (!waitForRenderState || LuaManager.thread != null && LuaManager.thread.step)) {
             AbstractPerformanceProfileProbe var1 = RenderThread.s_performance.displayUpdate.profile();
 
             try {
-               Display.processMessages();
+               if (!pzopt.InputThread.active()) Display.processMessages(); // pzopt: only the independent owner pumps while active
             } catch (Throwable var9) {
                if (var1 != null) {
                   try {
@@ -500,7 +533,7 @@ public class RenderThread {
          if (isDisplayCreated && hasContext) {
             try {
                hasContext = false;
-               Display.releaseContext();
+               if (Display.isCreated()) Display.releaseContext();
             } catch (LWJGLException e) {
                DebugType.General.printException(e, LogSeverity.Error, "Exception thrown trying to release GL context.", new Object[0]);
             }
@@ -614,7 +647,8 @@ public class RenderThread {
    }
 
    public static void shutdown() {
-      GameWindow.GameInput.quit();
+      if (pzopt.InputThread.active()) pzopt.InputThread.invoke(GameWindow.GameInput::quit);
+      else GameWindow.GameInput.quit();
       IsoPuddles.getInstance().freeHMTextureBuffer();
       if (isInitialized) {
          queueInvokeOnRenderContext(Display::destroy);

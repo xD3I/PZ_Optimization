@@ -160,6 +160,7 @@ public final class MainScreenState extends GameState {
       } // pzopt: bootRepair
 
       System.setProperty("slf4j.provider", "zombie.core.logger.Slf4jBridge");
+      pzopt.InputThread.establishOwner(); // pzopt: do not load input configuration before -cachedir is parsed
       Display.init();
       LocaleManager.initialise();
       String consoleDotTxtSizeString = System.getProperty("zomboid.ConsoleDotTxtSizeKB");

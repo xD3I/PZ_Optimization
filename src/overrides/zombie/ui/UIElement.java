@@ -2,6 +2,7 @@ package zombie.ui;
 
 import java.util.ArrayList;
 import java.util.Vector;
+import pzopt.SubframeInput;
 import se.krka.kahlua.vm.KahluaTable;
 import se.krka.kahlua.vm.KahluaUtil;
 import zombie.IndieGL;
@@ -1036,6 +1037,28 @@ public class UIElement implements UIElementInterface {
       }
    }
 
+   void cancelMouseInteraction() {
+      this.clicked = false;
+      this.leftDownTime = 0L;
+      boolean hadTransientState = clearTransientState("pressed");
+      hadTransientState |= clearTransientState("moving");
+      hadTransientState |= clearTransientState("resizing");
+      hadTransientState |= clearTransientState("dragging");
+      if (hadTransientState && this != UIManager.modal) {
+         this.capture = false;
+      }
+      for (int i = 0; i < this.controls.size(); i++) {
+         this.controls.get(i).cancelMouseInteraction();
+      }
+   }
+
+   private boolean clearTransientState(String field) {
+      if (this.table != null && this.table.rawget(field) == Boolean.TRUE) {
+         this.table.rawset(field, Boolean.FALSE);
+         return true;
+      }
+      return false;
+   }
    public Boolean onMouseDown(double x, double y) {
       if (this.clicked
          && UIManager.isDoubleClick((int)this.clickX, (int)this.clickY, (int)x, (int)y, this.leftDownTime)
@@ -1048,7 +1071,7 @@ public class UIElement implements UIElementInterface {
       this.clicked = true;
       this.clickX = x;
       this.clickY = y;
-      this.leftDownTime = System.currentTimeMillis();
+      this.leftDownTime = SubframeInput.inEvent() ? SubframeInput.eventMillis() : System.currentTimeMillis();
       if (this.parent != null && this.parent.maxDrawHeight != -1 && this.parent.maxDrawHeight <= y) {
          return Boolean.FALSE;
       }
@@ -1459,7 +1482,6 @@ public class UIElement implements UIElementInterface {
          }
       }
 
-      this.resizeDirty = false;
       this.lastwidth = this.getWidth();
       this.lastheight = this.getHeight();
    }

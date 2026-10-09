@@ -16,12 +16,13 @@ OUT = ROOT / "src/lua/client/pzopt/pzopt_optimizations_classes.lua"
 
 # aoStrength("key"): the per-surface AO strengths, an integer key that falls back on the old aoStrengthPct
 DECL = re.compile(r'static\s+final\s+[\w<>\[\]]+\s+([A-Z][A-Z0-9_]*)\s*=.*?\b(?:bool|integer|string|aoStrength)\(\s*"(\w+)"')
+LIVE_FIELD = re.compile(r'static\s+volatile\s+[\w<>\[\]]+\s+([A-Z][A-Z0-9_]*); // option key: (\w+)')
 
 
 def main():
     fields = {}  # FIELD -> key
     for line in CONFIG.read_text().splitlines():
-        m = DECL.search(line)
+        m = DECL.search(line) or LIVE_FIELD.search(line)
         if m:
             fields[m.group(1)] = m.group(2)
     # Config's own static methods that read a key (effectiveWorkers() -> parallel, workers) count as reading it

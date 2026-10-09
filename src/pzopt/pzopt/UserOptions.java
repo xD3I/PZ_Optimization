@@ -26,9 +26,9 @@ import java.util.TreeMap;
  * {@code -Dpzopt.<key>} and the install dir's {@code pzopt.properties}: the harness writes that
  * file per run, and a run's flags must not depend on what was clicked in the menu.
  *
- * Every key takes effect on the next launch, except the Profiler tab's (the overlay and its
- * game-thread profiler, {@link Config#isLive}): {@link #set} re-reads those at once and the
- * overlay picks them up from the next frame. The tab shows the values in force
+ * Every key takes effect on the next launch, except live keys such as the Profiler tab's, the Enhancements tab's, and
+ * the RawMouse sensitivity / acceleration curve ({@link Config#isLive}): {@link #set} re-reads those at once; consumers
+ * read the volatile value on use. The tab shows the values in force
  * ({@link Config#value}) and the stock "restart required" dialog when a change to a next-launch
  * key differs from them. A key that is absent from the file uses the default, so "Default" in the tab
  * removes the key rather than writing the default's value: defaults may change per build and
@@ -267,7 +267,7 @@ public final class UserOptions {
          }
       } else if (now && Enhancements.owns(key)) {
          Enhancements.apply(key);
-      } else if (now) {
+      } else if (now && !isRawMouseOption(key)) {
          Overlay.reconfigure();
       }
       File f = file();
@@ -278,6 +278,11 @@ public final class UserOptions {
       } catch (IOException e) {
          Log.warn("options: could not write " + f.getAbsolutePath() + ": " + e);
       }
+   }
+   private static boolean isRawMouseOption(String key) {
+      return "mouseSensitivity".equals(key) || "mouseAcceleration".equals(key)
+            || "mouseAccelerationOnsetCps".equals(key) || "mouseAccelerationSlopePctPerKcps".equals(key)
+            || "mouseAccelerationCapPct".equals(key);
    }
 
    /**

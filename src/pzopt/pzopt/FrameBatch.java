@@ -40,7 +40,8 @@ public final class FrameBatch {
       }
    }
 
-   public static final int THREADS = Math.max(1, Math.min(Config.FRAME_THREADS, Config.CPUS - 1));
+   /** frameThreads, clamped to cores - 1 and, in Windows dual-ccd placement, to the primary CCD's physical cores - 2. */
+   public static final int THREADS = Math.max(1, Math.min(Config.FRAME_THREADS, Math.min(Config.CPUS - 1, CorePlacement.workerLimit())));
 
    /**
     * One batch: its runner, size and counters in one object, published to the workers through {@link #current}. A worker

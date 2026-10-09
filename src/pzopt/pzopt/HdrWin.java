@@ -75,15 +75,15 @@ public final class HdrWin {
          return false;
       }
       try {
-         int[] fw = new int[1], fh = new int[1];
-         GLFW.glfwGetFramebufferSize(glfwWindow, fw, fh);
-         if (fw[0] <= 0 || fh[0] <= 0) {
+         long size = org.lwjglx.opengl.Display.pzoptFramebufferSize();
+         int framebufferWidth = (int)(size >> 32), framebufferHeight = (int)size;
+         if (framebufferWidth <= 0 || framebufferHeight <= 0) {
             return false;
          }
          if (!ready) {
-            init(glfwWindow, fw[0], fh[0]);
-         } else if (fw[0] != width || fh[0] != height) {
-            resize(fw[0], fh[0]);
+            init(glfwWindow, framebufferWidth, framebufferHeight);
+         } else if (framebufferWidth != width || framebufferHeight != height) {
+            resize(framebufferWidth, framebufferHeight);
          }
          presentFrame();
          return true;

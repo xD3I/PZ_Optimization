@@ -43,6 +43,22 @@ public final class KeyboardState {
       } // pzopt
    } // pzopt
 
+   /** pzopt: latch a key edge delivered by the window owner, including a complete tap between frames. */
+   public void pzoptKeyEvent(int glfwKey, int action, KeyboardState using) {
+      if (!this.isCreated) this.poll();
+      int key = org.lwjglx.input.KeyCodes.toLwjglKey(glfwKey);
+      if (this.keyDownStates == null || key < 0 || key >= this.keyDownStates.length) return;
+      boolean newPress = this.keyDownStates[key] && (using.keyDownStates == null || !using.keyDownStates[key]);
+      this.keyDownStates[key] = !(Core.isUseGameViewport() && !DebugContext.instance.focusedGameViewport)
+         && (action != org.lwjgl.glfw.GLFW.GLFW_RELEASE || newPress);
+      this.wasPolled = true;
+   }
+
+   public void pzoptFocusLost() {
+      if (this.keyDownStates != null) java.util.Arrays.fill(this.keyDownStates, false);
+      this.wasPolled = this.isCreated;
+   }
+
    public boolean wasPolled() {
       return this.wasPolled;
    }

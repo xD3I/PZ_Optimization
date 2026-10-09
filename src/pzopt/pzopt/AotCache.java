@@ -81,7 +81,7 @@ public final class AotCache {
 
    /** From boot (GameWindow.enter): decide the next launch's form on a daemon thread. */
    public static synchronized void start() {
-      if (started) {
+      if (started || "1".equals(HarnessFlags.get("launcher_read_only"))) {
          return;
       }
       started = true;

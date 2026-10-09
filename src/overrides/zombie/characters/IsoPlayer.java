@@ -288,6 +288,8 @@ public class IsoPlayer extends IsoLivingCharacter implements IAnimalVisual, IHum
    private final java.util.ArrayList<IsoMovingObject> pzoptSpotted = new java.util.ArrayList<>(); // pzopt: playerLosFast, this frame's spotted objects before one addAll into spottedList
    private int pzoptSneakSpotFrame = Integer.MIN_VALUE; // pzopt: playerLosFast, getSneakSpotMod memo
    private float pzoptSneakSpotMod;
+   private long pzoptCombatFrame = Long.MIN_VALUE; // pzopt: last subframe combat dispatch, once per game frame
+   private boolean pzoptCombatHandled;
    private static final int RAND_INJURY = 7;
    private static final int RAND_DISCOMFORT = 7;
    private static final int RAND_SICK = 7;
@@ -2545,6 +2547,9 @@ public class IsoPlayer extends IsoLivingCharacter implements IAnimalVisual, IHum
                   this.setDoGrapple(false);
                   this.setDoGrappleLetGo();
                }
+               if (this.pzoptProcessSubframeAttack(!bMelee && !bGrapple)) {
+                  isAttacking = false;
+               }
 
                if (bMelee) {
                   if (!this.lastAttackWasHandToHand) {
@@ -4010,6 +4015,87 @@ public class IsoPlayer extends IsoLivingCharacter implements IAnimalVisual, IHum
 
       this.setAutoWalkDirection(out);
       return out;
+   }
+
+   private boolean pzoptProcessSubframeAttack(boolean allowAttack) {
+      if (pzopt.SubframeInput.active() && !this.isAttackStarted()) pzopt.SubframeCombat.clear(this);
+      if (!allowAttack
+         || !pzopt.SubframeInput.active()
+         || !this.isLocalPlayer()
+         || this.getIndex() != 0
+         || this.isNpc()
+         || this.getVehicle() != null) {
+         return false;
+      }
+
+      long frame = pzopt.SubframeInput.frameNumber();
+      if (this.pzoptCombatFrame == frame) {
+         return this.pzoptCombatHandled;
+      }
+
+      this.pzoptCombatFrame = frame;
+      this.pzoptCombatHandled = false;
+      if (pzopt.SubframeInput.reset || pzopt.SubframeInput.hasPendingReset()) {
+         return false;
+      }
+
+      boolean wasAiming = this.isAiming();
+      boolean wasCharging = this.isCharging;
+      boolean wasChargingLt = this.isChargingLt;
+      for (int i = 0; i < pzopt.SubframeInput.count; i++) {
+         if (pzopt.SubframeInput.consumed[i]
+            || pzopt.SubframeInput.pressed[i] == 0
+            || pzopt.SubframeInput.reset
+            || pzopt.SubframeInput.hasPendingReset()) {
+            continue;
+         }
+
+         pzopt.SubframeInput.beginActionEvent(i);
+         try {
+            if (pzopt.SubframeInput.reset
+               || pzopt.SubframeInput.hasPendingReset()
+               || this.getInputMode() == CharacterInputMode.GAMEPAD
+               || !CharacterInputKeyBinding.Attack.isMouseKey()
+               || !this.isAnyAimKeyDown()
+               || !this.isAttackButtonDown()
+               || GameKeyboard.whichKeyPressed("Attack/Click") < Mouse.BTN_OFFSET
+               || GameKeyboard.whichKeyDownIgnoreMouse("Attack/Click") != 0) {
+               continue;
+            }
+
+            this.pzoptCombatHandled = true;
+            this.setIsAiming(true);
+            this.isCharging = true;
+            if (!this.isAttackStarted() && this.CanAttack()
+               && !this.bannedAttacking
+               && !this.isCurrentState(PlayerHitReactionState.instance())
+               && !this.isCurrentState(PlayerHitReactionPVPState.instance())) {
+               this.sprite.animate = true;
+               if (this.getRecoilDelay() <= 0.0F && this.getMeleeDelay() <= 0.0F) {
+                  try {
+                     pzopt.SubframeCombat.beginCandidate(this);
+                     this.AttemptAttack(this.useChargeTime);
+                     if (this.isAttackStarted()) {
+                        pzopt.SubframeCombat.commitCandidate();
+                        break;
+                     }
+                  } finally {
+                     pzopt.SubframeCombat.endCandidate();
+                  }
+               }
+
+               this.useChargeTime = 0.0F;
+               this.chargeTime = 0.0F;
+            }
+         } finally {
+            this.isCharging = wasCharging;
+            this.isChargingLt = wasChargingLt;
+            this.setIsAiming(wasAiming);
+            pzopt.SubframeInput.endEvent();
+         }
+      }
+
+      return this.pzoptCombatHandled;
    }
 
    private void UpdateInputState(IsoPlayer.InputState inputState) {

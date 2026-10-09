@@ -1454,8 +1454,8 @@ public final class Hdr {
    /** Dev: logs sizes, GL errors and the centre pixel of the back buffer (and of the copy) around the encode. */
    private static void diagnose(String when) {
       int w = org.lwjglx.opengl.Display.getWidth(), h = org.lwjglx.opengl.Display.getHeight();
-      int[] fw = new int[1], fh = new int[1];
-      GLFW.glfwGetFramebufferSize(org.lwjglx.opengl.Display.getWindow(), fw, fh);
+      long framebuffer = org.lwjglx.opengl.Display.pzoptFramebufferSize();
+      int fw = (int)(framebuffer >> 32), fh = (int)framebuffer;
       int err0 = GL11.glGetError();
       int prevRead = GL11.glGetInteger(GL30.GL_READ_FRAMEBUFFER_BINDING);
       int draw = GL11.glGetInteger(GL30.GL_DRAW_FRAMEBUFFER_BINDING);
@@ -1475,7 +1475,7 @@ public final class Hdr {
       int err2 = GL11.glGetError();
       GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, prevRead);
       Log.info(String.format("hdr diag %s frame %d: display %dx%d glfw fb %dx%d drawFbo %d err0 0x%x back(center)=%s err1 0x%x copy(center)=%s err2 0x%x stats=%d prog=%d uA=%d",
-            when, frames, w, h, fw[0], fh[0], draw, err0, back, err1, copy, err2, statsTex, worldProgram, uA));
+            when, frames, w, h, fw, fh, draw, err0, back, err1, copy, err2, statsTex, worldProgram, uA));
    }
 
    private static void encode() {

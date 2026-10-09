@@ -8,7 +8,6 @@ import imgui.extension.implot.ImPlotContext;
 import imgui.gl3.ImGuiImplGl3;
 import imgui.glfw.ImGuiImplGlfw;
 import java.nio.IntBuffer;
-import java.util.HashSet;
 import java.util.Set;
 import org.lwjgl.glfw.GLFW;
 import org.lwjgl.glfw.GLFWCharCallback;
@@ -22,6 +21,7 @@ import org.lwjgl.glfw.GLFWVidMode;
 import org.lwjgl.glfw.GLFWWindowIconifyCallback;
 import org.lwjgl.glfw.GLFWWindowPosCallback;
 import org.lwjgl.glfw.GLFWWindowRefreshCallback;
+import org.lwjgl.glfw.GLFWWindowFocusCallback;
 import org.lwjgl.glfw.GLFWWindowSizeCallback;
 import org.lwjgl.glfw.GLFWImage.Buffer;
 import org.lwjgl.opengl.GL;
@@ -44,37 +44,43 @@ import zombie.debug.DebugType;
 import zombie.util.list.PZArrayUtil;
 
 public class Display {
-   private static String windowTitle = "Game";
+   private static volatile String windowTitle = "Game";
    private static boolean isInitialized;
-   private static boolean displayCreated;
-   private static boolean displayFocused;
-   private static boolean displayVisible = true;
-   private static boolean displayDirty;
+   private static volatile boolean displayCreated;
+   private static volatile boolean displayFocused;
+   private static volatile boolean displayVisible = true;
+   private static volatile boolean displayDirty;
    private static boolean displayResizable = true;
    private static boolean vsyncEnabled = true;
-   private static DisplayMode gameWindowMode = new DisplayMode(640, 480);
-   private static DisplayMode desktopDisplayMode = new DisplayMode(640, 480);
-   private static int displayX;
-   private static int displayY;
-   private static boolean displayResized;
-   private static int displayWidth;
-   private static int displayHeight;
-   private static int displayFramebufferWidth;
-   private static int displayFramebufferHeight;
+   private static volatile DisplayMode gameWindowMode = new DisplayMode(640, 480);
+   private static volatile DisplayMode desktopDisplayMode = new DisplayMode(640, 480);
+   private static volatile int displayX;
+   private static volatile int displayY;
+   private static volatile boolean displayResized;
+   private static volatile int displayWidth;
+   private static volatile int displayHeight;
+   private static volatile int displayFramebufferWidth;
+   private static volatile int displayFramebufferHeight;
    private static Buffer displayIcons;
    private static long monitor;
-   private static boolean isBorderlessWindow;
-   private static boolean latestResized;
-   private static int latestWidth;
-   private static int latestHeight;
+   private static volatile boolean isBorderlessWindow;
+   private static volatile boolean latestResized;
+   private static volatile int latestWidth;
+   private static volatile int latestHeight;
    public static GLCapabilities capabilities;
    public static ImGuiImplGlfw imGuiGlfw;
    public static ImGuiImplGl3 imGuiGl3;
    private static ImPlotContext imPlotContext;
-   private static final Set<Display.FocusGainedListener> focusGainedListeners = new HashSet<>();
-   private static final Set<Display.FocusLostListener> focusLostListeners = new HashSet<>();
+   private static final Set<Display.FocusGainedListener> focusGainedListeners = new java.util.concurrent.CopyOnWriteArraySet<>();
+   private static final Set<Display.FocusLostListener> focusLostListeners = new java.util.concurrent.CopyOnWriteArraySet<>();
+   private static final java.util.concurrent.ConcurrentLinkedQueue<Boolean> inputFocusEvents = new java.util.concurrent.ConcurrentLinkedQueue<>();
    private static final double[] mouseCursorPosX = new double[1];
+   private static GLFWWindowFocusCallback windowFocusCallback;
    private static final double[] mouseCursorPosY = new double[1];
+   private static volatile boolean inputCloseRequested;
+   private static volatile boolean inputFullscreen;
+   private static volatile long framebufferSize;
+   private static final java.util.concurrent.atomic.AtomicBoolean inputResized = new java.util.concurrent.atomic.AtomicBoolean();
    private static int mouseCursorState = -1;
    static int frameCount;
 
@@ -254,6 +260,8 @@ public class Display {
          ImGui.createContext();
          imPlotContext = ImPlot.createContext();
          ImGuiIO io = ImGui.getIO();
+         String iniFile = System.getProperty("pzopt.imguiIniFile");
+         if (iniFile != null) io.setIniFilename(iniFile); // private layout for the real-game harness
          if (Core.isUseViewports()) {
             io.addConfigFlags(1024);
          }
@@ -267,7 +275,8 @@ public class Display {
          }
 
          imGuiGl3.init(glslVersion);
-         imGuiGlfw.init(Display.Window.handle, true);
+         if (pzopt.InputThread.shouldUse()) pzopt.ImGuiInput.init(Display.Window.handle, imGuiGlfw);
+         else imGuiGlfw.init(Display.Window.handle, true);
       }
    }
 
@@ -298,11 +307,22 @@ public class Display {
             Clipboard.rememberCurrentValue();
          }
 
-         if (focused) {
+         if (pzopt.InputThread.active()) {
+            inputFocusEvents.add(focused);
+         } else if (focused) {
             invokeDisplayFocusGainedEvent();
          } else {
             invokeDisplayFocusLostEvent();
          }
+      }
+   }
+
+   /** pzopt: game/UI listeners run at the frame input boundary, never in a GLFW upcall. */
+   public static void dispatchInputFocusEvents() {
+      Boolean focused;
+      while ((focused = inputFocusEvents.poll()) != null) {
+         if (focused) invokeDisplayFocusGainedEvent();
+         else invokeDisplayFocusLostEvent();
       }
    }
 
@@ -365,12 +385,18 @@ public class Display {
          throw new RuntimeException(e);
       }
 
-      if (processMessages) {
+      if (processMessages && !pzopt.InputThread.active()) {
          processMessages();
       }
    }
 
    private static void updateMouseCursor() {
+      if (pzopt.InputThread.active()) {
+         boolean lock = displayFocused && displayVisible && (Mouse.isGrabbed() || Core.getInstance().getOptionLockCursorToWindow());
+         int mode = !displayFocused || !lock && RenderThread.isCursorVisible() ? GLFW.GLFW_CURSOR_NORMAL : GLFW.GLFW_CURSOR_HIDDEN;
+         pzopt.WindowInput.updateCursor(mode, lock);
+         return;
+      }
       int cursorState = RenderThread.isCursorVisible() ? 212993 : 212994;
       boolean lockCursorToWindow = Core.getInstance().getOptionLockCursorToWindow();
       if (lockCursorToWindow) {
@@ -403,14 +429,29 @@ public class Display {
    }
 
    public static void processMessages() {
-      GLFW.glfwPollEvents();
+      if (pzopt.InputThread.active() && !pzopt.InputThread.isOwnerThread()) {
+         // Mods can request an extra event pump from the render context (e.g. a Java-mod approval dialog).
+         // Keep the synchronous contract, but perform native window/input work on the GLFW owner.
+         pzopt.InputThread.invoke(Display::processMessages);
+         return;
+      }
+      if (!pzopt.InputThread.active()) GLFW.glfwPollEvents(); // active owner already dispatched events while waiting for raw input
       Keyboard.poll();
-      Mouse.poll();
+      if (pzopt.InputThread.active()) {
+         if (pzopt.InputThread.sampleDue()) {
+            zombie.input.GameKeyboard.pzoptPollDevices();
+            Clipboard.updateMainThread();
+            pzopt.InputLag.afterPoll();
+         }
+      } else {
+         Mouse.poll();
+      }
       updateMouseCursor();
-      pzopt.InputLag.afterEvents(); // pzopt: harness input-lag probe, what glfwPollEvents delivered
+      pzopt.InputLag.afterEvents();
       if (latestResized) {
          latestResized = false;
          displayResized = true;
+         if (pzopt.InputThread.active()) inputResized.set(true);
          displayWidth = latestWidth;
          displayHeight = latestHeight;
          if (gameWindowMode.getFrequency() > 0) {
@@ -422,7 +463,8 @@ public class Display {
          displayResized = false;
       }
 
-      setDisplayFocused(GLFW.glfwGetWindowAttrib(Display.Window.handle, 131073) == 1);
+      if (pzopt.InputThread.active()) inputCloseRequested = GLFW.glfwWindowShouldClose(Display.Window.handle);
+      if (!pzopt.InputThread.active()) setDisplayFocused(GLFW.glfwGetWindowAttrib(Display.Window.handle, 131073) == 1);
    }
 
    public static void swapBuffers() throws LWJGLException {
@@ -520,17 +562,28 @@ public class Display {
    public static void destroy() {
       if (Core.isImGui()) {
          if (imGuiGl3 != null) {
+            if (pzopt.InputThread.active()) ImGui.destroyPlatformWindows();
             imGuiGl3.dispose();
-            imGuiGlfw.dispose();
+            if (pzopt.InputThread.active()) pzopt.ImGuiInput.dispose();
+            else imGuiGlfw.dispose();
          }
-
          ImPlot.destroyContext(imPlotContext);
          ImGui.destroyContext();
       }
-
-      Display.Callbacks.releaseCallbacks();
-      GLFW.glfwDestroyWindow(Display.Window.handle);
-      displayCreated = false;
+      if (pzopt.InputThread.active()) {
+         try { releaseContext(); } catch (LWJGLException e) { throw new RuntimeException(e); }
+         pzopt.InputThread.invoke(() -> {
+            pzopt.WindowInput.releaseCursor();
+            Display.Callbacks.releaseCallbacks();
+            GLFW.glfwDestroyWindow(Display.Window.handle);
+            Display.Window.handle = 0L;
+            displayCreated = false;
+         });
+      } else {
+         Display.Callbacks.releaseCallbacks();
+         GLFW.glfwDestroyWindow(Display.Window.handle);
+         displayCreated = false;
+      }
    }
 
    public static void setDisplayModeAndFullscreen(DisplayMode mode) throws LWJGLException {
@@ -542,7 +595,8 @@ public class Display {
    }
 
    public static boolean isFullscreen() {
-      return !isCreated() ? Core.getInstance().isFullScreen() : GLFW.glfwGetWindowMonitor(Display.Window.handle) != 0L && !pzoptBorderlessFs; // pzopt: a borderless monitor window is not the fullscreen option
+      if (pzopt.InputThread.active()) return inputFullscreen;
+      return !isCreated() ? Core.getInstance().isFullScreen() : GLFW.glfwGetWindowMonitor(Display.Window.handle) != 0L && !pzoptBorderlessFs;
    }
 
    /**
@@ -572,14 +626,16 @@ public class Display {
    }
 
    public static void setBorderlessWindow(boolean borderless) {
-      isBorderlessWindow = borderless;
-      if (borderless && isCreated() && pzopt.MacPresent.nativeFullscreenForBorderless()) { // pzopt: macOS: a native fullscreen Space (Adaptive-Sync / ProMotion timing), see MacPresent
-         pzopt.MacPresent.requestNativeFullscreen(); // pzopt: done on the next frame, after Core's mode switch
-         return; // pzopt: keeps its decoration, hidden in fullscreen
-      } // pzopt
-      if (isCreated()) {
-         GLFW.glfwSetWindowAttrib(getWindow(), 131077, borderless ? 0 : 1);
+      if (pzopt.InputThread.active() && !pzopt.InputThread.isOwnerThread()) {
+         pzopt.InputThread.invoke(() -> setBorderlessWindow(borderless));
+         return;
       }
+      isBorderlessWindow = borderless;
+      if (borderless && isCreated() && pzopt.MacPresent.nativeFullscreenForBorderless()) {
+         pzopt.MacPresent.requestNativeFullscreen();
+         return;
+      }
+      if (isCreated()) GLFW.glfwSetWindowAttrib(getWindow(), 131077, borderless ? 0 : 1);
    }
 
    public static boolean isBorderlessWindow() {
@@ -599,6 +655,11 @@ public class Display {
    }
 
    private static void setDisplayModeAndFullscreenInternal(DisplayMode mode, boolean fullscreen) {
+      if (pzopt.InputThread.active() && !pzopt.InputThread.isOwnerThread()) {
+         pzopt.InputThread.invoke(() -> setDisplayModeAndFullscreenInternal(mode, fullscreen));
+         RenderThread.invokeOnRenderContext(Display::refreshAfterModeChange);
+         return;
+      }
       boolean wasFullscreen = isFullscreen();
       DisplayMode oldMode = gameWindowMode;
       gameWindowMode = mode;
@@ -626,15 +687,25 @@ public class Display {
 
          GLFW.glfwShowWindow(Display.Window.handle);
          GLFW.glfwFocusWindow(Display.Window.handle);
-         pzoptAwaitWindowSize(); // pzopt: the window manager applies the new size after this call returns
-         GLFW.glfwMakeContextCurrent(0L);
-         GLFW.glfwMakeContextCurrent(Display.Window.handle);
-         GL11.glClearColor(0.0F, 0.0F, 0.0F, 1.0F);
-         GLFW.glfwSwapInterval(0);
-         GL11.glClear(16640);
-         GLFW.glfwSwapBuffers(Display.Window.handle);
-         setVSyncEnabled(vsyncEnabled);
+         pzoptAwaitWindowSize(); // the window manager applies the new size after this call returns
+         inputFullscreen = GLFW.glfwGetWindowMonitor(Display.Window.handle) != 0L && !pzoptBorderlessFs;
+         if (pzopt.InputThread.active()) pzopt.WindowInput.windowChanged();
+         if (pzopt.InputThread.active()) return;
+         refreshAfterModeChange();
       }
+   }
+   private static void refreshAfterModeChange() {
+      GLFW.glfwMakeContextCurrent(0L);
+      try {
+         makeCurrent();
+      } catch (LWJGLException e) {
+         throw new RuntimeException(e);
+      }
+      GL11.glClearColor(0.0F, 0.0F, 0.0F, 1.0F);
+      GLFW.glfwSwapInterval(0);
+      GL11.glClear(16640);
+      GLFW.glfwSwapBuffers(Display.Window.handle);
+      setVSyncEnabled(vsyncEnabled);
    }
 
    /**
@@ -692,8 +763,7 @@ public class Display {
          }
       }
       if (w[0] > 0 && h[0] > 0) {
-         displayFramebufferWidth = w[0];
-         displayFramebufferHeight = h[0];
+         publishFramebufferSize(w[0], h[0]);
          GLFW.glfwGetWindowSize(Display.Window.handle, w, h);
          if (w[0] > 0 && h[0] > 0) {
             latestWidth = w[0];
@@ -709,8 +779,7 @@ public class Display {
          IntBuffer fbw = stack.callocInt(1);
          IntBuffer fbh = stack.callocInt(1);
          GLFW.glfwGetFramebufferSize(Display.Window.handle, fbw, fbh);
-         displayFramebufferWidth = fbw.get(0);
-         displayFramebufferHeight = fbh.get(0);
+         publishFramebufferSize(fbw.get(0), fbh.get(0));
          IntBuffer fblb = stack.callocInt(1);
          IntBuffer fbtb = stack.callocInt(1);
          GLFW.glfwGetWindowFrameSize(Display.Window.handle, fblb, fbtb, null, null);
@@ -761,6 +830,13 @@ public class Display {
    }
 
    public static DisplayMode[] getAvailableDisplayModes() throws LWJGLException {
+      if (pzopt.InputThread.active() && !pzopt.InputThread.isOwnerThread()) {
+         return pzopt.InputThread.call(Display::pzoptAvailableDisplayModes);
+      }
+      return pzoptAvailableDisplayModes();
+   }
+
+   private static DisplayMode[] pzoptAvailableDisplayModes() {
       org.lwjgl.glfw.GLFWVidMode.Buffer modes = GLFW.glfwGetVideoModes(GLFW.glfwGetPrimaryMonitor());
       DisplayMode[] displayModes = new DisplayMode[modes.capacity()];
 
@@ -781,7 +857,7 @@ public class Display {
    }
 
    public static boolean wasResized() {
-      return displayResized;
+      return pzopt.InputThread.active() ? inputResized.getAndSet(false) : displayResized;
    }
 
    public static int getX() {
@@ -802,6 +878,19 @@ public class Display {
 
    public static int getHeight() {
       return displayFramebufferHeight > 0 ? displayFramebufferHeight : latestHeight; // pzopt: framebuffer size (HiDPI scale)
+   }
+
+   /** pzopt: one coherent framebuffer size for render-side native presenters. */
+   public static long pzoptFramebufferSize() { return framebufferSize; }
+
+   private static void publishFramebufferSize(int width, int height) {
+      displayFramebufferWidth = width;
+      displayFramebufferHeight = height;
+      framebufferSize = ((long)width << 32) | (height & 0xffffffffL);
+      if (pzopt.InputThread.active()) {
+         inputResized.set(true);
+         pzopt.WindowInput.windowChanged();
+      }
    }
 
    /** pzopt: framebuffer pixels per screen coordinate along X (1.0 when GLFW does not scale). */
@@ -833,13 +922,15 @@ public class Display {
 
    public static void setTitle(String title) {
       windowTitle = title;
-      if (isCreated()) {
+      if (pzopt.InputThread.active() && !pzopt.InputThread.isOwnerThread()) {
+         pzopt.InputThread.invoke(() -> setTitle(title));
+      } else if (isCreated()) {
          GLFW.glfwSetWindowTitle(Display.Window.handle, windowTitle);
       }
    }
 
    public static boolean isCloseRequested() {
-      return GLFW.glfwWindowShouldClose(Display.Window.handle);
+      return pzopt.InputThread.active() ? inputCloseRequested : GLFW.glfwWindowShouldClose(Display.Window.handle);
    }
 
    public static boolean isDirty() {
@@ -860,6 +951,19 @@ public class Display {
 
    public static boolean isResizable() {
       return displayResizable;
+   }
+   public static void seedInputState() {
+      if (!pzopt.InputThread.isOwnerThread()) throw new IllegalStateException("Input seed requires GLFW owner");
+      GLFW.glfwGetCursorPos(Display.Window.handle, mouseCursorPosX, mouseCursorPosY);
+      int buttons = 0;
+      for (int i = 0; i < 8; i++) if (GLFW.glfwGetMouseButton(Display.Window.handle, i) == GLFW.GLFW_PRESS) buttons |= 1 << i;
+      boolean focused = GLFW.glfwGetWindowAttrib(Display.Window.handle, GLFW.GLFW_FOCUSED) == GLFW.GLFW_TRUE;
+      setDisplayFocused(focused);
+      pzopt.SubframeInput.seed(mouseCursorPosX[0] * getFramebufferScaleX(), mouseCursorPosY[0] * getFramebufferScaleY(), buttons, focused);
+      zombie.input.GameKeyboard.pzoptSeedKeyState();
+      if (Core.isImGui()) pzopt.ImGuiInput.onFocus(focused);
+      inputFullscreen = GLFW.glfwGetWindowMonitor(Display.Window.handle) != 0L && !pzoptBorderlessFs;
+      inputCloseRequested = GLFW.glfwWindowShouldClose(Display.Window.handle);
    }
 
    public static void releaseContext() throws LWJGLException {
@@ -893,9 +997,21 @@ public class Display {
 
    public static void imGuiNewFrame() {
       if (Core.isImGui()) {
-         imGuiGlfw.newFrame();
-         ImGui.newFrame();
-         frameCount++;
+         if (pzopt.InputThread.active()) {
+            pzopt.ImGuiInput.beginFrame();
+            try {
+               pzopt.ImGuiInput.newFrame();
+               ImGui.newFrame();
+               frameCount++;
+            } catch (Throwable t) {
+               pzopt.ImGuiInput.endFrame();
+               throw t;
+            }
+         } else {
+            imGuiGlfw.newFrame();
+            ImGui.newFrame();
+            frameCount++;
+         }
       }
    }
 
@@ -922,19 +1038,30 @@ public class Display {
       }
 
       frameCount--;
-      ImGui.endFrame();
-      ImGui.render();
-      if (Core.isUseGameViewport()) {
-         SpriteRenderer.instance.glBuffer(12, 0);
+      ImDrawData drawData;
+      try {
+         ImGui.endFrame();
+         ImGui.render();
+         if (Core.isUseGameViewport()) {
+            SpriteRenderer.instance.glBuffer(12, 0);
+         }
+         drawData = ImGui.getDrawData();
+         if (pzopt.InputThread.active()) pzopt.ImGuiInput.updatePlatformWindows();
+      } finally {
+         if (pzopt.InputThread.active()) pzopt.ImGuiInput.endFrame();
       }
-
-      ImDrawData drawData = ImGui.getDrawData();
       if (Core.isUseViewports()) {
          RenderThread.invokeOnRenderContext(() -> {
             long backupWindowPtr = GLFW.glfwGetCurrentContext();
-            ImGui.updatePlatformWindows();
-            ImGui.renderPlatformWindowsDefault();
-            GLFW.glfwMakeContextCurrent(backupWindowPtr);
+            try {
+               if (pzopt.InputThread.active()) pzopt.ImGuiInput.renderPlatformWindows();
+               else {
+                  ImGui.updatePlatformWindows();
+                  ImGui.renderPlatformWindowsDefault();
+               }
+            } finally {
+               GLFW.glfwMakeContextCurrent(backupWindowPtr);
+            }
          });
       }
 
@@ -948,6 +1075,7 @@ public class Display {
       static GLFWKeyCallback keyCallback;
       static GLFWCharCallback charCallback;
       static GLFWCursorPosCallback cursorPosCallback;
+      static org.lwjgl.glfw.GLFWCursorEnterCallback cursorEnterCallback;
       static GLFWMouseButtonCallback mouseButtonCallback;
       static GLFWScrollCallback scrollCallback;
       static GLFWWindowIconifyCallback windowIconifyCallback;
@@ -958,12 +1086,41 @@ public class Display {
 
       static void initCallbacks() {
          // pzopt: cursor positions arrive in screen coordinates; the game works in framebuffer pixels (see getWidth)
-         cursorPosCallback = GLFWCursorPosCallback.create(
-            (windowHnd, xpos, ypos) -> Mouse.addMoveEvent(xpos * Display.getFramebufferScaleX(), ypos * Display.getFramebufferScaleY()) // pzopt: cursor in framebuffer pixels (HiDPI scale)
-         );
+         cursorPosCallback = GLFWCursorPosCallback.create((windowHnd, xpos, ypos) -> {
+            if (pzopt.RawMouse.active()) return;
+            double x = xpos * Display.getFramebufferScaleX(), y = ypos * Display.getFramebufferScaleY();
+            if (pzopt.InputThread.active()) pzopt.SubframeInput.offerMove(x, y);
+            else Mouse.addMoveEvent(x, y);
+         });
          GLFW.glfwSetCursorPosCallback(Display.getWindow(), cursorPosCallback);
-         mouseButtonCallback = GLFWMouseButtonCallback.create((windowHnd, button, action, mods) -> Mouse.addButtonEvent(button, action == 1));
+         if (Core.isImGui() && pzopt.InputThread.shouldUse()) {
+            cursorEnterCallback = org.lwjgl.glfw.GLFWCursorEnterCallback.create((windowHnd, entered) -> pzopt.ImGuiInput.onCursorEnter(entered));
+            GLFW.glfwSetCursorEnterCallback(Display.getWindow(), cursorEnterCallback);
+         }
+         mouseButtonCallback = GLFWMouseButtonCallback.create((windowHnd, button, action, mods) -> {
+            if (pzopt.RawMouse.active()) return;
+            if (pzopt.InputThread.active()) {
+               long pos = pzopt.WindowInput.messagePosition();
+               pzopt.SubframeInput.offerButtonAt(button, action == GLFW.GLFW_PRESS, (int)(pos >> 32), (int)pos);
+            } else Mouse.addButtonEvent(button, action == GLFW.GLFW_PRESS);
+            if (Core.isImGui() && pzopt.InputThread.shouldUse()) pzopt.ImGuiInput.onMouseButton(button, action, mods);
+         });
          GLFW.glfwSetMouseButtonCallback(Display.getWindow(), mouseButtonCallback);
+         windowFocusCallback = GLFWWindowFocusCallback.create((windowHnd, focused) -> {
+            if (pzopt.InputThread.active()) {
+               if (!Core.isImGui() || !Core.isUseViewports()) {
+                  pzopt.SubframeInput.focus(focused);
+                  pzopt.RawMouse.focusChanged(focused);
+               }
+               if (!focused) {
+                  pzopt.WindowInput.releaseCursor();
+                  zombie.input.GameKeyboard.pzoptFocusLost();
+               }
+            }
+            setDisplayFocused(focused);
+            if (Core.isImGui() && pzopt.InputThread.shouldUse()) pzopt.ImGuiInput.onFocus(focused);
+         });
+         GLFW.glfwSetWindowFocusCallback(Display.getWindow(), windowFocusCallback);
          windowIconifyCallback = GLFWWindowIconifyCallback.create((windowHnd, iconified) -> {
             if (noise) {
                DebugLog.log("glfwSetWindowIconifyCallback iconifed=" + iconified);
@@ -981,10 +1138,18 @@ public class Display {
                Display.latestResized = true;
                Display.latestWidth = width;
                Display.latestHeight = height;
+               if (pzopt.InputThread.active()) pzopt.WindowInput.windowChanged();
             }
          });
          GLFW.glfwSetWindowSizeCallback(Display.getWindow(), windowSizeCallback);
-         scrollCallback = GLFWScrollCallback.create((windowHnd, xpos, ypos) -> Mouse.setDWheel(xpos, ypos));
+         scrollCallback = GLFWScrollCallback.create((windowHnd, xpos, ypos) -> {
+            if (pzopt.RawMouse.active()) return;
+            if (pzopt.InputThread.active()) {
+               long pos = pzopt.WindowInput.messagePosition();
+               pzopt.SubframeInput.offerWheelAt(ypos, (int)(pos >> 32), (int)pos);
+            } else Mouse.setDWheel(xpos, ypos);
+            if (Core.isImGui() && pzopt.InputThread.shouldUse()) pzopt.ImGuiInput.onScroll(xpos, ypos);
+         });
          GLFW.glfwSetScrollCallback(Display.getWindow(), scrollCallback);
          windowPosCallback = GLFWWindowPosCallback.create((windowHnd, xpos, ypos) -> {
             if (noise) {
@@ -993,6 +1158,7 @@ public class Display {
 
             Display.displayX = xpos;
             Display.displayY = ypos;
+            if (pzopt.InputThread.active()) pzopt.WindowInput.windowChanged();
          });
          GLFW.glfwSetWindowPosCallback(Display.getWindow(), windowPosCallback);
          windowRefreshCallback = GLFWWindowRefreshCallback.create(windowHnd -> Display.displayDirty = true);
@@ -1002,13 +1168,20 @@ public class Display {
                DebugLog.log("glfwSetFramebufferSizeCallback width,height=" + width + "," + height);
             }
 
-            Display.displayFramebufferWidth = width;
-            Display.displayFramebufferHeight = height;
+            publishFramebufferSize(width, height);
          });
          GLFW.glfwSetFramebufferSizeCallback(Display.getWindow(), framebufferSizeCallback);
-         keyCallback = GLFWKeyCallback.create((windowHnd, key, scancode, action, mods) -> Keyboard.addKeyEvent(key, action));
+         keyCallback = GLFWKeyCallback.create((windowHnd, key, scancode, action, mods) -> {
+            if (pzopt.InputThread.active()) zombie.input.GameKeyboard.pzoptKeyEvent(key, action);
+            else Keyboard.addKeyEvent(key, action);
+            if (Core.isImGui() && pzopt.InputThread.shouldUse()) pzopt.ImGuiInput.onKey(key, scancode, action, mods);
+         });
          GLFW.glfwSetKeyCallback(Display.getWindow(), keyCallback);
-         charCallback = GLFWCharCallback.create((windowHnd, codepoint) -> Keyboard.addCharEvent((char)codepoint));
+         charCallback = GLFWCharCallback.create((windowHnd, codepoint) -> {
+            if (pzopt.InputThread.active()) zombie.input.GameKeyboard.pzoptCharEvent((char)codepoint);
+            else Keyboard.addCharEvent((char)codepoint);
+            if (Core.isImGui() && pzopt.InputThread.shouldUse()) pzopt.ImGuiInput.onChar(codepoint);
+         });
          GLFW.glfwSetCharCallback(Display.getWindow(), charCallback);
       }
 
@@ -1021,12 +1194,14 @@ public class Display {
          keyCallback.free();
          charCallback.free();
          cursorPosCallback.free();
+         if (cursorEnterCallback != null) cursorEnterCallback.free();
          mouseButtonCallback.free();
          scrollCallback.free();
          windowIconifyCallback.free();
          windowSizeCallback.free();
          windowPosCallback.free();
          windowRefreshCallback.free();
+         windowFocusCallback.free();
          framebufferSizeCallback.free();
       }
    }
@@ -1040,6 +1215,6 @@ public class Display {
    }
 
    private static final class Window {
-      static long handle;
+      static volatile long handle;
    }
 }
