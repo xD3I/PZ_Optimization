@@ -427,13 +427,15 @@ public final class Harness {
                    String[] xy = startFlag.split(",");
                    int sx = Integer.parseInt(xy[0].trim());
                    int sy = Integer.parseInt(xy[1].trim());
+                   int sz = xy.length > 2 ? Integer.parseInt(xy[2].trim()) : 0; // start=X,Y,Z: an upper floor (2026-10-10)
                    if (Boolean.parseBoolean(HarnessFlags.get("exit_car", "false")) && p.getVehicle() != null) {
                       Scene.leftCar = p.getVehicle(); // exit_car=true: out of the save's car first (headlights as the save had them)
                       Scene.leftCar.exit(p);
                       Log.info("harness: exit_car: left " + Scene.leftCar.getScriptName() + " at " + (int)Scene.leftCar.getX() + "," + (int)Scene.leftCar.getY() + ", headlights " + Scene.leftCar.getHeadlightsOn());
                    }
-                   Log.info("harness: teleporting from " + p.getXi() + "," + p.getYi() + " to start " + sx + "," + sy);
-                   p.teleportTo(sx, sy, 0);
+                   Log.info("harness: teleporting from " + p.getXi() + "," + p.getYi() + " to start " + sx + "," + sy + "," + sz);
+                   p.teleportTo(sx, sy, sz);
+                   routeZ = sz;
                 }
                 if (driving) {
                    vehicle = p.getVehicle();

@@ -1412,6 +1412,7 @@ public final class LightingJNI {
       // pzopt: pixelLight (pzopt.PixelLight). While the square's chunk bakes, the light it hands out is white (the chunk
       // texture holds the unlit surfaces, the light is composed per pixel afterwards); the real values stay in pzoptReal.
       private boolean pzoptWhite; // pzopt
+      private boolean pzoptBake; // pzopt: its chunk bakes (pplUnseenAmbient: white only once the player has seen the square)
       private final ColorInfo pzoptReal = new ColorInfo(); // pzopt
       // pzopt: darkness floor / remembered places (pzopt.Darkness). The native's values as read (8 corners, light info rgb
       // packed, fade multiplier bits) while a square-level feature is on; the cached ones are derived from them.
@@ -1454,7 +1455,8 @@ public final class LightingJNI {
 
       // pzopt: pixelLight. The light info object IsoGridSquare caches by reference turns white for the bake.
       public void pzoptWhiten() { // pzopt
-         if (!this.pzoptWhite) { // pzopt
+         this.pzoptBake = true; // pzopt
+         if (!this.pzoptWhite && !(pzopt.Config.PPL_UNSEEN_AMBIENT && (this.vis & 7) == 0)) { // pzopt: pplUnseenAmbient, a never seen square keeps its own (black) light
             this.pzoptReal.set(this.lightInfo); // pzopt
             this.lightInfo.set(1.0F, 1.0F, 1.0F, this.lightInfo.a); // pzopt
             this.pzoptWhite = true; // pzopt
@@ -1462,6 +1464,7 @@ public final class LightingJNI {
       } // pzopt
 
       public void pzoptUnwhiten() { // pzopt
+         this.pzoptBake = false; // pzopt
          if (this.pzoptWhite) { // pzopt
             this.lightInfo.set(this.pzoptReal); // pzopt
             this.pzoptWhite = false; // pzopt
@@ -1788,13 +1791,13 @@ public final class LightingJNI {
        * FBORenderCell re-bakes it now instead of holding it as sky drift.
        */
       /** pzopt: entityUpdateParallel. The level invalidation of a light change, at the join when a batch task read the light. */
-      private void pzoptInvalidate(java.util.ArrayList<Runnable> defer, FBORenderLevels renderLevels) { // pzopt
+      private void pzoptInvalidate(java.util.ArrayList<Runnable> defer, FBORenderLevels renderLevels, long flags) { // pzopt
          if (defer == null) { // pzopt
-            renderLevels.invalidateLevel(this.square.z, 32L); // pzopt
+            renderLevels.invalidateLevel(this.square.z, flags); // pzopt
             return; // pzopt
          } // pzopt
          IsoChunk c = this.square.chunk; int z = this.square.z, p = this.playerIndex; // pzopt
-         defer.add(() -> c.getRenderLevels(p).invalidateLevel(z, 32L)); // pzopt
+         defer.add(() -> c.getRenderLevels(p).invalidateLevel(z, flags)); // pzopt
       } // pzopt
 
       /** pzopt: entityUpdateParallel. LightDirt's bookkeeping of a light change, at the join when a batch task read the light. */
@@ -1845,7 +1848,7 @@ public final class LightingJNI {
                      dirty++;
                      int[] lightInts = pzoptLightInts.get(); // pzopt: lightingReadParallel, thread-local scratch
                      if (LightingJNI.getSquareLighting(this.playerIndex, this.square.x, this.square.y, this.square.z + 32, lightInts)) {
-                        boolean pzoptWasWhite = this.pzoptWhite; // pzopt: pixelLight, a lazy refresh in the middle of a bake reads and writes the real values
+                        boolean pzoptWasWhite = this.pzoptBake; // pzopt: pixelLight, a lazy refresh in the middle of a bake reads and writes the real values (and re-decides white by the new visibility)
                         this.pzoptUnwhiten(); // pzopt
                         byte pzoptWasVis = this.vis; // pzopt: pixelLight, only a visibility change re-bakes
                         IsoPlayer player = IsoPlayer.players[this.playerIndex];
@@ -1938,7 +1941,8 @@ public final class LightingJNI {
                            pzopt.PixelLight.lightChanged(this.square); // pzopt
                            if (pzoptWasVis != this.vis && !DebugOptions.instance.fboRenderChunk.nolighting.getValue() // pzopt
                               && pzopt.PixelLight.visRebake(this.square, pzoptWasVis, this.vis)) { // pzopt: pplVisRebakeFilter, only a square whose bake reads the bits
-                              this.pzoptInvalidate(pzoptDefer, renderLevels); // pzopt
+                              boolean pzoptFirstSight = pzopt.Config.PPL_UNSEEN_AMBIENT && (pzoptWasVis & 7) == 0 && (this.vis & 7) != 0; // pzopt: pplUnseenAmbient, it baked black until now
+                              this.pzoptInvalidate(pzoptDefer, renderLevels, pzoptFirstSight ? 32L | pzopt.BakeScheduler.DIRTY_FIRST_SIGHT : 32L); // pzopt
                            } // pzopt
                         } else // pzopt
                         if (isDarkMulti == wasDarkMulti
@@ -1958,11 +1962,11 @@ public final class LightingJNI {
                                     || isVertLight8 != wasVertLight8
                               )
                               && !DebugOptions.instance.fboRenderChunk.nolighting.getValue()) {
-                              this.pzoptInvalidate(pzoptDefer, renderLevels); // pzopt: renderLevels.invalidateLevel(z, 32), deferred on a batch task
+                              this.pzoptInvalidate(pzoptDefer, renderLevels, 32L); // pzopt: renderLevels.invalidateLevel(z, 32), deferred on a batch task
                               this.pzoptLightChangedMaybeDeferred(pzoptDefer, 0, 0, 0, wasVertLight1, wasVertLight2, wasVertLight3, wasVertLight4, wasVertLight5, wasVertLight6, wasVertLight7, wasVertLight8); // pzopt: LightDirt
                            }
                         } else if (!DebugOptions.instance.fboRenderChunk.nolighting.getValue()) {
-                           this.pzoptInvalidate(pzoptDefer, renderLevels); // pzopt: renderLevels.invalidateLevel(z, 32), deferred on a batch task
+                           this.pzoptInvalidate(pzoptDefer, renderLevels, 32L); // pzopt: renderLevels.invalidateLevel(z, 32), deferred on a batch task
                            this.pzoptLightChangedMaybeDeferred(pzoptDefer, // pzopt: LightDirt
                               Math.abs(isLightInfoR - wasLightInfoR) + Math.abs(isLightInfoG - wasLightInfoG) + Math.abs(isLightInfoB - wasLightInfoB),
                               Math.abs(isDarkMulti - wasDarkMulti), isLightLevel == wasLightLevel ? 0 : 255,

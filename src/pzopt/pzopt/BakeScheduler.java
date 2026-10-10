@@ -36,6 +36,11 @@ public final class BakeScheduler {
     * this pzopt dirty bit instead of DIRTY_REDRAW; stock never looks at it, the scheduler bakes it with lighting drift.
     */
    public static final long DIRTY_SEAM_LOW = 1L << 20;
+   /**
+    * pplUnseenAmbient: a square the player sees for the first time (LightingJNI's visibility bits leave 0) baked black until
+    * now; its level re-bakes in the strong lighting class (a few frames), not with the lighting drift (up to bakeMaxWaitLight).
+    */
+   public static final long DIRTY_FIRST_SIGHT = 1L << 21;
    private static final String[] NAMES = {"must", "cutaway", "arrival", "strong", "redraw", "light"};
    private static final BakeScheduler[] players = new BakeScheduler[4];
 

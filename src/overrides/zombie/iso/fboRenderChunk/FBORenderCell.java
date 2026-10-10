@@ -3714,7 +3714,7 @@ public final class FBORenderCell {
                }
                base += pzopt.TreeBake.rowStagger(square.x, square.y); // pzopt: trees on one iso row never tie in depth (the striped crowns)
                ColorInfo light = this.sanitizeLightInfo(playerIndex, square);
-               boolean unlit = tree.getSprite().getProperties().has(IsoFlagType.unlit) || pzopt.PixelLight.ACTIVE; // pzopt: pixelLight, trees bake unlit like the rest of the texture
+               boolean unlit = tree.getSprite().getProperties().has(IsoFlagType.unlit) || pzopt.PixelLight.ACTIVE && !pzopt.PixelLight.unseen(square, playerIndex); // pzopt: pixelLight, trees bake unlit like the rest of the texture (pplUnseenAmbient: a never seen square's with its own light)
                float cr = unlit ? 1.0F : light.r;
                float cg = unlit ? 1.0F : light.g;
                float cb = unlit ? 1.0F : light.b;
@@ -3822,7 +3822,7 @@ public final class FBORenderCell {
             }
             base += pzopt.TreeBake.rowStagger(square.x, square.y); // pzopt: as in pzoptBakeTrees, the same offset in every texture
             ColorInfo light = this.sanitizeLightInfo(playerIndex, square);
-            boolean unlit = tree.getSprite().getProperties().has(IsoFlagType.unlit) || pzopt.PixelLight.ACTIVE; // pzopt: pixelLight, trees bake unlit like the rest of the texture
+            boolean unlit = tree.getSprite().getProperties().has(IsoFlagType.unlit) || pzopt.PixelLight.ACTIVE && !pzopt.PixelLight.unseen(square, playerIndex); // pzopt: pixelLight, trees bake unlit like the rest of the texture (pplUnseenAmbient: a never seen square's with its own light)
             float cr = unlit ? 1.0F : light.r;
             float cg = unlit ? 1.0F : light.g;
             float cb = unlit ? 1.0F : light.b;
@@ -5236,7 +5236,9 @@ public final class FBORenderCell {
                klass = pzopt.BakeScheduler.ARRIVAL;
             } else if (rl.isDirty(z, 2048L | 16384L, zoom)) {
                klass = pzopt.BakeScheduler.CUTAWAY;
-            } else if (rl.isDirty(z, ~(32L | pzopt.BakeScheduler.DIRTY_SEAM_LOW), zoom)) {
+            } else if (rl.isDirty(z, pzopt.BakeScheduler.DIRTY_FIRST_SIGHT, zoom)) {
+               klass = pzopt.BakeScheduler.STRONG; // pzopt: pplUnseenAmbient, a square seen for the first time baked black until now
+            } else if (rl.isDirty(z, ~(32L | pzopt.BakeScheduler.DIRTY_SEAM_LOW | pzopt.BakeScheduler.DIRTY_FIRST_SIGHT), zoom)) {
                klass = pzopt.BakeScheduler.REDRAW;
             } else if (rl.isDirty(z, pzopt.BakeScheduler.DIRTY_SEAM_LOW, zoom)) {
                klass = pzopt.BakeScheduler.LIGHT; // seamDirections: a neighbour this level's seams do not read loaded

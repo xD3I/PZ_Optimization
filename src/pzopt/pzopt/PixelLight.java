@@ -117,6 +117,23 @@ public final class PixelLight {
       whitenedSquares += whitened.size();
    }
 
+   /**
+    * pplUnseenAmbient: the player has never seen the square (the lattice's "visible" bit is off): it bakes with its own light,
+    * black as stock draws it, and the composite lights it with the ambient. Stock draws ForceAmbient sprites (roofs) with the
+    * ambient whatever the square's light, so the roofs of undiscovered buildings show; lit from the square they were black,
+    * and the joined roof tile stock draws per frame over its baked copy (an eave over a garage) fought that black copy in the
+    * depth test (-1e-5 is under a DEPTH16 step): dashes that changed with every camera step (2026-10-10).
+    */
+   public static boolean unseen(IsoGridSquare sq, int playerIndex) {
+      return Config.PPL_UNSEEN_AMBIENT && ACTIVE && sq != null && playerIndex >= 0 && playerIndex < sq.lighting.length
+         && sq.lighting[playerIndex] instanceof LightingJNI.JNILighting jl && (jl.pzoptVis() & 7) == 0;
+   }
+
+   /** IsoObject.prepareToRender: the ambient a ForceAmbient sprite is drawn with (1 into a bake on a never seen square: the composite adds it). */
+   public static float forceAmbient(IsoGridSquare sq, int playerIndex, float ambient) {
+      return FBORenderChunkManager.instance.isCaching() && unseen(sq, playerIndex) ? 1.0F : ambient;
+   }
+
    /** After a chunk level's bake ended (and once before the composite): the real light back once the texture is done. */
    public static void bakeEnd() {
       if (bakeChunk == null || FBORenderChunkManager.instance.isCaching()) {
@@ -303,6 +320,7 @@ public final class PixelLight {
          f.chunkFlags[k] = chunkFlags(rc.chunk, rc.getMinLevel(), rc.getTopLevel());
       }
       f.wet = Config.PPL_WET_SPECULAR ? zombie.iso.IsoPuddles.getInstance().getWetGroundFinalValue() : 0.0F;
+      f.ambient = Config.PPL_UNSEEN_AMBIENT ? zombie.core.opengl.RenderSettings.getInstance().getAmbientForPlayer(playerIndex) : -1.0F; // pplUnseenAmbient: what stock draws ForceAmbient sprites with
       f.shadowLight = -1;
       for (int i = 0; i < f.lights && Config.PPL_SHADOWS; i++) {
          if (f.lc[i * 4 + 3] == 1.0F) { // the first handheld torch: the player's
@@ -1738,7 +1756,7 @@ public final class PixelLight {
       float zoom, offX, offY, d0, jx, jy;
       int ts, screenW, screenH, ox, oy;
       int lights, shadowLight, chunks;
-      float wet;
+      float wet, ambient;
       final zombie.core.textures.Texture[] chunkKeys = new zombie.core.textures.Texture[1024];
       final float[] chunkRect = new float[1024 * 4];
       final int[] chunkFlags = new int[1024];
@@ -1811,7 +1829,7 @@ public final class PixelLight {
       static boolean wantOn, onSent;
       private float zoom, offX, offY, d0, jx, jy;
       private int ts, screenW, screenH, ox, oy, n, lights, shadowLight = -1;
-      private float wet;
+      private float wet, ambient = -1.0F;
       private final java.util.IdentityHashMap<zombie.core.textures.Texture, Integer> chunkIndex = new java.util.IdentityHashMap<>();
       private final float[] chunkRect = new float[1024 * 4];
       private final int[] chunkFlags = new int[1024];
@@ -2153,6 +2171,7 @@ public final class PixelLight {
          this.n = f.n;
          this.lights = f.lights;
          this.wet = f.wet;
+         this.ambient = f.ambient;
          this.chunkIndex.clear();
          for (int i = 0; i < f.chunks; i++) {
             this.chunkIndex.put(f.chunkKeys[i], i); // (the keys stay until postRender: a replayed state renders this frame again)
@@ -2276,7 +2295,7 @@ public final class PixelLight {
          GL20.glUniform4f(loc[3], this.map[4], this.map[5], this.n, Config.DEV_PPL_VIEW);
          GL20.glUniform4i(loc[4], Math.floorMod(this.ox, this.n), Math.floorMod(this.oy, this.n), this.n - 1, LEVELS - 1);
          this.lightUniforms(loc[5], loc[6], loc[7], loc[9], loc[18]);
-         GL20.glUniform4f(loc[14], this.wet * Config.PPL_SPEC_PCT / 100.0F, 48.0F, 0.0F, 0.0F);
+         GL20.glUniform4f(loc[14], this.wet * Config.PPL_SPEC_PCT / 100.0F, 48.0F, Math.max(this.ambient, 0.0F), this.ambient >= 0.0F ? 1.0F : 0.0F); // z, w: pplUnseenAmbient
          GL20.glUniform1f(loc[17], Config.PPL_TORCH_FEET_GLOW ? 0.0F : 1.0F);
          boolean mask = this.maskValid && !shadowFailed && this.shadowLight >= 0 && Config.PPL_SHADOWS;
          GL20.glUniform4f(loc[10], Config.PPL_SMOOTH ? 1.0F : 0.0F, mask ? this.shadowLight : -1.0F, this.hasTorch() ? 1.0F : 0.0F, costMask);
@@ -2887,7 +2906,7 @@ public final class PixelLight {
       "   float wr = pplOpt.y;",
       "   return clamp(max(dot(n, ld) + wr, 0.0) / max(ld.z + wr, 0.15), 0.0, 1.25);",
       "}",
-      "uniform vec4 pplWet;", // x: wet ground x specular strength, y: shininess
+      "uniform vec4 pplWet;", // x: wet ground x specular strength, y: shininess, z: the ambient (pplUnseenAmbient, on when w is 1)
       "vec3 pplSpec = vec3(0.0);", // out of pplLight: the wet glints of the lights (added, not multiplied by the surface colour)
       "const vec3 PPL_VIEW = vec3(0.6428, 0.6428, 0.5162);", // towards the camera, in squares (the axis the screen does not see: (3, 3, 1) levels)
       "#ifdef PPL_LAZY_NORMAL",
@@ -3079,6 +3098,11 @@ public final class PixelLight {
       "   if (fz > 0.001) {", // walls and objects: the square's light from its foot to its top (0.5: none)
       "      L = clamp(L + fz * (texelFetch(pplWall, ivec3(s, lvl), 0).rgb * 2.0 - 1.0), 0.0, 1.0);",
       "   }",
+      // pplUnseenAmbient: a square the player has never seen baked with its own light (black; ForceAmbient roofs their tint): the
+      // ambient, as stock draws those roofs
+      "#ifdef PPL_UNSEEN_AMBIENT",
+      "   if (pplWet.w > 0.5 && !pplVisible(texelFetch(pplConn, ivec3(s, lvl), 0).a)) { L = vec3(pplWet.z); pplSpec = vec3(0.0); }",
+      "#endif",
       "#if !defined(PPL_BASE) && defined(PPL_DEV)",
       "   if (view == 5) L = torch * V;",
       "   if (view == 4) L = n * 0.5 + 0.5;",
@@ -3413,7 +3437,7 @@ public final class PixelLight {
 
    /** The game's chunkShader.frag (DIFFUSE x vertex colour, depth = chunkDepth + the texture's depth) with the light multiplied in. */
    private static final String TINT = (Config.DEV_PPL_TINT ? "#define PPL_TINT\n" : "") + (Config.PPL_TEXEL_POS ? "#define PPL_TEXEL\n#define PPL_NSPAN " + Config.PPL_NORMAL_SPAN + "\n#define PPL_NSPAN_WIDE " + Config.PPL_NORMAL_SPAN_WIDE + "\n" : "")
-      + (Config.PPL_TEXEL_HEIGHT ? "#define PPL_TEXEL_Z\n" + (Config.PPL_FLOOR_SNAP ? "#define PPL_FLOOR_SNAP\n" : "") : "") + (Config.PPL_SEEN_EDGE ? "#define PPL_SEEN_EDGE\n" : "") + (Config.PPL_WALL_EDGE ? "#define PPL_WALL_EDGE\n" : "") + (Config.TORCH_SOURCE_SELF_SHADOW ? "#define PPL_SELF_SHADOW\n" : "") + Relief.defines(); // the defines every chunk program gets
+      + (Config.PPL_TEXEL_HEIGHT ? "#define PPL_TEXEL_Z\n" + (Config.PPL_FLOOR_SNAP ? "#define PPL_FLOOR_SNAP\n" : "") : "") + (Config.PPL_SEEN_EDGE ? "#define PPL_SEEN_EDGE\n" : "") + (Config.PPL_UNSEEN_AMBIENT ? "#define PPL_UNSEEN_AMBIENT\n" : "") + (Config.PPL_WALL_EDGE ? "#define PPL_WALL_EDGE\n" : "") + (Config.TORCH_SOURCE_SELF_SHADOW ? "#define PPL_SELF_SHADOW\n" : "") + Relief.defines(); // the defines every chunk program gets
    private static final String CHUNK_FRAG = "#version 420\n" + (Config.DEV_PPL_VIEW != 0 ? "#define PPL_DEV\n" : "") + TINT + CHUNK_FRAG_BODY; // dev views compiled in only when asked: they keep values alive to the end (registers)
    /** The same without the dynamic lights (chunk textures no light reaches): 32 registers, full occupancy on the 890M (64 with). */
    private static final String CHUNK_BASE_FRAG = "#version 420\n#define PPL_BASE\n" + CHUNK_FRAG_BODY;

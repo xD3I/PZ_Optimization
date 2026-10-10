@@ -4023,7 +4023,7 @@ public class IsoObject extends GameEntity implements Serializable, ILuaIsoObject
       }
 
       if (!bHighlighted && this.sprite != null && this.sprite.forceAmbient && !DebugOptions.instance.fboRenderChunk.nolighting.getValue()) {
-         float ambient = RenderSettings.getInstance().getAmbientForPlayer(IsoCamera.frameState.playerIndex);
+         float ambient = pzopt.PixelLight.forceAmbient(this.square, playerIndex, RenderSettings.getInstance().getAmbientForPlayer(IsoCamera.frameState.playerIndex)); // pzopt: pplUnseenAmbient, 1 into a bake on a never seen square (the composite adds the ambient)
          if (this.isUseSnowSprite()) {
             ambient = PZMath.clamp(ambient * 1.2F, 0.0F, 1.0F);
          }

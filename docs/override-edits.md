@@ -6523,3 +6523,35 @@ change them.
   compile / link; `ChunkAo.packFar` (the far field interleaved on the game thread, one bulk upload);
   `CapsuleShadow.sunTile` skips a vehicle whose pose and sun step are unchanged since its atlas tile was drawn
   (`sunShadowStaticVehicles`).
+
+### Undiscovered roofs under pixelLight (2026-10-10, maintainer's controller-test save, the diner at 3566,10899): LightingJNI, IsoObject, FBORenderCell, IsoSprite
+
+Zoomed out and walking, the eave of an undiscovered building (`roofs_04_6` over its garage doors) flickered: dashes that
+changed with every camera step (Jev circle walk, 43 big reversals of the strip in 10 s; stock 0; `pixelLight=false` 0).
+Stock draws `ForceAmbient` sprites (2,256 tiles: the roofs) with the ambient whatever their square's light
+(`IsoObject.prepareToRender`), so the roofs of buildings the player has never seen show. pixelLight lit them from the square
+lattice, black on a never seen square: undiscovered roofs were missing, and stock's joined roof tile
+(`FBORenderCell.renderJoinedRoofTile`, drawn per frame when the roof tile above is translucent, 1e-5 in front, under one
+DEPTH16 step of the baked copy) fought a black baked copy of itself. `pplUnseenAmbient` (default on):
+- `LightingJNI.JNILighting.pzoptWhiten`: a square the player has never seen (`vis & 7 == 0`, the lattice's visible bit)
+  keeps its own light in a bake (black, as stock draws it) instead of white; `pzoptBake` marks the bake so a lazy refresh
+  in the middle of it re-decides by the new visibility (it used `pzoptWhite`).
+- `IsoObject.prepareToRender`: a ForceAmbient sprite on such a square bakes with its tint alone (`PixelLight.forceAmbient`;
+  per-frame draws keep stock's ambient).
+- `FBORenderCell` tree bakes (`pzoptBakeTrees` and the append path): a tree on such a square bakes with its own light
+  instead of white.
+- `LightingJNI` (pixelLight's visibility branch): a square seen for the first time invalidates its level with
+  `32 | BakeScheduler.DIRTY_FIRST_SIGHT` (`pzoptInvalidate` takes the flags); `FBORenderCell.pzoptSchedulePlan` offers
+  such a level in the strong lighting class (it baked black until now; the lighting drift class waits up to 120 frames).
+- pzopt only: the composite lights a pixel whose square was never seen with the ambient (`pplWet.zw`, define
+  `PPL_UNSEEN_AMBIENT`): black stays black, the roofs get stock's ambient x tint, live as the hour changes.
+- `IsoSprite.startTileDepthShader` (`joinedRoofFront`, default on): in the translucent (per-frame) pass the joined roof tile
+  (renderSquareOverride set, renderDepthAdjust non-zero) sits 5e-5 in front, as stock does for highlights. Stock adds
+  renderDepthAdjust in the bake branch only, so per frame the copy tied exactly with its baked twin and the two alternated
+  row by row with the camera's sub-pixel steps; with a baked term the per-frame copy lacks (AO, sun shadows, relief) that
+  still shimmered after pplUnseenAmbient (strip box 75 flip px/frame; with both 1.9, stock 3.0; Jev `fixed` 0.95; rig:
+  Jev circle walk `--flag start=3566,10903,1 --flag explore=circle --flag director=jev --flag circle_spots=0
+  --flag circle_radius=0.8 --flag zoom=max` on that save, `devCapture=5,25,60,100,crop=2300:1000:1200:600,ram`,
+  `crop-flicker.py --crop 470,200,350,220`).
+- Left as it was: a roof on a square the player has seen takes the lattice's light times the ambient baked in (stock: the
+  ambient alone), patchy and darker at night; making it exact needs a per-texel mark (a second target as foliage sway's).

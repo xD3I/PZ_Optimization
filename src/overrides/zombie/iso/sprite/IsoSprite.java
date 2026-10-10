@@ -1341,6 +1341,9 @@ public final class IsoSprite {
          } else if (obj instanceof IsoFireplace && this != obj.getSprite()) {
             frontDepthZ -= 5.0E-5F;
             farDepthZ -= 5.0E-5F;
+         } else if (obj != null && obj.renderSquareOverride != null && obj.renderDepthAdjust != 0.0F && pzopt.Config.JOINED_ROOF_FRONT && pzopt.Overrides.enabled()) { // pzopt: joinedRoofFront
+            frontDepthZ -= 5.0E-5F; // pzopt: the joined roof tile drawn per frame over its own baked copy (stock applies its
+            farDepthZ -= 5.0E-5F; // pzopt: renderDepthAdjust in the bake only: an exact tie, won row by row as the camera stepped)
          }
       } else {
          int chunkX = PZMath.fastfloor(x / 8.0F);
