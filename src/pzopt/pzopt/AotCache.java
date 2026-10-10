@@ -38,6 +38,13 @@ import org.json.JSONObject;
  * the original. Off (aotCache=false, the master switch, a build mismatch) or in a harness run, a JSON in the cache mode
  * is put back to the loose form. The installers (scripts/pzopt.sh, install.sh, install.ps1) and pzopt.Updater do the
  * same before they touch the loose files, so a stale jar can never shadow a newer install.
+ *
+ * Other mods' loose classes: dropping "." would drop any loose class another install put into the game folder too.
+ * The jar also takes the class files listed in the companion manifests ({@link #COMPANIONS}: PZ_Controller's
+ * pzctl/installed.txt, its zombie/input/AimingReticle override and pzctl/*), a file pzopt also ships staying pzopt's,
+ * and the fingerprint covers those files, so a companion reinstall rebuilds the jar and records again (2026-10-10:
+ * under the cache mode PZ_Controller's reticle bridge never loaded). PZ_Controller's installer resets the launcher
+ * the same way before it changes its files.
  */
 public final class AotCache {
    static final String JAR = "pzopt/aot/pzopt.jar";
@@ -47,6 +54,8 @@ public final class AotCache {
    private static final String OPT_OUT = "-XX:AOTCacheOutput=" + CACHE;
    private static final String OPT_USE = "-XX:AOTCache=" + CACHE;
    private static final String OPT_LOG = "-Xlog:aot=info:file=" + LOG + "::filecount=0";
+   /** Manifests of other installs whose loose class files the jar carries too (one relative path per line). */
+   static final String[] COMPANIONS = {"pzctl/installed.txt"};
 
    enum Mode { LOOSE, RECORD, USE }
 
@@ -175,6 +184,10 @@ public final class AotCache {
       if (Files.isRegularFile(manifest)) {
          md.update(Files.readAllBytes(manifest));
       }
+      for (String rel : companionClasses(game)) {
+         Path f = game.resolve(rel);
+         md.update((rel + "|" + Files.size(f) + "|" + Files.getLastModifiedTime(f).toMillis() + "\n").getBytes(StandardCharsets.UTF_8));
+      }
       Path gameJar = game.resolve("projectzomboid.jar");
       if (Files.isRegularFile(gameJar)) {
          md.update((Files.size(gameJar) + "|" + Files.getLastModifiedTime(gameJar).toMillis()).getBytes(StandardCharsets.UTF_8));
@@ -200,6 +213,29 @@ public final class AotCache {
             continue;
          }
          out.add(rel);
+      }
+      for (String rel : companionClasses(game)) {
+         if (!out.contains(rel)) {
+            out.add(rel);
+         }
+      }
+      return out;
+   }
+
+   /** The class files the companion manifests list and that are there (a missing companion is no error). */
+   static List<String> companionClasses(Path game) throws IOException {
+      List<String> out = new ArrayList<>();
+      for (String m : COMPANIONS) {
+         Path manifest = game.resolve(m);
+         if (!Files.isRegularFile(manifest)) {
+            continue;
+         }
+         for (String line : Files.readAllLines(manifest, StandardCharsets.UTF_8)) {
+            String rel = line.trim();
+            if (rel.endsWith(".class") && !rel.startsWith("media/") && Files.isRegularFile(game.resolve(rel)) && !out.contains(rel)) {
+               out.add(rel);
+            }
+         }
       }
       return out;
    }
