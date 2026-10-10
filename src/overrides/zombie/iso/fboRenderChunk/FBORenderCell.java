@@ -5690,8 +5690,10 @@ public final class FBORenderCell {
       pzopt.Mirrors.devAttached(wall, "captured (drawn " + cut + ", live " + wall.square.getPlayerCutawayFlag(playerIndex, this.currentTimeMillis) + ", north " + north + ")");
       try {
          this.pzoptMirrorCol.set(1.0F, 1.0F, 1.0F, 0.001F);
+         // no render prep: it sets the alpha to the overlay's own (1), so the "transparent" draw painted the mirror glass
+         // fully lit every frame; a reflection hid it, an undiscovered (blacked-out) room showed a bright pane (2026-10-10)
          s.getParentSprite().render(s, wall, wall.getX(), wall.getY(), wall.getZ(), IsoDirections.N, wall.offsetX,
-            wall.offsetY + wall.getRenderYOffset() * Core.tileScale, this.pzoptMirrorCol, true, null);
+            wall.offsetY + wall.getRenderYOffset() * Core.tileScale, this.pzoptMirrorCol, false, null);
       } finally {
          pzopt.Mirrors.endCapture();
       }

@@ -69,3 +69,25 @@ NE number is the stand-in area itself (the hidden landing round the stairwell): 
 `mirror_corners=pair`, `harness/mirrors/room-judge.py`, dev lines `mirrors: dev character ... in front of plane ...`,
 `mirrors: dev pane ...: seen, light, reflection shown`, `mirrors: dev geometry change`, stats `people in front of another
 room's mirror`, `unseen pane-frames`, `re-marches for a room change`, `unseen squares left out`.
+
+## Follow-up 2026-10-10: wall mirrors still lit in undiscovered rooms
+
+Maintainer: "check my latest save which has undiscovered rooms, the mirror reflection is visible even on undiscovered rooms,
+confirm this with Jev". Save `Sandbox/2026-10-10_12-55-31` (the gas station flat, 3566,10899,1), worktree
+`~/pzopt-wt/mirror-undiscovered`.
+
+- **Confirmed** (runs `mu-repro1`, `mu-ab-true` vs `mu-ab-false`, player held at the save's spot): the wall mirrors
+  `walls_decoration_01_0/1/9/10` of the undiscovered rooms (the game draws them black) showed as pale bright panes, luma
+  148 / 155 / 59 / 94 where `mirrors=false` draws 0 / 0 / 24 / 0. The 10-08 gate held their reflection at 0 (`dev pane ...
+  seen false, reflection shown 0.00`), and `devMirrorsSkip=4` / `7` (no composite / no static, model, composite pass) left
+  the panes as bright: not the reflection.
+- **Cause**: these mirrors are `WallOverlay` tiles of their wall; `pzoptCaptureAttachedMirror` draws the overlay once more per
+  frame to capture its quad, meant to be invisible (white, alpha 0.001), but with `bDoRenderPrep = true`
+  `IsoSprite.prepareToRenderSprite` replaced the alpha with the overlay's own (1). So the glass was painted fully lit and
+  opaque every frame since 2026-10-04: under a reflection it was hidden, in a blacked-out room it was the bright pane. The
+  10-08 judge (`room-judge.py`) read the `dev pane` log, which never sees this draw, so it said fixed.
+- **Fix**: the capture draw without render prep (alpha stays 0.001, byte 0). Stills on both floors: every unseen mirror equals
+  the `mirrors=false` frame (0 / 0 / 24 / 0); Jev (`harness/mirrors/undiscovered-judge.py`, pixel-based) `fixed` 1.00 upstairs
+  and on the ground floor. Jev mirror walk through the building (`mu-walk-fix` vs `mu-walk-off`, 7 faced events, 5 of 6
+  mirrors walked; #5 has no reachable station): unseen mirrors as dark as stock at every moment until their room is seen,
+  seen ones reflect (13-96 levels from stock glass); Jev `fixed` 0.89 (`undiscovered-judge.py --walk`).

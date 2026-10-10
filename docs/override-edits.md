@@ -6555,3 +6555,14 @@ DEPTH16 step of the baked copy) fought a black baked copy of itself. `pplUnseenA
   `crop-flicker.py --crop 470,200,350,220`).
 - Left as it was: a roof on a square the player has seen takes the lattice's light times the ambient baked in (stock: the
   ambient alone), patchy and darker at night; making it exact needs a per-texel mark (a second target as foliage sway's).
+### Wall mirrors lit in undiscovered rooms (2026-10-10, maintainer's save Sandbox/2026-10-10_12-55-31): FBORenderCell
+
+- `pzoptCaptureAttachedMirror` calls the sprite render with `bDoRenderPrep = false`. With render prep,
+  `IsoSprite.prepareToRenderSprite` set the colour's alpha to the overlay instance's own (1), so the "transparent" capture
+  draw (white, alpha 0.001) painted the mirror glass fully lit and opaque every frame. A lit room hid it under the
+  reflection; in a room the player has not discovered (the game draws it black, `isBlackedOutBuildingSquare`; the
+  reflection is held at 0 there since 2026-10-08) it showed as a bright pane. Without render prep the alpha stays 0.001
+  (byte 0, no pixel changes) and the instance's alpha fade is not stepped a second time a frame; the quad is captured as
+  before. Still frames on both floors: unseen wall mirrors luma 148 / 155 / 59 / 94 -> 0 / 0 / 24 / 0 = the
+  `mirrors=false` frame; Jev (`harness/mirrors/undiscovered-judge.py`, pixel-based: the 10-08 `room-judge.py` read the
+  `dev pane` log, which never saw this draw) `fixed` 1.00.
