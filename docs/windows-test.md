@@ -12,6 +12,8 @@ below tagged `b42.20.4-*` were for revision `b0bbce05d5`. Release tags are `b<ga
 GitHub's list (by creation day, then by tag name; names that parse as versions, like `42.20.4-...`, rank first within
 a day, hence the `b`) runs in release order; tags of releases deleted before then keep their old names below.
 
+Open bugs and every test still pending on Windows: "Open on Windows (consolidated 2026-10-10)" at the end of this file.
+
 2026-09-20 release from `100f441` (flicker of objects inside buildings, doors, windows and corpses fixed; overlay fps colour) is 699 KB, 130 files plus the manifest (131 lines, unchanged); tag `win-b0bbce05d5-100f441`.
 2026-09-20 night release from `cc99c05` (thunderstorm pass: puddle cache, rain tiles, VBORenderer batch, lighting re-bake spread, play mode; includes the 100f441 flicker fix and the overlay colours) is 740 KB, 145 files plus the manifest (146 lines); tag `win-b0bbce05d5-cc99c05`.
 2026-09-21 release from `4dbe655` (RecalcPool: a failed chunk-recalc retry no longer leaves the publisher blocked, which stopped every later chunk from loading; found in a Windows user's console, StackOverflowError in the stock `isWallTo` recursion) is 741 KB, 145 files plus the manifest (146 lines, unchanged); tag `win-b0bbce05d5-4dbe655`.
@@ -486,3 +488,51 @@ the candidates, and the 500-cap-vs-240-cap comparison is the first thing to run.
 - Screenshots of any artifact.
 - `pzopt-frames.out` / `pzopt-chunks.out` if `instrument=true` was used.
 - Whether the frame-cap combos and the menu cap worked.
+
+## Open on Windows (consolidated 2026-10-10)
+
+Everything still unverified or broken on Windows, in one place: one Windows session can work down this list. The older
+notes it collects stay where they are (each item links its source). Nothing here runs on the Linux machines, the Dell
+included; player console.txt files are the only Windows evidence so far.
+
+### Bugs found in player logs
+
+1. **The game cannot rewrite `ProjectZomboid64.json`, so the GC switch, the heap size and the AOT cache never apply on
+   Windows.** Two console.txt files from 2026-10-10 (Discord, builds 9309b09 and 6cc90a0; one game in
+   `C:\Program Files (x86)\Steam\...`, one in `T:\SteamLibrary\...`) end their boot with
+   `[pzopt] gc: java.nio.file.AccessDeniedException: ...\ProjectZomboid64.json.pzopt-tmp -> ...\ProjectZomboid64.json`
+   (and the same for `[pzopt] aot:`). Both writers (`AotCache.save`, `GcChoice.save`) write `ProjectZomboid64.json.pzopt-tmp`
+   (that works, the folder is writable) and then `Files.move(tmp, json, REPLACE_EXISTING, ATOMIC_MOVE)`, i.e.
+   `MoveFileEx(MOVEFILE_REPLACE_EXISTING)`, which Windows refuses while another handle on the target lacks
+   `FILE_SHARE_DELETE` or the file is read-only. Most likely `ProjectZomboid64.exe` keeps the JSON open for the life of
+   the game (not checked). Effect: both players still log `gc: running ZGC ...` on every launch (G1 never takes over),
+   one stays at the stock `-Xmx3072m` with 131 mods where `gcHeap=auto` chose 7680 MB, and the AOT cache never records.
+   Probably broken since the in-game writers exist (AOT 2026-09-22, GC 2026-09-23, heap 2026-10-05); every
+   `gc:` / `aot:` success seen so far was Linux or macOS. The installers (`install.ps1`, uninstall) run outside the game
+   and are not affected.
+   - To test: launch, quit to the menu; `console.txt` has `[pzopt] gc:` with or without the `AccessDeniedException`;
+     `handle64.exe ProjectZomboid64.json` (Sysinternals) while the game runs names the process holding it;
+     `attrib ProjectZomboid64.json` shows whether it is read-only.
+   - Fix options, once the holder is known: write the JSON in place (truncate + write, works if the holder shares
+     write), or hand the swap to the exit path / the restart helper (`pzopt.Restart`'s PowerShell already waits for the
+     game to end), and log the outcome either way. Also delete a stale `.pzopt-tmp` on the next boot.
+2. Not ours, for the record (same day): `bad allocation` from the native model importer then a crash to desktop was a
+   full C: drive (6 GB free, the page file could not grow); the player freed space and it works. A
+   `PZOptimizationRussia` translation mod replaces six of our Lua files (options tab, layout, frame cap, main menu);
+   the maintainer tells players not to combine it with ours.
+
+### Tests still pending
+
+| # | What | Status | Steps / source |
+|---|---|---|---|
+| 1 | Uninstall paths: in-game button (hidden `-EncodedCommand` PowerShell helper), `Uninstall-PZ-Optimization.cmd`, `uninstall.ps1` one-liner, boot repair on a revision mismatch, foreign class refusal / `-Force`, cut-short install | not run; two Workshop reports say the in-game button removed nothing (antivirus blocking the helper?) | 7 steps in `docs/findings-uninstall-2026-10-07.md` "Windows test (to do)" |
+| 2 | Restart game (`pzopt.Restart`: PowerShell reads the command line from WMI, waits for the game to end, starts it again) | **works**: a player's console (2026-10-10, 6cc90a0) logs `restart: started by Restart game in pid 4872; this process began 4812 ms after the press`. Still open: a launch through Steam | `docs/findings-updater-2026-09-26.md` |
+| 3 | In-game updater install on Windows (replace the files of `pzopt-installed.txt` from the Workshop copy / GitHub zip while the game runs, then restart) | seen offering and prefetching (`update prefetch ... 30 of 1090 files differ`), never seen finishing an install in a Windows log | `docs/findings-updater-2026-09-26.md` |
+| 4 | Item 1 above: launcher JSON rewrite (GC / heap / AOT) | broken in two logs; holder unknown | above |
+| 5 | HDR output (`pzopt.HdrWin`: D3D11 FP16 flip-model swap chain on the game's HWND, shared with GL through `WGL_NV_DX_interop2`) | written, never run; gated behind `hdrUntestedPlatforms=true` | `docs/findings-hdr-2026-09-24.md` option 4 |
+| 6 | DLSS on Windows (`pzopt_ngx64.dll`) | the DLL has never been built; releases ship no natives (`upscaler=dlss` runs as FSR 1) | `docs/dlss-windows-build.md`, `docs/plan-upscalers.md` |
+| 7 | Reflections (SSR: image load/store patches into the game's shaders) on Windows drivers | untested on Windows (and on AMD / Intel) | `docs/findings-reflections-2026-09-25.md` |
+| 8 | AMD/Windows black world (2026-09-27): fixed by gating the patches on `godRays`, but which cause it was is still open | needs a console.txt from an AMD Windows player with god rays **on**: the line "the game's samplers back on their stock units" or a black world | memory note `amd-windows-black-world-sampler-order`; release 3f8f7dc |
+
+The general first-test checklist (sections 1-6 above) was last run on 2026-09-19; a fresh pass of it on the current
+release belongs with item 1.

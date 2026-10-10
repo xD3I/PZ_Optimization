@@ -626,7 +626,7 @@ update) re-run `scripts/decompile.sh` and `scripts/regen-overrides.sh`.
   helper left, then restarts the game (skips `scripts/pzopt.sh` installs on a mismatch; `-Dpzopt.bootRepair=false`). Every release
   leaves `Uninstall-PZ-Optimization.cmd` / `uninstall-pz-optimization.bash` and `pzopt/uninstall/install.{ps1,bash}` in the game
   folder; release assets `uninstall.ps1` / `uninstall.sh`; installers find our files without a manifest and refuse another mod's class
-  unless `-Force`. Tests: `BootRepairTest`, `tests/install/install-sh-test.sh`, `harness/uninstall-e2e.sh` E-H. Windows test pending.
+  unless `-Force`. Tests: `BootRepairTest`, `tests/install/install-sh-test.sh`, `harness/uninstall-e2e.sh` E-H. Windows test pending (all open Windows items: `docs/windows-test.md` "Open on Windows").
 - Reflective props (2026-10-08, `docs/findings-prop-reflections-2026-10-08.md`, `mirrorsProps`, on with mirrors): 434 prop
   sprites that are not windows or mirror tiles (glass doors, store fronts, counters, cases, fridges, the glass table, screens,
   gym mirrors, steel, ceramic) reflect through pzopt.Mirrors; `harness/props/masks.py` fits each texel's face (top / south /

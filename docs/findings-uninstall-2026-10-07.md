@@ -53,6 +53,8 @@ leaves them too.
 
 ## Windows test (to do)
 
+(Collected with the other open Windows items in `docs/windows-test.md` "Open on Windows (consolidated 2026-10-10)".)
+
 On a Windows install with the release built from this change (Steam, the game in its default library):
 
 1. Install with the one-liner. The game folder has `Uninstall-PZ-Optimization.cmd` and `pzopt\uninstall\install.ps1`;
