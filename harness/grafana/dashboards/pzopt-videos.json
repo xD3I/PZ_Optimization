@@ -1,0 +1,1452 @@
+{
+ "uid": "pzopt-videos",
+ "title": "PZ videos",
+ "description": "Runs with a recording: play one next to its frame times on the video's clock, where each video lives, the Louisville bake check",
+ "tags": [
+  "pzopt"
+ ],
+ "timezone": "browser",
+ "editable": false,
+ "graphTooltip": 1,
+ "schemaVersion": 41,
+ "version": 1,
+ "refresh": "",
+ "liveNow": false,
+ "time": {
+  "from": "now-30d",
+  "to": "now"
+ },
+ "timepicker": {
+  "refresh_intervals": [
+   "1s",
+   "2s",
+   "5s",
+   "10s",
+   "30s",
+   "1m",
+   "5m"
+  ]
+ },
+ "templating": {
+  "list": [
+   {
+    "type": "query",
+    "name": "machine",
+    "label": "machine",
+    "datasource": {
+     "type": "grafana-postgresql-datasource",
+     "uid": "pzopt-pg"
+    },
+    "definition": "SELECT DISTINCT machine FROM runs LEFT JOIN run_videos v USING (run)\n  LEFT JOIN LATERAL (SELECT value FROM counters c WHERE c.run = runs.run AND c.grp = 'bake_counters' AND c.key = 'strongMarks'\n                     LIMIT 1) sm ON true WHERE (opts->>'record' = '1' OR v.run IS NOT NULL) AND $__timeFilter(started) ORDER BY 1",
+    "query": "SELECT DISTINCT machine FROM runs LEFT JOIN run_videos v USING (run)\n  LEFT JOIN LATERAL (SELECT value FROM counters c WHERE c.run = runs.run AND c.grp = 'bake_counters' AND c.key = 'strongMarks'\n                     LIMIT 1) sm ON true WHERE (opts->>'record' = '1' OR v.run IS NOT NULL) AND $__timeFilter(started) ORDER BY 1",
+    "refresh": 2,
+    "multi": true,
+    "includeAll": true,
+    "sort": 0,
+    "hide": 0,
+    "options": [],
+    "allValue": null,
+    "current": {
+     "text": "All",
+     "value": "$__all"
+    }
+   },
+   {
+    "type": "query",
+    "name": "preset",
+    "label": "preset",
+    "datasource": {
+     "type": "grafana-postgresql-datasource",
+     "uid": "pzopt-pg"
+    },
+    "definition": "SELECT DISTINCT coalesce(preset, 'none') FROM runs LEFT JOIN run_videos v USING (run)\n  LEFT JOIN LATERAL (SELECT value FROM counters c WHERE c.run = runs.run AND c.grp = 'bake_counters' AND c.key = 'strongMarks'\n                     LIMIT 1) sm ON true WHERE (opts->>'record' = '1' OR v.run IS NOT NULL) AND $__timeFilter(started) ORDER BY 1",
+    "query": "SELECT DISTINCT coalesce(preset, 'none') FROM runs LEFT JOIN run_videos v USING (run)\n  LEFT JOIN LATERAL (SELECT value FROM counters c WHERE c.run = runs.run AND c.grp = 'bake_counters' AND c.key = 'strongMarks'\n                     LIMIT 1) sm ON true WHERE (opts->>'record' = '1' OR v.run IS NOT NULL) AND $__timeFilter(started) ORDER BY 1",
+    "refresh": 2,
+    "multi": true,
+    "includeAll": true,
+    "sort": 0,
+    "hide": 0,
+    "options": [],
+    "allValue": null,
+    "current": {
+     "text": "All",
+     "value": "$__all"
+    }
+   },
+   {
+    "type": "textbox",
+    "name": "label",
+    "label": "label regex",
+    "query": ".*",
+    "current": {
+     "text": ".*",
+     "value": ".*"
+    },
+    "hide": 0
+   },
+   {
+    "type": "query",
+    "name": "vrun",
+    "label": "video",
+    "datasource": {
+     "type": "grafana-postgresql-datasource",
+     "uid": "pzopt-pg"
+    },
+    "definition": "SELECT run FROM runs LEFT JOIN run_videos v USING (run)\n  LEFT JOIN LATERAL (SELECT value FROM counters c WHERE c.run = runs.run AND c.grp = 'bake_counters' AND c.key = 'strongMarks'\n                     LIMIT 1) sm ON true WHERE v.url IS NOT NULL AND (opts->>'record' = '1' OR v.run IS NOT NULL) AND $__timeFilter(started) AND machine IN (${machine:sqlstring}) AND coalesce(preset, 'none') IN (${preset:sqlstring}) AND label ~ ${label:sqlstring} ORDER BY started DESC",
+    "query": "SELECT run FROM runs LEFT JOIN run_videos v USING (run)\n  LEFT JOIN LATERAL (SELECT value FROM counters c WHERE c.run = runs.run AND c.grp = 'bake_counters' AND c.key = 'strongMarks'\n                     LIMIT 1) sm ON true WHERE v.url IS NOT NULL AND (opts->>'record' = '1' OR v.run IS NOT NULL) AND $__timeFilter(started) AND machine IN (${machine:sqlstring}) AND coalesce(preset, 'none') IN (${preset:sqlstring}) AND label ~ ${label:sqlstring} ORDER BY started DESC",
+    "refresh": 2,
+    "multi": false,
+    "includeAll": false,
+    "sort": 0,
+    "hide": 0,
+    "options": []
+   },
+   {
+    "type": "query",
+    "name": "vurl",
+    "label": "url",
+    "datasource": {
+     "type": "grafana-postgresql-datasource",
+     "uid": "pzopt-pg"
+    },
+    "definition": "SELECT url FROM run_videos WHERE run = ${vrun:sqlstring}",
+    "query": "SELECT url FROM run_videos WHERE run = ${vrun:sqlstring}",
+    "refresh": 2,
+    "multi": false,
+    "includeAll": false,
+    "sort": 0,
+    "hide": 2,
+    "options": []
+   }
+  ]
+ },
+ "annotations": {
+  "list": [
+   {
+    "builtIn": 1,
+    "datasource": {
+     "type": "grafana",
+     "uid": "-- Grafana --"
+    },
+    "enable": true,
+    "hide": true,
+    "iconColor": "rgba(0, 211, 255, 1)",
+    "name": "Annotations & Alerts",
+    "type": "dashboard"
+   }
+  ]
+ },
+ "links": [
+  {
+   "title": "PZ Optimization",
+   "type": "dashboards",
+   "tags": [
+    "pzopt"
+   ],
+   "asDropdown": false,
+   "includeVars": false
+  }
+ ],
+ "panels": [
+  {
+   "type": "stat",
+   "title": "Videos",
+   "description": "Runs launched with --record (run.opts record=1) or with a video linked by harness/cold-store.py. 'not uploaded': the recording is only in the local run folder, or was deleted with it.",
+   "datasource": {
+    "type": "grafana-postgresql-datasource",
+    "uid": "pzopt-pg"
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "grafana-postgresql-datasource",
+      "uid": "pzopt-pg"
+     },
+     "rawQuery": true,
+     "editorMode": "code",
+     "format": "table",
+     "rawSql": "SELECT count(*) AS recorded,\n  count(*) FILTER (WHERE v.url IS NOT NULL) AS \"in the bucket\", count(*) FILTER (WHERE v.url IS NULL) AS \"not uploaded\"\nFROM runs LEFT JOIN run_videos v USING (run)\n  LEFT JOIN LATERAL (SELECT value FROM counters c WHERE c.run = runs.run AND c.grp = 'bake_counters' AND c.key = 'strongMarks'\n                     LIMIT 1) sm ON true WHERE (opts->>'record' = '1' OR v.run IS NOT NULL) AND $__timeFilter(started) AND machine IN (${machine:sqlstring}) AND coalesce(preset, 'none') IN (${preset:sqlstring}) AND label ~ ${label:sqlstring}",
+     "hide": false
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "none",
+     "color": {
+      "mode": "thresholds"
+     },
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "text",
+        "value": null
+       }
+      ]
+     },
+     "noValue": "\u2013"
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "values": false,
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "/.*/"
+    },
+    "colorMode": "none",
+    "graphMode": "none",
+    "textMode": "value_and_name",
+    "justifyMode": "center",
+    "orientation": "auto",
+    "wideLayout": true,
+    "text": {
+     "titleSize": 12,
+     "valueSize": 26
+    }
+   },
+   "id": 1,
+   "gridPos": {
+    "x": 0,
+    "y": 0,
+    "w": 8,
+    "h": 4
+   }
+  },
+  {
+   "type": "stat",
+   "title": "Video in the bucket",
+   "description": "run_videos.bytes of the selected runs (gs://diegov-videos-coldline)",
+   "datasource": {
+    "type": "grafana-postgresql-datasource",
+    "uid": "pzopt-pg"
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "grafana-postgresql-datasource",
+      "uid": "pzopt-pg"
+     },
+     "rawQuery": true,
+     "editorMode": "code",
+     "format": "table",
+     "rawSql": "SELECT sum(v.bytes) AS size, avg(v.bytes) AS \"per run\" FROM runs LEFT JOIN run_videos v USING (run)\n  LEFT JOIN LATERAL (SELECT value FROM counters c WHERE c.run = runs.run AND c.grp = 'bake_counters' AND c.key = 'strongMarks'\n                     LIMIT 1) sm ON true WHERE (opts->>'record' = '1' OR v.run IS NOT NULL) AND $__timeFilter(started) AND machine IN (${machine:sqlstring}) AND coalesce(preset, 'none') IN (${preset:sqlstring}) AND label ~ ${label:sqlstring}",
+     "hide": false
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "bytes",
+     "color": {
+      "mode": "thresholds"
+     },
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "text",
+        "value": null
+       }
+      ]
+     },
+     "noValue": "\u2013",
+     "decimals": 1
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "values": false,
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "/.*/"
+    },
+    "colorMode": "none",
+    "graphMode": "none",
+    "textMode": "value_and_name",
+    "justifyMode": "center",
+    "orientation": "auto",
+    "wideLayout": true,
+    "text": {
+     "titleSize": 12,
+     "valueSize": 26
+    }
+   },
+   "id": 2,
+   "gridPos": {
+    "x": 8,
+    "y": 0,
+    "w": 6,
+    "h": 4
+   }
+  },
+  {
+   "type": "stat",
+   "title": "Louisville bake check",
+   "description": "Recorded --preset louisville runs by bake_counters strongMarks (pzopt-bench.out): a healthy 25 s route has \u2248 14k, the see_all NaN flood 90k-350k; above 50k counts as flooded. A flooded run is discarded and re-run; the frames of its settle window show the pale roof blotches.",
+   "datasource": {
+    "type": "grafana-postgresql-datasource",
+    "uid": "pzopt-pg"
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "grafana-postgresql-datasource",
+      "uid": "pzopt-pg"
+     },
+     "rawQuery": true,
+     "editorMode": "code",
+     "format": "table",
+     "rawSql": "SELECT count(*) FILTER (WHERE sm.value <= 50000) AS healthy,\n  count(*) FILTER (WHERE sm.value > 50000) AS flooded, count(*) FILTER (WHERE sm.value IS NULL) AS \"no counters\"\nFROM runs LEFT JOIN run_videos v USING (run)\n  LEFT JOIN LATERAL (SELECT value FROM counters c WHERE c.run = runs.run AND c.grp = 'bake_counters' AND c.key = 'strongMarks'\n                     LIMIT 1) sm ON true WHERE (opts->>'record' = '1' OR v.run IS NOT NULL) AND $__timeFilter(started) AND machine IN (${machine:sqlstring}) AND coalesce(preset, 'none') IN (${preset:sqlstring}) AND label ~ ${label:sqlstring} AND preset = 'louisville'",
+     "hide": false
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "none",
+     "color": {
+      "mode": "thresholds"
+     },
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "text",
+        "value": null
+       }
+      ]
+     },
+     "noValue": "\u2013"
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "values": false,
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "/.*/"
+    },
+    "colorMode": "none",
+    "graphMode": "none",
+    "textMode": "value_and_name",
+    "justifyMode": "center",
+    "orientation": "auto",
+    "wideLayout": true,
+    "text": {
+     "titleSize": 12,
+     "valueSize": 26
+    }
+   },
+   "id": 3,
+   "gridPos": {
+    "x": 14,
+    "y": 0,
+    "w": 10,
+    "h": 4
+   }
+  },
+  {
+   "type": "row",
+   "title": "Watch",
+   "collapsed": false,
+   "panels": [],
+   "id": 4,
+   "gridPos": {
+    "x": 0,
+    "y": 4,
+    "w": 24,
+    "h": 1
+   }
+  },
+  {
+   "type": "text",
+   "title": "Recording: ${vrun}",
+   "options": {
+    "mode": "html",
+    "content": "<video controls preload=\"none\" width=\"100%\" src=\"${vurl}\"></video><p><a href=\"${vurl}\" target=\"_blank\">open the file</a> \u00b7 <a href=\"/d/pzopt-run/run?var-run=${vrun}\">run dashboard</a></p>"
+   },
+   "description": "The run picked under 'video' (runs with a video in the cold-storage bucket). AV1 10-bit PQ / BT.2020: plays in Chrome / Firefox / Edge, HDR on an HDR display. preload=none: nothing is fetched (and billed as bucket egress) until play is pressed. The video starts at the game's launch: the route starts at the second shown beside it.",
+   "id": 5,
+   "gridPos": {
+    "x": 0,
+    "y": 5,
+    "w": 16,
+    "h": 24
+   }
+  },
+  {
+   "type": "stat",
+   "title": "In the video",
+   "description": "Seconds into the recording (launch = 0 s): route start / end from the run's route window. The Louisville settle check reads the frames before the route start.",
+   "datasource": {
+    "type": "grafana-postgresql-datasource",
+    "uid": "pzopt-pg"
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "grafana-postgresql-datasource",
+      "uid": "pzopt-pg"
+     },
+     "rawQuery": true,
+     "editorMode": "code",
+     "format": "table",
+     "rawSql": "SELECT round(extract(epoch from route_start - started)::numeric, 1) AS \"route starts at s\",\n  round((extract(epoch from route_start - started) + route_seconds)::numeric, 1) AS \"route ends at s\", round((v.bytes / 1048576.0)::numeric) AS \"MiB\" FROM runs LEFT JOIN run_videos v USING (run)\n  LEFT JOIN LATERAL (SELECT value FROM counters c WHERE c.run = runs.run AND c.grp = 'bake_counters' AND c.key = 'strongMarks'\n                     LIMIT 1) sm ON true WHERE run = ${vrun:sqlstring}",
+     "hide": false
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "none",
+     "color": {
+      "mode": "thresholds"
+     },
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "text",
+        "value": null
+       }
+      ]
+     },
+     "noValue": "\u2013"
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "values": false,
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "/.*/"
+    },
+    "colorMode": "none",
+    "graphMode": "none",
+    "textMode": "value_and_name",
+    "justifyMode": "center",
+    "orientation": "auto",
+    "wideLayout": true,
+    "text": {
+     "titleSize": 12,
+     "valueSize": 26
+    }
+   },
+   "id": 6,
+   "gridPos": {
+    "x": 16,
+    "y": 5,
+    "w": 8,
+    "h": 4
+   }
+  },
+  {
+   "type": "stat",
+   "title": "Frame time (route)",
+   "description": "",
+   "datasource": {
+    "type": "grafana-postgresql-datasource",
+    "uid": "pzopt-pg"
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "grafana-postgresql-datasource",
+      "uid": "pzopt-pg"
+     },
+     "rawQuery": true,
+     "editorMode": "code",
+     "format": "table",
+     "rawSql": "SELECT fps_mean AS fps, p99_ms AS p99, p99_9_ms AS \"p99.9\" FROM runs LEFT JOIN run_videos v USING (run)\n  LEFT JOIN LATERAL (SELECT value FROM counters c WHERE c.run = runs.run AND c.grp = 'bake_counters' AND c.key = 'strongMarks'\n                     LIMIT 1) sm ON true WHERE run = ${vrun:sqlstring}",
+     "hide": false
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "none",
+     "color": {
+      "mode": "thresholds"
+     },
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "text",
+        "value": null
+       }
+      ]
+     },
+     "noValue": "\u2013",
+     "decimals": 1
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "values": false,
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "/.*/"
+    },
+    "colorMode": "none",
+    "graphMode": "none",
+    "textMode": "value_and_name",
+    "justifyMode": "center",
+    "orientation": "auto",
+    "wideLayout": true,
+    "text": {
+     "titleSize": 12,
+     "valueSize": 26
+    }
+   },
+   "id": 7,
+   "gridPos": {
+    "x": 16,
+    "y": 9,
+    "w": 8,
+    "h": 4
+   }
+  },
+  {
+   "type": "stat",
+   "title": "Utilization (route mean)",
+   "description": "",
+   "datasource": {
+    "type": "grafana-postgresql-datasource",
+    "uid": "pzopt-pg"
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "grafana-postgresql-datasource",
+      "uid": "pzopt-pg"
+     },
+     "rawQuery": true,
+     "editorMode": "code",
+     "format": "table",
+     "rawSql": "SELECT busiest_core_pct AS \"busiest core\", gpu_pct AS GPU FROM runs LEFT JOIN run_videos v USING (run)\n  LEFT JOIN LATERAL (SELECT value FROM counters c WHERE c.run = runs.run AND c.grp = 'bake_counters' AND c.key = 'strongMarks'\n                     LIMIT 1) sm ON true WHERE run = ${vrun:sqlstring}",
+     "hide": false
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "percent",
+     "color": {
+      "mode": "thresholds"
+     },
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "red",
+        "value": null
+       },
+       {
+        "color": "orange",
+        "value": 50
+       },
+       {
+        "color": "#EAB839",
+        "value": 75
+       },
+       {
+        "color": "green",
+        "value": 90
+       }
+      ]
+     },
+     "noValue": "\u2013",
+     "decimals": 0
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "values": false,
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "/.*/"
+    },
+    "colorMode": "background",
+    "graphMode": "none",
+    "textMode": "value_and_name",
+    "justifyMode": "center",
+    "orientation": "auto",
+    "wideLayout": true,
+    "text": {
+     "titleSize": 12,
+     "valueSize": 26
+    }
+   },
+   "id": 8,
+   "gridPos": {
+    "x": 16,
+    "y": 13,
+    "w": 8,
+    "h": 4
+   }
+  },
+  {
+   "type": "stat",
+   "title": "Verdict",
+   "description": "",
+   "datasource": {
+    "type": "grafana-postgresql-datasource",
+    "uid": "pzopt-pg"
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "grafana-postgresql-datasource",
+      "uid": "pzopt-pg"
+     },
+     "rawQuery": true,
+     "editorMode": "code",
+     "format": "table",
+     "rawSql": "SELECT coalesce(verdict, '-') AS \"Jev\", coalesce(CASE WHEN preset = 'louisville' THEN CASE WHEN sm.value IS NULL THEN 'no counters'\n  WHEN sm.value > 50000 THEN 'FLOODED' ELSE 'healthy' END END, '-') AS \"bake check\",\n  coalesce(round(sm.value)::text, '-') AS strongMarks FROM runs LEFT JOIN run_videos v USING (run)\n  LEFT JOIN LATERAL (SELECT value FROM counters c WHERE c.run = runs.run AND c.grp = 'bake_counters' AND c.key = 'strongMarks'\n                     LIMIT 1) sm ON true WHERE run = ${vrun:sqlstring}",
+     "hide": false
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "none",
+     "color": {
+      "mode": "thresholds"
+     },
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "text",
+        "value": null
+       }
+      ]
+     },
+     "noValue": "\u2013"
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "values": false,
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "/.*/"
+    },
+    "colorMode": "none",
+    "graphMode": "none",
+    "textMode": "value_and_name",
+    "justifyMode": "center",
+    "orientation": "auto",
+    "wideLayout": true,
+    "text": {
+     "titleSize": 12,
+     "valueSize": 18
+    }
+   },
+   "id": 9,
+   "gridPos": {
+    "x": 16,
+    "y": 17,
+    "w": 8,
+    "h": 4
+   }
+  },
+  {
+   "type": "trend",
+   "title": "Frame time on the video's clock (x = seconds since launch)",
+   "datasource": {
+    "type": "grafana-postgresql-datasource",
+    "uid": "pzopt-pg"
+   },
+   "description": "Every game frame (pzopt-frames.out) and every presented frame (pzopt-overlay.out) of the picked run, x = seconds into the recording, so a spike here is the moment to scrub to in the player.",
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "grafana-postgresql-datasource",
+      "uid": "pzopt-pg"
+     },
+     "rawQuery": true,
+     "editorMode": "code",
+     "format": "table",
+     "rawSql": "WITH r AS (SELECT started FROM runs WHERE run = ${vrun:sqlstring})\nSELECT video_s, \"game frame\", presented FROM (\n  SELECT extract(epoch from f.t - r.started) AS video_s, f.ms AS \"game frame\", NULL::real AS presented\n  FROM frames f, r WHERE f.run = ${vrun:sqlstring}\n  UNION ALL SELECT extract(epoch from o.t - r.started), NULL, o.ms FROM overlay o, r WHERE o.run = ${vrun:sqlstring}) x\nORDER BY 1",
+     "hide": false
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "ms",
+     "color": {
+      "mode": "palette-classic"
+     },
+     "custom": {
+      "drawStyle": "line",
+      "lineWidth": 1,
+      "showPoints": "never",
+      "fillOpacity": 8,
+      "axisSoftMin": 0,
+      "thresholdsStyle": {
+       "mode": "dashed"
+      },
+      "spanNulls": true
+     },
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "transparent",
+        "value": null
+       },
+       {
+        "color": "orange",
+        "value": 10
+       },
+       {
+        "color": "red",
+        "value": 16.7
+       }
+      ]
+     }
+    },
+    "overrides": [
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "video_s"
+      },
+      "properties": [
+       {
+        "id": "unit",
+        "value": "s"
+       }
+      ]
+     }
+    ]
+   },
+   "options": {
+    "xField": "video_s",
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom",
+     "showLegend": true
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "id": 10,
+   "gridPos": {
+    "x": 16,
+    "y": 21,
+    "w": 8,
+    "h": 8
+   }
+  },
+  {
+   "type": "row",
+   "title": "Recorded runs",
+   "collapsed": false,
+   "panels": [],
+   "id": 11,
+   "gridPos": {
+    "x": 0,
+    "y": 29,
+    "w": 24,
+    "h": 1
+   }
+  },
+  {
+   "type": "table",
+   "title": "Recorded runs",
+   "description": "Every recorded run in range. 'watch' opens the video in the bucket; 'route at s' is where the measured route starts in the video (it starts at launch); 'bake check' / strongMarks is the Louisville flood check. Click a run for its dashboard, or pick it under 'video' to play it above.",
+   "datasource": {
+    "type": "grafana-postgresql-datasource",
+    "uid": "pzopt-pg"
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "grafana-postgresql-datasource",
+      "uid": "pzopt-pg"
+     },
+     "rawQuery": true,
+     "editorMode": "code",
+     "format": "table",
+     "rawSql": "SELECT started, run, CASE WHEN v.url IS NOT NULL THEN 'watch' END AS video, v.url AS video_url,\n  CASE WHEN v.url IS NOT NULL THEN 'bucket' ELSE 'not uploaded' END AS \"where\", v.bytes AS size,\n  round(extract(epoch from route_start - started)::numeric, 1) AS \"route at s\", round(route_seconds::numeric) AS \"route s\",\n  CASE WHEN preset = 'louisville' THEN CASE WHEN sm.value IS NULL THEN 'no counters'\n  WHEN sm.value > 50000 THEN 'FLOODED' ELSE 'healthy' END END AS \"bake check\", sm.value AS strongMarks, fps_mean AS fps, p99_ms AS p99, p99_9_ms AS \"p99.9\",\n  gpu_pct AS \"GPU %\", busiest_core_pct AS \"busiest core %\", verdict, valid, opts->>'record_audio' AS audio,\n  machine, mode, preset, variant, label\nFROM runs LEFT JOIN run_videos v USING (run)\n  LEFT JOIN LATERAL (SELECT value FROM counters c WHERE c.run = runs.run AND c.grp = 'bake_counters' AND c.key = 'strongMarks'\n                     LIMIT 1) sm ON true WHERE (opts->>'record' = '1' OR v.run IS NOT NULL) AND $__timeFilter(started) AND machine IN (${machine:sqlstring}) AND coalesce(preset, 'none') IN (${preset:sqlstring}) AND label ~ ${label:sqlstring} ORDER BY started DESC",
+     "hide": false
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "custom": {
+      "align": "auto",
+      "cellOptions": {
+       "type": "auto"
+      },
+      "filterable": false,
+      "inspect": true,
+      "wrapHeaderText": true
+     }
+    },
+    "overrides": [
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "run"
+      },
+      "properties": [
+       {
+        "id": "links",
+        "value": [
+         {
+          "title": "Run dashboard",
+          "url": "/d/pzopt-run/run?var-run=${__value.raw}"
+         },
+         {
+          "title": "Play it here",
+          "url": "/d/pzopt-videos/videos?var-vrun=${__value.raw}&${__url_time_range}&var-machine=All&var-preset=All"
+         }
+        ]
+       },
+       {
+        "id": "custom.width",
+        "value": 300
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "video"
+      },
+      "properties": [
+       {
+        "id": "links",
+        "value": [
+         {
+          "title": "The run's recording (cold storage)",
+          "url": "${__data.fields.video_url}"
+         }
+        ]
+       },
+       {
+        "id": "custom.width",
+        "value": 60
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "video_url"
+      },
+      "properties": [
+       {
+        "id": "custom.hidden",
+        "value": true
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "started"
+      },
+      "properties": [
+       {
+        "id": "unit",
+        "value": "dateTimeAsIso"
+       },
+       {
+        "id": "custom.width",
+        "value": 160
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "size"
+      },
+      "properties": [
+       {
+        "id": "unit",
+        "value": "bytes"
+       },
+       {
+        "id": "decimals",
+        "value": 0
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "bake check"
+      },
+      "properties": [
+       {
+        "id": "custom.cellOptions",
+        "value": {
+         "type": "color-text"
+        }
+       },
+       {
+        "id": "mappings",
+        "value": [
+         {
+          "type": "value",
+          "options": {
+           "healthy": {
+            "color": "green",
+            "index": 0
+           },
+           "FLOODED": {
+            "color": "red",
+            "index": 1
+           },
+           "no counters": {
+            "color": "orange",
+            "index": 2
+           }
+          }
+         }
+        ]
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "strongMarks"
+      },
+      "properties": [
+       {
+        "id": "decimals",
+        "value": 0
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "fps"
+      },
+      "properties": [
+       {
+        "id": "decimals",
+        "value": 1
+       },
+       {
+        "id": "thresholds",
+        "value": {
+         "mode": "absolute",
+         "steps": [
+          {
+           "color": "red",
+           "value": null
+          },
+          {
+           "color": "orange",
+           "value": 60
+          },
+          {
+           "color": "#EAB839",
+           "value": 144
+          },
+          {
+           "color": "green",
+           "value": 235
+          }
+         ]
+        }
+       },
+       {
+        "id": "color",
+        "value": {
+         "mode": "thresholds"
+        }
+       },
+       {
+        "id": "custom.cellOptions",
+        "value": {
+         "type": "color-background",
+         "mode": "basic"
+        }
+       },
+       {
+        "id": "mappings",
+        "value": [
+         {
+          "type": "special",
+          "options": {
+           "match": "null",
+           "result": {
+            "text": "-",
+            "color": "transparent"
+           }
+          }
+         }
+        ]
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "p99"
+      },
+      "properties": [
+       {
+        "id": "unit",
+        "value": "ms"
+       },
+       {
+        "id": "decimals",
+        "value": 2
+       },
+       {
+        "id": "thresholds",
+        "value": {
+         "mode": "absolute",
+         "steps": [
+          {
+           "color": "green",
+           "value": null
+          },
+          {
+           "color": "#EAB839",
+           "value": 4.167
+          },
+          {
+           "color": "orange",
+           "value": 10
+          },
+          {
+           "color": "red",
+           "value": 16.7
+          }
+         ]
+        }
+       },
+       {
+        "id": "color",
+        "value": {
+         "mode": "thresholds"
+        }
+       },
+       {
+        "id": "custom.cellOptions",
+        "value": {
+         "type": "color-background",
+         "mode": "basic"
+        }
+       },
+       {
+        "id": "mappings",
+        "value": [
+         {
+          "type": "special",
+          "options": {
+           "match": "null",
+           "result": {
+            "text": "-",
+            "color": "transparent"
+           }
+          }
+         }
+        ]
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "p99.9"
+      },
+      "properties": [
+       {
+        "id": "unit",
+        "value": "ms"
+       },
+       {
+        "id": "decimals",
+        "value": 2
+       },
+       {
+        "id": "thresholds",
+        "value": {
+         "mode": "absolute",
+         "steps": [
+          {
+           "color": "green",
+           "value": null
+          },
+          {
+           "color": "#EAB839",
+           "value": 4.167
+          },
+          {
+           "color": "orange",
+           "value": 10
+          },
+          {
+           "color": "red",
+           "value": 16.7
+          }
+         ]
+        }
+       },
+       {
+        "id": "color",
+        "value": {
+         "mode": "thresholds"
+        }
+       },
+       {
+        "id": "custom.cellOptions",
+        "value": {
+         "type": "color-background",
+         "mode": "basic"
+        }
+       },
+       {
+        "id": "mappings",
+        "value": [
+         {
+          "type": "special",
+          "options": {
+           "match": "null",
+           "result": {
+            "text": "-",
+            "color": "transparent"
+           }
+          }
+         }
+        ]
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "GPU %"
+      },
+      "properties": [
+       {
+        "id": "unit",
+        "value": "percent"
+       },
+       {
+        "id": "decimals",
+        "value": 0
+       },
+       {
+        "id": "thresholds",
+        "value": {
+         "mode": "absolute",
+         "steps": [
+          {
+           "color": "red",
+           "value": null
+          },
+          {
+           "color": "orange",
+           "value": 50
+          },
+          {
+           "color": "#EAB839",
+           "value": 75
+          },
+          {
+           "color": "green",
+           "value": 90
+          }
+         ]
+        }
+       },
+       {
+        "id": "color",
+        "value": {
+         "mode": "thresholds"
+        }
+       },
+       {
+        "id": "custom.cellOptions",
+        "value": {
+         "type": "color-background",
+         "mode": "basic"
+        }
+       },
+       {
+        "id": "mappings",
+        "value": [
+         {
+          "type": "special",
+          "options": {
+           "match": "null",
+           "result": {
+            "text": "-",
+            "color": "transparent"
+           }
+          }
+         }
+        ]
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "busiest core %"
+      },
+      "properties": [
+       {
+        "id": "unit",
+        "value": "percent"
+       },
+       {
+        "id": "decimals",
+        "value": 0
+       },
+       {
+        "id": "thresholds",
+        "value": {
+         "mode": "absolute",
+         "steps": [
+          {
+           "color": "red",
+           "value": null
+          },
+          {
+           "color": "orange",
+           "value": 50
+          },
+          {
+           "color": "#EAB839",
+           "value": 75
+          },
+          {
+           "color": "green",
+           "value": 90
+          }
+         ]
+        }
+       },
+       {
+        "id": "color",
+        "value": {
+         "mode": "thresholds"
+        }
+       },
+       {
+        "id": "custom.cellOptions",
+        "value": {
+         "type": "color-background",
+         "mode": "basic"
+        }
+       },
+       {
+        "id": "mappings",
+        "value": [
+         {
+          "type": "special",
+          "options": {
+           "match": "null",
+           "result": {
+            "text": "-",
+            "color": "transparent"
+           }
+          }
+         }
+        ]
+       }
+      ]
+     }
+    ]
+   },
+   "transformations": [],
+   "options": {
+    "showHeader": true,
+    "cellHeight": "sm",
+    "footer": {
+     "show": false,
+     "reducer": [
+      "sum"
+     ],
+     "fields": ""
+    },
+    "sortBy": []
+   },
+   "id": 12,
+   "gridPos": {
+    "x": 0,
+    "y": 30,
+    "w": 24,
+    "h": 14
+   }
+  },
+  {
+   "type": "row",
+   "title": "Over time",
+   "collapsed": false,
+   "panels": [],
+   "id": 13,
+   "gridPos": {
+    "x": 0,
+    "y": 44,
+    "w": 24,
+    "h": 1
+   }
+  },
+  {
+   "type": "timeseries",
+   "title": "Recorded runs per day",
+   "description": "Recorded runs started each day, per machine.",
+   "datasource": {
+    "type": "grafana-postgresql-datasource",
+    "uid": "pzopt-pg"
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "grafana-postgresql-datasource",
+      "uid": "pzopt-pg"
+     },
+     "rawQuery": true,
+     "editorMode": "code",
+     "format": "time_series",
+     "rawSql": "SELECT date_trunc('day', started) AS time, machine AS metric, count(*) AS value\nFROM runs LEFT JOIN run_videos v USING (run)\n  LEFT JOIN LATERAL (SELECT value FROM counters c WHERE c.run = runs.run AND c.grp = 'bake_counters' AND c.key = 'strongMarks'\n                     LIMIT 1) sm ON true WHERE (opts->>'record' = '1' OR v.run IS NOT NULL) AND $__timeFilter(started) AND machine IN (${machine:sqlstring}) AND coalesce(preset, 'none') IN (${preset:sqlstring}) AND label ~ ${label:sqlstring} GROUP BY 1, 2 ORDER BY 1",
+     "hide": false
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "none",
+     "custom": {
+      "drawStyle": "bars",
+      "lineWidth": 1,
+      "pointSize": 4,
+      "showPoints": "never",
+      "fillOpacity": 60,
+      "spanNulls": false,
+      "stacking": {
+       "mode": "normal",
+       "group": "A"
+      },
+      "gradientMode": "none",
+      "axisSoftMin": 0,
+      "insertNulls": 3000
+     },
+     "color": {
+      "mode": "palette-classic"
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "right",
+     "showLegend": true
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "id": 14,
+   "gridPos": {
+    "x": 0,
+    "y": 45,
+    "w": 12,
+    "h": 8
+   }
+  },
+  {
+   "type": "timeseries",
+   "title": "Video uploaded to the bucket, cumulative",
+   "description": "Every run video cold-store.py linked (all runs, whatever the filters), summed by upload time.",
+   "datasource": {
+    "type": "grafana-postgresql-datasource",
+    "uid": "pzopt-pg"
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "grafana-postgresql-datasource",
+      "uid": "pzopt-pg"
+     },
+     "rawQuery": true,
+     "editorMode": "code",
+     "format": "time_series",
+     "rawSql": "SELECT uploaded AS time, sum(bytes) OVER (ORDER BY uploaded) AS bucket\nFROM run_videos WHERE uploaded IS NOT NULL ORDER BY 1",
+     "hide": false
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "bytes",
+     "custom": {
+      "drawStyle": "line",
+      "lineWidth": 1,
+      "pointSize": 4,
+      "showPoints": "never",
+      "fillOpacity": 0,
+      "spanNulls": false,
+      "stacking": {
+       "mode": "none",
+       "group": "A"
+      },
+      "gradientMode": "none",
+      "axisSoftMin": 0,
+      "insertNulls": 3000
+     },
+     "color": {
+      "mode": "palette-classic"
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "hidden",
+     "showLegend": false
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "id": 15,
+   "gridPos": {
+    "x": 12,
+    "y": 45,
+    "w": 12,
+    "h": 8
+   }
+  }
+ ]
+}

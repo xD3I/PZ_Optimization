@@ -30,7 +30,8 @@ sys.path.insert(0, str(HERE.parent))
 from typesafe_client import ask, choice, noul  # noqa: E402
 
 DASHBOARDS = {"pzopt-runs": "/d/pzopt-runs/pz-runs", "pzopt-run": "/d/pzopt-run/run", "pzopt-compare": "/d/pzopt-compare/compare",
-              "pzopt-live": "/d/pzopt-live/live", "pzopt-workshop": "/d/pzopt-workshop/pz-workshop-page"}
+              "pzopt-live": "/d/pzopt-live/live", "pzopt-workshop": "/d/pzopt-workshop/pz-workshop-page",
+              "pzopt-videos": "/d/pzopt-videos/pz-videos"}
 HOVER = {"pzopt-runs": "Each day's build on the desktop: fps"}
 CONTEXT = ("A public, read-only Grafana dashboard of a Project Zomboid performance mod (PZ Optimization), seen by anonymous "
            "visitors in Chrome. Panels read a Postgres database of benchmark runs. Expected emptiness is fine: the live "

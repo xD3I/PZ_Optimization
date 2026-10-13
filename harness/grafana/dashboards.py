@@ -1071,10 +1071,141 @@ WHERE kind IN ('restyle', 'mark') AND $__timeFilter(t)""", "#FF9830")
                      desc="How the Steam Workshop page converts: visitors, subscriptions, engagement, GitHub, Discord; before / after a page change")
 
 
+# ------------------------------------------------------------------ Videos
+
+# a run "has a video" when run.sh recorded it (run.opts record=1) or cold-store.py linked one (run_videos); strongMarks is
+# the Louisville bake check of CLAUDE.md (healthy ≈ 14k on a 25 s route, a see_all NaN flood 90k-350k)
+VID_FROM = """runs LEFT JOIN run_videos v USING (run)
+  LEFT JOIN LATERAL (SELECT value FROM counters c WHERE c.run = runs.run AND c.grp = 'bake_counters' AND c.key = 'strongMarks'
+                     LIMIT 1) sm ON true"""
+VID_WHERE = ("(opts->>'record' = '1' OR v.run IS NOT NULL) AND $__timeFilter(started) AND machine IN (${machine:sqlstring}) "
+             "AND coalesce(preset, 'none') IN (${preset:sqlstring}) AND label ~ ${label:sqlstring}")
+LOU_FLOOD = 50000
+LOU_CHECK = f"""CASE WHEN preset = 'louisville' THEN CASE WHEN sm.value IS NULL THEN 'no counters'
+  WHEN sm.value > {LOU_FLOOD} THEN 'FLOODED' ELSE 'healthy' END END"""
+VIDEO_S = "extract(epoch from route_start - started)"  # the recording starts at launch: route start's second in the video
+
+
+def video_dashboard():
+    L = Layout()
+    L.add(stat_panel("Videos", color_mode="none", sql=f"""SELECT count(*) AS recorded,
+  count(*) FILTER (WHERE v.url IS NOT NULL) AS "in the bucket", count(*) FILTER (WHERE v.url IS NULL) AS "not uploaded"
+FROM {VID_FROM} WHERE {VID_WHERE}""",
+                     desc="Runs launched with --record (run.opts record=1) or with a video linked by harness/cold-store.py. "
+                          "'not uploaded': the recording is only in the local run folder, or was deleted with it."), 8, 4)
+    L.add(stat_panel("Video in the bucket", color_mode="none", unit="bytes", decimals=1,
+                     sql=f"SELECT sum(v.bytes) AS size, avg(v.bytes) AS \"per run\" FROM {VID_FROM} WHERE {VID_WHERE}",
+                     desc="run_videos.bytes of the selected runs (gs://diegov-videos-coldline)"), 6, 4)
+    L.add(stat_panel("Louisville bake check", sql=f"""SELECT count(*) FILTER (WHERE sm.value <= {LOU_FLOOD}) AS healthy,
+  count(*) FILTER (WHERE sm.value > {LOU_FLOOD}) AS flooded, count(*) FILTER (WHERE sm.value IS NULL) AS "no counters"
+FROM {VID_FROM} WHERE {VID_WHERE} AND preset = 'louisville'""", color_mode="none",
+                     desc=f"Recorded --preset louisville runs by bake_counters strongMarks (pzopt-bench.out): a healthy 25 s route has "
+                          f"≈ 14k, the see_all NaN flood 90k-350k; above {LOU_FLOOD // 1000}k counts as flooded. A flooded run is "
+                          f"discarded and re-run; the frames of its settle window show the pale roof blotches."), 10, 4)
+
+    L.row("Watch")
+    L.add({"type": "text", "title": "Recording: ${vrun}", "options": {"mode": "html", "content": (
+        '<video controls preload="none" width="100%" src="${vurl}"></video>'
+        '<p><a href="${vurl}" target="_blank">open the file</a> · '
+        '<a href="/d/pzopt-run/run?var-run=${vrun}">run dashboard</a></p>')},
+        "description": "The run picked under 'video' (runs with a video in the cold-storage bucket). AV1 10-bit PQ / BT.2020: "
+                       "plays in Chrome / Firefox / Edge, HDR on an HDR display. preload=none: nothing is fetched (and billed as "
+                       "bucket egress) until play is pressed. The video starts at the game's launch: the route starts at the "
+                       "second shown beside it."}, 16, 24)
+    y0, side = L.y, []
+    one = f"FROM {VID_FROM} WHERE run = ${{vrun:sqlstring}}"
+    side.append((stat_panel("In the video", f"""SELECT round({VIDEO_S}::numeric, 1) AS "route starts at s",
+  round(({VIDEO_S} + route_seconds)::numeric, 1) AS "route ends at s", round((v.bytes / 1048576.0)::numeric) AS "MiB" {one}""",
+                     color_mode="none", desc="Seconds into the recording (launch = 0 s): route start / end from the run's "
+                                             "route window. The Louisville settle check reads the frames before the route start."), 4))
+    side.append((stat_panel("Frame time (route)", f"SELECT fps_mean AS fps, p99_ms AS p99, p99_9_ms AS \"p99.9\" {one}",
+                     decimals=1, color_mode="none"), 4))
+    side.append((stat_panel("Utilization (route mean)", f"SELECT busiest_core_pct AS \"busiest core\", gpu_pct AS GPU {one}",
+                     unit="percent", thr=UTIL_STEPS, decimals=0), 4))
+    side.append((stat_panel("Verdict", f"""SELECT coalesce(verdict, '-') AS "Jev", coalesce({LOU_CHECK}, '-') AS "bake check",
+  coalesce(round(sm.value)::text, '-') AS strongMarks {one}""", color_mode="none", value_size=18), 4))
+    trend = {"type": "trend", "title": "Frame time on the video's clock (x = seconds since launch)", "datasource": DS,
+             "description": "Every game frame (pzopt-frames.out) and every presented frame (pzopt-overlay.out) of the picked run, "
+                            "x = seconds into the recording, so a spike here is the moment to scrub to in the player.",
+             # one result set (the trend panel takes a single frame): each row fills one of the two columns
+             "targets": [q(f"""WITH r AS (SELECT started FROM runs WHERE run = ${{vrun:sqlstring}})
+SELECT video_s, "game frame", presented FROM (
+  SELECT extract(epoch from f.t - r.started) AS video_s, f.ms AS "game frame", NULL::real AS presented
+  FROM frames f, r WHERE f.run = ${{vrun:sqlstring}}
+  UNION ALL SELECT extract(epoch from o.t - r.started), NULL, o.ms FROM overlay o, r WHERE o.run = ${{vrun:sqlstring}}) x
+ORDER BY 1""", "table")],
+             "fieldConfig": {"defaults": {"unit": "ms", "color": {"mode": "palette-classic"},
+                                          "custom": {"drawStyle": "line", "lineWidth": 1, "showPoints": "never", "fillOpacity": 8,
+                                                     "axisSoftMin": 0, "thresholdsStyle": {"mode": "dashed"},
+                                                     "spanNulls": True},
+                                          "thresholds": steps([("transparent", None), ("orange", 10), ("red", 16.7)])},
+                             "overrides": [{"matcher": {"id": "byName", "options": "video_s"},
+                                            "properties": [{"id": "unit", "value": "s"}]}]},
+             "options": {"xField": "video_s", "legend": {"displayMode": "list", "placement": "bottom", "showLegend": True},
+                         "tooltip": {"mode": "multi", "sort": "desc"}}}
+    side.append((trend, 8))
+    for p, h in side:  # the right-hand column beside the player
+        p["id"], p["gridPos"] = L.id, {"x": 16, "y": y0, "w": 8, "h": h}
+        L.id, y0 = L.id + 1, y0 + h
+        L.panels.append(p)
+
+    L.row("Recorded runs")
+    L.add(table_panel("Recorded runs", f"""
+SELECT started, run, CASE WHEN v.url IS NOT NULL THEN 'watch' END AS video, v.url AS video_url,
+  CASE WHEN v.url IS NOT NULL THEN 'bucket' ELSE 'not uploaded' END AS "where", v.bytes AS size,
+  round({VIDEO_S}::numeric, 1) AS "route at s", round(route_seconds::numeric) AS "route s",
+  {LOU_CHECK} AS "bake check", sm.value AS strongMarks, fps_mean AS fps, p99_ms AS p99, p99_9_ms AS "p99.9",
+  gpu_pct AS "GPU %", busiest_core_pct AS "busiest core %", verdict, valid, opts->>'record_audio' AS audio,
+  machine, mode, preset, variant, label
+FROM {VID_FROM} WHERE {VID_WHERE} ORDER BY started DESC""",
+        desc="Every recorded run in range. 'watch' opens the video in the bucket; 'route at s' is where the measured route starts in "
+             "the video (it starts at launch); 'bake check' / strongMarks is the Louisville flood check. Click a run for its "
+             "dashboard, or pick it under 'video' to play it above.",
+        overrides=[
+            ov("run", link=[("Run dashboard", "/d/pzopt-run/run?var-run=${__value.raw}"),
+                            ("Play it here", "/d/pzopt-videos/videos?var-vrun=${__value.raw}&${__url_time_range}"
+                                             "&var-machine=All&var-preset=All")], width=300),
+            ov("video", link=[("The run's recording (cold storage)", "${__data.fields.video_url}")], width=60),
+            ov("video_url", hidden=True),
+            ov("started", unit="dateTimeAsIso", width=160),
+            ov("size", unit="bytes", decimals=0),
+            ov("bake check", color_text=True, mappings=[{"type": "value", "options": {
+                "healthy": {"color": "green", "index": 0}, "FLOODED": {"color": "red", "index": 1},
+                "no counters": {"color": "orange", "index": 2}}}]),
+            ov("strongMarks", decimals=0),
+            ov("fps", thresholds=FPS_STEPS, color_cell=True, decimals=1),
+            *[ov(n, thresholds=FRAME_STEPS, color_cell=True, decimals=2, unit="ms") for n in ("p99", "p99.9")],
+            *[ov(n, thresholds=UTIL_STEPS, color_cell=True, decimals=0, unit="percent") for n in ("GPU %", "busiest core %")],
+        ]), 24, 14)
+
+    L.row("Over time")
+    L.add(ts_panel("Recorded runs per day", [q(f"""SELECT date_trunc('day', started) AS time, machine AS metric, count(*) AS value
+FROM {VID_FROM} WHERE {VID_WHERE} GROUP BY 1, 2 ORDER BY 1""")], unit="none", bars=True, stack=True, legend="right",
+                   desc="Recorded runs started each day, per machine."), 12, 8)
+    L.add(ts_panel("Video uploaded to the bucket, cumulative", [q(f"""SELECT uploaded AS time, sum(bytes) OVER (ORDER BY uploaded) AS bucket
+FROM run_videos WHERE uploaded IS NOT NULL ORDER BY 1""")], unit="bytes", fill=0, legend="hidden",
+                   desc="Every run video cold-store.py linked (all runs, whatever the filters), summed by upload time."), 12, 8)
+
+    rec = f"FROM {VID_FROM} WHERE (opts->>'record' = '1' OR v.run IS NOT NULL) AND $__timeFilter(started)"
+    variables = [
+        var_query("machine", "machine", f"SELECT DISTINCT machine {rec} ORDER BY 1", multi=True, include_all=True,
+                  current={"text": "All", "value": "$__all"}),
+        var_query("preset", "preset", f"SELECT DISTINCT coalesce(preset, 'none') {rec} ORDER BY 1", multi=True, include_all=True,
+                  current={"text": "All", "value": "$__all"}),
+        {"type": "textbox", "name": "label", "label": "label regex", "query": ".*", "current": {"text": ".*", "value": ".*"}, "hide": 0},
+        var_query("vrun", "video", f"SELECT run FROM {VID_FROM} WHERE v.url IS NOT NULL AND {VID_WHERE} ORDER BY started DESC"),
+        {**var_query("vurl", "url", "SELECT url FROM run_videos WHERE run = ${vrun:sqlstring}"), "hide": 2},
+    ]
+    return dashboard("pzopt-videos", "PZ videos", L, variables, time=("now-30d", "now"),
+                     desc="Runs with a recording: play one next to its frame times on the video's clock, where each video lives, "
+                          "the Louisville bake check")
+
+
 def main():
     OUT.mkdir(exist_ok=True)
     from machines import machine_dashboards  # one per test machine, built from this file's panels
-    for d in (runs_dashboard(), run_dashboard(), compare_dashboard(), live_dashboard(), workshop_dashboard(), *machine_dashboards()):
+    for d in (runs_dashboard(), run_dashboard(), compare_dashboard(), live_dashboard(), workshop_dashboard(), video_dashboard(),
+              *machine_dashboards()):
         (OUT / f"{d['uid']}.json").write_text(json.dumps(d, indent=1) + "\n")
     print(f"dashboards: {', '.join(sorted(p.name for p in OUT.glob('*.json')))}")
 

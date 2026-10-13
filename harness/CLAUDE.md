@@ -729,7 +729,7 @@ with the variables filled in: the test after editing `dashboards.py` (0 errors e
   schedmon CPU / run-queue per OS thread, PSI, memory, pacing, the inputs (keys / buttons timeline, analog axes, every
   event, the harness configuration), the console as a searchable log, counters), *PZ compare* (runs on one route-time
   axis, % change vs a base run, percentile bars, phase matrix, a diff flame graph base vs another run), *PZ live* (the game
-  running now, 1 s refresh, with the last 10 s as a flame graph and the live inputs), *PZ Workshop page* (`pzopt-workshop`,
+  running now, 1 s refresh, with the last 10 s as a flame graph and the live inputs), *PZ videos* (`pzopt-videos`, 2026-10-13: runs with a recording = run.opts record=1 or a `run_videos` link; variable `video` plays the picked run's bucket video in an HTML `<video preload=none>` beside its frame times on the video's clock (x = seconds since launch, the recording starts at launch) and where the route starts in it; every recorded run with bucket / not uploaded, the Louisville strongMarks bake check (> 50k = flooded), recordings per day, bucket bytes over time), *PZ Workshop page* (`pzopt-workshop`,
   2026-10-10, the description restyle: how the page converts; `workshop_stats.py` also stores every GitHub release's downloads,
   every comment's time, GitHub's daily views (local DB only: owner-only data, and the public DB answers anonymous SQL),
   stars / Discord members, each description version and the page changes; SQL in `workshop_sql.py`): tiles, per UTC day
