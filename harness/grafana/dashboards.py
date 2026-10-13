@@ -1075,14 +1075,14 @@ WHERE kind IN ('restyle', 'mark') AND $__timeFilter(t)""", "#FF9830")
 
 # a run "has a video" when run.sh recorded it (run.opts record=1) or cold-store.py linked one (run_videos); strongMarks is
 # the Louisville bake check of CLAUDE.md (healthy ≈ 14k on a 25 s route, a see_all NaN flood 90k-350k)
-VID_FROM = """runs LEFT JOIN run_videos v USING (run)
-  LEFT JOIN LATERAL (SELECT value FROM counters c WHERE c.run = runs.run AND c.grp = 'bake_counters' AND c.key = 'strongMarks'
-                     LIMIT 1) sm ON true"""
+VID_FROM = "runs LEFT JOIN run_videos v USING (run)"
+# per run through the counters_run index: a join with all of counters timed out on the public DB's e2-micro (30 s)
+SM = "(SELECT max(value) FROM counters c WHERE c.run = runs.run AND c.grp = 'bake_counters' AND c.key = 'strongMarks')"
 VID_WHERE = ("(opts->>'record' = '1' OR v.run IS NOT NULL) AND $__timeFilter(started) AND machine IN (${machine:sqlstring}) "
              "AND coalesce(preset, 'none') IN (${preset:sqlstring}) AND label ~ ${label:sqlstring}")
 LOU_FLOOD = 50000
-LOU_CHECK = f"""CASE WHEN preset = 'louisville' THEN CASE WHEN sm.value IS NULL THEN 'no counters'
-  WHEN sm.value > {LOU_FLOOD} THEN 'FLOODED' ELSE 'healthy' END END"""
+LOU_CHECK = f"""CASE WHEN preset = 'louisville' THEN CASE WHEN {SM} IS NULL THEN 'no counters'
+  WHEN {SM} > {LOU_FLOOD} THEN 'FLOODED' ELSE 'healthy' END END"""
 VIDEO_S = "extract(epoch from route_start - started)"  # the recording starts at launch: route start's second in the video
 
 
@@ -1096,9 +1096,9 @@ FROM {VID_FROM} WHERE {VID_WHERE}""",
     L.add(stat_panel("Video in the bucket", color_mode="none", unit="bytes", decimals=1,
                      sql=f"SELECT sum(v.bytes) AS size, avg(v.bytes) AS \"per run\" FROM {VID_FROM} WHERE {VID_WHERE}",
                      desc="run_videos.bytes of the selected runs (gs://diegov-videos-coldline)"), 6, 4)
-    L.add(stat_panel("Louisville bake check", sql=f"""SELECT count(*) FILTER (WHERE sm.value <= {LOU_FLOOD}) AS healthy,
-  count(*) FILTER (WHERE sm.value > {LOU_FLOOD}) AS flooded, count(*) FILTER (WHERE sm.value IS NULL) AS "no counters"
-FROM {VID_FROM} WHERE {VID_WHERE} AND preset = 'louisville'""", color_mode="none",
+    L.add(stat_panel("Louisville bake check", sql=f"""SELECT count(*) FILTER (WHERE sm <= {LOU_FLOOD}) AS healthy,
+  count(*) FILTER (WHERE sm > {LOU_FLOOD}) AS flooded, count(*) FILTER (WHERE sm IS NULL) AS "no counters"
+FROM (SELECT {SM} AS sm FROM {VID_FROM} WHERE {VID_WHERE} AND preset = 'louisville') x""", color_mode="none",
                      desc=f"Recorded --preset louisville runs by bake_counters strongMarks (pzopt-bench.out): a healthy 25 s route has "
                           f"≈ 14k, the see_all NaN flood 90k-350k; above {LOU_FLOOD // 1000}k counts as flooded. A flooded run is "
                           f"discarded and re-run; the frames of its settle window show the pale roof blotches."), 10, 4)
@@ -1123,7 +1123,7 @@ FROM {VID_FROM} WHERE {VID_WHERE} AND preset = 'louisville'""", color_mode="none
     side.append((stat_panel("Utilization (route mean)", f"SELECT busiest_core_pct AS \"busiest core\", gpu_pct AS GPU {one}",
                      unit="percent", thr=UTIL_STEPS, decimals=0), 4))
     side.append((stat_panel("Verdict", f"""SELECT coalesce(verdict, '-') AS "Jev", coalesce({LOU_CHECK}, '-') AS "bake check",
-  coalesce(round(sm.value)::text, '-') AS strongMarks {one}""", color_mode="none", value_size=18), 4))
+  coalesce(round({SM})::text, '-') AS strongMarks {one}""", color_mode="none", value_size=18), 4))
     trend = {"type": "trend", "title": "Frame time on the video's clock (x = seconds since launch)", "datasource": DS,
              "description": "Every game frame (pzopt-frames.out) and every presented frame (pzopt-overlay.out) of the picked run, "
                             "x = seconds into the recording, so a spike here is the moment to scrub to in the player.",
@@ -1154,7 +1154,7 @@ ORDER BY 1""", "table")],
 SELECT started, run, CASE WHEN v.url IS NOT NULL THEN 'watch' END AS video, v.url AS video_url,
   CASE WHEN v.url IS NOT NULL THEN 'bucket' ELSE 'not uploaded' END AS "where", v.bytes AS size,
   round({VIDEO_S}::numeric, 1) AS "route at s", round(route_seconds::numeric) AS "route s",
-  {LOU_CHECK} AS "bake check", sm.value AS strongMarks, fps_mean AS fps, p99_ms AS p99, p99_9_ms AS "p99.9",
+  {LOU_CHECK} AS "bake check", {SM} AS strongMarks, fps_mean AS fps, p99_ms AS p99, p99_9_ms AS "p99.9",
   gpu_pct AS "GPU %", busiest_core_pct AS "busiest core %", verdict, valid, opts->>'record_audio' AS audio,
   machine, mode, preset, variant, label
 FROM {VID_FROM} WHERE {VID_WHERE} ORDER BY started DESC""",
@@ -1186,7 +1186,7 @@ FROM {VID_FROM} WHERE {VID_WHERE} GROUP BY 1, 2 ORDER BY 1""")], unit="none", ba
 FROM run_videos WHERE uploaded IS NOT NULL ORDER BY 1""")], unit="bytes", fill=0, legend="hidden",
                    desc="Every run video cold-store.py linked (all runs, whatever the filters), summed by upload time."), 12, 8)
 
-    rec = f"FROM {VID_FROM} WHERE (opts->>'record' = '1' OR v.run IS NOT NULL) AND $__timeFilter(started)"
+    rec = "FROM runs LEFT JOIN run_videos v USING (run) WHERE (opts->>'record' = '1' OR v.run IS NOT NULL) AND $__timeFilter(started)"
     variables = [
         var_query("machine", "machine", f"SELECT DISTINCT machine {rec} ORDER BY 1", multi=True, include_all=True,
                   current={"text": "All", "value": "$__all"}),

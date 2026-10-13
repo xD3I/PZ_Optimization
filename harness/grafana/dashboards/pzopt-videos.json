@@ -37,8 +37,8 @@
      "type": "grafana-postgresql-datasource",
      "uid": "pzopt-pg"
     },
-    "definition": "SELECT DISTINCT machine FROM runs LEFT JOIN run_videos v USING (run)\n  LEFT JOIN LATERAL (SELECT value FROM counters c WHERE c.run = runs.run AND c.grp = 'bake_counters' AND c.key = 'strongMarks'\n                     LIMIT 1) sm ON true WHERE (opts->>'record' = '1' OR v.run IS NOT NULL) AND $__timeFilter(started) ORDER BY 1",
-    "query": "SELECT DISTINCT machine FROM runs LEFT JOIN run_videos v USING (run)\n  LEFT JOIN LATERAL (SELECT value FROM counters c WHERE c.run = runs.run AND c.grp = 'bake_counters' AND c.key = 'strongMarks'\n                     LIMIT 1) sm ON true WHERE (opts->>'record' = '1' OR v.run IS NOT NULL) AND $__timeFilter(started) ORDER BY 1",
+    "definition": "SELECT DISTINCT machine FROM runs LEFT JOIN run_videos v USING (run) WHERE (opts->>'record' = '1' OR v.run IS NOT NULL) AND $__timeFilter(started) ORDER BY 1",
+    "query": "SELECT DISTINCT machine FROM runs LEFT JOIN run_videos v USING (run) WHERE (opts->>'record' = '1' OR v.run IS NOT NULL) AND $__timeFilter(started) ORDER BY 1",
     "refresh": 2,
     "multi": true,
     "includeAll": true,
@@ -59,8 +59,8 @@
      "type": "grafana-postgresql-datasource",
      "uid": "pzopt-pg"
     },
-    "definition": "SELECT DISTINCT coalesce(preset, 'none') FROM runs LEFT JOIN run_videos v USING (run)\n  LEFT JOIN LATERAL (SELECT value FROM counters c WHERE c.run = runs.run AND c.grp = 'bake_counters' AND c.key = 'strongMarks'\n                     LIMIT 1) sm ON true WHERE (opts->>'record' = '1' OR v.run IS NOT NULL) AND $__timeFilter(started) ORDER BY 1",
-    "query": "SELECT DISTINCT coalesce(preset, 'none') FROM runs LEFT JOIN run_videos v USING (run)\n  LEFT JOIN LATERAL (SELECT value FROM counters c WHERE c.run = runs.run AND c.grp = 'bake_counters' AND c.key = 'strongMarks'\n                     LIMIT 1) sm ON true WHERE (opts->>'record' = '1' OR v.run IS NOT NULL) AND $__timeFilter(started) ORDER BY 1",
+    "definition": "SELECT DISTINCT coalesce(preset, 'none') FROM runs LEFT JOIN run_videos v USING (run) WHERE (opts->>'record' = '1' OR v.run IS NOT NULL) AND $__timeFilter(started) ORDER BY 1",
+    "query": "SELECT DISTINCT coalesce(preset, 'none') FROM runs LEFT JOIN run_videos v USING (run) WHERE (opts->>'record' = '1' OR v.run IS NOT NULL) AND $__timeFilter(started) ORDER BY 1",
     "refresh": 2,
     "multi": true,
     "includeAll": true,
@@ -92,8 +92,8 @@
      "type": "grafana-postgresql-datasource",
      "uid": "pzopt-pg"
     },
-    "definition": "SELECT run FROM runs LEFT JOIN run_videos v USING (run)\n  LEFT JOIN LATERAL (SELECT value FROM counters c WHERE c.run = runs.run AND c.grp = 'bake_counters' AND c.key = 'strongMarks'\n                     LIMIT 1) sm ON true WHERE v.url IS NOT NULL AND (opts->>'record' = '1' OR v.run IS NOT NULL) AND $__timeFilter(started) AND machine IN (${machine:sqlstring}) AND coalesce(preset, 'none') IN (${preset:sqlstring}) AND label ~ ${label:sqlstring} ORDER BY started DESC",
-    "query": "SELECT run FROM runs LEFT JOIN run_videos v USING (run)\n  LEFT JOIN LATERAL (SELECT value FROM counters c WHERE c.run = runs.run AND c.grp = 'bake_counters' AND c.key = 'strongMarks'\n                     LIMIT 1) sm ON true WHERE v.url IS NOT NULL AND (opts->>'record' = '1' OR v.run IS NOT NULL) AND $__timeFilter(started) AND machine IN (${machine:sqlstring}) AND coalesce(preset, 'none') IN (${preset:sqlstring}) AND label ~ ${label:sqlstring} ORDER BY started DESC",
+    "definition": "SELECT run FROM runs LEFT JOIN run_videos v USING (run) WHERE v.url IS NOT NULL AND (opts->>'record' = '1' OR v.run IS NOT NULL) AND $__timeFilter(started) AND machine IN (${machine:sqlstring}) AND coalesce(preset, 'none') IN (${preset:sqlstring}) AND label ~ ${label:sqlstring} ORDER BY started DESC",
+    "query": "SELECT run FROM runs LEFT JOIN run_videos v USING (run) WHERE v.url IS NOT NULL AND (opts->>'record' = '1' OR v.run IS NOT NULL) AND $__timeFilter(started) AND machine IN (${machine:sqlstring}) AND coalesce(preset, 'none') IN (${preset:sqlstring}) AND label ~ ${label:sqlstring} ORDER BY started DESC",
     "refresh": 2,
     "multi": false,
     "includeAll": false,
@@ -166,7 +166,7 @@
      "rawQuery": true,
      "editorMode": "code",
      "format": "table",
-     "rawSql": "SELECT count(*) AS recorded,\n  count(*) FILTER (WHERE v.url IS NOT NULL) AS \"in the bucket\", count(*) FILTER (WHERE v.url IS NULL) AS \"not uploaded\"\nFROM runs LEFT JOIN run_videos v USING (run)\n  LEFT JOIN LATERAL (SELECT value FROM counters c WHERE c.run = runs.run AND c.grp = 'bake_counters' AND c.key = 'strongMarks'\n                     LIMIT 1) sm ON true WHERE (opts->>'record' = '1' OR v.run IS NOT NULL) AND $__timeFilter(started) AND machine IN (${machine:sqlstring}) AND coalesce(preset, 'none') IN (${preset:sqlstring}) AND label ~ ${label:sqlstring}",
+     "rawSql": "SELECT count(*) AS recorded,\n  count(*) FILTER (WHERE v.url IS NOT NULL) AS \"in the bucket\", count(*) FILTER (WHERE v.url IS NULL) AS \"not uploaded\"\nFROM runs LEFT JOIN run_videos v USING (run) WHERE (opts->>'record' = '1' OR v.run IS NOT NULL) AND $__timeFilter(started) AND machine IN (${machine:sqlstring}) AND coalesce(preset, 'none') IN (${preset:sqlstring}) AND label ~ ${label:sqlstring}",
      "hide": false
     }
    ],
@@ -234,7 +234,7 @@
      "rawQuery": true,
      "editorMode": "code",
      "format": "table",
-     "rawSql": "SELECT sum(v.bytes) AS size, avg(v.bytes) AS \"per run\" FROM runs LEFT JOIN run_videos v USING (run)\n  LEFT JOIN LATERAL (SELECT value FROM counters c WHERE c.run = runs.run AND c.grp = 'bake_counters' AND c.key = 'strongMarks'\n                     LIMIT 1) sm ON true WHERE (opts->>'record' = '1' OR v.run IS NOT NULL) AND $__timeFilter(started) AND machine IN (${machine:sqlstring}) AND coalesce(preset, 'none') IN (${preset:sqlstring}) AND label ~ ${label:sqlstring}",
+     "rawSql": "SELECT sum(v.bytes) AS size, avg(v.bytes) AS \"per run\" FROM runs LEFT JOIN run_videos v USING (run) WHERE (opts->>'record' = '1' OR v.run IS NOT NULL) AND $__timeFilter(started) AND machine IN (${machine:sqlstring}) AND coalesce(preset, 'none') IN (${preset:sqlstring}) AND label ~ ${label:sqlstring}",
      "hide": false
     }
    ],
@@ -303,7 +303,7 @@
      "rawQuery": true,
      "editorMode": "code",
      "format": "table",
-     "rawSql": "SELECT count(*) FILTER (WHERE sm.value <= 50000) AS healthy,\n  count(*) FILTER (WHERE sm.value > 50000) AS flooded, count(*) FILTER (WHERE sm.value IS NULL) AS \"no counters\"\nFROM runs LEFT JOIN run_videos v USING (run)\n  LEFT JOIN LATERAL (SELECT value FROM counters c WHERE c.run = runs.run AND c.grp = 'bake_counters' AND c.key = 'strongMarks'\n                     LIMIT 1) sm ON true WHERE (opts->>'record' = '1' OR v.run IS NOT NULL) AND $__timeFilter(started) AND machine IN (${machine:sqlstring}) AND coalesce(preset, 'none') IN (${preset:sqlstring}) AND label ~ ${label:sqlstring} AND preset = 'louisville'",
+     "rawSql": "SELECT count(*) FILTER (WHERE sm <= 50000) AS healthy,\n  count(*) FILTER (WHERE sm > 50000) AS flooded, count(*) FILTER (WHERE sm IS NULL) AS \"no counters\"\nFROM (SELECT (SELECT max(value) FROM counters c WHERE c.run = runs.run AND c.grp = 'bake_counters' AND c.key = 'strongMarks') AS sm FROM runs LEFT JOIN run_videos v USING (run) WHERE (opts->>'record' = '1' OR v.run IS NOT NULL) AND $__timeFilter(started) AND machine IN (${machine:sqlstring}) AND coalesce(preset, 'none') IN (${preset:sqlstring}) AND label ~ ${label:sqlstring} AND preset = 'louisville') x",
      "hide": false
     }
    ],
@@ -400,7 +400,7 @@
      "rawQuery": true,
      "editorMode": "code",
      "format": "table",
-     "rawSql": "SELECT round(extract(epoch from route_start - started)::numeric, 1) AS \"route starts at s\",\n  round((extract(epoch from route_start - started) + route_seconds)::numeric, 1) AS \"route ends at s\", round((v.bytes / 1048576.0)::numeric) AS \"MiB\" FROM runs LEFT JOIN run_videos v USING (run)\n  LEFT JOIN LATERAL (SELECT value FROM counters c WHERE c.run = runs.run AND c.grp = 'bake_counters' AND c.key = 'strongMarks'\n                     LIMIT 1) sm ON true WHERE run = ${vrun:sqlstring}",
+     "rawSql": "SELECT round(extract(epoch from route_start - started)::numeric, 1) AS \"route starts at s\",\n  round((extract(epoch from route_start - started) + route_seconds)::numeric, 1) AS \"route ends at s\", round((v.bytes / 1048576.0)::numeric) AS \"MiB\" FROM runs LEFT JOIN run_videos v USING (run) WHERE run = ${vrun:sqlstring}",
      "hide": false
     }
    ],
@@ -468,7 +468,7 @@
      "rawQuery": true,
      "editorMode": "code",
      "format": "table",
-     "rawSql": "SELECT fps_mean AS fps, p99_ms AS p99, p99_9_ms AS \"p99.9\" FROM runs LEFT JOIN run_videos v USING (run)\n  LEFT JOIN LATERAL (SELECT value FROM counters c WHERE c.run = runs.run AND c.grp = 'bake_counters' AND c.key = 'strongMarks'\n                     LIMIT 1) sm ON true WHERE run = ${vrun:sqlstring}",
+     "rawSql": "SELECT fps_mean AS fps, p99_ms AS p99, p99_9_ms AS \"p99.9\" FROM runs LEFT JOIN run_videos v USING (run) WHERE run = ${vrun:sqlstring}",
      "hide": false
     }
    ],
@@ -537,7 +537,7 @@
      "rawQuery": true,
      "editorMode": "code",
      "format": "table",
-     "rawSql": "SELECT busiest_core_pct AS \"busiest core\", gpu_pct AS GPU FROM runs LEFT JOIN run_videos v USING (run)\n  LEFT JOIN LATERAL (SELECT value FROM counters c WHERE c.run = runs.run AND c.grp = 'bake_counters' AND c.key = 'strongMarks'\n                     LIMIT 1) sm ON true WHERE run = ${vrun:sqlstring}",
+     "rawSql": "SELECT busiest_core_pct AS \"busiest core\", gpu_pct AS GPU FROM runs LEFT JOIN run_videos v USING (run) WHERE run = ${vrun:sqlstring}",
      "hide": false
     }
    ],
@@ -618,7 +618,7 @@
      "rawQuery": true,
      "editorMode": "code",
      "format": "table",
-     "rawSql": "SELECT coalesce(verdict, '-') AS \"Jev\", coalesce(CASE WHEN preset = 'louisville' THEN CASE WHEN sm.value IS NULL THEN 'no counters'\n  WHEN sm.value > 50000 THEN 'FLOODED' ELSE 'healthy' END END, '-') AS \"bake check\",\n  coalesce(round(sm.value)::text, '-') AS strongMarks FROM runs LEFT JOIN run_videos v USING (run)\n  LEFT JOIN LATERAL (SELECT value FROM counters c WHERE c.run = runs.run AND c.grp = 'bake_counters' AND c.key = 'strongMarks'\n                     LIMIT 1) sm ON true WHERE run = ${vrun:sqlstring}",
+     "rawSql": "SELECT coalesce(verdict, '-') AS \"Jev\", coalesce(CASE WHEN preset = 'louisville' THEN CASE WHEN (SELECT max(value) FROM counters c WHERE c.run = runs.run AND c.grp = 'bake_counters' AND c.key = 'strongMarks') IS NULL THEN 'no counters'\n  WHEN (SELECT max(value) FROM counters c WHERE c.run = runs.run AND c.grp = 'bake_counters' AND c.key = 'strongMarks') > 50000 THEN 'FLOODED' ELSE 'healthy' END END, '-') AS \"bake check\",\n  coalesce(round((SELECT max(value) FROM counters c WHERE c.run = runs.run AND c.grp = 'bake_counters' AND c.key = 'strongMarks'))::text, '-') AS strongMarks FROM runs LEFT JOIN run_videos v USING (run) WHERE run = ${vrun:sqlstring}",
      "hide": false
     }
    ],
@@ -791,7 +791,7 @@
      "rawQuery": true,
      "editorMode": "code",
      "format": "table",
-     "rawSql": "SELECT started, run, CASE WHEN v.url IS NOT NULL THEN 'watch' END AS video, v.url AS video_url,\n  CASE WHEN v.url IS NOT NULL THEN 'bucket' ELSE 'not uploaded' END AS \"where\", v.bytes AS size,\n  round(extract(epoch from route_start - started)::numeric, 1) AS \"route at s\", round(route_seconds::numeric) AS \"route s\",\n  CASE WHEN preset = 'louisville' THEN CASE WHEN sm.value IS NULL THEN 'no counters'\n  WHEN sm.value > 50000 THEN 'FLOODED' ELSE 'healthy' END END AS \"bake check\", sm.value AS strongMarks, fps_mean AS fps, p99_ms AS p99, p99_9_ms AS \"p99.9\",\n  gpu_pct AS \"GPU %\", busiest_core_pct AS \"busiest core %\", verdict, valid, opts->>'record_audio' AS audio,\n  machine, mode, preset, variant, label\nFROM runs LEFT JOIN run_videos v USING (run)\n  LEFT JOIN LATERAL (SELECT value FROM counters c WHERE c.run = runs.run AND c.grp = 'bake_counters' AND c.key = 'strongMarks'\n                     LIMIT 1) sm ON true WHERE (opts->>'record' = '1' OR v.run IS NOT NULL) AND $__timeFilter(started) AND machine IN (${machine:sqlstring}) AND coalesce(preset, 'none') IN (${preset:sqlstring}) AND label ~ ${label:sqlstring} ORDER BY started DESC",
+     "rawSql": "SELECT started, run, CASE WHEN v.url IS NOT NULL THEN 'watch' END AS video, v.url AS video_url,\n  CASE WHEN v.url IS NOT NULL THEN 'bucket' ELSE 'not uploaded' END AS \"where\", v.bytes AS size,\n  round(extract(epoch from route_start - started)::numeric, 1) AS \"route at s\", round(route_seconds::numeric) AS \"route s\",\n  CASE WHEN preset = 'louisville' THEN CASE WHEN (SELECT max(value) FROM counters c WHERE c.run = runs.run AND c.grp = 'bake_counters' AND c.key = 'strongMarks') IS NULL THEN 'no counters'\n  WHEN (SELECT max(value) FROM counters c WHERE c.run = runs.run AND c.grp = 'bake_counters' AND c.key = 'strongMarks') > 50000 THEN 'FLOODED' ELSE 'healthy' END END AS \"bake check\", (SELECT max(value) FROM counters c WHERE c.run = runs.run AND c.grp = 'bake_counters' AND c.key = 'strongMarks') AS strongMarks, fps_mean AS fps, p99_ms AS p99, p99_9_ms AS \"p99.9\",\n  gpu_pct AS \"GPU %\", busiest_core_pct AS \"busiest core %\", verdict, valid, opts->>'record_audio' AS audio,\n  machine, mode, preset, variant, label\nFROM runs LEFT JOIN run_videos v USING (run) WHERE (opts->>'record' = '1' OR v.run IS NOT NULL) AND $__timeFilter(started) AND machine IN (${machine:sqlstring}) AND coalesce(preset, 'none') IN (${preset:sqlstring}) AND label ~ ${label:sqlstring} ORDER BY started DESC",
      "hide": false
     }
    ],
@@ -1336,7 +1336,7 @@
      "rawQuery": true,
      "editorMode": "code",
      "format": "time_series",
-     "rawSql": "SELECT date_trunc('day', started) AS time, machine AS metric, count(*) AS value\nFROM runs LEFT JOIN run_videos v USING (run)\n  LEFT JOIN LATERAL (SELECT value FROM counters c WHERE c.run = runs.run AND c.grp = 'bake_counters' AND c.key = 'strongMarks'\n                     LIMIT 1) sm ON true WHERE (opts->>'record' = '1' OR v.run IS NOT NULL) AND $__timeFilter(started) AND machine IN (${machine:sqlstring}) AND coalesce(preset, 'none') IN (${preset:sqlstring}) AND label ~ ${label:sqlstring} GROUP BY 1, 2 ORDER BY 1",
+     "rawSql": "SELECT date_trunc('day', started) AS time, machine AS metric, count(*) AS value\nFROM runs LEFT JOIN run_videos v USING (run) WHERE (opts->>'record' = '1' OR v.run IS NOT NULL) AND $__timeFilter(started) AND machine IN (${machine:sqlstring}) AND coalesce(preset, 'none') IN (${preset:sqlstring}) AND label ~ ${label:sqlstring} GROUP BY 1, 2 ORDER BY 1",
      "hide": false
     }
    ],
