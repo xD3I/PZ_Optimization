@@ -34,6 +34,11 @@ import org.json.JSONObject;
  *   record               -> the cache is written at exit; JSON "use": -XX:AOTCache
  *   use                  -> nothing, unless the JVM's AOT log shows the cache was not used (game update, reinstall,
  *                           missing file) or the installed files changed: then back to record with a rebuilt jar.
+ * A recording that leaves no cache (the JVM itself crashed while writing it: Zulu 25.0.1 died in TrainingData::cleanup /
+ * SystemDictionaryShared::check_for_exclusion with a -javaagent mod loaded, sixteen hs_err files on one machine, every launch
+ * a recording and every exit a crash) is counted in the state file; after {@link #MAX_FAILED} in a row for the same install
+ * the launcher goes back to the loose classes and stays there until the install, the game jar or Java changes, or the
+ * player switches aotCache off and on again.
  * The JSON is backed up once (ProjectZomboid64.json.pzopt-backup), written to a tmp file and read back before it replaces
  * the original (renamed over it; in place on Windows, where the running launcher holds the file: {@link #replaceJson}). Off (aotCache=false, the master switch, a build mismatch) or in a harness run, a JSON in the cache mode
  * is put back to the loose form. The installers (scripts/pzopt.sh, install.sh, install.ps1) and pzopt.Updater do the
@@ -58,6 +63,9 @@ public final class AotCache {
    private static final String OPT_LOG = "-Xlog:aot=info:file=" + LOG + "::filecount=0";
    /** Manifests of other installs whose loose class files the jar carries too (one relative path per line). */
    static final String[] COMPANIONS = {"pzctl/installed.txt"};
+
+   /** Recordings in a row that left no usable cache before the cache mode is given up for this install. */
+   static final int MAX_FAILED = 3;
 
    enum Mode { LOOSE, RECORD, USE }
 
@@ -135,6 +143,9 @@ public final class AotCache {
       }
       Files.deleteIfExists(game.resolve("ProjectZomboid64.json.pzopt-tmp")); // left by a refused rename before replaceJson
       if (!wanted()) {
+         if (PHASE_OFF.equals(readState(game).getProperty("phase"))) {
+            Files.deleteIfExists(game.resolve(STATE)); // switching the cache off and on again is the player's retry after a give-up
+         }
          if (resetLauncher(game)) {
             Log.info("aot: cache mode off; launcher back to the loose classes for the next launch");
          }
@@ -148,37 +159,54 @@ public final class AotCache {
       }
       Properties state = readState(game);
       boolean sameInstall = fp.equals(state.getProperty("fingerprint"));
+      int failed = sameInstall ? failures(state) : 0;
+      if (sameInstall && PHASE_OFF.equals(state.getProperty("phase"))) {
+         resetLauncher(game); // a hand-edited or stale cache-form JSON goes back too
+         Log.info("aot: off for this install after " + failed + " recordings that left no cache; retried when the install, the game or Java changes");
+         return;
+      }
       switch (MODE) {
          case LOOSE -> {
             buildJar(game);
             writeLauncher(game, OPT_OUT);
-            writeState(game, fp, "record");
+            writeState(game, fp, "record", failed);
             Log.info("aot: built " + JAR + "; the next launch records the AOT cache (written when the game quits)");
          }
          case RECORD -> {
             if (!sameInstall) {
                buildJar(game);
                writeLauncher(game, OPT_OUT);
-               writeState(game, fp, "record");
+               writeState(game, fp, "record", 0);
                Log.info("aot: the install changed during a recording session; rebuilt the jar, recording again next launch");
             } else {
                writeLauncher(game, OPT_USE);
-               writeState(game, fp, "use");
+               writeState(game, fp, "use", failed);
                Log.info("aot: recording this session; the next launch uses the cache");
             }
          }
          case USE -> {
             String log = readLog(game);
             boolean used = log.contains("Using AOT-linked classes: true") && !log.contains("Specified AOT cache not found");
+            int next = failuresAfter(used, sameInstall, failed);
             if (!used || !sameInstall) {
                Files.deleteIfExists(game.resolve(CACHE));
+               if (giveUp(next)) {
+                  // the running JVM has the jar open (locked on Windows): leave it, the loose launcher no longer lists it
+                  resetLauncher(game);
+                  writeState(game, fp, PHASE_OFF, next);
+                  Log.warn("aot: " + next + " recordings in a row left no cache (the JVM crashing while it wrote one? see hs_err_pid*.log in the game folder); cache mode off for this install");
+                  return;
+               }
                if (!sameInstall) {
                   buildJar(game);
                }
                writeLauncher(game, OPT_OUT);
-               writeState(game, fp, "record");
+               writeState(game, fp, "record", next);
                Log.info("aot: cache " + (used ? "belongs to another install" : "not used by the JVM") + "; recording again next launch");
             } else {
+               if (failed != 0) {
+                  writeState(game, fp, "use", 0);
+               }
                Log.info("aot: running from the AOT cache");
             }
          }
@@ -468,7 +496,7 @@ public final class AotCache {
       Files.deleteIfExists(tmp);
    }
 
-   private static Properties readState(Path game) {
+   static Properties readState(Path game) {
       Properties p = new Properties();
       Path f = game.resolve(STATE);
       if (Files.isRegularFile(f)) {
@@ -480,10 +508,30 @@ public final class AotCache {
       return p;
    }
 
-   private static void writeState(Path game, String fp, String phase) throws IOException {
+   static final String PHASE_OFF = "off";
+
+   /** The failure count after a launch in USE mode: a cache the JVM did not use for the same install is one more failed recording. */
+   static int failuresAfter(boolean used, boolean sameInstall, int failed) {
+      return sameInstall && !used ? failed + 1 : 0;
+   }
+
+   static boolean giveUp(int failed) {
+      return failed >= MAX_FAILED;
+   }
+
+   static int failures(Properties state) {
+      try {
+         return Math.max(0, Integer.parseInt(state.getProperty("failures", "0").trim()));
+      } catch (NumberFormatException e) {
+         return 0;
+      }
+   }
+
+   static void writeState(Path game, String fp, String phase, int failed) throws IOException {
       Properties p = new Properties();
       p.setProperty("fingerprint", fp);
       p.setProperty("phase", phase);
+      p.setProperty("failures", Integer.toString(failed));
       Path f = game.resolve(STATE);
       Files.createDirectories(f.getParent());
       try (OutputStream out = Files.newOutputStream(f)) {

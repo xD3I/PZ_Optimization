@@ -77,7 +77,23 @@ public class AotCacheTest {
       JSONObject stock = new JSONObject(STOCK);
       Check.check(j.getJSONArray("classpath").similar(stock.getJSONArray("classpath")), "loose classpath back: " + j.getJSONArray("classpath"));
       Check.check(j.getJSONArray("vmArgs").similar(stock.getJSONArray("vmArgs")), "stock options back: " + j.getJSONArray("vmArgs"));
-      System.out.println("AotCacheTest: jar, record, use, reset ok");
+      // a recording that leaves no cache (the JVM crashing while it writes one) is counted; two in a row for the same install end the cycle
+      Check.check(AotCache.failuresAfter(false, true, 0) == 1, "a cache not used for the same install is one failed recording");
+      Check.check(AotCache.failuresAfter(false, true, 1) == 2, "failures accumulate");
+      Check.check(AotCache.failuresAfter(true, true, 1) == 0, "a used cache clears the count");
+      Check.check(AotCache.failuresAfter(false, false, 5) == 0, "another install starts over");
+      Check.check(!AotCache.giveUp(1) && AotCache.giveUp(AotCache.MAX_FAILED), "gives up at MAX_FAILED, not before");
+      AotCache.writeState(game, "fp1", AotCache.PHASE_OFF, 2);
+      java.util.Properties st = AotCache.readState(game);
+      Check.check("fp1".equals(st.getProperty("fingerprint")) && "off".equals(st.getProperty("phase")) && AotCache.failures(st) == 2,
+            "state round trip: " + st);
+      java.util.Properties old = new java.util.Properties(); // a state file written before the counter existed
+      old.setProperty("phase", "record");
+      Check.check(AotCache.failures(old) == 0, "no failures key reads 0");
+      old.setProperty("failures", "x");
+      Check.check(AotCache.failures(old) == 0, "a garbled failures value reads 0");
+
+      System.out.println("AotCacheTest: jar, record, use, reset, crash-loop guard ok");
    }
 
    private static JSONObject read(Path game) throws Exception {
