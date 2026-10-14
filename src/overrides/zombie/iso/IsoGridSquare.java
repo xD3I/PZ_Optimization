@@ -646,8 +646,12 @@ public final class IsoGridSquare {
                IsoPuddles.getInstance().getPuddlesSize() + Core.getInstance().getPerfPuddles() + IsoCamera.frameState.offscreenWidth - this.puddlesCacheSize
             )
             >= 0.01) {
-         this.puddlesCacheSize = IsoPuddles.getInstance().getPuddlesSize() + Core.getInstance().getPerfPuddles() + IsoCamera.frameState.offscreenWidth;
-         this.puddlesCacheLevel = IsoPuddlesCompute.computePuddle(this);
+         float pzoptPuddlesSize = IsoPuddles.getInstance().getPuddlesSize() + Core.getInstance().getPerfPuddles() + IsoCamera.frameState.offscreenWidth; // pzopt: the size is stored after the level, so a second thread never sees the new size with the old level
+         // pzopt: IsoPuddlesCompute keeps its scratch in statics (pool_vector3f, allocated_vector3f) and a zombie on a frame worker (its footstep material) races the game thread's calls: one thread's releaseAll cleared the list the other was reading (issue #71)
+         synchronized (IsoPuddlesCompute.class) { // pzopt: one caller at a time
+            this.puddlesCacheLevel = IsoPuddlesCompute.computePuddle(this); // pzopt: inside the lock
+            this.puddlesCacheSize = pzoptPuddlesSize; // pzopt: after the level
+         } // pzopt: lock end
       }
 
       return this.puddlesCacheLevel;

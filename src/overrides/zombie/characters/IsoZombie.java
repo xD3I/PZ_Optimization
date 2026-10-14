@@ -273,9 +273,14 @@ public final class IsoZombie extends IsoGameCharacter implements IHumanVisual {
             continue;
          }
 
-         for (int n = 0; n < size; n++) {
-            IsoMovingObject obj = objects.get(n);
-            if (obj == this || !pzopt.SeparateBatch.solid(obj) || Math.abs(thisZ - obj.getZ()) > 0.3F) { // pzopt: separateMemo, once per neighbour per frame
+         for (int n = 0; n < size && n < objects.size(); n++) { // pzopt: on a worker the game thread may shorten the square's list under us (removeFromSquare of an inline entity)
+            IsoMovingObject obj;
+            try { // pzopt: the list can shrink between the size check and the read
+               obj = objects.get(n); // pzopt: same read
+            } catch (IndexOutOfBoundsException e) { // pzopt: lost the race
+               break; // pzopt: nothing left to separate from on this square
+            }
+            if (obj == null || obj == this || !pzopt.SeparateBatch.solid(obj) || Math.abs(thisZ - obj.getZ()) > 0.3F) { // pzopt: separateMemo, once per neighbour per frame
                continue;
             }
 
@@ -2143,7 +2148,7 @@ public final class IsoZombie extends IsoGameCharacter implements IHumanVisual {
       }
 
       double degreeOfSound = Math.toDegrees(radDirOfSound);
-      Vector2 zombieAngle = new Vector2(this.getDir().Rot180().ToVector().x, this.getDir().Rot180().ToVector().y);
+      Vector2 zombieAngle = this.getDir().Rot180().ToVector(new Vector2()); // pzopt: IsoDirections.ToVector() answers one shared static, which another zombie's thread overwrote between the x and the y read; the copy overload is the same value
       zombieAngle.normalize();
       float radDirOfZombie = zombieAngle.getDirectionNeg();
       if (radDirOfZombie < 0.0F) {

@@ -6913,3 +6913,35 @@ dev `devBakeRecordCheck=N`, `devBakeRecordSerial`).
   against a key-off recording of the same build: parity (0.85). Measured and rejected: a task per chunk (neighbour roof
   joins waited for splices), waking the lanes at the prediction's start (`bakeRecordPrewake`), the first texture the stock way
   on the game thread.
+
+## Puddle level under a lock (issue #71): `IsoGridSquare.getPuddlesInGround`
+
+`IsoPuddlesCompute.computePuddle` works in static scratch (`pool_vector3f`, `allocated_vector3f`, `temp_vector2f`, the
+`puddlesDir*` floats) and ends with `releaseAll()` on the pool. Its only caller is `IsoGridSquare.getPuddlesInGround`,
+which the game thread reaches from rendering (`IsoObject` puddle tests, the chunk bake) and, since the zombie update runs on
+the frame workers, a batched zombie reaches through its footstep audio (`ParameterFootstepMaterial2.getMaterial`). Two
+threads in the compute at once emptied the list under each other's `releaseAll`: `IndexOutOfBoundsException: Index 0 out of
+bounds for length 0` at `ObjectPool.releaseAll`, which kicks the player out to the main menu (issue #71, Linux, rain with
+zombies near). The static-state audit of 2026-10-13 had not listed it: nothing in the zombie update touches
+`IsoPuddlesCompute` directly.
+
+The call now runs inside `synchronized (IsoPuddlesCompute.class)`. It only recomputes when the puddle size changed (the
+square caches the level), so the lock is cold in play. Inside the compute the only other lock taken is the
+`IsoPuddlesGeometry.pool` monitor of `getPuddles()`, and nothing holding that monitor calls back into the compute, so there
+is no lock-order cycle.
+
+## Two worker races left in `IsoZombie` (static-state audit follow-up, 2026-10-13)
+
+- `IsoZombie.setTurnAlertedValues` (reached from `RespondToSound` by a zombie in the path-find / walk-toward state): it built
+  its vector from `Rot180().ToVector().x` and `.ToVector().y`. `IsoDirections.ToVector()` copies into one shared static
+  (`IsoDirections.TEMP`) and returns it, so with zombies answering a sound on several workers (and inline on the game thread)
+  x and y could come from different zombies' directions and pick a wrong turn-alerted variable (silent, no exception). It now
+  uses the copy overload `ToVector(new Vector2())`, the same value.
+- `IsoZombie.pzoptSeparateCompute` (our code): the neighbour walk captured `objects.size()` once and then `get(n)`; on a
+  worker the game thread can remove an inline entity from the square's list in that window (`IndexOutOfBoundsException`,
+  which latches the batching off for the session). The loop re-reads the size and skips a null.
+
+Open from the same audit, not changed: `PathfindNative.requestMap` is a plain `HashMap` that `addRequest` /
+`cancelRequest` mutate from several workers (a lost put or remove leaves a stale path request; fixing it needs an override of
+`zombie.pathfind.nativeCode.PathfindNative`); `VirtualZombieManager.isReused` reads two plain `HashSet`s the game thread
+mutates; `checkZombieEntersPlayerBuilding` touches the local player's music events from a worker.
