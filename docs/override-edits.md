@@ -6913,3 +6913,15 @@ dev `devBakeRecordCheck=N`, `devBakeRecordSerial`).
   against a key-off recording of the same build: parity (0.85). Measured and rejected: a task per chunk (neighbour roof
   joins waited for splices), waking the lanes at the prediction's start (`bakeRecordPrewake`), the first texture the stock way
   on the game thread.
+
+## Save thumbnail with `resumeShot` (issue #32): `SavefileThumbnail.create(int)`
+
+The Continue / Load menu reads `<save>/thumb.png`, which `SavefileThumbnail.TakeScreenShotDrawer` writes on the render
+thread. `create(int)` queues the thumbnail frame (world at zoom 1, the drawer) and, stock, ends with `EndFrameUI`, which
+hands the frame to the render thread (`RenderThread.Ready` -> `pushFrameDown`). With `resumeShot` the exit save inserted the
+capture frame (`pzoptCaptureFloor`: a second `renderWorld(.., clear=true)`) before that tail, and the second frame's
+`SpriteRenderer.prePopulating()` clears the populating state, so the still-unpushed thumbnail frame (world, drawer,
+`RenderScale.RESUME`) was dropped: `thumb.png` kept the previous exit's image (Windows reports, `resumeShot=false` fixed it).
+The stock tail (restore the screen image, draw the UI, `EndFrameUI`) is now a helper, `pzoptEndFrame`, and runs before the
+capture frame on exit saves and again at the end for the capture frame, so both frames reach the render thread in order. Found
+by reading code and bytecode; not run in game (the check is `stat thumb.png` before and after one exit with `resumeShot` on).
