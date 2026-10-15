@@ -835,4 +835,6 @@ dashboard too) until billing is re-linked by hand. Budget costs lag by hours. Te
 - Do not add `no_display` or long lingers: The maintainer wants the overlay visible and the game to
   close by itself after a run.
 
+`jre-wrapper.sh` (2026-10-15, issue #11): a run on another JRE without touching the shared `jre64`: `GAME_WRAPPER=$PWD/harness/jre-wrapper.sh PZOPT_JRE=<jre dir> harness/run.sh --launcher direct ...` (as a queue `cmd` job; the env never reaches a `submit run`). The native launcher takes the first `java` on PATH; check `java.version=` in console.txt. Findings `docs/findings-java27-shenandoah-2026-10-15.md`.
+
 `native-threads.sh <out> [start-after] [window]`: run beside `run.sh`; snapshots every native thread's CPU (driver workers, MangoHud, JIT) and the GL-related environment of the live game process. `pzopt-threads.out` only sees Java threads.
