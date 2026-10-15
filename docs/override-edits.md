@@ -3263,6 +3263,12 @@ stock skips) and writes them through stock's `MainOptions.writeKey`. Rig `harnes
 96 lines / 84 bindings and Map on F8 (`keywipe-after`), byte-identical to the file stock's eager build writes
 (`keywipe-stockref`, `--prop lazyOptionsScreen=false`).
 
+Fixed (issue #59): mod options (`PZAPI.ModOptions`, the "Mods" page) stayed at their defaults after loading a save until the
+options screen was opened once. Stock reads `ModOptions.ini` only in `MainOptions:addModOptionsPanel` (its first line,
+`PZAPI.ModOptions:load()`), which `create()` calls when a mod registered options (`#PZAPI.ModOptions.Data ~= 0`); the
+deferred path skipped it. It now makes the same call under the same guard (in a `pcall`) before it returns, so the saved
+values are in memory at boot and at every world entry, as in stock. `lazyOptionsScreen=false` was the workaround.
+
 Dropped (2026-09-23): building the main menu's other screens (server settings, sandbox options, character creation,
 multiplayer, credits, spawn select) on first use. A `lua_wrap` profile had put them at ~600 ms, but that rig's per-call
 overhead inflated them; without it the whole main menu builds in 378 ms eager vs 348 ms lazy on the flip

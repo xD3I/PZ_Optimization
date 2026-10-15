@@ -5495,6 +5495,15 @@ local function install()
                 fileOutput:close()
             end
             self.pzoptCreatePending = true
+            -- Stock reads ModOptions.ini only in addModOptionsPanel, which create() calls when a mod registered options
+            -- (MainOptions.lua:409). Deferred, every mod option stayed at its default until the screen was opened once
+            -- (issue #59). Same guard, same call, same moment as stock.
+            if PZAPI and PZAPI.ModOptions and #PZAPI.ModOptions.Data ~= 0 then
+                local okLoad, errLoad = pcall(PZAPI.ModOptions.load, PZAPI.ModOptions)
+                if not okLoad then
+                    print("[pzopt] options screen: ModOptions load failed: " .. tostring(errLoad))
+                end
+            end
             PzoptLogInfo("[pzopt] options screen: build deferred until it is opened (key bindings loaded)")
             return
         end
