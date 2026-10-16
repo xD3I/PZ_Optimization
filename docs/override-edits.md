@@ -531,8 +531,10 @@ inner class). Edits:
    (`ExceptionInInitializerError` in `IsoWorld.<clinit>`, nothing in
    console.txt). The marker is printed by the next override that loads.
 2. **`checkVehiclesZones` dedupe.** Under the same guard the O(n²) scan is
-   replaced by one pass with a `HashSet<Long>` keyed on
-   `(getX(), getY(), w, h)`: a zone whose key was seen is removed, so the
+   replaced by one pass with a `HashSet<PzoptVehicleZoneKey>` keyed on
+   the full-width integers `(getX(), getY(), w, h)`. The record equality
+   distinguishes signed values and values separated by 65536; ordinary hash
+   collisions are resolved by equality. A zone whose key was seen is removed, so the
    first zone of each key survives exactly as in stock (stock removes the
    later index). The stock debug string is only built when
    `DebugType.Vehicle.isEnabled()`; one `[pzopt]` line reports the counts.
