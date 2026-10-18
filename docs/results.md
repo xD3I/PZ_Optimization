@@ -242,3 +242,10 @@ Louisville with the fix (`win-g1sw-*`, one each): spin 201.5 (195) / with Enhanc
 (44.1) / 39.0 (35.9). What is left above Linux: pixelLight +0.23 ms (its doubled bakes on a render thread already at 93-95 %)
 and sway +0.12 (program switches); the bigger gap is the base itself, 2.86 vs 1.67 ms with the render thread at 93-95 % in the
 defaults (Linux ~1.3 ms of render thread a frame): the Windows GL driver's per-call cost, not an Enhancement.
+
+## 2026-10-18 16:20-16:25 — KI5 LAV-300 flicker report, single-player repro (`docs/findings-ki5-vehicle-flicker-2026-10-18.md`)
+
+Desktop, direct launch, `--mode bench --mod damnlib --mod 84gageV300`, LAV-300 APC + vanilla Van parked by the car rig at
+8158,11514, 14 s hold, recorded. `ki5-lav-repro2` (tab file: car glass and sun shadows off): steady, LAV / Van frame-to-frame
+luma diff 0.30 / 0.30. `ki5-lav-allenh` (rain, every Visuals key on): steady, 0.69 / 0.43 (rain streaks), LAV mean luma flat
+within +-0.2 over 6 s. No flicker reproduced.
