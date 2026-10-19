@@ -648,7 +648,8 @@ final class RainRipples {
          "}",
          "// the stock call's replacement: the slope into pzRainG (the wave normal's plane), the shade term the stock adds",
          "vec3 pzRain(vec2 fc) {",
-         "   vec2 g = pzRainSlope(fc) * pzRainP.z;",
+         // The stock surface mask also covers roofed/interior vertices; crest alpha must not resurrect them.
+         "   vec2 g = pzRainSlope(fc) * pzRainP.z * clamp(puddlesDirNone, 0.0, 1.0);",
          "   pzRainG = vec2(g.x - g.y, g.x + g.y) * 0.7071;",
          "   return vec3(0.0, 0.0, (1.0 - rainIntensity * 0.5) * (1.0 - min(1.0, 1.5 * dot(pzRainG, pzRainG))));",
          "}",
