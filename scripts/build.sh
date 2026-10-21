@@ -34,7 +34,8 @@ rm -rf "$OUT" "$BUILD/stock"
 mkdir -p "$OUT" "$BUILD/stock"
 
 echo "compiling src/ against $JAR (--release $RELEASE)"
-mapfile -t sources < <(find "$SRC/overrides" "$SRC/shims" "$SRC/pzopt" -name '*.java' | sort)
+# src/vendor: third-party pure-Java libraries (javif, the menu clips' AV1 / AVIF decoder, MPL-2.0: src/vendor/javif)
+mapfile -t sources < <(find "$SRC/overrides" "$SRC/shims" "$SRC/pzopt" "$SRC/vendor" -name '*.java' | sort)
 javac --release "$RELEASE" -nowarn -Xlint:-options -parameters -g \
   -cp "$JAR" -d "$OUT" "${sources[@]}"
 
@@ -87,12 +88,19 @@ if [[ -d "$SRC/lua" ]]; then
   java -cp "$JAR" "$REPO/scripts/LuaDebugCompile.java" "${lua_files[@]}" \
     || { echo "LUA DEBUG COMPILE FAILED: split the function named above (scripts/LuaDebugCompile.java)" >&2; exit 1; }
 fi
-# Other loose media (src/media/ui/pzopt/compare/*.gif: the PZ OPTIMIZATION screen's stock-vs-optimized clips,
+# Other loose media (src/media/ui/pzopt/compare/*.gif and *.avif: the PZ OPTIMIZATION screen's stock-vs-optimized clips,
 # harness/menu-gifs.py) lands under the game dir's media/ the same way.
 if [[ -d "$SRC/media" ]]; then
   mkdir -p "$OUT/media"
   cp -r "$SRC/media/." "$OUT/media/"
 fi
+# The licence of every vendored library ships beside the classes (src/vendor/<name>/LICENSE -> pzopt/licenses/<name>/)
+for lic in "$SRC"/vendor/*/LICENSE; do
+  [[ -f "$lic" ]] || continue
+  name=$(basename "$(dirname "$lic")")
+  mkdir -p "$OUT/pzopt/licenses/$name"
+  cp "$lic" "$(dirname "$lic")/README.md" "$OUT/pzopt/licenses/$name/" 2>/dev/null || cp "$lic" "$OUT/pzopt/licenses/$name/"
+done
 # The uninstallers that stay in the game folder (2026-10-07, docs/findings-uninstall-2026-10-07.md): this release's own
 # installers under pzopt/uninstall/ (.bash: the Workshop uploader bans .sh) and the wrappers at the top of the folder
 # (Uninstall-PZ-Optimization.cmd to double-click, uninstall-pz-optimization.bash). They are release files like the

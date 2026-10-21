@@ -177,12 +177,14 @@
  },
  "hdr": {
   "opt": {
+   "avif_bytes": 44323,
    "bytes": 308572,
    "file": "hdr-opt.gif",
    "run": "enh-hdr-night-20260925-003235",
    "video_t0": 22.31
   },
   "stock": {
+   "avif_bytes": 50740,
    "bytes": 200118,
    "file": "hdr-stock.gif",
    "run": "enh-sdr-night-20260925-003116",
@@ -192,12 +194,14 @@
  },
  "hdrday": {
   "opt": {
+   "avif_bytes": 230104,
    "bytes": 2788809,
    "file": "hdrday-opt.gif",
    "run": "enh-hdr-day-20260925-003444",
    "video_t0": 18.91
   },
   "stock": {
+   "avif_bytes": 119589,
    "bytes": 1587248,
    "file": "hdrday-stock.gif",
    "run": "enh-sdr-day-20260925-003340",

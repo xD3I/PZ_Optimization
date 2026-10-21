@@ -278,6 +278,107 @@ def gif(src, t0, dur, ass, out, fps=FPS, hold=0.0, extra='', crop=None, denoise=
     n = subprocess.run(['ffprobe', '-v', 'error', '-count_frames', '-select_streams', 'v:0', '-show_entries',
                         'stream=nb_read_frames', '-of', 'csv=p=0', out], capture_output=True, text=True).stdout.strip()
     print(f'wrote {out} ({size / 1e6:.2f} MB, {n} frames)')
+    if AVIF:
+        AVIF_BYTES[out] = avif(src, t0, dur, ass, out[:-4] + '.avif', fps=fps, hold=hold, crop=crop, sdr=sdr)
+    return size
+
+
+# --- AVIF beside every GIF (docs/findings-clip-format-2026-10-20.md): pzopt.GifTextures plays <clip>-<side>.avif when it
+# is there (javif, pure Java), the GIF otherwise. HDR sources stay PQ / BT.2020 10-bit (shown as HDR with the game's HDR
+# output on, else through the GIFs' own tone map, pzopt.ClipColor); the in-game panes (sdr=True) are 8-bit BT.709.
+# No denoise (it was for the 96-colour palette) and no dither. MENU_AVIF=0 skips them.
+AVIF = os.environ.get('MENU_AVIF', '1') != '0'
+AVIF_Q, AVIF_SPEED, AVIF_CHROMA = 80, 4, '420'   # 4:2:0 decodes ~1.7x faster than 4:4:4 at the same quality
+AVIF_BYTES = {}  # GIF path -> bytes of the AVIF written beside it
+
+
+def _hable(x):
+    A, B, C, D, E, F = 0.15, 0.50, 0.10, 0.20, 0.02, 0.30
+    return (x * (x * A + B * C) + D * E) / (x * (x * A + B) + D * F) - E / F
+
+
+M2020_709 = [[1.6605, -0.5876, -0.0728], [-0.1246, 1.1329, -0.0083], [-0.0182, -0.1006, 1.1187]]
+
+
+def _gif_tonemap_lin(L):
+    """The GIF chain's tone map (TONEMAP; pzopt.ClipColor.toSdr) on linear BT.2020 light in units of 200 nits, (n,3) ->
+    linear BT.2020 before the BT.709 matrix: ffmpeg's hable, peak 10, desaturation 2 on r+g+b (zscale tags its RGB
+    output AVCOL_SPC_RGB, luma coefficients 1, 1, 1)."""
+    import numpy as np
+    l = L.sum(1, keepdims=True)
+    ob = np.maximum(l - 2, 1e-6) / np.maximum(l, 1e-6)
+    L = L * (1 - ob) + l * ob
+    s = np.maximum(L.max(1, keepdims=True), 1e-6)
+    return L * (_hable(s) / _hable(10.0) / s)
+
+
+def _overlay_to_pq(rgb8):
+    """Overlay colours (n,3 sRGB-ish 8-bit, what the GIF's counter shows) -> 16-bit PQ BT.2020 codes whose tone-mapped
+    SDR view is that colour (fixed-point inverse of the tone map; with HDR output on, the counter is as bright as the
+    tone map's inverse makes it: amber ~260 nits, white ~645 nits)."""
+    import numpy as np
+    m = np.array(M2020_709)
+    T = np.clip((rgb8 / 255.0) ** 2.4 @ np.linalg.inv(m).T, 1e-5, None)
+    L = T / 0.3934
+    for _ in range(120):
+        L = np.maximum(L * np.sqrt(T / np.maximum(_gif_tonemap_lin(L), 1e-9)), 0)
+    y = (L * 200 / 10000) ** (2610 / 16384)
+    pq = ((3424 / 4096 + 2413 / 128 * y) / (1 + 2392 / 128 * y)) ** (2523 / 32)
+    return np.round(np.clip(pq, 0, 1) * 65535)
+
+
+def avif(src, t0, dur, ass, out, fps=FPS, hold=0.0, crop=None, sdr=False, q=AVIF_Q):
+    """The GIF's cut as an animated AVIF (avifenc / libaom from a y4m: ffmpeg's own AVIF muxer writes an edit list javif
+    refuses). The counter is rendered by libass on black and on white, the pair giving its colour and coverage, and
+    blended over the scene: in 8-bit for an SDR source, in PQ codes (through _overlay_to_pq) for an HDR one."""
+    import numpy as np
+    if crop:
+        cx, cy, cw, ch = (int(v) for v in crop.split(':'))
+        geo, h = f'crop={cw}:{ch}:{cx}:{cy},', max(2, round(ch * W / cw / 2) * 2)
+    else:
+        geo, h = '', H
+    pix, dt = ('rgb24', np.uint8) if sdr else ('rgb48le', np.dtype('<u2'))
+    pad = f',tpad=stop_mode=clone:stop_duration={hold:.3f}' if hold > 0 else ''
+    conv = 'format=rgb24' if sdr else 'scale=in_color_matrix=bt2020:in_range=tv:out_range=pc:flags=accurate_rnd+full_chroma_int,format=rgb48le'
+    raw = tempfile.mktemp(suffix='.raw')
+    sh(['ffmpeg', '-hide_banner', '-v', 'error', '-y', '-ss', f'{t0:.3f}', '-t', f'{dur:.3f}', '-i', src, '-vf',
+        f'fps={fps},{geo}scale={W}:{h}:flags=lanczos,{conv}{pad}', '-an', '-f', 'rawvideo', raw])
+    frames = np.fromfile(raw, dt).reshape(-1, h, W, 3)
+    os.unlink(raw)
+    if ass:
+        layers = []
+        for bg in ('black', 'white'):
+            lr = tempfile.mktemp(suffix='.rgb')
+            sh(['ffmpeg', '-hide_banner', '-v', 'error', '-y', '-f', 'lavfi', '-i',
+                f'color=c={bg}:s={W}x{h}:r={fps}:d={dur + hold:.3f}', '-vf',
+                'subtitles=' + ass.replace(':', '\\:') + ',format=rgb24', '-frames:v', str(len(frames)), '-f', 'rawvideo', lr])
+            layers.append(np.fromfile(lr, np.uint8).reshape(-1, h, W, 3).astype(np.float32))
+            os.unlink(lr)
+        n = min(len(frames), len(layers[0]), len(layers[1]))
+        frames = frames[:n]
+        black, white = layers[0][:n], layers[1][:n]
+        a = np.clip(1 - (white - black).mean(-1, keepdims=True) / 255, 0, 1)
+        colour = np.clip(black / np.maximum(a, 1e-3), 0, 255)
+        if sdr:
+            frames = np.round(frames * (1 - a) + colour * a).astype(np.uint8)
+        else:
+            on = a[..., 0] > 0
+            cols, inv = np.unique(np.round(colour[on]).astype(np.int32), axis=0, return_inverse=True)
+            pq = np.zeros(colour.shape, np.float32)
+            pq[on] = _overlay_to_pq(cols.astype(np.float64))[inv.ravel()]
+            frames = np.round(frames * (1 - a) + pq * a).astype('<u2')
+    raw = tempfile.mktemp(suffix='.raw')
+    frames.tofile(raw)
+    y4m = tempfile.mktemp(suffix='.y4m')
+    mat, fmt = ('bt709', f'yuv{AVIF_CHROMA}p') if sdr else ('bt2020', f'yuv{AVIF_CHROMA}p10le')
+    sh(['ffmpeg', '-hide_banner', '-v', 'error', '-y', '-f', 'rawvideo', '-pix_fmt', pix, '-s', f'{W}x{h}', '-r', str(fps),
+        '-i', raw, '-vf', f'scale=out_color_matrix={mat}:out_range=pc,format={fmt}', '-color_range', 'pc', '-strict', '-1', y4m])
+    os.unlink(raw)
+    sh(['avifenc', '--cicp', '1/13/1' if sdr else '9/16/9', '-r', 'full', '-d', '8' if sdr else '10', '-y', AVIF_CHROMA,
+        '--fps', str(fps), '-q', str(q), '-s', str(AVIF_SPEED), '-j', 'all', y4m, out], stdout=subprocess.DEVNULL)
+    os.unlink(y4m)
+    size = os.path.getsize(out)
+    print(f'wrote {out} ({size / 1e3:.0f} kB, {len(frames)} frames, {"SDR 8-bit" if sdr else "PQ 10-bit"})')
     return size
 
 
@@ -413,6 +514,10 @@ def main():
             continue
         fn = {'load': load_clip, 'pane': pane_clip, 'capture': capture_clip}.get(c.get('kind'), action_clip)
         report[name] = dict(title=c['title'], **fn(name, c, work))
+        for side in ('stock', 'opt'):  # the AVIF written beside each GIF
+            g = os.path.join(OUT, report[name][side].get('file') or f'{name}-{side}.gif')
+            if g in AVIF_BYTES:
+                report[name][side]['avif_bytes'] = AVIF_BYTES[g]
     shutil.rmtree(work, ignore_errors=True)
     # which runs and cut points made the shipped GIFs; a partial run updates its clips and keeps the rest
     path = os.path.join(REPO, 'harness/menu-gifs.json')
