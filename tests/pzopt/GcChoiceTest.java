@@ -78,7 +78,7 @@ public class GcChoiceTest {
       GcChoice.heapToPzopt(h, 6144, true, true);
       java.util.List<Object> ha = h.getJSONArray("vmArgs").toList();
       check(ha.get(0).equals("-Xmx6144m") && !ha.contains("-Xmx3072m"), "-Xmx replaced in place: " + ha);
-      check(ha.contains("-Xms6144m") && ha.contains("-XX:+AlwaysPreTouch") && ha.contains(GcChoice.HEAP_MARKER + "3072m,none,1"), "-Xms, pre-touch, marker: " + ha);
+      check(ha.contains("-Xms6144m") && ha.contains("-XX:+AlwaysPreTouch") && ha.contains(GcChoice.HEAP_MARKER + "3072m,none,1,6144m,6144m,6144"), "-Xms, pre-touch, marker: " + ha);
       check(h.getJSONObject("windows").getJSONArray("vmArgs").toList().contains("-Xmx6144m"), "windows section heap");
       String hOnce = h.toString();
       GcChoice.heapToPzopt(h, 6144, true, true);
@@ -104,12 +104,13 @@ public class GcChoiceTest {
       java.util.List<Object> ba = big.getJSONArray("vmArgs").toList();
       check(ba.contains("-Xmx4096m") && ba.contains("-Xms4096m") && !ba.contains("-Xms5120m") && GcChoice.heapConflict(big) == null,
             "-Xms lowered to the new -Xmx: " + ba);
-      check(ba.contains(GcChoice.HEAP_MARKER + "5120m,5120m,0"), "marker keeps the player's sizes: " + ba);
+      check(ba.contains(GcChoice.HEAP_MARKER + "5120m,5120m,0,4096m,4096m,4096"), "marker keeps the player's sizes: " + ba);
       GcChoice.heapToStock(big);
       check(big.similar(bigStock), "undo gives the player's -Xms / -Xmx back: " + big);
       JSONObject small = new JSONObject(STOCK.replace("\"-Xmx3072m\"", "\"-Xms2g\",\"-Xmx3072m\""));
       GcChoice.heapToPzopt(small, 4096, false, false);
       check(small.getJSONArray("vmArgs").toList().contains("-Xms2g"), "a smaller -Xms stays as it is: " + small);
+      heapPlayerChoice(stock);
       check(GcChoice.heapConflict(new JSONObject(STOCK.replace("\"-Xmx3072m\"", "\"-Xms6g\",\"-Xmx4096m\""))) != null, "conflict found");
       check(GcChoice.heapConflict(new JSONObject(STOCK)) == null, "stock has no conflict");
       check(GcChoice.sizeMb("5120m") == 5120 && GcChoice.sizeMb("6G") == 6144 && GcChoice.sizeMb("4194304k") == 4096
@@ -157,6 +158,113 @@ public class GcChoiceTest {
             && !tw.getJSONArray("vmArgs").toList().contains("-XX:G1NewSizePercent=2"), "windows: the tuned set in the version section: " + tw);
       check(GcChoice.toStock(tw) && tw.similar(new JSONObject(win)), "windows: tuned undo: " + tw);
       System.out.println("GcChoiceTest ok");
+   }
+
+   /** 2026-10-19 (Workshop: "the mod resets my -Xmx12g to 3g"): auto never lowers a heap, a hand edit wins, every undo agrees. */
+   private static void heapPlayerChoice(JSONObject stock) {
+      int auto = GcChoice.heapMb(Config.GC_HEAP_AUTO_MB);
+      int autoMods = GcChoice.heapMb(Config.GC_HEAP_AUTO_MODS_MB);
+      // stock 3072 -> auto writes its size (4096, or 8192 with a big mod list), undone exactly
+      for (int size : new int[] {auto, autoMods}) {
+         JSONObject a = new JSONObject(STOCK);
+         GcChoice.heapApply(a, "auto", size, false, false);
+         java.util.List<Object> aa = a.getJSONArray("vmArgs").toList();
+         check(aa.get(0).equals("-Xmx" + size + "m") && aa.contains(GcChoice.HEAP_MARKER + "3072m,none,0," + size + "m,-,auto"), "auto raises the stock heap: " + aa);
+         String once = a.toString();
+         GcChoice.heapApply(a, "auto", size, false, false);
+         check(a.toString().equals(once), "auto re-applied is a no-op");
+         GcChoice.heapToStock(a);
+         check(a.similar(stock), "auto undone exactly: " + a);
+      }
+      // a player's 12g before we touched the file: auto leaves it (no marker, nothing for an undo to put back)
+      JSONObject p12 = new JSONObject(STOCK.replace("-Xmx3072m", "-Xmx12g"));
+      JSONObject p12Stock = new JSONObject(p12.toString());
+      check(!GcChoice.heapApply(p12, "auto", auto, false, false).isEmpty() && p12.similar(p12Stock), "auto keeps the player's 12g: " + p12);
+      GcChoice.heapApply(p12, "auto", autoMods, false, false);
+      check(p12.similar(p12Stock), "auto with mods keeps it too");
+      // above the half-RAM cap (auto's size clamped to 2048 on a small machine): still his
+      JSONObject p6 = new JSONObject(STOCK.replace("-Xmx3072m", "-Xmx6144m"));
+      GcChoice.heapApply(p6, "auto", 2048, false, false);
+      check(p6.getJSONArray("vmArgs").toList().get(0).equals("-Xmx6144m") && !p6.toString().contains("pzopt.heap"), "the cap never shrinks a player's heap: " + p6);
+      // ... but an explicit number is written (the menu choice), and undone to the player's value
+      JSONObject pe = new JSONObject(p12Stock.toString());
+      GcChoice.heapApply(pe, "16384", 16384, false, false);
+      check(pe.getJSONArray("vmArgs").toList().get(0).equals("-Xmx16384m"), "an explicit size replaces it: " + pe);
+      GcChoice.heapToStock(pe);
+      check(pe.similar(p12Stock), "and the undo gives the 12g back: " + pe);
+      // the player edits -Xmx after we wrote ours: kept on the next launch, on a re-apply and by every undo
+      JSONObject ed = new JSONObject(STOCK);
+      GcChoice.heapApply(ed, "auto", auto, false, false);
+      JSONObject edited = new JSONObject(ed.toString().replace("-Xmx" + auto + "m", "-Xmx12g"));
+      JSONObject next = new JSONObject(edited.toString());
+      String note = GcChoice.heapApply(next, "auto", auto, false, false);
+      java.util.List<Object> na = next.getJSONArray("vmArgs").toList();
+      check(na.get(0).equals("-Xmx12g") && !na.contains("-Xmx3072m") && na.contains(GcChoice.HEAP_MARKER + "12g,none,0,p,-,auto") && note.contains("by hand"),
+            "the hand edit survives the next launch: " + na);
+      String twice = next.toString();
+      GcChoice.heapApply(next, "auto", auto, false, false);
+      check(next.toString().equals(twice), "and every launch after it");
+      // a hand edit below auto's size is his too (auto does not raise it back while gcHeap stays auto)
+      JSONObject low = new JSONObject(ed.toString().replace("-Xmx" + auto + "m", "-Xmx2g"));
+      GcChoice.heapApply(low, "auto", auto, false, false);
+      GcChoice.heapApply(low, "auto", auto, false, false);
+      check(low.getJSONArray("vmArgs").toList().get(0).equals("-Xmx2g"), "a hand edit to 2g stays under auto: " + low);
+      // a later menu choice applies again over it, and its undo gives his value back
+      GcChoice.heapApply(low, "8192", 8192, false, false);
+      check(low.getJSONArray("vmArgs").toList().get(0).equals("-Xmx8192m"), "a new menu choice applies: " + low);
+      GcChoice.heapToStock(low);
+      check(low.getJSONArray("vmArgs").toList().get(0).equals("-Xmx2g") && !low.toString().contains("pzopt.heap"), "its undo gives the 2g back: " + low);
+      // undo / uninstall right after the hand edit: his value stays, not the marker's 3072
+      JSONObject un = new JSONObject(edited.toString());
+      GcChoice.heapToStock(un);
+      check(un.getJSONArray("vmArgs").toList().get(0).equals("-Xmx12g") && !un.toString().contains("pzopt.heap"), "undo keeps the hand edit: " + un);
+      JSONObject un2 = new JSONObject(next.toString());
+      GcChoice.heapToStock(un2);
+      check(un2.getJSONArray("vmArgs").toList().get(0).equals("-Xmx12g") && !un2.toString().contains("pzopt.heap"), "undo of a 'p' marker keeps it: " + un2);
+      // a marker of the old three-field form (installs 2026-10-05..10-18) with the player's 12g typed over our 4096
+      JSONObject legacy = new JSONObject(STOCK.replace("\"-Xmx3072m\"", "\"-Xmx12g\"").replace("\"-XX:-OmitStackTraceInFastThrow\"",
+            "\"-XX:-OmitStackTraceInFastThrow\",\"" + GcChoice.HEAP_MARKER + "3072m,none,0\""));
+      JSONObject legacyUndo = new JSONObject(legacy.toString());
+      GcChoice.heapApply(legacy, "auto", auto, false, false);
+      check(legacy.getJSONArray("vmArgs").toList().get(0).equals("-Xmx12g"), "legacy marker: the 12g survives the launch: " + legacy);
+      GcChoice.heapToStock(legacyUndo);
+      check(legacyUndo.getJSONArray("vmArgs").toList().get(0).equals("-Xmx12g") && !legacyUndo.toString().contains("pzopt.heap"), "legacy marker: and the undo: " + legacyUndo);
+      // ... "12288m" typed by hand looks like one of our sizes, but auto never lowers it
+      JSONObject legacyM = new JSONObject(legacy.toString().replace("-Xmx12g", "-Xmx12288m").replace(GcChoice.HEAP_MARKER + "12g,none,0,p,-,auto", GcChoice.HEAP_MARKER + "3072m,none,0"));
+      GcChoice.heapApply(legacyM, "auto", auto, false, false);
+      check(legacyM.getJSONArray("vmArgs").toList().get(0).equals("-Xmx12288m"), "legacy marker: a typed 12288m is not lowered by auto: " + legacyM);
+      // ... and a legacy marker over our own auto size is still ours: the undo gives the launcher's 3072 back
+      JSONObject legacyOurs = new JSONObject(STOCK.replace("\"-Xmx3072m\"", "\"-Xmx" + auto + "m\"").replace("\"-XX:-OmitStackTraceInFastThrow\"",
+            "\"-XX:-OmitStackTraceInFastThrow\",\"" + GcChoice.HEAP_MARKER + "3072m,none,0\""));
+      GcChoice.heapToStock(legacyOurs);
+      check(legacyOurs.getJSONArray("vmArgs").toList().get(0).equals("-Xmx3072m") && !legacyOurs.toString().contains("pzopt.heap"), "legacy marker: our own size undone: " + legacyOurs);
+      check(GcChoice.legacyOurs("4096m") && GcChoice.legacyOurs("7680m") && !GcChoice.legacyOurs("12g") && !GcChoice.legacyOurs("3000m") && !GcChoice.legacyOurs("none"), "legacy sizes");
+      // -Xms: fixed follows the kept -Xmx; a hand-edited -Xms is his, and our -Xmx never goes below it
+      JSONObject fx = new JSONObject(p12Stock.toString());
+      GcChoice.heapApply(fx, "auto", auto, true, false);
+      java.util.List<Object> fa = fx.getJSONArray("vmArgs").toList();
+      check(fa.contains("-Xmx12g") && fa.contains("-Xms12g") && GcChoice.heapConflict(fx) == null, "fixed under a kept 12g: " + fa);
+      GcChoice.heapToStock(fx);
+      check(fx.similar(p12Stock), "fixed undone: " + fx);
+      JSONObject msEd = new JSONObject(STOCK);
+      GcChoice.heapApply(msEd, "auto", auto, true, false);
+      msEd = new JSONObject(msEd.toString().replace("-Xms" + auto + "m", "-Xms6g"));
+      GcChoice.heapApply(msEd, "auto", auto, true, false);
+      java.util.List<Object> ma = msEd.getJSONArray("vmArgs").toList();
+      check(ma.contains("-Xms6g") && ma.contains("-Xmx6g") && GcChoice.heapConflict(msEd) == null, "a hand-edited -Xms above our -Xmx raises it: " + ma);
+      GcChoice.heapToStock(msEd);
+      ma = msEd.getJSONArray("vmArgs").toList();
+      check(ma.contains("-Xms6g") && ma.contains("-Xmx6g") && GcChoice.heapConflict(msEd) == null && !msEd.toString().contains("pzopt.heap"), "undo keeps the player's -Xms and an -Xmx it fits under: " + ma);
+      // explicit settings unchanged: a number replaces any -Xmx (a larger one too), game leaves it
+      JSONObject ex = new JSONObject(STOCK.replace("-Xmx3072m", "-Xmx12g"));
+      GcChoice.heapApply(ex, "6144", 6144, false, false);
+      check(ex.getJSONArray("vmArgs").toList().get(0).equals("-Xmx6144m") && ex.toString().contains(GcChoice.HEAP_MARKER + "12g,none,0,6144m,-,6144"), "explicit number: " + ex);
+      GcChoice.heapToStock(ex);
+      check(ex.getJSONArray("vmArgs").toList().get(0).equals("-Xmx12g"), "explicit number undone");
+      JSONObject gm = new JSONObject(STOCK);
+      GcChoice.heapApply(gm, "auto", auto, false, false);
+      GcChoice.heapApply(gm, "game", 0, false, false);
+      check(gm.similar(stock), "gcHeap=game after auto: the launcher's own again: " + gm);
    }
 
    private static void check(boolean ok, String what) {

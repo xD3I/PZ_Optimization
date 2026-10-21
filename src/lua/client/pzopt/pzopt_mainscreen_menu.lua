@@ -3575,6 +3575,48 @@ local function fitMenuColumn(self)
     bp:setHeight(bottom)
 end
 
+-- The pause menu: no row on top of another (Workshop report 2026-10-19: "the PZO entries in the ESC menu overlap options
+-- from other mods"). A mod that adds its own row under Options after us (its instantiate wraps ours: game-dir Lua loads
+-- first) places it where ours already is and moves only Exit / Quit down. Every frame, after the stock and the mods'
+-- layout: the visible rows in their order, each pushed down to the bottom of the one above when it overlaps it, the panel
+-- as tall as the column. Rows that do not overlap keep their place, so the stock layout is untouched.
+local function unstackPauseMenu(self)
+    local bp = self.bottomPanel
+    local me = self.pzoptMenuOption
+    if not bp or not me or not me:isVisible() then return end
+    local x0, x1 = me:getX(), me:getX() + math.max(1, me:getWidth())
+    local rows = {}
+    for _, c in pairs(bp:getChildren()) do
+        -- the column's rows (a row of another column, beside ours, is left where it is)
+        if c.Type == "ISLabel" and c:isVisible() and c:getX() < x1 and c:getX() + math.max(1, c:getWidth()) > x0 then table.insert(rows, c) end
+    end
+    if #rows < 2 then return end
+    -- by place; on the same place ours first (it was there first: the other row was put on top of it)
+    table.sort(rows, function(a, b)
+        if a == b then return false end
+        local ya, yb = a:getY(), b:getY()
+        if ya ~= yb then return ya < yb end
+        if a == me or b == me then return a == me end
+        return tostring(a.internal or a.name) < tostring(b.internal or b.name)
+    end)
+    local bottom, moved = rows[1]:getY() + rows[1]:getHeight(), false
+    for i = 2, #rows do
+        local c = rows[i]
+        if c:getY() < bottom - 1 then
+            c:setY(bottom)
+            moved = true
+        end
+        bottom = math.max(bottom, c:getY() + c:getHeight())
+    end
+    if moved or bp:getHeight() < bottom then
+        if bp:getHeight() < bottom then bp:setHeight(bottom) end
+        if not self.pzoptUnstackLogged then
+            self.pzoptUnstackLogged = true
+            PzoptLogInfo("[pzopt] menu: pause menu rows moved apart (another mod's row overlapped)")
+        end
+    end
+end
+
 -- Escape at the main menu: the open pzopt dialog first (they never get key events of their own: UIManager sends those
 -- only to elements that ask for them), then the screen; the stock screens keep theirs.
 local function onEscape(ms)
@@ -3734,6 +3776,7 @@ local function install()
                 end
             end)
         end
+        if label and self.inGame then pcall(unstackPauseMenu, self) end
     end
     -- In a game the menu key (Escape) toggles the pause menu (the stock ToggleEscapeMenu): with the PZ Optimization screen
     -- up it closes the screen first, back onto the pause menu, instead of resuming the game under it

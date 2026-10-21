@@ -12,7 +12,11 @@ in 512 MB steps), `gcHeapFixed` (`-Xms` = `-Xmx`), `gcPreTouch` (`-XX:+AlwaysPre
 `-Xmx` replaced in place, `-Xms` set or added, `-XX:+AlwaysPreTouch` added unless the player has it, and the marker
 `-Dpzopt.heap=<old -Xmx>,<old -Xms>,<pre-touch added 0|1>` (`none` for an absent flag). Every undo reads the marker:
 `GcChoice.undo` (in-game uninstall), `reset_gc` in `scripts/pzopt.sh` and `install.sh`, `Reset-Gc` in `install.ps1`
-(PowerShell not run here: no pwsh on the desktop). Harness runs never get the player's JSON edits; `run.sh` applies the
+(PowerShell not run here: no pwsh on the desktop). Since 2026-10-19 (Workshop: players' own `-Xmx12g` reset to 3072m at
+every launch, `docs/override-edits.md` "Java heap: the player's own -Xmx wins") the marker also records what was written
+and the gcHeap it was for (`...,<-Xmx written>,<-Xms written>,<gcHeap>`): auto only raises the heap (an `-Xmx` at or above
+its size stays), a flag changed by hand after our write is the player's and no launch or undo writes over it until gcHeap
+is changed in the menu, and an undo restores the old value only where ours still stands. Harness runs never get the player's JSON edits; `run.sh` applies the
 same rule to every optimized run (`-Xmx4096m`, `-Xmx8192m` with 30 `--mod` ids or more; `--prop gcHeap=game|<MB>`,
 `gcHeapFixed=true`, `gcPreTouch=true`; not in a stock run, nor when the run passes its own `--vmarg -Xmx`), so harness runs
 measure what players get. The mod count `auto` reads: `mod = ` lines of `Zomboid/mods/default.txt` and of the last save's

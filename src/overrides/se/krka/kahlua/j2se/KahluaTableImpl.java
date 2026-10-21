@@ -102,7 +102,7 @@ public final class KahluaTableImpl implements KahluaTable {
          }
 
          Object pzoptPrev = this.delegate.put(key, value); // pzopt: uiRetained, the previous value comes back for free
-         if (pzoptPrev != value && (pzoptPrev == null || !pzoptPrev.equals(value))) { // pzopt: uiRetained
+         if (!pzopt.UiDeps.safeEquals(pzoptPrev, value)) { // pzopt: uiRetained, a value-changing write (an equals that cannot throw: a game list's does, 2026-10-19)
             this.pzoptWrites++; // pzopt: uiRetained
             if (pzopt.UiDeps.on) { // pzopt: uiVerify
                pzopt.UiDeps.write(this); // pzopt: uiVerify

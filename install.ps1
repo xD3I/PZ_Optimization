@@ -217,11 +217,22 @@ function Reset-Gc {
     $a = [System.Collections.ArrayList]@($a)
     $mk = @($a | Where-Object { $_ -like "$hm*" })
     if ($mk.Count -eq 0) { return ,@($a) }
-    $old = @(($mk[-1].Substring($hm.Length) -split ',') + @('none', 'none', '0'))
+    $fs = @($mk[-1].Substring($hm.Length) -split ',')
+    $old = @($fs + @('none', 'none', '0'))
+    # fields 4 / 5 (2026-10-19): what GcChoice wrote ('-' left as it was, 'p' the player's); the old value goes back only
+    # where ours still stands, a flag changed by hand since stays (GcChoice.undoFlag). A three-field marker does not say:
+    # GcChoice only wrote '<N>m' sizes, 512 MB steps from 1 GB.
+    $wrote = if ($fs.Count -ge 5) { @($fs[3], $fs[4]) } else { @($null, $null) }
     foreach ($x in $mk) { $a.Remove($x) }
-    foreach ($pair in @(@('-Xmx', $old[0]), @('-Xms', $old[1]))) {
+    foreach ($pair in @(@('-Xmx', $old[0], $wrote[0]), @('-Xms', $old[1], $wrote[1]))) {
       $i = -1
       for ($k = 0; $k -lt $a.Count; $k++) { if ($a[$k].StartsWith($pair[0])) { $i = $k } }
+      $cur = if ($i -ge 0) { $a[$i].Substring($pair[0].Length) } else { 'none' }
+      $w = $pair[2]
+      if ($null -eq $w) { $isOurs = ($cur -cmatch '^[0-9]+m$') -and ([long]$cur.TrimEnd('m') -ge 1024) -and ([long]$cur.TrimEnd('m') % 512 -eq 0) }
+      elseif ($w -eq '-' -or $w -eq 'p') { $isOurs = $false }
+      else { $isOurs = ($cur -ceq $w) }
+      if (-not $isOurs) { continue }
       if ($pair[1] -eq 'none') { if ($i -ge 0) { $a.RemoveAt($i) } }
       elseif ($i -ge 0) { $a[$i] = $pair[0] + $pair[1] }
       else { [void]$a.Add($pair[0] + $pair[1]) }

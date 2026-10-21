@@ -370,6 +370,8 @@ public final class UiRetained {
    }
    private static final java.util.HashMap<String, Integer> dirtyWhy = new java.util.HashMap<>();
 
+   private static boolean depsThrewLogged;
+
    /** uiVerify: the read set says rendering it again would draw something else (memoised for the frame). */
    private static boolean depsChanged(UIElementInterface e, Rec r) {
       UiDeps.skipNoisy = now - r.lastFreshNs < baseNs(); // learned-noisy reads are checked at the stock rate
@@ -378,8 +380,19 @@ public final class UiRetained {
       long period = Math.min(baseNs(), r.getterCostNs * 100L);
       boolean full = now - r.lastGetterCheckNs >= period;
       UiDeps.skipGetters = !full;
-      int v = UiDeps.validate(r.deps, frameNo);
-      UiDeps.skipGetters = false;
+      int v;
+      try {
+         v = UiDeps.validate(r.deps, frameNo);
+      } catch (RuntimeException ex) {
+         // never into the frame (Workshop report 2026-10-19: an exception a frame, ~3 fps): render it fresh, logged once
+         if (!depsThrewLogged) {
+            depsThrewLogged = true;
+            Log.warn("uiVerify: validating " + r.name + " threw " + ex + " (rendered fresh; logged once)");
+         }
+         return true;
+      } finally {
+         UiDeps.skipGetters = false;
+      }
       if (full && r.deps.validFrame == frameNo) {
          r.lastGetterCheckNs = now;
          r.getterCostNs = r.deps.validNs;

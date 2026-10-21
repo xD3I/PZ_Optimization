@@ -101,7 +101,7 @@ public final class UiDeps {
 
       boolean noisy(Object a, Object b) {
          for (int i = 0; i < nNoise; i++) {
-            if (noiseA[i] == a && java.util.Objects.equals(noiseB[i], b)) {
+            if (noiseA[i] == a && safeEquals(noiseB[i], b)) { // never Objects.equals: a game list's equals throws (PZArrayList)
                return true;
             }
          }
@@ -125,6 +125,13 @@ public final class UiDeps {
          return nNoise;
       }
       long validNs;
+      // an element that is a top-level element and some panel's child too (a mod adds it to UIManager and to a parent):
+      // UIManager's fresh render and its own UIElement.render both begin its log; the inner begin / end pair is ignored
+      // (counted here) instead of nesting the log in itself, which made validate recurse until the stack overflowed
+      int reentry;
+      boolean validating; // validate is inside this log's check: a log reached again through its subs is a cycle
+      // a validation of this log threw (kept across recordings): its element keeps uiRetained's timer rules from then on
+      boolean validateThrew;
 
       void reset(int id, UIElement owner) {
          this.id = id;
@@ -177,12 +184,20 @@ public final class UiDeps {
       }
 
       public int size() {
+         if (validating) {
+            return 0; // a cycle through the subs (validate's guard flag doubles as the walk's)
+         }
          int s = n;
-      for (int i = 0; i < nt; i++) {
-         s += scount[i];
-      }
-         for (int i = 0; i < ns; i++) {
-            s += subs[i].size();
+         for (int i = 0; i < nt; i++) {
+            s += scount[i];
+         }
+         validating = true;
+         try {
+            for (int i = 0; i < ns; i++) {
+               s += subs[i].size();
+            }
+         } finally {
+            validating = false;
          }
          return s;
       }
@@ -227,7 +242,7 @@ public final class UiDeps {
          Object[] k = skeys[slot];
          int c = scount[slot];
          for (int i = 0; i < c; i++) {
-            if (k[i] == key || key != null && key.equals(k[i])) {
+            if (safeEquals(key, k[i])) {
                return; // the first value read is what the render saw first; later reads of a key it set itself follow from it
             }
          }
@@ -241,6 +256,9 @@ public final class UiDeps {
       }
 
       void addSub(Log l) {
+         if (l == this) {
+            return; // its own render drawn inside itself: its reads are already its own
+         }
          for (int i = 0; i < ns; i++) {
             if (subs[i] == l) {
                return;
@@ -294,7 +312,7 @@ public final class UiDeps {
       Log l = top.mismatchLog;
       if (l != null && top.mismatchNoisy) {
          for (int i = 0; i < l.nNoise; i++) {
-            if (l.noiseA[i] == top.mismatchA && l.noiseB[i] == top.mismatchB) {
+            if (l.noiseA[i] == top.mismatchA && safeEquals(l.noiseB[i], top.mismatchB)) { // the entry noisy() matched
                l.nNoise--;
                l.noiseA[i] = l.noiseA[l.nNoise];
                l.noiseB[i] = l.noiseB[l.nNoise];
@@ -315,12 +333,21 @@ public final class UiDeps {
       } else if (t != thread) {
          return;
       }
+      for (int i = 0; i < depth; i++) {
+         if (stack[i] == log) {
+            log.reentry++; // already recording (a top-level element that is also a child): its reads stay where they go
+            return;
+         }
+      }
       if (depth == stack.length) {
          log.reset(nextId++, owner);
          log.markOpaque("depth");
          return;
       }
       log.reset(nextId++, owner);
+      if (log.validateThrew) {
+         log.markOpaque("validate threw"); // its read set cannot be checked safely: stock rate (timer rules)
+      }
       if (owner instanceof zombie.ui.UITextBox2 tb && !tb.isFocused()) {
          // a text box nobody types into draws its text, cursor and frame: those, compared (a focused one blinks: opaque)
          log.addCall(null, tb, null, textBoxSig(tb), K_TEXTBOX);
@@ -334,6 +361,10 @@ public final class UiDeps {
 
    /** The render that begin started ended (UiRetained.freshEnd); its table write counts are taken now. */
    public static void end(Log log) {
+      if (log.reentry > 0) {
+         log.reentry--; // the end of a begin that found the log already recording
+         return;
+      }
       if (depth == 0 || stack[depth - 1] != log) {
          return; // begin was refused (another thread, too deep) or the stack was reset after an exception
       }
@@ -378,6 +409,7 @@ public final class UiDeps {
       while (depth > 0) {
          Log l = stack[--depth];
          stack[depth] = null;
+         l.reentry = 0;
          l.markOpaque("unfinished");
       }
       on = false;
@@ -609,13 +641,20 @@ public final class UiDeps {
       if (log.validFrame == frame && log.validFull == !skipGetters) {
          return log.validResult;
       }
+      if (log.validating) {
+         return OPAQUE; // reached again through its own subs (a cycle): no verdict, the element renders fresh
+      }
       long t0 = System.nanoTime();
       boolean wasOn = on;
       on = false; // a validation inside a recording render (a child's) reads tables and calls getters: not the render's reads
       int r;
+      log.validating = true;
       try {
          r = check(log, frame);
+      } catch (RuntimeException e) {
+         r = checkThrew(log, e);
       } finally {
+         log.validating = false;
          on = wasOn;
       }
       log.validNs = System.nanoTime() - t0;
@@ -650,7 +689,7 @@ public final class UiDeps {
                continue;
             }
             Object type = t.rawget("Type");
-            log.mismatch = "table:" + (type instanceof String ts ? ts : "?") + "." + (key == ITER ? "pairs" : key == LEN ? "#" : String.valueOf(key));
+            log.mismatch = "table:" + (type instanceof String ts ? ts : "?") + "." + (key == ITER ? "pairs" : key == LEN ? "#" : describe(key));
             log.mismatchLog = log;
             log.mismatchA = t;
             log.mismatchB = key;
@@ -762,6 +801,106 @@ public final class UiDeps {
       return result;
    }
 
+   static int statThrew;
+   private static boolean loggedThrew;
+
+   /**
+    * check threw (a getter's receiver, a table key or a draw helper's object misbehaved): nothing escapes into the frame.
+    * The element renders fresh now (INVALID) and keeps the timer rules from then on (stock rate); logged once a session.
+    */
+   private static int checkThrew(Log log, RuntimeException e) {
+      statThrew++;
+      log.validateThrew = true;
+      log.markOpaque("validate threw");
+      log.mismatch = "threw " + e.getClass().getSimpleName();
+      log.mismatchLog = null;
+      log.mismatchA = null;
+      log.mismatchB = null;
+      log.mismatchNoisy = false;
+      if (!loggedThrew) {
+         loggedThrew = true;
+         StackTraceElement[] st = e.getStackTrace();
+         StringBuilder b = new StringBuilder("uiVerify: a read-set validation threw ").append(e);
+         for (int i = 0; i < Math.min(6, st.length); i++) {
+            b.append(i == 0 ? " at " : " < ").append(st[i]);
+         }
+         b.append(" (the element renders at the stock rate; logged once)");
+         try {
+            pzopt.Log.warn(b.toString());
+         } catch (RuntimeException ignored) {
+            // no logger (a unit test without the game's log): the verdict above still holds
+         }
+      }
+      return INVALID;
+   }
+
+   /**
+    * Equality of two recorded values that cannot throw (a learned-noisy receiver, a table key, a table value written
+    * over): identity, then numbers / text / flags / characters by value, indexed lists element by element (identity or
+    * those values: AbstractList.equals walks iterators, and zombie.util.list.PZArrayList's throw, Workshop report
+    * 2026-10-19), other collections and maps by identity, any other object by its equals with whatever it throws read
+    * as "different". Different only ever means "check it" / "count the write": never a missed change.
+    */
+   public static boolean safeEquals(Object a, Object b) {
+      if (a == b) {
+         return true;
+      }
+      if (a == null || b == null) {
+         return false;
+      }
+      if (a instanceof Number || a instanceof String || a instanceof Boolean || a instanceof Character) {
+         return a.equals(b);
+      }
+      if (a instanceof java.util.Collection<?> || a instanceof java.util.Map<?, ?> || b instanceof java.util.Collection<?>
+         || b instanceof java.util.Map<?, ?>) {
+         return a instanceof java.util.List<?> la && a instanceof java.util.RandomAccess && b instanceof java.util.List<?> lb
+            && b instanceof java.util.RandomAccess && listsEqual(la, lb);
+      }
+      Class<?> c = a.getClass();
+      for (int i = 0; i < nBadEquals; i++) {
+         if (badEquals[i] == c) {
+            return false; // its equals threw before: identity only (no exception a frame)
+         }
+      }
+      try {
+         return a.equals(b);
+      } catch (RuntimeException e) {
+         if (nBadEquals < badEquals.length) {
+            badEquals[nBadEquals++] = c;
+         }
+         return false;
+      }
+   }
+
+   private static final Class<?>[] badEquals = new Class<?>[16];
+   private static int nBadEquals;
+
+   private static boolean listsEqual(java.util.List<?> a, java.util.List<?> b) {
+      try {
+         int n = a.size();
+         if (n != b.size()) {
+            return false;
+         }
+         for (int i = 0; i < n; i++) {
+            Object x = a.get(i);
+            Object y = b.get(i);
+            if (x != y && (x == null || y == null || !(x instanceof Number || x instanceof String || x instanceof Boolean
+               || x instanceof Character) || !x.equals(y))) {
+               return false;
+            }
+         }
+         return true;
+      } catch (RuntimeException e) {
+         return false; // changed while compared (another thread), or a get that throws
+      }
+   }
+
+   /** A table key for the mismatch text: never its toString (a Java object's may walk a list or throw). */
+   private static String describe(Object key) {
+      return key instanceof String || key instanceof Number || key instanceof Boolean ? String.valueOf(key)
+         : key == null ? "nil" : key.getClass().getSimpleName();
+   }
+
    /** A table field: numbers, text and flags by value, tables, functions and objects by identity. */
    static boolean same2(Object a, Object b) {
       return a == b || a != null && b != null && (a instanceof Double || a instanceof String || a instanceof Boolean) && a.equals(b);
@@ -785,6 +924,9 @@ public final class UiDeps {
       StringBuilder b = new StringBuilder();
       b.append("validations=").append(statValidations).append(" validate_us=").append(statValidateNs / 1000L)
          .append(" calls=").append(statCalls).append(" opaque=").append(statOpaque);
+      if (statThrew > 0) {
+         b.append(" threw=").append(statThrew);
+      }
       if (!opaqueWhy.isEmpty()) {
          java.util.List<java.util.Map.Entry<String, int[]>> l = new java.util.ArrayList<>(opaqueWhy.entrySet());
          l.sort((x, y) -> y.getValue()[0] - x.getValue()[0]);
@@ -797,6 +939,7 @@ public final class UiDeps {
       statValidateNs = 0L;
       statCalls = 0;
       statOpaque = 0;
+      statThrew = 0;
       opaqueWhy.clear();
       return b.toString();
    }

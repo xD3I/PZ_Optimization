@@ -150,13 +150,19 @@ if "vmArgs" in j: j["vmArgs"]=fixj(j["vmArgs"])
 for v in j.values():
     if isinstance(v,dict) and "vmArgs" in v: v["vmArgs"]=fixj(v["vmArgs"])
 H="-Dpzopt.heap="
-def fixh(a):
+def ours(v):  # a three-field marker (before 2026-10-19) does not say what GcChoice wrote: only "<N>m" sizes, 512 MB steps from 1 GB
+    return v.endswith("m") and v[:-1].isdigit() and int(v[:-1])>=1024 and int(v[:-1])%512==0
+def fixh(a):  # marker <old -Xmx>,<old -Xms>,<pre-touch>[,<-Xmx written>,<-Xms written>,<gcHeap>]: the old value back only where ours still stands (GcChoice.undoFlag)
     m=[x for x in a if x.startswith(H)]
     if not m: return a
-    old=(m[-1][len(H):].split(",")+["none","none","0"])[:3]
+    fs=m[-1][len(H):].split(",")
+    old=(fs+["none","none","0"])[:3]
+    wrote=fs[3:5] if len(fs)>=5 else [None,None]
     a=[x for x in a if not x.startswith(H)]
-    for f,o in (("-Xmx",old[0]),("-Xms",old[1])):
+    for (f,o),w in zip((("-Xmx",old[0]),("-Xms",old[1])),wrote):
         i=max([k for k,x in enumerate(a) if x.startswith(f)],default=-1)
+        cur=a[i][len(f):] if i>=0 else "none"
+        if w in ("-","p") or not (ours(cur) if w is None else cur==w): continue  # left as it was, or changed by hand since: the player's
         if o=="none": a=[x for k,x in enumerate(a) if k!=i]
         elif i>=0: a[i]=f+o
         else: a.append(f+o)

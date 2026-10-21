@@ -24,10 +24,18 @@ import org.json.JSONObject;
  * gcHeap / gcHeapFixed / gcPreTouch (2026-10-05): the heap the next launch gets. The effective -Xmx (the last one) is
  * replaced by gcHeap: auto (default) = gcHeapAutoMb (4 GB), or gcHeapAutoModsMb (8 GB) when gcHeapAutoMods or more mods
  * are enabled (main menu's mods/default.txt or the last save's mods.txt, the larger); game = the launcher's own (3072 MB
- * on the Steam depots); a number = that many MB. Never more than half the machine's RAM.
+ * on the Steam depots); a number = that many MB. What we write is never more than half the machine's RAM.
  * gcHeapFixed sets -Xms to the same size (the heap never grows or shrinks), gcPreTouch adds -XX:+AlwaysPreTouch (every
- * heap page committed at boot). The marker -Dpzopt.heap=&lt;old -Xmx&gt;,&lt;old -Xms&gt;,&lt;pre-touch added 0|1&gt; ("none" for an
- * absent flag) records what was there, so every undo (this class, scripts/pzopt.sh, install.sh, install.ps1) puts it back.
+ * heap page committed at boot). The marker -Dpzopt.heap=&lt;old -Xmx&gt;,&lt;old -Xms&gt;,&lt;pre-touch added 0|1&gt;,&lt;-Xmx
+ * written&gt;,&lt;-Xms written&gt;,&lt;gcHeap&gt; ("none" for an absent flag; written "-" = left as it was, "p" = the player's)
+ * records what was there and what we put, so every undo (this class, scripts/pzopt.sh, install.sh, install.ps1) puts the
+ * old value back where our value still stands. Since 2026-10-19 (Workshop, three players: "the mod resets my -Xmx12g to
+ * 3g"; until then every launch restored the marker's old -Xmx over whatever the file held before writing gcHeap, and auto
+ * replaced any -Xmx, larger ones too): auto only raises the heap (an -Xmx at or above auto's size stays, even past the
+ * half-RAM cap), and a flag changed by hand after we wrote it is the player's: no launch, undo or uninstaller writes over
+ * it until gcHeap is changed in the menu. Markers of the three-field form are read as before for the old value; what we
+ * wrote is inferred ({@link #legacyOurs}). Older installers' undo reads only the first three fields; a "p" marker's old
+ * values are the player's own, so they put his value back too.
  *
  * gcG1Tuned (2026-10-14, maintainer; the GC pass, docs/override-edits.md "Defaults ... gcSlack and players' G1 settings"):
  * with gcMode=g1 the switch also writes {@link #TUNE_FLAGS} (a 2-4 % young generation, no survivor copies, mixed
@@ -54,6 +62,10 @@ public final class GcChoice {
    private static final String G1 = "-XX:+UseG1GC";
    private static final String PAUSE = "-XX:MaxGCPauseMillis=";
    static final String HEAP_MARKER = "-Dpzopt.heap=";
+   /** Heap marker field 4 / 5: we left this flag as it was. */
+   static final String HEAP_LEFT = "-";
+   /** Heap marker field 4 / 5: the player changed this flag by hand after we wrote it; his while gcHeap stays field 6. */
+   static final String HEAP_PLAYER = "p";
    private static final String XMX = "-Xmx";
    private static final String XMS = "-Xms";
    private static final String PRETOUCH = "-XX:+AlwaysPreTouch";
@@ -125,11 +137,13 @@ public final class GcChoice {
          if (Overrides.enabled() && Config.JIT_STEADY) {
             jitToSteady(j);
          }
-         heapToStock(j);
          int mods = enabledMods();
          int heapMb = heapMb(wantMb(Config.GC_HEAP, mods));
+         String kept = "";
          if (Overrides.enabled()) {
-            heapToPzopt(j, heapMb, Config.GC_HEAP_FIXED, Config.GC_PRE_TOUCH);
+            kept = heapApply(j, Config.GC_HEAP, heapMb, Config.GC_HEAP_FIXED, Config.GC_PRE_TOUCH);
+         } else {
+            heapToStock(j);
          }
          boolean changed = !j.toString().equals(before);
          Log.info("gc: running " + currentGc() + "; gcMode=" + Config.GC_MODE + " gcPauseMs=" + Config.GC_PAUSE_MS + " gcG1Tuned=" + Config.GC_G1_TUNED + " ("
@@ -137,6 +151,7 @@ public final class GcChoice {
                + "; heap now " + (Runtime.getRuntime().maxMemory() >> 20) + " MB max, gcHeap=" + Config.GC_HEAP + " (" + mods + " mods) -> "
                + (heapMb > 0 ? heapMb + " MB" : "the launcher's own")
                + (heapMb > 0 && heapMb != wantMb(Config.GC_HEAP, mods) ? " (clamped to half of " + (physicalMb() >> 10) + " GB RAM)" : "")
+               + kept
                + " gcHeapFixed=" + Config.GC_HEAP_FIXED + " gcPreTouch=" + Config.GC_PRE_TOUCH
                + (changed ? " (launcher JSON updated)" : ""));
          if (changed) {
@@ -449,39 +464,169 @@ public final class GcChoice {
       }
    }
 
-   /** gcHeap / gcHeapFixed / gcPreTouch into every vmArgs array, with the marker recording the flags they replaced. */
+   /** heapApply with an explicit size ({@code heapMb} MB, 0 = gcHeap=game). */
    static void heapToPzopt(JSONObject j, int heapMb, boolean fixed, boolean preTouch) {
-      forEachVmArgs(j, args -> {
-         if (prefixIndex(args, HEAP_MARKER) >= 0) {
-            return;
+      heapApply(j, heapMb > 0 ? String.valueOf(heapMb) : "game", heapMb, fixed, preTouch);
+   }
+
+   /**
+    * gcHeap / gcHeapFixed / gcPreTouch into every vmArgs array (each array is first put back to what it is without us, the
+    * player's hand edits kept, see {@link #heapArray}). {@code setting} is gcHeap, {@code heapMb} its size after the RAM
+    * clamp (0 = the launcher's own). Returns what was left to the player, for the log ("" when nothing).
+    */
+   static String heapApply(JSONObject j, String setting, int heapMb, boolean fixed, boolean preTouch) {
+      String key = setting.toLowerCase(java.util.Locale.ROOT).replaceAll("[^a-z0-9]", "");
+      StringBuilder kept = new StringBuilder();
+      forEachVmArgs(j, args -> heapArray(args, key, heapMb, fixed, preTouch, kept));
+      return kept.toString();
+   }
+
+   /**
+    * One vmArgs array. Undo (setting null): where our marker is, every flag we wrote that still holds what we wrote gets
+    * its old value back; a flag that differs from what we wrote was changed by hand since and stays (2026-10-19, Workshop:
+    * "I set -Xmx12g in the .json, your mod reverts it to 3g": the old undo put the marker's 3072m back over any edit, at
+    * every launch and in every uninstaller). Apply (setting set): after that undo, gcHeap is written, except
+    * <ul>
+    * <li>over a flag the player changed by hand: his from then on, kept as "p" in the marker while gcHeap stays the
+    * setting it was seen under (a new menu choice applies again, the undo leaves it);</li>
+    * <li>with gcHeap=auto over an -Xmx at or above auto's size (or one that does not parse): auto only ever raises the
+    * heap, a player's 12 GB is never lowered, the half-RAM cap included (it limits only what we write).</li>
+    * </ul>
+    */
+   private static void heapArray(JSONArray args, String setting, int heapMb, boolean fixed, boolean preTouch, StringBuilder kept) {
+      boolean redo = setting != null;
+      boolean auto = "auto".equals(setting);
+      boolean ownMx = false;
+      boolean ownMs = false;
+      int m = lastPrefixIndex(args, HEAP_MARKER);
+      if (m >= 0) {
+         String[] f = args.optString(m).substring(HEAP_MARKER.length()).split(",", -1);
+         boolean legacy = f.length < 5; // a marker from before 2026-10-19: <old -Xmx>,<old -Xms>,<pre-touch> only
+         for (int i = args.length() - 1; i >= 0; i--) {
+            if (args.optString(i).startsWith(HEAP_MARKER)) {
+               args.remove(i);
+            }
          }
-         int mx = lastPrefixIndex(args, XMX);
-         int ms = lastPrefixIndex(args, XMS);
-         String oldMx = mx < 0 ? "none" : args.optString(mx).substring(XMX.length());
-         String oldMs = ms < 0 ? "none" : args.optString(ms).substring(XMS.length());
-         String newMx = heapMb > 0 ? heapMb + "m" : mx < 0 ? null : oldMx;
-         String newMs = fixed && newMx != null ? newMx : null;
-         if (newMs == null && newMx != null && ms >= 0 && sizeMb(oldMs) > sizeMb(newMx)) {
+         String wroteFor = field(f, 5, "");
+         ownMx = undoFlag(args, XMX, field(f, 0, "none"), legacy ? null : field(f, 3, HEAP_LEFT), setting, wroteFor, redo && auto ? heapMb : 0);
+         ownMs = undoFlag(args, XMS, field(f, 1, "none"), legacy ? null : field(f, 4, HEAP_LEFT), setting, wroteFor, 0);
+         if (field(f, 2, "0").equals("1")) {
+            int t = indexOf(args, PRETOUCH);
+            if (t >= 0) {
+               args.remove(t);
+            }
+         }
+      }
+      if (!redo) {
+         return;
+      }
+      int mx = lastPrefixIndex(args, XMX);
+      int ms = lastPrefixIndex(args, XMS);
+      String baseMx = mx < 0 ? "none" : args.optString(mx).substring(XMX.length());
+      String baseMs = ms < 0 ? "none" : args.optString(ms).substring(XMS.length());
+      String newMx = null;
+      if (ownMx) {
+         kept.append(", -Xmx").append(baseMx).append(" kept (changed by hand)");
+      } else if (heapMb > 0) {
+         long cur = mx < 0 ? -1 : sizeMb(baseMx);
+         if (auto && mx >= 0 && (cur < 0 || cur >= heapMb)) {
+            if (cur != heapMb) {
+               kept.append(", -Xmx").append(baseMx).append(" kept (auto never lowers a heap)");
+            }
+         } else {
+            newMx = heapMb + "m";
+         }
+      }
+      String newMs = null;
+      boolean mxFromMs = false;
+      if (ownMs) {
+         kept.append(", -Xms").append(baseMs).append(" kept (changed by hand)");
+         String effMx = newMx != null ? newMx : mx >= 0 ? baseMx : null;
+         if (!ownMx && effMx != null && sizeMb(baseMs) > sizeMb(effMx)) {
+            // the player's own -Xms above the -Xmx: the JVM would refuse to start. His minimum wins: the -Xmx rises to it
+            // and is his from then on ("p", the old value his), so no undo puts a smaller -Xmx under his -Xms
+            newMx = baseMs;
+            mxFromMs = true;
+         }
+      } else {
+         String effMx = newMx != null ? newMx : mx >= 0 ? baseMx : null;
+         if (fixed && effMx != null) {
+            newMs = effMx;
+         } else if (newMx != null && ms >= 0 && sizeMb(baseMs) > sizeMb(newMx)) {
             // a player's own -Xms above the new -Xmx: the JVM refuses to start ("Initial heap size set to a larger value
             // than the maximum heap size") before console.txt exists, and every launch after it fails the same way
-            // (Discord, 2026-10-17: -Xms5120m -Xmx5120m with gcHeap=auto's 4096). The marker keeps the old -Xms for the undo.
+            // (Discord, 2026-10-17: -Xms5120m -Xmx5120m with gcHeap=4096). The marker keeps the old -Xms for the undo.
             newMs = newMx;
          }
-         boolean addTouch = preTouch && indexOf(args, PRETOUCH) < 0;
-         if (heapMb <= 0 && newMs == null && !addTouch) {
-            return;
+      }
+      if (newMx != null && newMx.equals(baseMx)) {
+         newMx = null;
+      }
+      if (newMs != null && newMs.equals(baseMs)) {
+         newMs = null;
+      }
+      boolean addTouch = preTouch && indexOf(args, PRETOUCH) < 0;
+      if (newMx == null && newMs == null && !addTouch && !ownMx && !ownMs && !mxFromMs) {
+         return;
+      }
+      if (newMx != null) {
+         set(args, mx, XMX + newMx);
+      }
+      if (newMs != null) {
+         set(args, ms, XMS + newMs);
+      }
+      if (addTouch) {
+         args.put(PRETOUCH);
+      }
+      args.put(HEAP_MARKER + (mxFromMs ? baseMs : baseMx) + "," + baseMs + "," + (addTouch ? 1 : 0) + ","
+            + (mxFromMs || ownMx ? HEAP_PLAYER : newMx != null ? newMx : HEAP_LEFT)
+            + "," + (newMs != null ? newMs : ownMs ? HEAP_PLAYER : HEAP_LEFT) + "," + setting);
+   }
+
+   /**
+    * One flag of a marked array back to its state without us; true when it is the player's own. {@code wrote}: what we wrote
+    * (HEAP_LEFT: we left it, HEAP_PLAYER: the player's, remembered while gcHeap is still {@code wroteFor}; null: a marker
+    * from before 2026-10-19, which does not say: we only ever wrote "&lt;N&gt;m" sizes of 512 MB steps from 1 GB, any other
+    * value is the player's, and with gcHeap=auto ({@code autoMb} &gt; 0) a value above auto's size that is not one of auto's
+    * own sizes is kept as his too: a "12288m" typed by hand is never lowered, at worst a 12 GB menu choice made before
+    * switching back to auto stays once).
+    */
+   private static boolean undoFlag(JSONArray args, String flag, String old, String wrote, String setting, String wroteFor, int autoMb) {
+      int i = lastPrefixIndex(args, flag);
+      String cur = i < 0 ? "none" : args.optString(i).substring(flag.length());
+      if (wrote == null) {
+         long size = sizeMb(cur);
+         boolean autoSize = size == heapMb(Config.GC_HEAP_AUTO_MB) || size == heapMb(Config.GC_HEAP_AUTO_MODS_MB);
+         if (!legacyOurs(cur) || autoMb > 0 && size > autoMb && !autoSize) {
+            return true;
          }
-         if (newMx != null) {
-            set(args, mx, XMX + newMx);
-         }
-         if (newMs != null) {
-            set(args, ms, XMS + newMs);
-         }
-         if (addTouch) {
-            args.put(PRETOUCH);
-         }
-         args.put(HEAP_MARKER + oldMx + "," + oldMs + "," + (addTouch ? 1 : 0));
-      });
+         restore(args, flag, old);
+         return false;
+      }
+      if (wrote.equals(HEAP_LEFT)) {
+         return false;
+      }
+      if (wrote.equals(HEAP_PLAYER)) {
+         return wroteFor.equals(setting);
+      }
+      if (cur.equals(wrote)) {
+         restore(args, flag, old);
+         return false;
+      }
+      return true; // changed by hand after we wrote it
+   }
+
+   /** A legacy marker's flag value we could have written: "&lt;N&gt;m", N a multiple of 512 from 1024 (heapMb's sizes). */
+   static boolean legacyOurs(String v) {
+      if (!v.matches("[0-9]{4,9}m")) {
+         return false;
+      }
+      long n = Long.parseLong(v.substring(0, v.length() - 1));
+      return n >= 1024 && n % 512 == 0;
+   }
+
+   private static String field(String[] f, int i, String def) {
+      return i < f.length && !f[i].isEmpty() ? f[i] : def;
    }
 
    /** A -Xmx / -Xms size ("5120m", "6g", "4194304k", bytes) in MB; -1 when it does not parse. */
@@ -522,28 +667,12 @@ public final class GcChoice {
       return bad[0];
    }
 
-   /** Undo heapToPzopt where its marker is: the old -Xmx / -Xms back (or gone), our pre-touch flag removed. */
+   /**
+    * Undo heapApply where its marker is: our pre-touch flag removed, the old -Xmx / -Xms back (or gone) where the flag still
+    * holds what we wrote; a flag changed by hand since stays as the player left it.
+    */
    static void heapToStock(JSONObject j) {
-      forEachVmArgs(j, args -> {
-         int m = lastPrefixIndex(args, HEAP_MARKER);
-         if (m < 0) {
-            return;
-         }
-         String[] old = args.optString(m).substring(HEAP_MARKER.length()).split(",");
-         for (int i = args.length() - 1; i >= 0; i--) {
-            if (args.optString(i).startsWith(HEAP_MARKER)) {
-               args.remove(i);
-            }
-         }
-         restore(args, XMX, old.length > 0 ? old[0] : "none");
-         restore(args, XMS, old.length > 1 ? old[1] : "none");
-         if (old.length > 2 && old[2].equals("1")) {
-            int t = indexOf(args, PRETOUCH);
-            if (t >= 0) {
-               args.remove(t);
-            }
-         }
-      });
+      forEachVmArgs(j, args -> heapArray(args, null, 0, false, false, null));
    }
 
    private static void set(JSONArray a, int i, String v) {

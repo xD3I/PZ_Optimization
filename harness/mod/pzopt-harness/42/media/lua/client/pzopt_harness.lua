@@ -215,6 +215,137 @@ end
 -- Screenshots/pzopt-compat-chosen.png (it saves the choice: pass --vmarg -Dpzopt.userOptionsFile=<scratch file>).
 local compatCheck = nil
 
+-- spawn_select=<text> (2026-10-19, Workshop "Nellis Air Base: the game freezes when I select the spawn location"): stays on
+-- the main menu and starts a new Apocalypse game the way the menu does (SOLO -> NewGameScreen:clickPlay, WorldSelect first
+-- when it has choices: the world whose title or map folders contain the text, else the first, then its Next), so
+-- MapSpawnSelect opens as for a player; 3 s later selects the first spawn region whose title contains the text (lower case,
+-- _ for a space), spawn_wait s (8) later writes Screenshots/pzopt-spawn-2.png and with spawn_next=1 presses Next, 4 s later
+-- quits; spawn_mode=sandbox starts a Sandbox game instead; spawn_input=1 leaves the region click to the run (writes
+-- Lua/pzopt-spawn-click.txt "<item x> <item y> <map x> <map y>" for xdotool, see the run's wrapper); spawn_next=play goes on through the profession and character screens and presses Play (a new world named
+-- pzopt-spawn-<epoch ms> in Saves/Apocalypse: delete it after the run). "[pzopt-harness] spawn: tick" every 500 ms with the map panel's data state: a freeze shows as the ticks stopping.
+local spawnCheck = nil
+local function spawnLog(s) print("[pzopt-harness] spawn: " .. s) end
+local function spawnTick()
+    local c = spawnCheck
+    local ms = MainScreen.instance
+    if not ms or (ms.delay and ms.delay > 0) or not ms.soloScreen then return end
+    local now = getTimestampMs()
+    local mss = MapSpawnSelect and MapSpawnSelect.instance
+    if not c.beat or now - c.beat >= 500 then
+        c.beat = now
+        local st = ""
+        if mss and mss.mapPanel and mss.mapPanel.mapAPI then
+            local okd, cnt = pcall(function() return mss.mapPanel.mapAPI:getDataCount() end)
+            local okl, ld = pcall(function() return mss.mapPanel.mapAPI:isDataLoaded() end)
+            st = " visible=" .. tostring(mss:isVisible()) .. " data=" .. tostring(okd and cnt or "?") .. " loaded="
+                .. tostring(okl and ld or "?") .. " reset=" .. tostring(mss.mapPanel.hasResetView)
+        end
+        spawnLog("tick step=" .. c.step .. " t=" .. now .. st)
+    end
+    if now < c.at then return end
+    if c.step == 0 then
+        ActiveMods.getById("currentGame"):copyFrom(ActiveMods.getById("default"))
+        ms.soloScreen:setVisible(true)
+        spawnLog("solo screen shown")
+        c.step, c.at = 1, now + 1500
+        if c.enable and not c.resumed then
+            -- spawn_enable=<id;id;...>: the new game screen's CHOOSE MODS path: the mods (in Zomboid/mods, not in
+            -- default.txt) switched on for this game only, then the Lua reset the mod screen does ("NewGameMods");
+            -- the rig resumes after the reset (spawn_reset_done=1 in the flag file) on the new game screen
+            local cur = ActiveMods.getById("currentGame")
+            for id in string.gmatch(c.enable, "[^;]+") do cur:setModActive(id, true) end
+            appendFlag("spawn_reset_done=1")
+            spawnLog("mods " .. c.enable .. " enabled for the new game; ResetLua(currentGame, NewGameMods)")
+            spawnCheck = false
+            getCore():ResetLua("currentGame", "NewGameMods")
+            return
+        end
+    elseif c.step == 1 then
+        local ss = ms.soloScreen
+        local pick = nil
+        for _, p in ipairs(ss.panels or {}) do
+            if p.data and p.data.mode == (c.sandbox and GameMode.SANDBOX or GameMode.APOCALYPSE):toString() then pick = p end
+        end
+        if not pick then spawnLog("no game mode panel; done"); spawnCheck = false; getCore():quit(); return end
+        ss.selectedItem = pick
+        local t0 = getTimestampMs()
+        ss:clickPlay()
+        spawnLog("clickPlay " .. (getTimestampMs() - t0) .. " ms; WorldSelect visible=" .. tostring(WorldSelect.instance
+            and WorldSelect.instance:isVisible()) .. " MapSpawnSelect visible=" .. tostring(mss and mss:isVisible()))
+        c.step, c.at = 2, now + 2000
+    elseif c.step == 2 then
+        local ws = WorldSelect.instance
+        if ws and ws:isVisible() then
+            local sel = 1
+            for i, it in ipairs(ws.listbox.items) do
+                local dirs = {}
+                local md = it.item.mapDirs
+                for j = 0, (md and md:size() or 0) - 1 do table.insert(dirs, tostring(md:get(j))) end
+                local d = table.concat(dirs, ";")
+                spawnLog("world " .. i .. " '" .. tostring(it.item.name) .. "' dirs=" .. d)
+                if string.find(string.lower(tostring(it.item.name) .. " " .. d), c.pattern, 1, true) then sel = i end
+            end
+            ws.listbox.selected = sel
+            ws:onSelectWorld()
+            local t0 = getTimestampMs()
+            ws:clickNext()
+            spawnLog("world " .. sel .. " chosen, Next " .. (getTimestampMs() - t0) .. " ms")
+        end
+        c.step, c.at = 3, now + 3000
+    elseif c.step == 3 then
+        if not (mss and mss:isVisible()) then spawnLog("MapSpawnSelect not visible; done"); spawnCheck = false; getCore():quit(); return end
+        local sel = nil
+        for i, it in ipairs(mss.listbox.items) do
+            spawnLog("region " .. i .. " '" .. tostring(it.item.name) .. "' dir=" .. tostring(it.item.dir))
+            if not sel and string.find(string.lower(tostring(it.item.name)), c.pattern, 1, true) then sel = i end
+        end
+        getCore():TakeFullScreenshot("pzopt-spawn-1.png")
+        if mss.textEntry then mss.textEntry:setText("pzopt-spawn-" .. tostring(now)) end
+        if not sel then spawnLog("no region matches '" .. c.pattern .. "'"); sel = mss.listbox.selected end
+        if c.input then
+            -- spawn_input=1: the run's xdotool clicks the region (real mouse input), then drags and wheels the map
+            local lb = mss.listbox
+            local x = lb:getAbsoluteX() + 40
+            local y = lb:getAbsoluteY() + (sel - 1) * lb.itemheight + lb.itemheight / 2 + (lb:getYScroll() or 0)
+            local mp = mss.mapPanel
+            local w = getFileWriter("pzopt-spawn-click.txt", true, false)
+            if w then
+                w:write(string.format("%d %d %d %d\n", math.floor(x), math.floor(y), math.floor(mp:getAbsoluteX() + mp:getWidth() / 2),
+                    math.floor(mp:getAbsoluteY() + mp:getHeight() / 2)))
+                w:close()
+            end
+            spawnLog("click file written: item " .. math.floor(x) .. "," .. math.floor(y))
+        else
+            mss.listbox.selected = sel
+        end
+        spawnLog("region " .. sel .. " selected")
+        c.step, c.at = 4, now + c.wait * 1000
+    elseif c.step == 4 then
+        getCore():TakeFullScreenshot("pzopt-spawn-2.png")
+        if c.next then
+            local t0 = getTimestampMs()
+            mss:clickNext()
+            spawnLog("Next " .. (getTimestampMs() - t0) .. " ms; profession screen visible="
+                .. tostring(ms.charCreationProfession and ms.charCreationProfession:isVisible()))
+        end
+        c.step, c.at = 5, now + 4000
+    elseif c.step == 5 and c.play then
+        getCore():TakeFullScreenshot("pzopt-spawn-3.png")
+        ms.charCreationProfession:onOptionMouseDown({ internal = "NEXT" })
+        spawnLog("profession Next; character screen visible=" .. tostring(ms.charCreationMain:isVisible()))
+        c.step, c.at = 6, now + 3000
+    elseif c.step == 6 then
+        spawnLog("play: world " .. tostring(getWorld():getWorld()) .. " map " .. tostring(getWorld():getMap()))
+        spawnCheck = false
+        ms.charCreationMain:onOptionMouseDown({ internal = "NEXT" })
+    else
+        getCore():TakeFullScreenshot("pzopt-spawn-3.png")
+        spawnLog("done")
+        spawnCheck = false
+        getCore():quit()
+    end
+end
+
 local function compatTick()
     local c = compatCheck
     local ms = MainScreen.instance
@@ -474,7 +605,7 @@ local function onMainMenuEnter()
         getCore():quit()
         return
     end
-    if flags.consumed and not flags.pad then return end -- Continue already triggered by this process (Lua was reset)
+    if flags.consumed and not flags.pad and not (flags.spawn_reset_done and not flags.spawn_resumed) then return end -- Continue already triggered by this process (Lua was reset)
     if flags.pad and pad == false then return end -- pad script done, quitting
     if flags.compat_check and flags.compat_check ~= "" then
         if compatCheck == nil then
@@ -485,6 +616,19 @@ local function onMainMenuEnter()
     end
     if flags.mods_shot and flags.mods_shot ~= "" then   -- pzopt_harness_mods.lua drives the Mods screen and quits
         appendFlag("consumed=1")
+        return
+    end
+    if flags.spawn_select and flags.spawn_select ~= "" then
+        if spawnCheck == nil then
+            appendFlag("consumed=1")
+            local resumed = flags.spawn_reset_done ~= nil
+            if resumed then appendFlag("spawn_resumed=1"); print("[pzopt-harness] spawn: resumed after the Lua reset") end
+            spawnCheck = { pattern = string.lower((string.gsub(flags.spawn_select, "_", " "))), step = 0, at = 0,
+                wait = tonumber(flags.spawn_wait or "") or 8, next = flags.spawn_next == "1" or flags.spawn_next == "play",
+                play = flags.spawn_next == "play", sandbox = flags.spawn_mode == "sandbox", input = flags.spawn_input == "1",
+                enable = (flags.spawn_enable and flags.spawn_enable ~= "") and flags.spawn_enable or nil, resumed = resumed }
+            if resumed then spawnCheck.step, spawnCheck.at = 1, getTimestampMs() + 3000 end
+        end
         return
     end
     local anyOptions = false
@@ -595,6 +739,11 @@ end
 -- OnFETick is the only per-frame event the main menu fires (OnTickEvenPaused is in-world only,
 -- which is why earlier versions of this file never pressed Continue by themselves)
 local function onFETick()
+    if spawnCheck then
+        local ok, err = pcall(spawnTick)
+        if not ok then print("[pzopt-harness] spawn: rig error " .. tostring(err)); spawnCheck = false; getCore():quit() end
+        return
+    end
     if compatCheck then
         local ok, err = pcall(compatTick)
         if not ok then print("[pzopt-harness] compat check: rig error " .. tostring(err)); compatCheck = false; getCore():quit() end
@@ -683,6 +832,68 @@ local function lureTick()
         print(string.format("[pzopt-harness] lure: dist=%.1f lured=%d action=%s", lure.animal:DistTo(player),
             player:getLuredAnimals():size(),
             tostring(ISTimedActionQueue.getTimedActionQueue(player).queue[1] and ISTimedActionQueue.getTimedActionQueue(player).queue[1].Type)))
+    end
+end
+
+-- squarehud=R (2026-10-19, Workshop report "a zombie broke a window / furniture placed: ~3 fps, 3k errors a minute"):
+-- squarehud_at (3) s after the player exists, a small top-level Lua panel whose render reads getObjects():size() of
+-- every square within R tiles of the player's square then (the squares stay fixed) and draws one line that does not
+-- show the count (a mod HUD reading the squares around the player). uiVerify then logs one List.size call per square,
+-- a PZArrayList receiver each; a change of one square's objects that draws the same is learned as noise, and the old
+-- Log.noisy compared the other squares' lists with Objects.equals (PZArrayList.listIterator throws, every frame).
+-- furniture=S: every S s (from squarehud_at + 2) a chair is put on the square south-east of that centre square
+-- (IsoGridSquare.AddTileObject), the next time taken away again (RemoveTileObject); one log line each.
+local squareHud = nil
+local function squareHudTick()
+    if squareHud == false then return end
+    local player = getPlayer()
+    if not player then return end
+    if squareHud == nil then
+        local flags = readFlags()
+        if not flags or not flags.squarehud or flags.squarehud == "" then squareHud = false; return end
+        squareHud = { r = tonumber(flags.squarehud) or 4, atMs = getTimestampMs() + (tonumber(flags.squarehud_at) or 3) * 1000,
+                      every = tonumber(flags.furniture) or 0 }
+    end
+    local now = getTimestampMs()
+    if now < squareHud.atMs then return end
+    if not squareHud.panel then
+        local sq = player:getCurrentSquare()
+        if not sq then return end
+        PzoptSquareHud = PzoptSquareHud or ISUIElement:derive("PzoptSquareHud")
+        function PzoptSquareHud:render()
+            local n = 0
+            local cell = getCell()
+            for x = self.cx - self.r, self.cx + self.r do
+                for y = self.cy - self.r, self.cy + self.r do
+                    local s = cell:getGridSquare(x, y, self.cz)
+                    if s then n = n + s:getObjects():size() end
+                end
+            end
+            self:drawText(n > 0 and "pzopt square hud: objects around" or "pzopt square hud: nothing around", 2, 2, 1, 1, 1, 1, UIFont.Small)
+        end
+        local p = PzoptSquareHud:new(40, 200, 260, 24)
+        p.cx, p.cy, p.cz, p.r = sq:getX(), sq:getY(), sq:getZ(), squareHud.r
+        p:initialise()
+        p:addToUIManager()
+        squareHud.panel = p
+        squareHud.nextMs = now + 2000
+        print(string.format("[pzopt-harness] squarehud: panel up, %d squares around %d,%d,%d", (2 * p.r + 1) ^ 2, p.cx, p.cy, p.cz))
+        return
+    end
+    if squareHud.every > 0 and now >= squareHud.nextMs then
+        squareHud.nextMs = now + squareHud.every * 1000
+        local p = squareHud.panel
+        local s = getCell():getGridSquare(p.cx + 1, p.cy + 1, p.cz)
+        if not s then return end
+        if squareHud.chair then
+            s:RemoveTileObject(squareHud.chair)
+            squareHud.chair = nil
+            print(string.format("[pzopt-harness] furniture: chair removed at %d,%d (%d objects)", s:getX(), s:getY(), s:getObjects():size()))
+        else
+            squareHud.chair = IsoObject.new(s, "furniture_seating_indoor_01_0", "Chair")
+            s:AddTileObject(squareHud.chair)
+            print(string.format("[pzopt-harness] furniture: chair placed at %d,%d (%d objects)", s:getX(), s:getY(), s:getObjects():size()))
+        end
     end
 end
 
@@ -874,6 +1085,43 @@ end
 -- rig and puts the player's choice back when the menu closes. The frame cap's own console line ("frame cap: menu
 -- phase 5.0 s, 300 frames, 60.0 fps (cap 60 fps)") is the measurement: the pause menu runs at the menu cap.
 local pauseMenu = nil
+-- pause_menu_modrow=true (2026-10-19, Workshop "the PZO entries in the ESC menu overlap other mods' options"): before the
+-- menu opens, a row added the way pause-menu mods add theirs (an ISLabel right under Options, Exit and Quit moved down by
+-- its height, nothing else); 1.5 s after opening every visible row of the column is logged ("[pzopt-harness] pause menu
+-- row: <name> y=<y> h=<h>") with the overlaps ("[pzopt-harness] pause menu rows: N visible, M overlapping") and
+-- Screenshots/pzopt-pausemenu.png is written.
+function PzoptHarnessPauseModRow()
+    local ms = MainScreen.instance
+    if not ms or not ms.optionsOption or not ms.bottomPanel then print("[pzopt-harness] pause menu: no menu for the mod row") return end
+    local h = ms.optionsOption:getHeight()
+    local row = ISLabel:new(ms.optionsOption:getX(), ms.optionsOption:getBottom(), h, "FAKE MOD OPTIONS", 1, 0.8, 0.3, 1, UIFont.Large, true)
+    row.internal = "FAKE_MOD_ROW"
+    row:initialise()
+    ms.bottomPanel:addChild(row)
+    if ms.exitOption then ms.exitOption:setY(ms.exitOption:getY() + h) end
+    if ms.quitToDesktopOption then ms.quitToDesktopOption:setY(ms.quitToDesktopOption:getY() + h) end
+    ms.bottomPanel:setHeight(ms.bottomPanel:getHeight() + h)
+    print("[pzopt-harness] pause menu: fake mod row added at y=" .. row:getY())
+end
+function PzoptHarnessPauseRows()
+    local ms = MainScreen.instance
+    if not ms or not ms.bottomPanel then return end
+    local rows = {}
+    for _, c in pairs(ms.bottomPanel:getChildren()) do
+        if c.Type == "ISLabel" and c:isVisible() then table.insert(rows, c) end
+    end
+    table.sort(rows, function(a, b) return a:getY() < b:getY() end)
+    local overlaps = 0
+    for i, c in ipairs(rows) do
+        print("[pzopt-harness] pause menu row: " .. tostring(c.internal or c.name) .. " y=" .. c:getY() .. " h=" .. c:getHeight())
+        for j = i + 1, #rows do
+            local d = rows[j]
+            if d:getY() < c:getY() + c:getHeight() - 1 and c:getY() < d:getY() + d:getHeight() - 1 then overlaps = overlaps + 1 end
+        end
+    end
+    print("[pzopt-harness] pause menu rows: " .. #rows .. " visible, " .. overlaps .. " overlapping, panel h=" .. ms.bottomPanel:getHeight())
+    getCore():TakeFullScreenshot("pzopt-pausemenu.png")
+end
 local function escapeKey()
     local k = getCore():getKey("Main Menu")
     return k ~= 0 and k or Keyboard.KEY_ESCAPE
@@ -885,7 +1133,8 @@ local function pauseMenuTick()
         local flags = readFlags()
         if not flags or not flags.pause_menu or flags.pause_menu == "" then pauseMenu = false; return end
         pauseMenu = { openMs = getTimestampMs() + (tonumber(flags.pause_menu) or 10) * 1000,
-            secs = tonumber(flags.pause_menu_secs) or 5, cap = tonumber(flags.pause_menu_cap) }
+            secs = tonumber(flags.pause_menu_secs) or 5, cap = tonumber(flags.pause_menu_cap),
+            modRow = flags.pause_menu_modrow == "true" }
     end
     local now = getTimestampMs()
     if not pauseMenu.closeMs and now >= pauseMenu.openMs then
@@ -897,10 +1146,15 @@ local function pauseMenuTick()
                 if fps == pauseMenu.cap then perf:setMenuFramerateIndex(i + 2) end
             end
         end
+        if pauseMenu.modRow then PzoptHarnessPauseModRow() end
         ToggleEscapeMenu(escapeKey())
         pauseMenu.closeMs = now + pauseMenu.secs * 1000
+        pauseMenu.rowsMs = now + 1500
         print("[pzopt-harness] pause menu: open=" .. tostring(MainScreen.instance and MainScreen.instance:isVisible())
             .. " menu cap index=" .. tostring(perf:getMenuFramerateIndex()))
+    elseif pauseMenu.rowsMs and now >= pauseMenu.rowsMs then
+        pauseMenu.rowsMs = nil
+        PzoptHarnessPauseRows()
     elseif pauseMenu.closeMs and not pauseMenu.closed and now >= pauseMenu.closeMs then
         if MainScreen.instance and MainScreen.instance:isVisible() then
             ToggleEscapeMenu(escapeKey())
@@ -1434,7 +1688,80 @@ Events.OnFETick.Add(function()
     if not ok then print("[pzopt-harness] options screen: rig error " .. tostring(err)); optionsScreen = false end
 end)
 
+-- ui_cycle=S (2026-10-19, Workshop "Stack overflow in pzopt.UiDeps.validate"): S seconds into the world, two panels of the
+-- same size swap parent and child every ui_cycle_swap_ms (1000) ms, the child at the parent's corner, so it stays where it
+-- was on screen (a mod wrapping a window in a container, a docking window). Their renders are above the retained UI's
+-- cheap limits and read their own table, so each is replayed and validated: the child replayed inside the new parent
+-- while its own read set still holds the old child (a cycle of read sets). Drawn for ui_cycle_secs (20);
+-- "[pzopt-harness] ui_cycle: alive <n> frames" every 5 s, "ui_cycle: done" at the end. (A top-level element with a parent
+-- is no case: UIManager.update removes it with an IllegalStateException.)
+PzoptHarnessUiCycle = nil
+function PzoptHarnessUiCycleTick()
+    local u = PzoptHarnessUiCycle
+    if u == false then return end
+    if not getPlayer() then return end
+    if u == nil then
+        local flags = readFlags()
+        if not flags or not flags.ui_cycle or flags.ui_cycle == "" then PzoptHarnessUiCycle = false return end
+        PzoptHarnessUiCycle = { at = getTimestampMs() + (tonumber(flags.ui_cycle) or 5) * 1000,
+            secs = tonumber(flags.ui_cycle_secs) or 20, swapMs = tonumber(flags.ui_cycle_swap_ms) or 1000, frames = 0 }
+        return
+    end
+    local now = getTimestampMs()
+    if not u.built then
+        if now < u.at then return end
+        -- a render above the retained UI's cheap limit (uiRetainedCheapUs), reading its own table: replayed and validated
+        local function heavy(self)
+            ISPanel.render(self)
+            local c = self.rigColor
+            for i = 0, 399 do
+                self:drawRect(4 + (i % 20) * 6, 4 + math.floor(i / 20) * 4, 4, 2, c.a, c.r, c.g, c.b)
+            end
+        end
+        local a = ISPanel:new(700, 200, 300, 200)
+        a:initialise()
+        a:addToUIManager()
+        local b = ISPanel:new(0, 0, 300, 200)
+        b:initialise()
+        a:addChild(b)
+        for _, p in ipairs({ a, b }) do
+            p.rigColor = { r = 0.9, g = 0.9, b = 0.2, a = 0.6 }
+            p.render = heavy
+        end
+        u.a, u.b = a, b
+        u.built, u.until_, u.next, u.swap = now, now + u.secs * 1000, now + 5000, now + u.swapMs
+        print("[pzopt-harness] ui_cycle: built (two same-size panels swapping parent and child every " .. u.swapMs .. " ms)")
+        return
+    end
+    u.frames = u.frames + 1
+    if now >= u.swap then
+        u.swap = now + u.swapMs
+        local top, child = u.a, u.b
+        if child:getParent() == nil then top, child = u.b, u.a end
+        local x, y = top:getX(), top:getY()
+        top:removeChild(child)
+        top:removeFromUIManager()
+        child:setX(x) child:setY(y)
+        child:addToUIManager()
+        top:setX(0) top:setY(0)
+        child:addChild(top)
+        u.swaps = (u.swaps or 0) + 1
+    end
+    if now >= u.next then
+        u.next = now + 5000
+        print("[pzopt-harness] ui_cycle: alive " .. u.frames .. " frames, " .. tostring(u.swaps or 0) .. " swaps")
+    end
+    if now >= u.until_ then
+        local top = u.a:getParent() == nil and u.a or u.b
+        top:removeFromUIManager()
+        print("[pzopt-harness] ui_cycle: done, " .. u.frames .. " frames")
+        PzoptHarnessUiCycle = false
+    end
+end
+
 local function onTickEvenPaused()
+    local okc, errc = pcall(PzoptHarnessUiCycleTick)
+    if not okc then print("[pzopt-harness] ui_cycle: rig error " .. tostring(errc)); PzoptHarnessUiCycle = false end
     local okf, errf = pcall(finalTick)
     if not okf then print("[pzopt-harness] final: FAIL rig error " .. tostring(errf)); final = false end
     local okm, errm = pcall(mastersTick)
@@ -1451,6 +1778,8 @@ local function onTickEvenPaused()
     if not ok3 then print("[pzopt-harness] pause menu: rig error " .. tostring(err3)); pauseMenu = false end
     local okg, errg = pcall(glassTick)
     if not okg then print("[pzopt-harness] glass: rig error " .. tostring(errg)); glass = false end
+    local okq, errq = pcall(squareHudTick)
+    if not okq then print("[pzopt-harness] squarehud: rig error " .. tostring(errq)); squareHud = false end
     local ok, err = pcall(lureTick)
     if not ok then print("[pzopt-harness] lure: rig error " .. tostring(err)); lure = false end
     local ok2, err2 = pcall(optionsCheckTick)

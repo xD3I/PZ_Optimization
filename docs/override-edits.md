@@ -8473,3 +8473,63 @@ decision) from the level's last preparation, whatever had changed since.
   also refreshes the shared occupancy when voxel lighting wants it (`pzopt.VoxelLight.wantsOccupancy()`), as it already did
   for god rays and entity shadows. Voxel lighting traces its lamp, room and sky light through that occupancy
   (`docs/findings-voxel-lighting-2026-10-18.md`). No other override changes.
+
+### Java heap: the player's own -Xmx wins (Workshop, 2026-10-19): `pzopt.GcChoice`, no override
+
+Three players on the Workshop page: "I set my XMX to 12g, your mod reverts it back to 3072m", "it kept resetting my memory
+allocation back to the default", "it wasn't using the available system memory". Root cause (since 981b0602, 2026-10-05):
+`GcChoice.apply` ran `heapToStock` first on every launch, which put the marker's old `-Xmx` (the Steam depot's `3072m`)
+back over whatever the file held, then `heapToPzopt` replaced any `-Xmx` with gcHeap's size (auto: 4096 / 8192), larger
+ones too, and recorded the 3072 again as "old". A hand edit therefore lasted one launch; the uninstallers (`GcChoice.undo`
+from the in-game uninstall and the boot repair, `reset_gc` in `scripts/pzopt.sh` / `install.sh` — every re-install runs it —
+and `Reset-Gc` in `install.ps1`) and every launch with the overrides off (`enabled=false`, a build mismatch after a game
+update) or with `gcHeap=game` left exactly that 3072m.
+
+- Marker `-Dpzopt.heap=<old -Xmx>,<old -Xms>,<pre-touch 0|1>,<-Xmx written>,<-Xms written>,<gcHeap>` (written `-` = left
+  as it was, `p` = the player's). Every undo puts the old value back only where the flag still holds what we wrote; a
+  flag that differs was changed by hand and stays (GcChoice `undoFlag`, Python `fixh`, PowerShell `$fixHeap`).
+- A hand edit is the player's from then on: the launch records it as `p` with the gcHeap of that launch and leaves it
+  alone (undo too) until gcHeap is changed in the menu; a new menu choice applies over it and its undo gives his value back.
+- `gcHeap=auto` only raises: an `-Xmx` at or above auto's size (or one that does not parse) stays, past the half-RAM cap
+  too (the cap limits only what we write). A player's 12g before the install gets no marker at all.
+- `-Xms`: `gcHeapFixed` follows the kept `-Xmx`; a hand-edited `-Xms` above our `-Xmx` raises the `-Xmx` to it (recorded as
+  his, so no undo leaves `-Xms` > `-Xmx`); the 2026-10-17 rule (a launcher `-Xms` above an explicit size is lowered with it)
+  stays for explicit sizes.
+- Three-field markers (installs 2026-10-05..10-18) do not say what was written: a value of our form (`<N>m`, 512 MB steps
+  from 1 GB) counts as ours, anything else (`12g`) as the player's; on a launch with auto a value of our form above auto's
+  size that is not one of auto's own sizes is kept too (a typed `12288m`). Older installers read only the first three
+  fields; a `p` field's old value is the player's own, so they put his value back as well.
+- `gcHeap=<MB>` and `gcHeap=game` work as before (a number replaces the launcher's `-Xmx`, game leaves it); `run.sh`
+  writes the harness JSON itself and is unchanged.
+- Tests: `GcChoiceTest.heapPlayerChoice` (stock 3072 -> 4096 / 8192 and back, a player's 12g kept under auto and past the
+  cap, hand edit after our write kept on the next launches and by the undo, a later menu choice and its undo, legacy
+  markers, `-Xms` cases, explicit number and game); the Python undo was run on the same markers by hand; `install.ps1` not
+  run (no pwsh here).
+
+### uiVerify: recorded values compared without equals that can throw (Workshop, 2026-10-19): `pzopt.UiDeps`, KahluaTableImpl
+
+Report: "a zombie broke a window near me / placing or destroying furniture: FPS collapses, 3k+ errors in 60 seconds",
+`UnsupportedOperationException at PZArrayList.listIterator` from `AbstractList.equals` < `Objects.equals` <
+`UiDeps$Log.noisy` < `UiDeps.check` < `UiRetained.decideFrame`, every frame. A render that reads several squares'
+`getObjects()` (a `zombie.util.list.PZArrayList`, whose iterators throw) logs one `size()` / `get()` call per square; a
+square's change that draws the same is learned as noise `(method, receiver list)`, and from then on `Log.noisy` compared
+every other square's list with `Objects.equals`, i.e. `AbstractList.equals`, which walks `listIterator()`. Repro: harness
+flags `squarehud=4 furniture=3 glass=windowW` (runs `uideps-before-rel` on the d1bbdcf release: 6341 exceptions, one a frame
+from 2 frames after the first chair, vs `uideps-after-fix`).
+
+- `UiDeps.safeEquals(a, b)` replaces every equals on a recorded value: identity, then numbers / text / flags / characters
+  by value, `RandomAccess` lists element by element by index (identity or those values), other collections and maps by
+  identity, any other object by its `equals` with a throw read as "different" (and that class then compared by identity).
+  Used by `Log.noisy` (learned-noisy receivers and table keys), `Log.addKey` (dedup of a table's read keys, on the
+  recording path inside `rawget`), `unlearnNoise` (it matched with `==`, now the same test `noisy` used). "Different"
+  only means "check it" / "count the write", never a missed change.
+- `KahluaTableImpl.rawset`: the `pzoptWrites` value-change test (ours, every Lua write) was `pzoptPrev.equals(value)`; a
+  field holding one game list overwritten with another threw inside Lua. Now `UiDeps.safeEquals`.
+- The table-mismatch text (`log.mismatch`) no longer calls a key's `toString` (a Java key's may walk a list).
+- Guard: a `RuntimeException` inside `UiDeps.check` makes that frame's verdict INVALID (the element renders fresh), marks
+  the log opaque and sticky (`Log.validateThrew`: its later recordings are opaque, so the element keeps uiRetained's timer
+  rules, the stock rate), logs one warning a session and counts `threw=` in the per-second `ui` stats line;
+  `UiRetained.depsChanged` also catches anything `validate` lets through (fresh render, logged once) and always resets
+  `skipGetters`.
+- Tests: `UiDepsTest` (`noisyListReceivers` with a list whose iterators throw and with the real `PZArrayList`; an equal
+  list as the learned receiver; a table key whose `hashCode` throws once the table changed: INVALID, then opaque).
