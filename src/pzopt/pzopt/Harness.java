@@ -77,6 +77,7 @@ import zombie.vehicles.BaseVehicle;
  *                      door_cover=any also takes doors under a porch roof, door_at=x,y,z,N|W pins one
  *   upstairs Z         dev: at route start move the player to the nearest loaded indoor square at level Z (issue #12)
  *   upstairs_at S      dev: with upstairs, make that move S seconds into the route instead (a Stats mark "upstairs")
+ *   game_speed N      dev: the game's speed control N (2 = x5, 3 = x20, 4 = x40) from game_speed_at S seconds into the route (fast forward)
  *   pause_at S         dev: pause the game (speed 0, as the player's pause) S seconds into the route; the route stops too
  *   close_curtains true dev: at route start close every open curtain in that range through IsoCurtain.ToggleDoor
  *                      (map curtains always load open; the bench save is a copy, nothing persists)
@@ -207,6 +208,11 @@ public final class Harness {
    private static float x, y;
    private static int routeZ; // the level the bench route walks on (upstairs=Z moves it)
    private static float upstairsAt; // upstairs_at: seconds into the route of the level change (0 = at route start)
+   private static int gameSpeed; // game_speed: the game's speed control (1 normal, 2 = x5, 3 = x20, 4 = x40) from game_speed_at s into the route, re-applied when the game resets it
+   private static float gameSpeedAt;
+   private static boolean gameSpeedOn;
+   private static int gameSpeedResets;
+   private static long gameSpeedLogNs;
    private static float pauseAt; // pause_at: seconds into the route at which the game is paused (UIManager speed 0), 0 = never
    private static float startX, startY;
    private static int chunksAtStart;
@@ -745,6 +751,8 @@ public final class Harness {
                }
                int upstairs = Integer.parseInt(HarnessFlags.get("upstairs", "0").trim());
                upstairsAt = Float.parseFloat(HarnessFlags.get("upstairs_at", "0").trim());
+               gameSpeed = Integer.parseInt(HarnessFlags.get("game_speed", "0").trim()); // game_speed=N: fast-forward rig (repro time-light-shadows)
+               gameSpeedAt = Float.parseFloat(HarnessFlags.get("game_speed_at", "0").trim());
                pauseAt = Float.parseFloat(HarnessFlags.get("pause_at", "0").trim()); // pause_at=S: the game's own pause (speed 0) S seconds into the route
                if (upstairs > 0 && upstairsAt <= 0f) {
                   goUpstairs(p, upstairs); // dev: upper-floor rig (issue #12, FSR black squares upstairs)
@@ -834,6 +842,30 @@ public final class Harness {
             if (Explore.done() || TreeWalk.done() || LightWalk.done() || RoomLightRig.done()) {
                finish(p, 0); // explore=restaurant: every room visited (or the director said done)
                return;
+            }
+            if (gameSpeed > 0 && (nowNs - runStartNs) / 1e9 >= gameSpeedAt) {
+               zombie.ui.SpeedControls sc = zombie.ui.UIManager.getSpeedControls();
+               if (sc != null && sc.getCurrentGameSpeed() != gameSpeed) {
+                  if (gameSpeedOn) {
+                     gameSpeedResets++;
+                  }
+                  sc.SetCurrentGameSpeed(gameSpeed);
+                  float m = gameSpeed == 2 ? 5f : gameSpeed == 3 ? 20f : gameSpeed == 4 ? 40f : 1f;
+                  zombie.GameTime.getInstance().setMultiplier(m);
+                  if (!gameSpeedOn || gameSpeedResets <= 20) {
+                     Log.info(String.format(java.util.Locale.ROOT, "harness: game_speed %d (x%.0f) %s at t=%.2fs hour=%.3f epoch_ms=%d", gameSpeed, m,
+                        gameSpeedOn ? "re-applied (reset #" + gameSpeedResets + ")" : "applied", (nowNs - runStartNs) / 1e9, zombie.GameTime.getInstance().getTimeOfDay(), System.currentTimeMillis()));
+                  }
+                  if (!gameSpeedOn) {
+                     Stats.mark("game-speed");
+                  }
+                  gameSpeedOn = true;
+               }
+               if (nowNs - gameSpeedLogNs >= 1_000_000_000L) {
+                  gameSpeedLogNs = nowNs;
+                  Log.info(String.format(java.util.Locale.ROOT, "harness: game_speed t=%.1fs hour=%.3f speed=%d multiplier=%.1f epoch_ms=%d", (nowNs - runStartNs) / 1e9,
+                     zombie.GameTime.getInstance().getTimeOfDay(), sc != null ? sc.getCurrentGameSpeed() : -1, zombie.GameTime.getInstance().getTrueMultiplier(), System.currentTimeMillis()));
+               }
             }
             if (pauseAt > 0f && (nowNs - runStartNs) / 1e9 >= pauseAt) {
                pauseAt = 0f; // once: the game paused as a player would (pause_at rig, the 2026-10-01 burn-in report was taken paused)

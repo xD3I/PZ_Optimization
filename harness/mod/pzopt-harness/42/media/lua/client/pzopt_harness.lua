@@ -63,6 +63,7 @@ local quitAtMs = nil
 -- options_shots=<page>;<page>;...: shows each page in turn and writes Screenshots/pzopt-options-<n>.png per page (1.5 s
 --   each), then quits.
 local optionsCheck = nil
+local seqTick
 local OLD_TABS = { Optimizations = "perf", Enhancements = "vis", Profiler = "tools", ["PZ Optimization"] = "home" }
 local LEVELS = { simple = 1, advanced = 2, everything = 3 }
 -- options_joy=<step>,<step>,...: the screen's controller navigation without a pad: the steps call its own joypad handlers
@@ -214,6 +215,55 @@ end
 -- presses that choice's button after the first screenshot, logs the profile state and writes
 -- Screenshots/pzopt-compat-chosen.png (it saves the choice: pass --vmarg -Dpzopt.userOptionsFile=<scratch file>).
 local compatCheck = nil
+-- menu_hold=<secs> (repro-ui 2026-10-16, Workshop "Show Performance Overlay blocks the mod list"): stay on the main menu
+-- that long, log every bottom-panel item ("[pzopt-harness] menu item: <internal> '<text>' x y w h visible") once the
+-- menu is up and again 1 s later ("menu items logged" marks the second), log each item click the game dispatches, quit.
+local menuHold = nil
+local function menuItemsLog(ms, tag)
+    for _, ch in pairs(ms.bottomPanel:getChildren()) do
+        if ch.Type == "ISLabel" then
+            print(string.format("[pzopt-harness] menu item%s: %s '%s' x=%d y=%d w=%d h=%d visible=%s", tag, tostring(ch.internal),
+                tostring(ch.name), ch:getAbsoluteX(), ch:getAbsoluteY(), ch:getWidth(), ch:getHeight(), tostring(ch:isVisible())))
+        end
+    end
+end
+local function menuHoldTick()
+    local c = menuHold
+    local ms = MainScreen.instance
+    if not ms or (ms.delay and ms.delay > 0) or not ms.optionsOption or not ms.optionsOption:isVisible() then return end
+    local now = getTimestampMs()
+    if not c.at then
+        c.at = now
+        print("[pzopt-harness] menu hold: menu up, screen=" .. getCore():getScreenWidth() .. "x" .. getCore():getScreenHeight())
+        menuItemsLog(ms, "")
+        if not c.hooked then
+            c.hooked = true
+            local stock = MainScreen.onMenuItemMouseDownMainMenu
+            MainScreen.onMenuItemMouseDownMainMenu = function(item, x, y)
+                print("[pzopt-harness] menu hold: click on " .. tostring(item.internal) .. " epoch=" .. getTimestampMs())
+                return stock(item, x, y)
+            end
+            for _, ch in pairs(ms.bottomPanel:getChildren()) do
+                if ch.onMouseDown == stock then ch.onMouseDown = MainScreen.onMenuItemMouseDownMainMenu end
+                if ch.internal == "PZOPT_OVERLAY" then
+                    local own = ch.onMouseDown
+                    ch.onMouseDown = function(item, x2, y2)
+                        print("[pzopt-harness] menu hold: click on PZOPT_OVERLAY epoch=" .. getTimestampMs())
+                        return own(item, x2, y2)
+                    end
+                end
+            end
+        end
+    elseif not c.logged2 and now - c.at >= 1000 then
+        c.logged2 = true
+        menuItemsLog(ms, " (1s)")
+        print("[pzopt-harness] menu hold: menu items logged")
+    elseif now - c.at >= c.secs * 1000 then
+        menuHold = false
+        print("[pzopt-harness] menu hold: done, quitting")
+        getCore():quit()
+    end
+end
 
 -- spawn_select=<text> (2026-10-19, Workshop "Nellis Air Base: the game freezes when I select the spawn location"): stays on
 -- the main menu and starts a new Apocalypse game the way the menu does (SOLO -> NewGameScreen:clickPlay, WorldSelect first
@@ -516,6 +566,65 @@ local function ioStep(io, now)
     return false
 end
 
+-- options_seq=<secs>/<tab>;<secs>/<tab>;... (repro-ui 2026-10-16, tooltip flicker report): after opening, show each
+-- tab in turn for <secs> s (tab = an index into the options tabs, or pz[@<spec>] for the PZ OPTIMIZATION screen on the page
+-- an options_nav spec names; written for the old PZ Optimization tab, ported 2026-10-21 untested),
+-- log "[pzopt-harness] options seq: ..." with the window rect and, 0.6 s after each switch, one "TIP" line per visible
+-- control that has a tooltip (absolute UI px), so a job wrapper can move the real mouse over them; quits after the last.
+local function tipScan(el, out, depth)
+    if not el or depth > 12 or #out >= 40 then return end
+    local okv, vis = pcall(function() return el:isReallyVisible() end)
+    if not okv or not vis then return end
+    local tip = el.tooltip or el.toolTipMap or el.tooltipMap or el.tooltipText
+    if tip and tip ~= "" and el.getAbsoluteX then
+        local x, y, w, h = el:getAbsoluteX(), el:getAbsoluteY(), el:getWidth(), el:getHeight()
+        if w > 4 and h > 4 and x >= 0 and y >= 0 and x + w <= getCore():getScreenWidth() and y + h <= getCore():getScreenHeight() then
+            table.insert(out, string.format("%d %d %d %d %s", x, y, w, h, tostring(el.Type)))
+        end
+    end
+    local okc, kids = pcall(function() return el:getChildren() end)
+    if okc and kids then
+        for _, k in pairs(kids) do tipScan(k, out, depth + 1) end
+    end
+end
+
+seqTick = function(c, ms, now)
+    local mo = ms.mainOptions
+    if c.seqIndex and c.seqScanAt and now >= c.seqScanAt then
+        c.seqScanAt = nil
+        local out = {}
+        tipScan(c.seqRoot or mo, out, 0)
+        for i, l in ipairs(out) do print("[pzopt-harness] options seq: TIP " .. c.seqIndex .. " " .. l) end
+        print("[pzopt-harness] options seq: tips " .. c.seqIndex .. " n=" .. #out .. " epoch=" .. getTimestampMs())
+        return
+    end
+    if c.seqIndex and now < c.seqUntil then return end
+    local i = (c.seqIndex or 0) + 1
+    if i > #c.seq then
+        c.seqDone, c.shotMs = true, now - 1500
+        print("[pzopt-harness] options seq: done epoch=" .. getTimestampMs())
+        return
+    end
+    local e = c.seq[i]
+    local tab, nav, found, root = e.tab, nil, nil, mo
+    if string.sub(tab, 1, 2) == "pz" then
+        -- since 2026-10-18 the settings live on the PZ OPTIMIZATION screen: pz@<spec> = an applyNav spec (pz alone = home)
+        nav = string.match(tab, "^pz@(.+)$") or "home"
+        root = applyNav(nav)
+        tab, found = "PZ OPTIMIZATION", root ~= nil
+        root = root or mo
+    else
+        local v = mo.tabs.viewList[tonumber(tab) or 1]
+        tab = v and v.name or tab
+        found = mo.tabs:activateView(tab)
+    end
+    c.seqRoot = root
+    print(string.format("[pzopt-harness] options seq: step %d tab=%s nav=%s found=%s secs=%s epoch=%d screen=%dx%d win=%d,%d,%d,%d",
+        i, tostring(tab), tostring(nav), tostring(found), tostring(e.secs), getTimestampMs(), getCore():getScreenWidth(),
+        getCore():getScreenHeight(), root:getAbsoluteX(), root:getAbsoluteY(), root:getWidth(), root:getHeight()))
+    c.seqIndex, c.seqUntil, c.seqScanAt = i, now + e.secs * 1000, now + 600
+end
+
 local function optionsTick()
     local c = optionsCheck
     local ms = MainScreen.instance
@@ -540,6 +649,8 @@ local function optionsTick()
         c.readStarted = true
         PzoptBenchRead.begin(readStops(c))
         print("[pzopt-harness] options: readability tour started")
+    elseif c.seq and not c.seqDone then
+        seqTick(c, ms, now)
     elseif c.read and not c.readDone then
         return
     elseif c.read and not c.shotMs then
@@ -597,6 +708,14 @@ local function optionsTick()
     end
 end
 
+-- ingame_options (repro-ui): the in-world entry points to this file's options rig (a later "local optionsCheck" shadows it)
+local function optionsFromWorld(seq) optionsCheck = { tab = "Optimizations", seq = seq } end
+local function optionsWorldTick()
+    if not optionsCheck then return end
+    local ok, err = pcall(optionsTick)
+    if not ok then print("[pzopt-harness] ingame options: rig error " .. tostring(err)); optionsCheck = false; getCore():quit() end
+end
+
 local function onMainMenuEnter()
     local flags = readFlags()
     if not flags or not flags.mode then return end
@@ -611,6 +730,13 @@ local function onMainMenuEnter()
         if compatCheck == nil then
             appendFlag("consumed=1")
             compatCheck = { choose = (flags.compat_choose and flags.compat_choose ~= "") and flags.compat_choose or nil }
+        end
+        return
+    end
+    if flags.menu_hold and flags.menu_hold ~= "" then
+        if menuHold == nil then
+            appendFlag("consumed=1")
+            menuHold = { secs = tonumber(flags.menu_hold) or 20 }
         end
         return
     end
@@ -655,7 +781,15 @@ local function onMainMenuEnter()
                 end)() or nil,
                 select = flags.options_select ~= "" and flags.options_select or nil,
                 io = (flags.options_io and flags.options_io ~= "") and {} or nil,
-                profile = (flags.options_profile and flags.options_profile ~= "") and flags.options_profile or nil }
+                profile = (flags.options_profile and flags.options_profile ~= "") and flags.options_profile or nil,
+                seq = (flags.options_seq and flags.options_seq ~= "") and (function()
+                    local t = {}
+                    for s in string.gmatch(flags.options_seq, "[^;]+") do
+                        local secs, tab = string.match(s, "^([%d%.]+)/(.+)$")
+                        if secs then table.insert(t, { secs = tonumber(secs), tab = tab }) end
+                    end
+                    return t
+                end)() or nil }
         end
         return
     end
@@ -742,6 +876,11 @@ local function onFETick()
     if spawnCheck then
         local ok, err = pcall(spawnTick)
         if not ok then print("[pzopt-harness] spawn: rig error " .. tostring(err)); spawnCheck = false; getCore():quit() end
+        return
+    end
+    if menuHold then
+        local ok, err = pcall(menuHoldTick)
+        if not ok then print("[pzopt-harness] menu hold: rig error " .. tostring(err)); menuHold = false; getCore():quit() end
         return
     end
     if compatCheck then
@@ -1166,6 +1305,34 @@ local function pauseMenuTick()
         if pauseMenu.oldIndex then getPerformance():setMenuFramerateIndex(pauseMenu.oldIndex) end
         pauseMenu = false
     end
+end
+
+-- ingame_options=S (repro-ui 2026-10-16): S seconds into the world open the pause menu (as Esc does), then Options, and
+-- play options_seq there (see options_seq above: tabs in turn, TIP lines, quits the game after the last step).
+local ingameOptions = nil
+local function ingameOptionsTick()
+    if ingameOptions == false then return end
+    if not getPlayer() then return end
+    if ingameOptions == nil then
+        local flags = readFlags()
+        if not flags or not flags.ingame_options or flags.ingame_options == "" then ingameOptions = false; return end
+        ingameOptions = { openMs = getTimestampMs() + (tonumber(flags.ingame_options) or 8) * 1000, flags = flags }
+    end
+    local now = getTimestampMs()
+    if not ingameOptions.opened then
+        if now < ingameOptions.openMs then return end
+        ingameOptions.opened = true
+        ToggleEscapeMenu(escapeKey())
+        print("[pzopt-harness] ingame options: pause menu open=" .. tostring(MainScreen.instance and MainScreen.instance:isVisible()))
+        local seq = {}
+        for e in string.gmatch(ingameOptions.flags.options_seq or "10/1", "[^;]+") do
+            local secs, tab = string.match(e, "^([%d%.]+)/(.+)$")
+            if secs then table.insert(seq, { secs = tonumber(secs), tab = tab }) end
+        end
+        optionsFromWorld(seq)
+        return
+    end
+    optionsWorldTick()
 end
 
 -- inputlag=1 (run.sh --inputlag, 2026-09-24): in-game input-lag profile. 6 s after the player exists this writes
@@ -1900,3 +2067,4 @@ Events.OnFETick.Add(luaProfTick)
 Events.OnMainMenuEnter.Add(onMainMenuEnter)
 Events.OnFETick.Add(onFETick)
 Events.OnTickEvenPaused.Add(onTickEvenPaused)
+Events.OnTickEvenPaused.Add(function() local ok, err = pcall(ingameOptionsTick); if not ok then print("[pzopt-harness] ingame options: " .. tostring(err)); ingameOptions = false end end)
