@@ -302,6 +302,13 @@ public final class TexCompress {
       }
    }
 
+   /** Render thread, TextureID.generateHwId (tail pass): the fences only when the staging buffer runs low (see TexBcGpu.stagingLow). */
+   public static void pollStagingIfLow() {
+      if (TexBcGpu.stagingLow()) {
+         TexBcGpu.pollFences();
+      }
+   }
+
    private static boolean s3tc() {
       if (s3tc == null) {
          s3tc = org.lwjgl.opengl.GL.getCapabilities().GL_EXT_texture_compression_s3tc;

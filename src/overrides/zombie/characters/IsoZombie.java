@@ -232,6 +232,18 @@ public final class IsoZombie extends IsoGameCharacter implements IHumanVisual {
    private IsoMovingObject pzoptSepContact;
    private IsoMovingObject[] pzoptSepCollide;
    private int pzoptSepCollideCount;
+   public byte pzoptLodFade; // pzopt: zombieLodFadeMs (pzopt.ZombieLod), 0 none, 1 model -> sprite, 2 sprite -> model
+   public long pzoptLodFadeStartNs; // pzopt: when that fade started
+   public float pzoptLodModelAlpha = 1.0F; // pzopt: this frame's share of the model (ModelSlotRenderData.init multiplies its alpha)
+   public float pzoptLodSpriteAlpha; // pzopt: this frame's share of the flat sprite drawn under it (0: none)
+   public int pzoptSightRank; // pzopt: zombieFirstSightSprite, this zombie's place in the cull loop's nearest-first order
+   public int pzoptSightPend = -1; // pzopt: zombieFirstSightSprite, the cull pass in which this zombie waited for its first composite (drawn as its sprite)
+   public int pzoptSightDefer = -1; // pzopt: zombieFirstSightSprite, the cull pass (pzopt.FirstSight.frame) in which this zombie's first clothing composite waits (drawn as its sprite)
+   public int pzoptSightForce = -1; // pzopt: zombieFirstSightSprite (phasing fix 2026-10-18), the cull pass in which this zombie's first composite is made past the budgets (zombieFirstSightMaxWaitMs)
+   public int pzoptSightKept = -1; // pzopt: the cull pass in which this zombie, clothed before, came up without a composite (a model reset) and kept the stock order (census)
+   public long pzoptSightWaitNs; // pzopt: when this zombie's wait for its first composite began
+   public long pzoptClothedNs; // pzopt: the last cull pass in which this zombie's model had its clothing composite (pzopt.FirstSight.pending)
+   public float pzoptLodSpriteScale = 1.0F; // pzopt: renderTextureInsteadOfModel's alpha factor (the sprite share while a crossfade draws it under the model)
    public IsoGridSquare pzoptOutlineSquare; // pzopt: occluded outlines, the square the occluder test ran for (OccludedOutline.classify)
    public long pzoptOutlineNs; // pzopt: occluded outlines, when it ran
    public byte pzoptOutlineClass; // pzopt: occluded outlines, its result
@@ -240,13 +252,13 @@ public final class IsoZombie extends IsoGameCharacter implements IHumanVisual {
 
    /** Worker or game thread: the separation of this zombie, read-only, recorded into the fields above. */
    public void pzoptSeparateCompute() {
-      this.pzoptSepFrame = pzopt.FrameTick.frame();
+      this.pzoptSepFrame = pzopt.SeparateBatch.stamp(); // pzopt: separateAsync, the frame the result is for (FrameTick.frame() + 1 while the batch runs ahead of the frame tick)
       this.pzoptSepDx = 0.0F;
       this.pzoptSepDy = 0.0F;
       this.pzoptSepWasSeparated = false;
       this.pzoptSepContact = null;
       this.pzoptSepCollideCount = 0;
-      if (!this.isSolidForSeparate() || !this.isPushableForSeparate()) {
+      if (!pzopt.SeparateBatch.solid(this) || !this.isPushableForSeparate()) { // pzopt: separateMemo, the batch's per-frame answer
          return;
       }
 
@@ -275,7 +287,7 @@ public final class IsoZombie extends IsoGameCharacter implements IHumanVisual {
 
          for (int n = 0; n < size; n++) {
             IsoMovingObject obj = objects.get(n);
-            if (obj == this || !obj.isSolidForSeparate() || Math.abs(thisZ - obj.getZ()) > 0.3F) {
+            if (obj == this || !pzopt.SeparateBatch.solid(obj) || Math.abs(thisZ - obj.getZ()) > 0.3F) { // pzopt: separateMemo, once per neighbour per frame
                continue;
             }
 
@@ -329,6 +341,51 @@ public final class IsoZombie extends IsoGameCharacter implements IHumanVisual {
          }
       }
    }
+
+   /**
+    * pzopt: separateAsync rig (devSeparateAsyncCheck), game thread at the join: the recorded (asynchronous) result kept
+    * aside, the compute run again here, and the two compared. The zombie keeps the result computed here. True = equal.
+    */
+   public boolean pzoptSepRecheck() { // pzopt
+      float dx = this.pzoptSepDx, dy = this.pzoptSepDy; // pzopt
+      boolean was = this.pzoptSepWasSeparated; // pzopt
+      IsoMovingObject contact = this.pzoptSepContact; // pzopt
+      int n = this.pzoptSepCollideCount; // pzopt
+      IsoMovingObject[] collide = n > 0 ? java.util.Arrays.copyOf(this.pzoptSepCollide, n) : null; // pzopt
+      boolean computed = this.pzoptSepFrame == pzopt.FrameTick.frame(); // pzopt
+      this.pzoptSeparateCompute(); // pzopt
+      if (!computed) { // pzopt
+         return true; // pzopt: the asynchronous task did not finish this zombie (it threw): nothing to compare
+      } // pzopt
+      if (Float.floatToIntBits(dx) != Float.floatToIntBits(this.pzoptSepDx) || Float.floatToIntBits(dy) != Float.floatToIntBits(this.pzoptSepDy) // pzopt
+         || was != this.pzoptSepWasSeparated || contact != this.pzoptSepContact || n != this.pzoptSepCollideCount) { // pzopt
+         return false; // pzopt
+      } // pzopt
+      for (int i = 0; i < n; i++) { // pzopt
+         if (collide[i] != this.pzoptSepCollide[i]) { // pzopt
+            return false; // pzopt
+         } // pzopt
+      } // pzopt
+      return true; // pzopt
+   } // pzopt
+
+   /** pzopt: separateAsync, an asynchronous compute that threw: computed again inline in separate(). */
+   public void pzoptSepInvalidate() { // pzopt
+      this.pzoptSepFrame = 0; // pzopt
+   } // pzopt
+
+   private int pzoptSolidMemo; // pzopt: separateMemo, (frame << 1) | solid; one int write, so a racing worker only recomputes
+
+   /** pzopt: separateMemo, isSolidForSeparate for the separation batch's frame (nothing changes a character during it). */
+   public boolean pzoptSolidMemo(int stamp) { // pzopt
+      int m = this.pzoptSolidMemo; // pzopt
+      if (m >>> 1 == stamp) { // pzopt
+         return (m & 1) != 0; // pzopt
+      } // pzopt
+      boolean solid = this.isSolidForSeparate(); // pzopt
+      this.pzoptSolidMemo = stamp << 1 | (solid ? 1 : 0); // pzopt
+      return solid; // pzopt
+   } // pzopt
 
    /** Game thread, in loop order: the writes the compute recorded. */
    private void pzoptSeparateApply() {
@@ -1556,6 +1613,7 @@ public final class IsoZombie extends IsoGameCharacter implements IHumanVisual {
    }
 
    public float Hit(HandWeapon weapon, IsoGameCharacter wielder, float damageSplit, boolean bIgnoreDamage, float modDelta, boolean bRemote) {
+      pzopt.ActionEval.settle(this, pzopt.ActionEval.S_HIT); // pzopt: f8-streamfix, a hit lands after the evaluation stock ran in this zombie's loop slot
       if ((Core.tutorial || Core.debug) && this.immortalTutorialZombie) {
          return 0.0F;
       }
@@ -1755,7 +1813,8 @@ public final class IsoZombie extends IsoGameCharacter implements IHumanVisual {
                - 1.0F;
          }
 
-         tex.render(x, y, this.getZ(), sx, sy, 0.0F, 0.0F, 0.0F, this.getAlpha(playerIndex));
+         float pzoptLit = pzopt.ZombieLod.spriteLight(this); // pzopt: zombieLodSpriteLight, the flat sprite in the square's light instead of black (0 = stock; without zombieLodDynamic only a new zombie's, zombieFirstSightSprite)
+         tex.render(x, y, this.getZ(), sx, sy, pzoptLit > 0.0F ? inf.r * pzoptLit : 0.0F, pzoptLit > 0.0F ? inf.g * pzoptLit : 0.0F, pzoptLit > 0.0F ? inf.b * pzoptLit : 0.0F, this.getAlpha(playerIndex) * this.pzoptLodSpriteScale); // pzopt: zombieLodFadeMs, the sprite's share during a crossfade (1 otherwise)
       }
 
       if (DebugOptions.instance.character.debug.render.angle.getValue()) {
@@ -1850,6 +1909,11 @@ public final class IsoZombie extends IsoGameCharacter implements IHumanVisual {
                   cameraRenderData.init(zombie.core.opengl.CharacterModelCamera.instance, modelSlot);
                }
 
+               if (this.pzoptLodSpriteAlpha > 0.0F) { // pzopt: zombieLodFadeMs, the flat sprite under the fading model
+                  this.pzoptLodSpriteScale = this.pzoptLodSpriteAlpha; // pzopt
+                  this.renderTextureInsteadOfModel(x, y); // pzopt
+                  this.pzoptLodSpriteScale = 1.0F; // pzopt
+               } // pzopt
                zombie.core.SpriteRenderer.instance.drawGeneric(cameraRenderData);
                zombie.core.SpriteRenderer.instance.drawModel(modelSlot);
             }
@@ -2431,7 +2495,7 @@ public final class IsoZombie extends IsoGameCharacter implements IHumanVisual {
                            chance /= dif;
                         }
 
-                        Vector2 thisToOther = IsoGameCharacter.tempo;
+                        Vector2 thisToOther = pzopt.WorkerScratch.v2(IsoGameCharacter.tempo, pzopt.WorkerScratch.ZOMBIE_TEMPO); // pzopt: static audit, per thread on a worker
                         thisToOther.x = other.getX();
                         thisToOther.y = other.getY();
                         thisToOther.x = thisToOther.x - this.getX();
@@ -2462,7 +2526,7 @@ public final class IsoZombie extends IsoGameCharacter implements IHumanVisual {
                            // vision-radius update moved above it (no dependence either way) so that is known first.
                            boolean pzoptSkipFacing = chance == 0.0F && !bForced && pzopt.Overrides.enabled() && pzopt.Config.ZOMBIE_SPOT_FAST;
                            if (viewDist > 0.5F && !pzoptSkipFacing) {
-                              Vector2 thisForward = this.getLookVector(tempo2);
+                              Vector2 thisForward = this.getLookVector(pzopt.WorkerScratch.v2(tempo2, pzopt.WorkerScratch.ZOMBIE_TEMPO2)); // pzopt: static audit
                               float cosAngle = thisForward.dot(thisToOther);
                               if (cosAngle < -0.4F) {
                                  chance = 0.0F;
@@ -2886,7 +2950,7 @@ public final class IsoZombie extends IsoGameCharacter implements IHumanVisual {
                            }
                         }
 
-                        Vector2 thisToOther = IsoGameCharacter.tempo;
+                        Vector2 thisToOther = pzopt.WorkerScratch.v2(IsoGameCharacter.tempo, pzopt.WorkerScratch.ZOMBIE_TEMPO); // pzopt: static audit, per thread on a worker
                         thisToOther.x = other.getX();
                         thisToOther.y = other.getY();
                         thisToOther.x = thisToOther.x - this.getX();
@@ -2913,7 +2977,7 @@ public final class IsoZombie extends IsoGameCharacter implements IHumanVisual {
                            }
 
                            thisToOther.normalize();
-                           Vector2 thisForward = this.getLookVector(tempo2);
+                           Vector2 thisForward = this.getLookVector(pzopt.WorkerScratch.v2(tempo2, pzopt.WorkerScratch.ZOMBIE_TEMPO2)); // pzopt: static audit
                            float cosAngle = thisForward.dot(thisToOther);
                            this.updateVisionRadius();
                            if (this.DistTo(other) > this.visionRadiusResult) {
@@ -3401,7 +3465,17 @@ public final class IsoZombie extends IsoGameCharacter implements IHumanVisual {
       }
    }
 
+   public long pzoptCleanFrame; // pzopt: postupdateClean (f8-zomb2), the movement-queue frame this zombie's postupdate finished in its task
+
+   public int pzoptCleanIdx = -1; // pzopt: postupdateClean exactness (f8-cleanfix), this zombie's index in PostupdateBatch's movement queue (valid while the queue holds it there)
+
    public void postupdate() {
+      pzopt.PostupdateBatch.reachedAt(this); // pzopt: postupdateClean exactness (f8-cleanfix), the bucket loop reached this zombie
+      if (this.pzoptCleanFrame != 0L && this.pzoptCleanFrame == pzopt.PostupdateBatch.frameStamp()) { // pzopt: postupdateClean, done already this frame
+         pzopt.PostupdateBatch.cleanGuarded++; // pzopt
+         pzopt.PostupdateBatch.cleanGuard(this); // pzopt: f8-cleanfix, reached past the loop's cursor: it joins ActionEval's queue here as cleanAt would have
+         return; // pzopt
+      } // pzopt
       AbstractPerformanceProfileProbe var1 = IsoZombie.s_performance.postUpdate.profile();
 
       try {
@@ -3422,6 +3496,73 @@ public final class IsoZombie extends IsoGameCharacter implements IHumanVisual {
          var1.close();
       }
    }
+
+   /**
+    * pzopt: postupdateClean (zombie redesign, f8-zomb2), a frame worker right after this zombie's movement was computed and its
+    * square move found to be a no-op: the rest of its postupdate when none of it needs the game thread, done here; the bucket
+    * loop then skips the zombie (2 = it still joins ActionEval's queue there, in order). 0 = nothing done, the loop runs it as
+    * before. Needs: no target (no chase count, canSeeTarget false), no grapple-only reanimation, a square, no reanimated
+    * player, no hit infos or ballistics, and for an animating zombie the head on the worker and states with no
+    * side-effecting condition variable (an empty snapshot).
+    */
+   public int pzoptStreamGen; // pzopt: postupdateFuse (f8-zomb2), the ActionEval generation this zombie's evaluation went to the stream in
+   public int pzoptLateGen; // pzopt: zombieLateApply (f8-zomb3), the ActionEval generation whose apply holds this zombie until FinishAnimation
+
+   public byte pzoptCleanPostupdate() { // pzopt
+      if (this.target != null || this.isReanimatedForGrappleOnly() || this.current == null || this.getReanimatedPlayer() != null || !this.pzoptCleanTailOk()) { // pzopt
+         return 0; // pzopt
+      } // pzopt
+      boolean anim = this.isAnimationUpdatingThisFrame(); // pzopt
+      if (anim && !pzopt.ActionEval.cleanSubmitOk(this)) { // pzopt
+         return 0; // pzopt
+      } // pzopt
+      pzopt.PostupdateBatch.Snap pzoptUndo = this.pzoptMoveSnap; // pzopt: f8-cleanfix, what the tail below changes, kept for a zombie the loop then never reaches (stock skips it)
+      pzoptUndo.cleanUnbalanced = this.unbalancedLevel; // pzopt: f8-cleanfix
+      pzoptUndo.cleanSeenTime = this.targetSeenTime; // pzopt: f8-cleanfix
+      pzoptUndo.cleanCanSee = this.canSeeTarget; // pzopt: f8-cleanfix
+      pzoptUndo.cleanHeadPending = this.pzoptHeadPending; // pzopt: f8-cleanfix
+      if (anim) { // pzopt
+         pzopt.ActionEval.cleanPrepare(this); // pzopt: the empty snapshot, the head left to the evaluation task
+      } // pzopt
+      this.pzoptCleanTail(); // pzopt: IsoGameCharacter.postUpdateInternal's tail
+      if (this.unbalancedLevel > 0.0F) { // pzopt: the rest of postUpdateInternal below, for this zombie
+         pzopt.UpdateBatch.pomSet((float)this.getCurrentSimulationLevel().getFrameMod()); // pzopt: the bucket's multiplier the loop would run it under
+         try { // pzopt
+            this.unbalancedLevel = PZMath.clamp(PZMath.lerp(this.unbalancedLevel, 0.0F, 0.5F * GameTime.getInstance().getMultiplier(), LerpType.EaseOutQuad), 0.0F, 1.0F); // pzopt
+         } finally { // pzopt
+            pzopt.UpdateBatch.pomClear(); // pzopt
+         } // pzopt
+      } // pzopt
+      this.canSeeTarget = false; // pzopt: isTargetVisible() with no target
+      if (this.targetSeenTime > 0.0F) { // pzopt
+         this.targetSeenTime = 0.0F; // pzopt
+      } // pzopt
+      return anim ? (byte)2 : (byte)1; // pzopt
+   } // pzopt
+
+   /**
+    * pzopt: postupdateClean exactness (f8-cleanfix), game thread after the bucket loop: a clean zombie the loop never reached (stock
+    * skips the entry after one that removes itself, so it runs no postupdate this frame) gets back what pzoptCleanPostupdate's
+    * tail changed (the movement is put back from the same Snap by the caller). clearAttackVars needs nothing: a zombie's attack
+    * vars are only ever cleared (CombatManager fills an IsoLivingCharacter's), so a second clear is a no-op. The snapshot map is
+    * the evaluation's own scratch, refilled before any evaluation reads it.
+    */
+   public void pzoptCleanUndo(pzopt.PostupdateBatch.Snap s) { // pzopt
+      this.unbalancedLevel = s.cleanUnbalanced; // pzopt
+      this.targetSeenTime = s.cleanSeenTime; // pzopt
+      this.canSeeTarget = s.cleanCanSee; // pzopt
+      this.pzoptHeadPending = s.cleanHeadPending; // pzopt: the head it left to an evaluation task that never goes out
+      this.pzoptCleanFrame = 0L; // pzopt
+   } // pzopt
+
+   /** pzopt: devCleanSkipCheck (f8-cleanfix), what a postupdate writes into the zombie beyond the movement Snap. */
+   @Override // pzopt
+   public void pzoptSkipPrint(double[] o, int k) { // pzopt
+      super.pzoptSkipPrint(o, k); // pzopt
+      o[k + pzopt.PostupdateBatch.PRINT_CHAR] = this.unbalancedLevel; // pzopt
+      o[k + pzopt.PostupdateBatch.PRINT_CHAR + 1] = this.targetSeenTime; // pzopt
+      o[k + pzopt.PostupdateBatch.PRINT_CHAR + 2] = this.canSeeTarget ? 1.0 : 0.0; // pzopt
+   } // pzopt
 
    private void postUpdateInternal() {
       if (this.target instanceof IsoPlayer isoPlayer) {
@@ -3738,7 +3879,7 @@ public final class IsoZombie extends IsoGameCharacter implements IHumanVisual {
 
                   if (!this.isLocal()) {
                      this.setVehicleCollision(this.vehicle4testCollision != null && this.vehicle4testCollision.updateNetworkHitByVehicle(this));
-                  } else if (this.vehicle4testCollision != null) {
+                  } else if (this.vehicle4testCollision != null && !pzopt.UpdateBatch.deferVehicleHit(this, this.vehicle4testCollision)) { // pzopt: vehicleHitDefer, on a batch task the hit test (hitCharacter -> onHitByVehicle -> slideAwayFromWalls -> CollideWithObstacles' shared scratch) runs on the game thread at the join
                      HitVars hitVars = this.vehicle4testCollision.checkNetworkCollision(this);
                      this.setVehicleCollision(hitVars != null);
                      if (this.isVehicleCollision()) {
@@ -3886,6 +4027,18 @@ public final class IsoZombie extends IsoGameCharacter implements IHumanVisual {
     * nulls vehicle4testCollision before the join). The controller is re-read here rather than carried along: the
     * rest of this frame may have released the ragdoll, and then there is nothing to tell Bullet.
     */
+   /**
+    * pzopt: vehicleHitDefer (zombie pass 2026-10-13), the game thread's run of the vehicle hit test a batch task
+    * deferred: the stock branch of updateInternal with the vehicle the task saw (the field is nulled in the task).
+    */
+   public void pzoptVehicleHit(BaseVehicle vehicle) { // pzopt
+      HitVars hitVars = vehicle.checkNetworkCollision(this); // pzopt
+      this.setVehicleCollision(hitVars != null); // pzopt
+      if (this.isVehicleCollision()) { // pzopt
+         this.doNetworkHitByVehicle(vehicle, hitVars); // pzopt
+      } // pzopt
+   } // pzopt
+
    public void pzoptVehicleCollision(BaseVehicle vehicle) {
       RagdollController ragdollController = this.getRagdollController();
       if (ragdollController != null) {
@@ -3990,7 +4143,8 @@ public final class IsoZombie extends IsoGameCharacter implements IHumanVisual {
             this.checkForCorpseTimer = this.checkForCorpseTimer - GameTime.getInstance().getThirtyFPSMultiplier();
             if (this.checkForCorpseTimer <= 0.0F) {
                this.checkForCorpseTimer = 10000.0F;
-               tempBodies.clear();
+               ArrayList<IsoDeadBody> pzoptBodies = pzopt.WorkerScratch.bodies(tempBodies); // pzopt: zombie pass static audit, the static list is per thread on a frame worker
+               pzoptBodies.clear(); // pzopt
 
                for (int x = -10; x < 10; x++) {
                   for (int y = -10; y < 10; y++) {
@@ -4005,22 +4159,22 @@ public final class IsoZombie extends IsoGameCharacter implements IHumanVisual {
                            && !corpse.isAnimalSkeleton()
                            && !PolygonalMap2.instance
                               .lineClearCollide(this.getX(), this.getY(), corpse.getX(), corpse.getY(), PZMath.fastfloor(this.getZ()), null, false, true)) {
-                           tempBodies.add(corpse);
+                           pzoptBodies.add(corpse); // pzopt
                         }
                      }
                   }
                }
 
-               if (!tempBodies.isEmpty()) {
-                  this.bodyToEat = (IsoDeadBody)PZArrayUtil.pickRandom(tempBodies);
-                  tempBodies.clear();
+               if (!pzoptBodies.isEmpty()) { // pzopt
+                  this.bodyToEat = (IsoDeadBody)PZArrayUtil.pickRandom(pzoptBodies); // pzopt
+                  pzoptBodies.clear(); // pzopt
                }
             }
          }
 
          if (this.bodyToEat != null && this.isCurrentState(ZombieIdleState.instance())) {
             if (this.DistToSquared(this.bodyToEat) > 1.0F) {
-               Vector2 v = tempo.set(this.getX() - this.bodyToEat.getX(), this.getY() - this.bodyToEat.getY());
+               Vector2 v = pzopt.WorkerScratch.v2(tempo, pzopt.WorkerScratch.ZOMBIE_TEMPO).set(this.getX() - this.bodyToEat.getX(), this.getY() - this.bodyToEat.getY()); // pzopt: static audit, per thread on a worker
                v.setLength(0.5F);
                this.pathToLocationF(this.bodyToEat.getX() + v.x, this.bodyToEat.getY() + v.y, this.bodyToEat.getZ());
             }
@@ -4721,6 +4875,8 @@ public final class IsoZombie extends IsoGameCharacter implements IHumanVisual {
    }
 
    public void removeFromWorld() {
+      pzopt.ZombieLate.touch(this, pzopt.ZombieLate.R_REMOVE); // pzopt: zombieLateApply (f8-zomb3), a held zombie is applied before it leaves the world
+      pzopt.ActionEval.settle(this, pzopt.ActionEval.S_REMOVE); // pzopt: f8-streamfix, its evaluation task (if one is out) finishes before it leaves the world
       this.getEmitter().stopOrTriggerSoundByName("BurningFlesh");
       this.clearAggroList();
       VirtualZombieManager.instance.RemoveZombie(this);
@@ -4765,6 +4921,8 @@ public final class IsoZombie extends IsoGameCharacter implements IHumanVisual {
    }
 
    public void resetForReuse() {
+      pzopt.ZombieLate.touch(this, pzopt.ZombieLate.R_REUSE); // pzopt: f8-streamfix, a held zombie (left the world in the bucket loop) is applied before it is reset
+      pzopt.ActionEval.settle(this, pzopt.ActionEval.S_REUSE); // pzopt: f8-streamfix, its evaluation task (if one is out) finishes before the reset (setGroup cleared the container it evaluates)
       this.setCrawler(false);
       this.initializeStates();
       this.getActionContext().setGroup(pzoptGroup(false));
@@ -5154,8 +5312,10 @@ public final class IsoZombie extends IsoGameCharacter implements IHumanVisual {
          return false;
       }
 
-      tempo.set(this.target.getX() - this.getX(), this.target.getY() - this.getY());
-      float length = tempo.getLength();
+      Vector2 pzoptTempo = pzopt.WorkerScratch.v2(tempo, pzopt.WorkerScratch.ZOMBIE_TEMPO); // pzopt: static audit, per thread on a worker
+      Vector2 pzoptTempo2 = pzopt.WorkerScratch.v2(tempo2, pzopt.WorkerScratch.ZOMBIE_TEMPO2); // pzopt
+      pzoptTempo.set(this.target.getX() - this.getX(), this.target.getY() - this.getY()); // pzopt
+      float length = pzoptTempo.getLength(); // pzopt
       if (length == 0.0F) {
          return true;
       }
@@ -5164,9 +5324,9 @@ public final class IsoZombie extends IsoGameCharacter implements IHumanVisual {
          return false;
       }
 
-      tempo.normalize();
-      this.getVectorFromDirection(tempo2);
-      float facing = tempo.dot(tempo2);
+      pzoptTempo.normalize(); // pzopt
+      this.getVectorFromDirection(pzoptTempo2); // pzopt
+      float facing = pzoptTempo.dot(pzoptTempo2); // pzopt
       return facing >= dot;
    }
 
@@ -5445,6 +5605,7 @@ public final class IsoZombie extends IsoGameCharacter implements IHumanVisual {
 
    public void setSkeleton(boolean isSkeleton) {
       this.isSkeleton = isSkeleton;
+      this.pzoptBmEpoch = 0; // pzopt: bodyModelCache, a body-model input changed
       if (isSkeleton) {
          this.getHumanVisual().setHairModel("");
          this.getHumanVisual().setBeardModel("");
@@ -5576,7 +5737,7 @@ public final class IsoZombie extends IsoGameCharacter implements IHumanVisual {
       return dot >= 0.8F;
    }
 
-   private static final ThreadLocal<Vector2[]> pzoptFacingScratch = ThreadLocal.withInitial(() -> new Vector2[]{new Vector2(), new Vector2()}); // pzopt: actionEvalParallel
+   private static final pzopt.Tl<Vector2[]> pzoptFacingScratch = new pzopt.Tl<>(() -> new Vector2[]{new Vector2(), new Vector2()}); // pzopt: actionEvalParallel
 
    public boolean isTargetLocationKnown() {
       if (this.target == null) {
@@ -6106,17 +6267,25 @@ public final class IsoZombie extends IsoGameCharacter implements IHumanVisual {
     * the game thread before the batch; everything else updates inline as stock.
     */
    public boolean pzoptBatchSafe() { // pzopt
-      if (this.getBallisticsTarget() != null || this.isRagdoll() || this.isFalling() || this.isOnFire() || this.isBeingGrappled() || this.isGrappling() // pzopt
+      if (this.getBallisticsTarget() != null || this.pzoptRenewStalePlayer() || this.isRagdoll() || this.isFalling() || this.isOnFire() || this.isBeingGrappled() || this.isGrappling() // pzopt
          || this.getReanimatedPlayer() != null || this.pzoptAnimPlayerStale() || !this.pzoptRagdollFree()) { // pzopt
+         pzopt.UpdateBatch.inlineBecause("physical", null); // pzopt: instrument, why a zombie stays inline
          return false; // pzopt
       } // pzopt
       zombie.ai.State state = this.getCurrentState(); // pzopt
-      if (state != ZombieIdleState.instance() && state != WalkTowardState.instance() && state != PathFindState.instance()) { // pzopt
+      if (state != ZombieIdleState.instance() && state != WalkTowardState.instance() && state != PathFindState.instance() // pzopt
+         && !(pzopt.UpdateBatch.moreCalmStates() && (state == ZombieSittingState.instance() || state == GenericDefaultState.instance())) // pzopt: entityUpdateMoreStates, two more states whose execute does nothing in single player
+         && !(pzopt.UpdateBatch.alertedCalm() && state == zombie.ai.states.ZombieTurnAlerted.instance())) { // pzopt: entityUpdateAlerted (f8-zomb2), turning toward a heard sound: no execute of its own, its exit (pathToSound) runs where a state change happens
+         pzopt.UpdateBatch.inlineBecause("state", state); // pzopt: instrument
          return false; // pzopt
+      } // pzopt
+      if (pzopt.UpdateBatch.nearPlayerAllowed()) { // pzopt: entityUpdateNearPlayer, players update before the flight now, so a calm zombie near one reads a stable player
+         return true; // pzopt
       } // pzopt
       for (int i = 0; i < IsoPlayer.numPlayers; i++) { // pzopt
          IsoPlayer player = IsoPlayer.players[i]; // pzopt
          if (player != null && this.DistToSquared(player) < 144.0F) { // pzopt
+            pzopt.UpdateBatch.inlineBecause("near player", null); // pzopt: instrument
             return false; // pzopt
          } // pzopt
       } // pzopt
@@ -6158,9 +6327,11 @@ public final class IsoZombie extends IsoGameCharacter implements IHumanVisual {
    }
 
    private void updateMovementStatistics() {
-      lastPosition.set(this.getLastX(), this.getLastY());
-      currentPosition.set(this.getX(), this.getY());
-      float distanceTraveled = PZMath.clamp(lastPosition.distanceTo(currentPosition), 0.0F, 0.5F);
+      Vector2 pzoptLast = pzopt.WorkerScratch.v2(lastPosition, pzopt.WorkerScratch.ZOMBIE_LAST_POSITION); // pzopt: static audit, per thread on a worker
+      Vector2 pzoptCurrent = pzopt.WorkerScratch.v2(currentPosition, pzopt.WorkerScratch.ZOMBIE_CURRENT_POSITION); // pzopt
+      pzoptLast.set(this.getLastX(), this.getLastY()); // pzopt
+      pzoptCurrent.set(this.getX(), this.getY()); // pzopt
+      float distanceTraveled = PZMath.clamp(pzoptLast.distanceTo(pzoptCurrent), 0.0F, 0.5F);
       String statisticName = "Zombie's Distance Walked";
       if (this.crawling) {
          statisticName = "Zombie's Distance Crawled";
@@ -6420,6 +6591,30 @@ public final class IsoZombie extends IsoGameCharacter implements IHumanVisual {
    private static boolean pzoptEcsFast() {
       return pzopt.Overrides.enabled() && pzopt.Config.ECS_LOOKUP_FAST;
    }
+
+   /**
+    * pzopt: schedulerFillParallel (f9-los). IsoGameCharacter's rule with the state machine component from the ecsLookupFast
+    * field instead of IsoMovingObject's tryGetECSComponent (the component map's hash probe: ~70 % of the scheduler's
+    * classification on the flip). The component is registered once in the constructor and never replaced, so both find
+    * the same object; the answer is the same.
+    */
+   @Override
+   public zombie.UpdateSchedulerSimulationLevel getMinimumSimulationLevel() { // pzopt
+      if (!pzopt.Config.SCHEDULER_FILL_PARALLEL || !pzoptEcsFast() || !pzopt.ZombAb.on(pzopt.ZombAb.SCHED_FILL)) { // pzopt
+         return super.getMinimumSimulationLevel(); // pzopt
+      } // pzopt
+      StateMachineComponent pzoptComponent = this.pzoptStateMachineComponent; // pzopt: filled by the first ecsLookupFast accessor (the constructor's)
+      if (pzoptComponent == null) { // pzopt
+         return super.getMinimumSimulationLevel(); // pzopt
+      } // pzopt
+      zombie.UpdateSchedulerSimulationLevel pzoptLevel = this.isDead() || this.isRagdollSimulationActive() || this.isFalling() // pzopt: IsoGameCharacter.getMinimumSimulationLevel
+         ? zombie.UpdateSchedulerSimulationLevel.FULL // pzopt
+         : pzoptComponent.getMinimumSimulationLevel(); // pzopt: IsoMovingObject's tryGetECSComponent finds this same component
+      if (pzopt.Config.DEV_SCHED_FILL_CHECK) { // pzopt: devSchedFillCheck, against the stock lookup
+         pzopt.SchedulerClassify.minLevelChecked(pzoptLevel == super.getMinimumSimulationLevel()); // pzopt
+      } // pzopt
+      return pzoptLevel; // pzopt
+   } // pzopt
 
    // pzopt: actionGroupCache. updateInternal asks ActionGroup for the "zombie" and "zombie-crawler" groups by name on
    // every zombie on every frame; the lookup lower-cases the name into a new String and probes a HashMap for a group

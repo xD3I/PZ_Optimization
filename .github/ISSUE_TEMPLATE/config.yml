@@ -2,4 +2,4 @@ blank_issues_enabled: false
 contact_links:
   - name: Install and usage guide
     url: https://github.com/xD3I/PZ_Optimization#readme
-    about: Read the README first. It covers installation, every Config flag, and how to go back to stock.
+    about: Read the README and its pages first (docs/guide/): installation, every setting, and how to go back to stock.

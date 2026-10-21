@@ -1,0 +1,1 @@
+-Xms8192m -Xmx8192m -XX:MaxGCPauseMillis=5 -XX:+UnlockExperimentalVMOptions -XX:G1NewSizePercent=1 -XX:MaxTenuringThreshold=0 -XX:ReservedCodeCacheSize=512m -XX:SweeperThreshold=50 -XX:-G1UseAdaptiveIHOP -XX:InitiatingHeapOccupancyPercent=70 -XX:G1MixedGCCountTarget=24 -XX:G1MixedGCLiveThresholdPercent=50 -XX:G1HeapWastePercent=10 -XX:G1MaxNewSizePercent=2 -XX:+AlwaysPreTouch

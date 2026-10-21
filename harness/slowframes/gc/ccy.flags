@@ -1,0 +1,1 @@
+-Xms4096m -XX:MaxGCPauseMillis=5 -XX:+UnlockExperimentalVMOptions -XX:G1NewSizePercent=2 -XX:MaxTenuringThreshold=0 -XX:ReservedCodeCacheSize=512m -XX:SweeperThreshold=50 -XX:-G1UseAdaptiveIHOP -XX:InitiatingHeapOccupancyPercent=70

@@ -20,6 +20,8 @@ public final class AnimCapture {
 
    /** Armed on the game thread: this character's animator and model update run on a worker this frame. */
    public boolean armed;
+   /** postupdateFuse: the ActionEval generation whose stream task armed this capture and ran its animator on the worker. */
+   public int fusedGen;
    /** Set by the worker: the character must finish on the game thread (events of the animator step, an impure read, a failure). */
    public boolean serial;
    /** Set last by the worker task (animatorPipeline: the game thread finishes the character once it sees it). */

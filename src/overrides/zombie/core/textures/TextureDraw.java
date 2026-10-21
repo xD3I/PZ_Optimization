@@ -491,7 +491,11 @@ public final class TextureDraw {
 
    public void run() {
       if (pzopt.UniformCache.ON && this.type != TextureDraw.Type.StartShader) pzopt.UniformCache.reset(); // pzopt: uniformCache, any other command may touch uniforms
+      if (pzopt.MovingProf.active) pzopt.MovingProf.op(this); // pzopt: devMovingProf, the moving pass per command category (dev rig)
+      if (pzopt.AtlasBatch.pending != 0) pzopt.AtlasBatch.beforeOp(this); // pzopt: atlasBatch, a run of atlas quads ends here unless this is one of them or a StartShader(0)
+      if (pzopt.HordeBatch.pending != 0) pzopt.HordeBatch.beforeOp(this); // pzopt: hordeBatch, a run of zombie draws ends here unless this is one of them
       if (pzopt.Sway.mrt) pzopt.Sway.beforeOp(this); // pzopt: foliage sway, a model / generic drawer binds its own program: one draw buffer again
+      if (pzopt.HordeDraw.LOG && this.type != TextureDraw.Type.DrawModel) pzopt.HordeDraw.other(); // pzopt: horde model draws, dev: a command between character draws
       switch (this.type) {
          case glBuffer:
             if (Core.getInstance().supportsFBO()) {
@@ -644,6 +648,7 @@ public final class TextureDraw {
             pzopt.CarOccupant.markDrawModel(); // pzopt: carOccupant, dev timing (the slot init wait of an occupant's draw)
             if (this.drawer != null) {
                if (this.future != null) {
+                  pzopt.MovingProf.enter(pzopt.MovingProf.WAIT); // pzopt: devMovingProf, the init future wait (dev rig)
                   ProfileArea var13 = GameProfiler.getInstance().profile("Wait");
 
                   try {
@@ -663,8 +668,12 @@ public final class TextureDraw {
                   if (var13 != null) {
                      var13.close();
                   }
+                  pzopt.MovingProf.exit(); // pzopt: devMovingProf
                }
 
+               if (pzopt.AtlasBatch.ON && pzopt.AtlasBatch.offer(this)) { // pzopt: atlasBatch, an atlas zombie's quad goes into the run
+                  break; // pzopt
+               } // pzopt
                if (pzopt.CarOccupant.capture(this)) { // pzopt: carOccupant, a seated character drawn into its car's impostor tile instead of the world
                   break; // pzopt
                } // pzopt
@@ -672,13 +681,21 @@ public final class TextureDraw {
                if (pzoptMotionId == 0 && pzopt.Ssr.stencilMoving()) { // pzopt: reflections, the moving-object scatter reads only the pixels the models drew
                   pzoptMotionId = pzopt.ObjectMotion.MOVING_ID; // pzopt
                } // pzopt
+               if (pzopt.HordeBatch.offer(this, pzoptMotionId)) { // pzopt: hordeBatch, a zombie's model draws go into the batch
+                  break; // pzopt
+               } // pzopt
                if (pzoptMotionId > 0) {
                   pzopt.ObjectMotion.beginStencil(pzoptMotionId);
                }
                boolean pzoptOutline = pzopt.OccludedOutline.beginModel(this); // pzopt: occluded outlines, the stencil codes this model's meshes write
+               if (pzopt.HordeDraw.modelBegin(this.drawer)) { // pzopt: horde model draws, dev rig (counters, cost modes)
+               if (pzopt.MovingProf.active) pzopt.MovingProf.enterStock(this.drawer); // pzopt: devMovingProf, a model drawn by the stock path (dev rig)
                synchronized (this.drawer) {
                   this.drawer.render(this);
                }
+               if (pzopt.MovingProf.active) pzopt.MovingProf.exitStock(this.drawer); // pzopt: devMovingProf
+               pzopt.HordeDraw.modelEnd(this.drawer); // pzopt: horde model draws, dev rig
+               } // pzopt
                if (pzoptOutline) pzopt.OccludedOutline.endModel(); // pzopt
                if (pzoptMotionId > 0) {
                   pzopt.ObjectMotion.endStencil();

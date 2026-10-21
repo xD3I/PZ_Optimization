@@ -81,5 +81,9 @@ https://raw.githubusercontent.com/xD3I/PZ_Optimization/master/docs/workshop/imag
 https://raw.githubusercontent.com/xD3I/PZ_Optimization/master/docs/workshop/images/84-new-puddle-ripples-changes.png https://da.gd/9D5VC
 https://raw.githubusercontent.com/xD3I/PZ_Optimization/master/docs/workshop/images/85-new-puddle-ripples-2.avif https://da.gd/PKkpC
 https://raw.githubusercontent.com/xD3I/PZ_Optimization/master/docs/workshop/images/86-new-puddle-ripples-2-changes.png https://da.gd/z5ISdZ
+https://raw.githubusercontent.com/xD3I/PZ_Optimization/master/docs/workshop/images/87-new-louisville-race.avif https://da.gd/apfKEZ
+https://raw.githubusercontent.com/xD3I/PZ_Optimization/master/docs/workshop/images/88-new-louisville-devices.png https://da.gd/a4wKk
+https://raw.githubusercontent.com/xD3I/PZ_Optimization/master/docs/workshop/images/89-new-benchmark-menu.avif https://da.gd/ctB9q
+https://raw.githubusercontent.com/xD3I/PZ_Optimization/master/docs/workshop/images/90-new-voxel-lighting.avif https://da.gd/4j65D
 https://raw.githubusercontent.com/xD3I/PZ_Optimization/master/docs/workshop/images/link-discord-small.png https://da.gd/1vw0V
 https://raw.githubusercontent.com/xD3I/PZ_Optimization/master/docs/workshop/images/link-github-small.png https://da.gd/evzPKc

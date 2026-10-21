@@ -1,5 +1,6 @@
-# Menu tour for run.sh --pad (menu profiling): main menu steps, Options > Display, Optimizations tab (preview), other tabs.
-# Never left/right or A on a settings page (they change values); B leaves the options screen.
+# Menu tour for run.sh --pad (menu profiling): main menu steps, Options > Display, the other Options tabs, then the PZ
+# OPTIMIZATION screen (its home list, its sections by LB / RB; since 2026-10-18 the pzopt settings live there, not in an
+# Options tab). Never left/right on a settings page or A on a setting (they change values); B leaves each screen.
 mark activate
 a
 sleep 1.5
@@ -84,58 +85,7 @@ hold down 3
 sleep 0.8
 hold up 3
 sleep 1
-mark tab-optimizations
-rb
-sleep 3
-mark opt-steps
-down
-sleep 0.4
-down
-sleep 0.4
-down
-sleep 0.4
-down
-sleep 0.4
-down
-sleep 0.4
-down
-sleep 0.4
-down
-sleep 0.4
-down
-sleep 0.4
-down
-sleep 0.4
-down
-sleep 0.4
-down
-sleep 0.4
-down
-sleep 0.4
-down
-sleep 0.4
-down
-sleep 0.4
-down
-sleep 0.4
-down
-sleep 0.4
-down
-sleep 0.4
-down
-sleep 0.4
-down
-sleep 0.4
-down
-sleep 0.4
-mark opt-hold
-hold down 4
-sleep 1
-hold up 4
-sleep 1
 mark tabs-right
-rb
-sleep 1.2
 rb
 sleep 1.2
 rb
@@ -149,13 +99,61 @@ lb
 sleep 1.2
 lb
 sleep 1.2
-lb
-sleep 1.2
-lb
-sleep 1.2
 mark options-close
 b
 sleep 2.5
+mark main-to-pzmenu
+down
+sleep 0.5
+mark pzmenu-open
+a
+sleep 2
+mark pzmenu-steps
+down
+sleep 0.4
+down
+sleep 0.4
+down
+sleep 0.4
+down
+sleep 0.4
+down
+sleep 0.4
+down
+sleep 0.4
+down
+sleep 0.4
+down
+sleep 0.4
+down
+sleep 0.4
+down
+sleep 0.4
+mark pzmenu-hold
+hold down 3
+sleep 0.8
+hold up 3
+sleep 1
+mark pzmenu-sections
+rb
+sleep 1.2
+rb
+sleep 1.2
+rb
+sleep 1.2
+rb
+sleep 1.2
+lb
+sleep 1.2
+lb
+sleep 1.2
+lb
+sleep 1.2
+lb
+sleep 1.2
+mark pzmenu-close
+b
+sleep 2
 mark main-steps-after
 down
 sleep 0.5

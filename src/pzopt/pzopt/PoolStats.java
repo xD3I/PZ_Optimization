@@ -25,7 +25,7 @@ public final class PoolStats {
    }
 
    /** Per worker thread: pool stack -> its pending counts. */
-   private static final ThreadLocal<IdentityHashMap<Pool.PoolStacks, Tally>> TALLIES = ThreadLocal.withInitial(IdentityHashMap::new);
+   private static final Tl<IdentityHashMap<Pool.PoolStacks, Tally>> TALLIES = new Tl<>(IdentityHashMap::new);
 
    /** True when the event was tallied (a frame worker); false = the caller counts it the stock way. */
    public static boolean alloc(PoolCounter counter, Pool.PoolStacks stacks, boolean reused) {

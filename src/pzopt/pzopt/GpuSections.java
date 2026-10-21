@@ -106,6 +106,11 @@ public final class GpuSections {
       }
    }
 
+   /** Whether a generic drawer is one of these timestamp markers (pzopt.HordeBatch lets them inside a run). */
+   public static boolean isMarker(Object o) {
+      return o instanceof Marker;
+   }
+
    public static boolean enabled() {
       return Config.GPU_SECTIONS && Overrides.enabled();
    }

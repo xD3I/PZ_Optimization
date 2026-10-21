@@ -176,6 +176,23 @@ public final class VBORenderer {
       this.ibo.create();
    }
 
+   /** pzopt: atlasBatch, nothing queued here (no vertices, no runs, no run in progress): a flush would draw only what follows. */
+   public boolean pzoptIdle() { // pzopt
+      return this.runInProgress == null && this.runs.isEmpty() && (this.elements == null || this.elements.position() == 0) && this.commands.position() == 0; // pzopt
+   } // pzopt
+
+   public float pzoptDx() { // pzopt: atlasBatch, the vertex offset addQuad adds
+      return this.dx; // pzopt
+   } // pzopt
+
+   public float pzoptDy() { // pzopt
+      return this.dy; // pzopt
+   } // pzopt
+
+   public float pzoptDz() { // pzopt
+      return this.dz; // pzopt
+   } // pzopt
+
    public void setOffset(float dx, float dy, float dz) {
       this.dx = dx;
       this.dy = dy;

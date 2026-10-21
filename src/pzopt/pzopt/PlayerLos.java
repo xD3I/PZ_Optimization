@@ -38,6 +38,12 @@ public final class PlayerLos<T> {
       }
    }
 
+   /** Forgets what the set mirrors, so the next {@link #sync} rebuilds it (f9-los: frames of the stock path changed the stack). */
+   public void invalidate() {
+      this.mirrored = null;
+      this.mirroredSize = -1;
+   }
+
    /** {@code stack.contains(o)} in one hash probe; {@link #sync} must have run this frame. */
    public boolean contains(T o) {
       return this.remembered.contains(o);

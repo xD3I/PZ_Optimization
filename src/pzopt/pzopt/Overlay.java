@@ -122,6 +122,14 @@ public final class Overlay {
    private static final float[] frameMs = new float[RING];
    private static final long[] frameEndNs = new long[RING];
    private static final float[] gpuMs = new float[RING];
+   // the built-in benchmark's extra columns (BenchRecorder): render-thread time from the frame's acquire to the swap's
+   // return, and the game thread's last completed step, per presented frame
+   private static final boolean BENCH = BenchPlan.active();
+   private static final float[] renderMs = new float[RING];
+   private static final float[] stepMs = new float[RING];
+   private static final float[] presentMs = new float[RING];
+   private static long renderStartNs;
+   static volatile long swapCallNs;
    private static volatile int head; // frames recorded so far; slot = (head - 1) & (RING - 1) is the newest
    private static long lastSwapNs;
    private static volatile long renderThreadId = -1L;
@@ -129,6 +137,7 @@ public final class Overlay {
    // --- GPU timer queries (render thread only) ---
    private static int gpuState; // 0 untried, 1 running, -1 unavailable
    private static final int[] queryIds = new int[QUERIES];
+   private static QueryBuf queryBuf; // pacingQueryBuffer (tail2)
    private static final long[] queryFrame = new long[QUERIES]; // head value the query belongs to, -1 free
    private static int queryNext;
    private static int activeQuery = -1;
@@ -305,6 +314,10 @@ public final class Overlay {
 
    /** Before {@code SpriteRenderer.postRender()}: start the frame's GL_TIME_ELAPSED query. */
    public static void gpuBegin() {
+      if (BENCH) {
+         renderStartNs = System.nanoTime();
+         BenchSystem.captureGl();
+      }
       if (!sampling || gpuState < 0) {
          return;
       }
@@ -318,6 +331,7 @@ public final class Overlay {
             }
             GL15.glGenQueries(queryIds);
             Arrays.fill(queryFrame, -1L);
+            queryBuf = QueryBuf.create(QUERIES, "overlay"); // pacingQueryBuffer (tail2)
             gpuState = 1;
          }
          collectQueries();
@@ -340,6 +354,9 @@ public final class Overlay {
       }
       try {
          GL15.glEndQuery(GL33.GL_TIME_ELAPSED);
+         if (queryBuf != null) { // pacingQueryBuffer (tail2): the result lands in mapped memory, no per-frame polling
+            queryBuf.request(activeQuery, queryIds[activeQuery]);
+         }
          queryFrame[activeQuery] = head;
          queryNext = (activeQuery + 1) % QUERIES;
       } catch (Throwable t) {
@@ -356,10 +373,18 @@ public final class Overlay {
          if (f == -1L) {
             continue;
          }
-         if (GL15.glGetQueryObjecti(queryIds[i], GL15.GL_QUERY_RESULT_AVAILABLE) == 0) {
-            continue;
+         long ns;
+         if (queryBuf != null) { // pacingQueryBuffer (tail2): read from client memory
+            ns = queryBuf.get(i);
+            if (ns == -1L) {
+               continue;
+            }
+         } else {
+            if (GL15.glGetQueryObjecti(queryIds[i], GL15.GL_QUERY_RESULT_AVAILABLE) == 0) {
+               continue;
+            }
+            ns = GL33.glGetQueryObjecti64(queryIds[i], GL15.GL_QUERY_RESULT);
          }
-         long ns = GL33.glGetQueryObjecti64(queryIds[i], GL15.GL_QUERY_RESULT);
          queryFrame[i] = -1L;
          if (f < head) { // slot already written by onSwap: fill it in (still within the ring)
             gpuMs[(int)(f & (RING - 1))] = ns / 1e6f;
@@ -386,6 +411,13 @@ public final class Overlay {
          frameMs[slot] = ms;
          frameEndNs[slot] = now;
          gpuMs[slot] = pendingGpuMs;
+         if (BENCH) {
+            long sw = swapCallNs >= renderStartNs ? swapCallNs : now;
+            renderMs[slot] = renderStartNs != 0L ? (sw - renderStartNs) / 1e6f : 0f;
+            presentMs[slot] = (now - sw) / 1e6f;
+            // the game thread's own work: its step minus the wait at the frame hand-off (render thread / GPU / v-sync)
+            stepMs[slot] = Math.max(0L, FrameCap.lastStepNs - LowLatency.handoffWaitNs) / 1e6f;
+         }
          pendingGpuMs = 0f;
          head = h + 1;
          if (logFrames && h >= LOG_LAG) {
@@ -405,6 +437,9 @@ public final class Overlay {
       int slot = frame & (RING - 1);
       long end = frameEndNs[slot];
       float ms = frameMs[slot];
+      if (BENCH) {
+         BenchRecorder.onFrame(ms, gpuMs[slot], renderMs[slot], stepMs[slot], presentMs[slot], end);
+      }
       try {
          if (log == null) {
             String dir = ZomboidFileSystem.instance.getCacheDir();
@@ -434,6 +469,11 @@ public final class Overlay {
       }
    }
 
+   /** The latest utilization the sampler thread measured: process, machine, game thread, render thread, GPU busy (%). */
+   static float[] loads() {
+      return new float[] {processLoad, systemLoad, gameLoad, renderLoad, gpuLoad};
+   }
+
    /** Flush the frame log (called at quit from the harness; safe to call any time). */
    public static void flushLog() {
       BufferedWriter w = log;
@@ -461,8 +501,8 @@ public final class Overlay {
    }
 
    /**
-    * The toggle key, or the "Performance overlay" item of the main and pause menus
-    * (pzopt_mainscreen_overlay.lua, game thread): show / hide, or the notice while sampling is off.
+    * The toggle key, the L3 + R3 chord or the PZ Optimization screen's Profiler > Performance overlay row (game thread):
+    * show / hide; while the measuring is off it is switched on first (or the notice says why it cannot be).
     */
    public static void toggle() {
       if (!ACTIVE) {
@@ -472,12 +512,35 @@ public final class Overlay {
          visible = !visible;
          steadyLeftW = 0;
          Log.info("overlay: " + (visible ? "shown" : "hidden"));
+         return;
+      }
+      // the measuring is off (overlaySampling or the Profiler master switch): switch it on, saved like the Profiler tab
+      // does (UserOptions: both keys apply at once, Config.reloadLive + reconfigure), then show the overlay (2026-10-18;
+      // the key, the L3 + R3 chord and the PZ Optimization screen's toggle all come here)
+      String turned = enableMeasuring();
+      if (sampling) {
+         visible = true;
+         steadyLeftW = 0;
+         Log.info("overlay: measuring switched on (" + turned + ") and shown");
       } else {
          noticeUntilNs = System.nanoTime() + NOTICE_NS;
          String[] notice = notice();
-         Log.info("overlay: sampling is off (" + (Config.PROFILER_ENABLED ? "overlaySampling" : "profilerEnabled") + "=false); "
-               + notice[1] + " " + notice[2]);
+         Log.info("overlay: sampling is off (" + (Config.PROFILER_ENABLED ? "overlaySampling" : "profilerEnabled") + "=false"
+               + (turned.isEmpty() ? "" : ", tried " + turned) + "); " + notice[1] + " " + notice[2]);
       }
+   }
+
+   /** Saves profilerEnabled / overlaySampling on (unless a pin decides them); returns the keys it changed. */
+   static String enableMeasuring() {
+      StringBuilder changed = new StringBuilder();
+      for (String key : new String[] { "profilerEnabled", "overlaySampling" }) {
+         if ("true".equals(Config.value(key)) || Config.pinnedBy(key) != null) {
+            continue;
+         }
+         UserOptions.set(key, "true".equals(Config.defaultValue(key)) ? "" : "true");
+         changed.append(changed.length() == 0 ? "" : ", ").append(key);
+      }
+      return changed.toString();
    }
 
    /** Whether the frame log is being written (harness runs, {@code overlayLog}): the game-thread profile samples for it too. */

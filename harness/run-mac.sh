@@ -43,6 +43,27 @@ FLAG_FILE="$ZOMBOID/Lua/pzopt-harness.txt"
 die() { echo "$*" >&2; exit 1; }
 [[ -f "$JAR" ]] || die "projectzomboid.jar not found under $PZ_APP (set PZ_APP)"
 
+# --benchmark <spec> (with --label, --prop k=v): the game's built-in benchmark chain through harness/benchmark-run.sh
+# (as run.sh), so a Mac queue job can run it; the other arguments do not apply
+# --screen WxH: the game in a window of that size (BENCH_SCREEN, the readability checks of small screens), --font N its UI
+# font size (BENCH_FONT, options.ini fontSize); --benchmark pad
+# (with --label bench-pad) runs the controller check harness/benchmark-pad-check.sh instead (a uinput pad: Linux only)
+if [[ " $* " == *" --benchmark "* ]]; then
+  b_spec=""; b_label="bench"; b_props=()
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --benchmark) b_spec="$2"; shift 2 ;;
+      --label) b_label="$2"; shift 2 ;;
+      --screen) export BENCH_SCREEN="$2"; shift 2 ;;
+      --font) export BENCH_FONT="$2"; shift 2 ;;
+      --prop) b_props+=("$2"); shift 2 ;;
+      *) shift ;;
+    esac
+  done
+  [[ "$b_spec" == pad ]] && BENCH_PROPS="${b_props[*]:-}" exec "$HERE"/benchmark-pad-check.sh
+  exec "$HERE/benchmark-run.sh" "$b_spec" "$b_label" ${b_props[@]+"${b_props[@]}"}
+fi
+
 java_bin() {
   local arch; arch=$(uname -m)
   local j="$PZ_APP/Contents/PlugIns/jre-$( [[ "$arch" == arm64 ]] && echo aarch64 || echo x86_64 )/Contents/Home/bin/java"
@@ -276,7 +297,7 @@ for h in "$PZ_DIR"/hs_err_pid*.log "$ZOMBOID"/hs_err_pid*.log; do [[ -f "$h" ]] 
 [[ -f "$game_cache/console.txt" ]] && cp "$game_cache/console.txt" "$out/console.txt" || echo "no console.txt written" >&2
 [[ "$game_cache" != "$ZOMBOID" ]] && { echo "game user folder $game_cache"; ls -la "$game_cache" "$game_cache/pzopt"; } > "$out/game-cache-dir.txt" 2>&1
 cp "$ZOMBOID"/pzopt-*.out "$out/" 2>/dev/null || true
-cp "$ZOMBOID"/Screenshots/pzopt-*.png "$out/" 2>/dev/null || true   # harness screenshots (options_tab rig)
+cp "$ZOMBOID"/Screenshots/pzopt-*.png "$out/" 2>/dev/null || true   # harness screenshots (the options_* rigs of the PZ OPTIMIZATION screen)
 [[ -d "$ZOMBOID/pzopt-hdr" ]] && mv "$ZOMBOID/pzopt-hdr" "$out/hdr"   # HDR frame dumps (tools/hdr/hdrframe.py)
 [[ -d "$ZOMBOID/pzopt-capture" ]] && mv "$ZOMBOID/pzopt-capture" "$out/capture"   # frame sequence (harness/ppl/capture.py)
 cp "$PZ_DIR/pzopt.properties" "$out/pzopt.properties"

@@ -257,6 +257,46 @@
     "Windows: G1 + heap settings apply, uninstall removes every file, HDR screenshot fix",
     "Windows: per-frame worker waits no longer sleep 1 ms"
    ]
+  },
+  {
+   "day": "2026-10-12",
+   "build": "29a9d56",
+   "notes": [
+    "Puddle ripples: raindrop rings and continuous car wakes",
+    "Mirrors: one reflection per mirror",
+    "Ambient occlusion follows an opened gate",
+    "Mods: AOT cache keeps other mods' classes, animation cache keyed on a mod's skeleton"
+   ]
+  },
+  {
+   "day": "2026-10-13",
+   "build": "4be8d4e",
+   "notes": [
+    "Zombie update on the frame workers by default",
+    "Ragdoll checks off the game thread",
+    "Chunk bakes without driver round trips",
+    "Vehicle-hit crash fix"
+   ]
+  },
+  {
+   "day": "2026-10-14",
+   "build": "f964083",
+   "notes": [
+    "Hordes: 3D zombies drawn in batches, distant ones as lit sprites",
+    "Louisville 120: zombie postupdate and tile recording on the workers",
+    "UI: hover, drag and scroll at the frame rate",
+    "Garbage collection and spare work in the frame cap's slack"
+   ]
+  },
+  {
+   "day": "2026-10-15",
+   "build": "a0cc7a4",
+   "notes": [
+    "Frame queue at frame caps: steadier pacing",
+    "Player sight and the zombie scheduler on the workers",
+    "First sight of a horde: spawns, models and clothing spread over frames",
+    "Cheaper chunk hand-off at chunk borders"
+   ]
   }
  ],
  "excluded": {

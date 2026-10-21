@@ -463,6 +463,7 @@ public final class ChunkAo {
       lastMipLevels = needed;
       if (PENDING.isEmpty()) {
          applyStaged(playerIndex, false);
+         restoreWorldFrame(playerIndex); // bakeNoSync
          return;
       }
       VISIBLE.clear();
@@ -547,9 +548,11 @@ public final class ChunkAo {
                trace(info.chunk, rc, "deferred compute (fresh=" + job.fresh + ")");
             }
             SpriteRenderer.instance.drawGeneric(job);
+            queuedAfterBakes = true; // bakeNoSync: the job leaves the viewport to restoreWorldFrame
          }
       }
       applyStaged(playerIndex, true);
+      restoreWorldFrame(playerIndex); // bakeNoSync
    }
 
    /**
@@ -609,6 +612,7 @@ public final class ChunkAo {
             stepApplyForced++;
          }
          SpriteRenderer.instance.drawGeneric(job);
+         queuedAfterBakes = true; // bakeNoSync: the job leaves the viewport to restoreWorldFrame
          SunShadow.stepApplied(STAGED_SUN, STAGED_SUN[3]); // the per-frame passes follow the step the textures now show
       }
    }
@@ -2044,6 +2048,17 @@ public final class ChunkAo {
 
       @Override
       public void render() {
+         long bakeLogT0 = BakeLog.ON ? System.nanoTime() : 0L; // bake timing: the render thread's time in AO jobs (pzopt-bakes.out "ra" rows)
+         try {
+            this.renderJob();
+         } finally {
+            if (BakeLog.ON) {
+               BakeLog.rtAo(bakeLogT0, this.kind);
+            }
+         }
+      }
+
+      private void renderJob() {
          try {
             if (this.generation != ChunkAo.generation) {
                return; // queued before the AO settings changed: its texture bakes again under the new ones
@@ -2086,6 +2101,47 @@ public final class ChunkAo {
    // ------------------------------------------------------------------------------------------------ render thread
 
    private static final Gl GL = new Gl();
+   /** bakeNoSync: the multiplies' occlusion queries still to read, read after the swap (render thread). */
+   private static final java.util.ArrayList<Entry> PENDING_QUERIES = new java.util.ArrayList<>();
+
+   /**
+    * bakeNoSync, render thread right after the swap (GlNames.refill): the "anything drawn" answers of the multiplies queued
+    * since; read there instead of at the texture's next bake, where the read waited for the driver thread to work off the
+    * bakes queued before it. A query not ready yet is asked again after the next swap.
+    */
+   static void pollQueries() {
+      if (!Config.BAKE_NO_SYNC || PENDING_QUERIES.isEmpty()) {
+         return;
+      }
+      for (int i = PENDING_QUERIES.size() - 1; i >= 0; i--) {
+         Entry e = PENDING_QUERIES.get(i);
+         if (!e.queryPending || e.query == 0) {
+            PENDING_QUERIES.remove(i);
+            continue;
+         }
+         if (GL15.glGetQueryObjecti(e.query, GL15.GL_QUERY_RESULT_AVAILABLE) != 0) {
+            e.empty = GL15.glGetQueryObjecti(e.query, GL15.GL_QUERY_RESULT) == 0;
+            e.queryPending = false;
+            PENDING_QUERIES.remove(i);
+         }
+      }
+      if (PENDING_QUERIES.size() > 4096) {
+         PENDING_QUERIES.clear(); // a bound: an entry left pending is multiplied as before
+      }
+   }
+
+   /** bakeNoSync, game thread: AO jobs after the bakes leave the viewport alone; the stock state comes back as after a bake. */
+   private static boolean queuedAfterBakes;
+
+   private static void restoreWorldFrame(int playerIndex) {
+      if (queuedAfterBakes && Config.BAKE_NO_SYNC && zombie.characters.IsoPlayer.numPlayers == 1) {
+         queuedAfterBakes = false;
+         // what FBORenderChunkManager.endCaching issues after every bake: the world pass's viewport and matrices
+         SpriteRenderer.instance.glDoStartFrame(zombie.core.Core.getInstance().getScreenWidth(), zombie.core.Core.getInstance().getScreenHeight(),
+            zombie.core.Core.getInstance().getCurrentPlayerZoom(), playerIndex);
+      }
+      queuedAfterBakes = false;
+   }
 
    /** The AO kept for one FBORenderChunk (by index): R8 at the AO scale, and the texture it was computed for. */
    private static final class Entry {
@@ -2117,6 +2173,47 @@ public final class ChunkAo {
    }
 
    private static final class Gl {
+      private long noSyncChecks, noSyncMismatches;
+      private final int[] checkViewport = new int[4];
+
+      /**
+       * The framebuffer bound when a job starts, with this.viewport set to the viewport to put back (bakeNoSync: from records
+       * instead of two glGets; viewport[2] = -1 = leave it, flush() queues a stock glDoStartFrame behind its jobs). A job
+       * inside a bake finds the texture's framebuffer (TextureFBO.startDrawing records it) and the bake's viewport, set by its
+       * glDoStartFrameFlipY(w, h): the whole texture for one player.
+       */
+      private int saveState(Job job, boolean inBake) {
+         if (!Config.BAKE_NO_SYNC || zombie.characters.IsoPlayer.numPlayers > 1) {
+            GL11.glGetIntegerv(GL11.GL_VIEWPORT, this.viewport);
+            return GL11.glGetInteger(GL30.GL_DRAW_FRAMEBUFFER_BINDING);
+         }
+         int fbo = zombie.core.textures.TextureFBO.lastID;
+         if (inBake) {
+            this.viewport[0] = 0;
+            this.viewport[1] = 0;
+            this.viewport[2] = job.w;
+            this.viewport[3] = job.h;
+         } else {
+            this.viewport[2] = -1;
+         }
+         if (Config.DEV_BAKE_NO_SYNC_CHECK > 0 && ++this.noSyncChecks % Config.DEV_BAKE_NO_SYNC_CHECK == 0) {
+            GL11.glGetIntegerv(GL11.GL_VIEWPORT, this.checkViewport);
+            int real = GL11.glGetInteger(GL30.GL_DRAW_FRAMEBUFFER_BINDING);
+            boolean vpOk = !inBake || java.util.Arrays.equals(this.checkViewport, this.viewport);
+            if (real != fbo || !vpOk) {
+               if (this.noSyncMismatches++ < 20) {
+                  Log.warn("bake no-sync check: job kind " + job.kind + " inBake=" + inBake + " recorded fbo " + fbo + " viewport "
+                     + java.util.Arrays.toString(this.viewport) + ", driver fbo " + real + " viewport " + java.util.Arrays.toString(this.checkViewport));
+               }
+               if (inBake) {
+                  System.arraycopy(this.checkViewport, 0, this.viewport, 0, 4);
+               }
+               return real;
+            }
+         }
+         return fbo;
+      }
+
       private final HashMap<Integer, Entry> entries = new HashMap<>();
       /** Render thread: kept terms by the colour texture they were computed for (CloudShadow reads them per composite draw). */
       private final HashMap<Integer, Entry> byColour = new HashMap<>();
@@ -2210,7 +2307,7 @@ public final class ChunkAo {
             return; // a compute is queued
          }
          boolean dev = Config.DEV_AO_VIEW > 0;
-         if (e.queryPending && GL15.glGetQueryObjecti(e.query, GL15.GL_QUERY_RESULT_AVAILABLE) != 0) {
+         if (e.queryPending && !Config.BAKE_NO_SYNC && GL15.glGetQueryObjecti(e.query, GL15.GL_QUERY_RESULT_AVAILABLE) != 0) { // bakeNoSync: read after the swap (pollQueries)
             e.empty = GL15.glGetQueryObjecti(e.query, GL15.GL_QUERY_RESULT) == 0;
             e.queryPending = false;
          }
@@ -2218,7 +2315,7 @@ public final class ChunkAo {
             skippedEmpty++;
             return;
          }
-         GL11.glGetIntegerv(GL11.GL_VIEWPORT, this.viewport);
+         this.saveState(job, true); // the bake's viewport (bakeNoSync: no driver round trip)
          this.stamp(0);
          this.begin();
          this.drawMultiply(job, e, sc, aw, ah);
@@ -2258,10 +2355,10 @@ public final class ChunkAo {
             GL11.glBlendFunc(GL11.GL_ZERO, GL11.GL_SRC_COLOR);
          }
          GL11.glColorMask(true, true, true, false);
-         boolean check = !e.checked && !dev;
+         boolean check = !e.checked && !dev && !Config.BAKE_NO_SYNC; // bakeNoSync: no "anything drawn" query (beginning one inside a bake waited for the driver thread); an empty term is multiplied like any other
          if (check) {
             if (e.query == 0) {
-               e.query = GL15.glGenQueries();
+               e.query = GlNames.query(); // bakeNoSync: pooled
             }
             GL15.glBeginQuery(GL33.GL_ANY_SAMPLES_PASSED, e.query);
          }
@@ -2270,6 +2367,9 @@ public final class ChunkAo {
             GL15.glEndQuery(GL33.GL_ANY_SAMPLES_PASSED);
             e.checked = true;
             e.queryPending = true;
+            if (Config.BAKE_NO_SYNC) {
+               PENDING_QUERIES.add(e); // read after the swap (pollQueries)
+            }
          }
          GL11.glDisable(GL11.GL_BLEND);
          GL11.glColorMask(true, true, true, true);
@@ -2371,11 +2471,10 @@ public final class ChunkAo {
             fail("shaders did not compile");
             return;
          }
-         int previousFbo = GL11.glGetInteger(GL30.GL_DRAW_FRAMEBUFFER_BINDING);
+         int previousFbo = this.saveState(job, inBake); // the framebuffer and viewport bound (bakeNoSync: no driver round trip)
          if (inBake) {
             job.fbo = previousFbo; // the texture's own framebuffer, bound by the bake
          }
-         GL11.glGetIntegerv(GL11.GL_VIEWPORT, this.viewport);
          float sc = scale();
          int aw = Math.max(1, (int)Math.ceil(job.w * sc));
          int ah = Math.max(1, (int)Math.ceil(job.h * sc));
@@ -2525,7 +2624,7 @@ public final class ChunkAo {
          if (job.mipmaps && job.mipLevels > 0 && job.colorTex > 0 && !Config.DEV_AO_NO_MIPS) {
             // the bake's mipmaps get the same ratio level by level (glGenerateMipmap costs ~65 us on a 1024 texture)
             if (this.mipFbo == 0) {
-               this.mipFbo = GL30.glGenFramebuffers();
+               this.mipFbo = GlNames.bakeFramebuffer(); // bakeNoSync: pooled
             }
             GL30.glBindFramebuffer(GL30.GL_FRAMEBUFFER, this.mipFbo);
             GL20.glDrawBuffers(GL30.GL_COLOR_ATTACHMENT0);
@@ -2718,7 +2817,9 @@ public final class ChunkAo {
       }
 
       private static void restore(int[] viewport) {
-         GL11.glViewport(viewport[0], viewport[1], viewport[2], viewport[3]);
+         if (viewport[2] >= 0) { // bakeNoSync: after the bakes the viewport is left to the glDoStartFrame flush() queues behind its jobs
+            GL11.glViewport(viewport[0], viewport[1], viewport[2], viewport[3]);
+         }
          GL11.glColorMask(true, true, true, true);
          GL13.glActiveTexture(GL13.GL_TEXTURE1);
          GL11.glBindTexture(GL11.GL_TEXTURE_2D, 0);
@@ -2777,7 +2878,7 @@ public final class ChunkAo {
        * the pool was short). Leaves texture unit 0 and the framebuffer unbound; the callers bind what they draw with.
        */
       private static int quietTexture(int w, int h) {
-         int tex = GL11.glGenTextures();
+         int tex = GlNames.bakeTexture(); // bakeNoSync: pooled
          GL13.glActiveTexture(GL13.GL_TEXTURE0);
          GL11.glBindTexture(GL11.GL_TEXTURE_2D, tex);
          GL11.glTexImage2D(GL11.GL_TEXTURE_2D, 0, GL30.GL_RG8, w, h, 0, GL30.GL_RG, GL11.GL_UNSIGNED_BYTE, (ByteBuffer)null);
@@ -2790,7 +2891,7 @@ public final class ChunkAo {
       }
 
       private static int quietFbo(int tex) {
-         int fbo = GL30.glGenFramebuffers();
+         int fbo = GlNames.bakeFramebuffer(); // bakeNoSync: pooled
          GL30.glBindFramebuffer(GL30.GL_FRAMEBUFFER, fbo);
          GL30.glFramebufferTexture2D(GL30.GL_FRAMEBUFFER, GL30.GL_COLOR_ATTACHMENT0, GL11.GL_TEXTURE_2D, tex, 0);
          GL20.glDrawBuffers(GL30.GL_COLOR_ATTACHMENT0);
@@ -2850,8 +2951,7 @@ public final class ChunkAo {
          if (failed || this.ratioProgram == 0) {
             return;
          }
-         int previousFbo = GL11.glGetInteger(GL30.GL_DRAW_FRAMEBUFFER_BINDING);
-         GL11.glGetIntegerv(GL11.GL_VIEWPORT, this.viewport);
+         int previousFbo = this.saveState(job, false); // bakeNoSync: no driver round trip
          long now = System.nanoTime();
          this.releaseFinishedFades(now);
          boolean fade = Config.SUN_STEP_FADE_MS > 0 && CloudShadow.stepFadeSupported();
@@ -2892,7 +2992,7 @@ public final class ChunkAo {
             GL11.glDrawArrays(GL11.GL_TRIANGLE_FAN, 0, 4);
             if (e.sMipmaps && e.sMipLevels > 0 && e.sColorTex > 0 && !Config.DEV_AO_NO_MIPS) {
                if (this.mipFbo == 0) {
-                  this.mipFbo = GL30.glGenFramebuffers();
+                  this.mipFbo = GlNames.bakeFramebuffer(); // bakeNoSync: pooled
                }
                GL30.glBindFramebuffer(GL30.GL_FRAMEBUFFER, this.mipFbo);
                GL20.glDrawBuffers(GL30.GL_COLOR_ATTACHMENT0);
@@ -2993,13 +3093,16 @@ public final class ChunkAo {
             GL11.glColorMask(true, true, true, true);
          }
          e.fadeT0 = now;
-         if (!org.lwjgl.opengl.ARBBindlessTexture.glIsTextureHandleResidentARB(e.fadeHandle)) {
-            org.lwjgl.opengl.ARBBindlessTexture.glMakeTextureHandleResidentARB(e.fadeHandle);
+         if (Config.BAKE_NO_SYNC ? FADE_RESIDENT.add(e.fadeHandle) : !org.lwjgl.opengl.ARBBindlessTexture.glIsTextureHandleResidentARB(e.fadeHandle)) {
+            org.lwjgl.opengl.ARBBindlessTexture.glMakeTextureHandleResidentARB(e.fadeHandle); // bakeNoSync: residency from our own record, not a driver query
          }
          if (!this.fading.contains(e)) {
             this.fading.add(e);
          }
       }
+
+      /** bakeNoSync: the fade textures' bindless handles this class made resident (instead of glIsTextureHandleResidentARB). */
+      private static final java.util.HashSet<Long> FADE_RESIDENT = new java.util.HashSet<>();
 
       private void releaseFade(Entry e) {
          if (e.fadeTex == 0) {
@@ -3008,8 +3111,8 @@ public final class ChunkAo {
          this.fading.remove(e);
          if (e.fadeHandle != 0L) {
             CloudShadow.stepOldReleased(e.fadeHandle);
-            if (org.lwjgl.opengl.ARBBindlessTexture.glIsTextureHandleResidentARB(e.fadeHandle)) {
-               org.lwjgl.opengl.ARBBindlessTexture.glMakeTextureHandleNonResidentARB(e.fadeHandle);
+            if (Config.BAKE_NO_SYNC ? FADE_RESIDENT.remove(e.fadeHandle) : org.lwjgl.opengl.ARBBindlessTexture.glIsTextureHandleResidentARB(e.fadeHandle)) {
+               org.lwjgl.opengl.ARBBindlessTexture.glMakeTextureHandleNonResidentARB(e.fadeHandle); // bakeNoSync: our own record
             }
          }
          if (e.fadeHandle != 0L && this.fadePool.size() < 160) {
@@ -3129,8 +3232,8 @@ public final class ChunkAo {
       }
 
       private static int texture(int w, int h, int internal, int format, int type, boolean linear) {
-         int previous = GL11.glGetInteger(GL11.GL_TEXTURE_BINDING_2D);
-         int tex = GL11.glGenTextures();
+         int previous = Config.BAKE_NO_SYNC ? 0 : GL11.glGetInteger(GL11.GL_TEXTURE_BINDING_2D); // bakeNoSync: inside a job, whose restore() unbinds units 0 / 1 anyway
+         int tex = GlNames.bakeTexture();
          GL11.glBindTexture(GL11.GL_TEXTURE_2D, tex);
          GL11.glTexImage2D(GL11.GL_TEXTURE_2D, 0, internal, w, h, 0, format, type, (ByteBuffer)null);
          int filter = linear ? GL11.GL_LINEAR : GL11.GL_NEAREST;
@@ -3150,9 +3253,9 @@ public final class ChunkAo {
 
       private void uploadFar(Job job) {
          GL13.glActiveTexture(GL13.GL_TEXTURE0 + FAR_UNIT);
-         this.farPrev = GL11.glGetInteger(GL11.GL_TEXTURE_BINDING_2D);
+         this.farPrev = Config.BAKE_NO_SYNC ? 0 : GL11.glGetInteger(GL11.GL_TEXTURE_BINDING_2D); // bakeNoSync: pixelLight binds its mask on this unit at each composite draw that reads it
          if (this.farTex == 0) {
-            this.farTex = GL11.glGenTextures();
+            this.farTex = GlNames.bakeTexture();
             GL11.glBindTexture(GL11.GL_TEXTURE_2D, this.farTex);
             GL11.glTexImage2D(GL11.GL_TEXTURE_2D, 0, GL11.GL_RGB8, FAR_SIDE, FAR_SIDE, 0, GL11.GL_RGB, GL11.GL_UNSIGNED_BYTE, (ByteBuffer)null);
             GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MIN_FILTER, GL11.GL_LINEAR);
@@ -3176,8 +3279,8 @@ public final class ChunkAo {
        * per pixel was ~50 MB of texture reads a frame at 5K; the bake passes read level 0 with textureLod).
        */
       private static int keptTexture(int w, int h) {
-         int previous = GL11.glGetInteger(GL11.GL_TEXTURE_BINDING_2D);
-         int tex = GL11.glGenTextures();
+         int previous = Config.BAKE_NO_SYNC ? 0 : GL11.glGetInteger(GL11.GL_TEXTURE_BINDING_2D); // bakeNoSync: as texture()
+         int tex = GlNames.bakeTexture();
          GL11.glBindTexture(GL11.GL_TEXTURE_2D, tex);
          for (int k = 0; k <= 2; k++) {
             GL11.glTexImage2D(GL11.GL_TEXTURE_2D, k, GL30.GL_RG8, Math.max(1, w >> k), Math.max(1, h >> k), 0, GL30.GL_RG, GL11.GL_UNSIGNED_BYTE, (ByteBuffer)null);
@@ -3204,7 +3307,7 @@ public final class ChunkAo {
       }
 
       private static int fbo(int tex) {
-         int fbo = GL30.glGenFramebuffers();
+         int fbo = GlNames.bakeFramebuffer(); // bakeNoSync: pooled
          GL30.glBindFramebuffer(GL30.GL_FRAMEBUFFER, fbo);
          GL30.glFramebufferTexture2D(GL30.GL_FRAMEBUFFER, GL30.GL_COLOR_ATTACHMENT0, GL11.GL_TEXTURE_2D, tex, 0);
          GL20.glDrawBuffers(GL30.GL_COLOR_ATTACHMENT0);

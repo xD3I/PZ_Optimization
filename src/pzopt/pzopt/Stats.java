@@ -71,7 +71,15 @@ public final class Stats {
       }
    }
 
+   /** Chunks the streamer has started loading since boot, counted whether or not the logs are on (benchmark). */
+   private static final java.util.concurrent.atomic.AtomicInteger loaded = new java.util.concurrent.atomic.AtomicInteger();
+
+   public static int loadedChunks() {
+      return loaded.get();
+   }
+
    public static Timing begin(IsoChunk chunk) {
+      loaded.incrementAndGet();
       Timing t = new Timing();
       Long e = enqueued.remove(chunk);
       t.loadStartNs = System.nanoTime();

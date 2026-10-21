@@ -24,6 +24,15 @@ public interface ECSEntity {
 
    HashMap<Class<? extends ECSComponent>, ECSComponent> getECSComponentMap();
 
+   /** pzopt: ecsValuesCache (zombie redesign, f8-zomb2): the map's values in its iteration order, or null (no cache on this entity type). */
+   default ECSComponent[] pzoptEcsValues() { // pzopt
+      return null; // pzopt
+   } // pzopt
+
+   /** pzopt: ecsValuesCache, the map changed. */
+   default void pzoptEcsChanged() { // pzopt
+   } // pzopt
+
    default void registerECSComponents() {
       this.setECSComponent(new FrameKeeperComponent());
    }
@@ -73,6 +82,7 @@ public interface ECSEntity {
       if (!this.hasECSComponent(component)) {
          this.removeECSComponent(component.getECSClass());
          this.getECSComponentMapInternal().put(component.getECSClass(), component);
+         this.pzoptEcsChanged(); // pzopt: ecsValuesCache
          component.setECSOwnerEntity(this);
       }
    }
@@ -89,6 +99,7 @@ public interface ECSEntity {
       ComponentType component = this.tryGetECSComponent(componentClass);
       if (component != null) {
          this.getECSComponentMapInternal().remove(component.getECSClass());
+         this.pzoptEcsChanged(); // pzopt: ecsValuesCache
          component.setECSOwnerEntity(null);
       }
    }
@@ -116,6 +127,16 @@ public interface ECSEntity {
    }
 
    default <ST> void visitAllComponents(Class<? extends ST> instanceOf, Consumer<ST> visitor) {
+      ECSComponent[] pzoptValues = this.pzoptEcsValues(); // pzopt: ecsValuesCache, the same values in the same order without an iterator a call
+      if (pzoptValues != null) { // pzopt
+         for (ECSComponent c : pzoptValues) { // pzopt
+            ST converted = (ST)Type.tryCastTo(c, instanceOf); // pzopt
+            if (converted != null) { // pzopt
+               visitor.accept(converted); // pzopt
+            } // pzopt
+         } // pzopt
+         return; // pzopt
+      } // pzopt
       for (ECSComponent c : this.getECSComponentMapInternal().values()) {
          ST converted = (ST)Type.tryCastTo(c, instanceOf);
          if (converted != null) {
@@ -125,6 +146,16 @@ public interface ECSEntity {
    }
 
    default <ST, P1> void visitAllComponents(Class<? extends ST> instanceOf, BiConsumer<ST, P1> visitor, P1 param1) {
+      ECSComponent[] pzoptValues = this.pzoptEcsValues(); // pzopt: ecsValuesCache
+      if (pzoptValues != null) { // pzopt
+         for (ECSComponent c : pzoptValues) { // pzopt
+            ST converted = (ST)Type.tryCastTo(c, instanceOf); // pzopt
+            if (converted != null) { // pzopt
+               visitor.accept(converted, param1); // pzopt
+            } // pzopt
+         } // pzopt
+         return; // pzopt
+      } // pzopt
       for (ECSComponent c : this.getECSComponentMapInternal().values()) {
          ST converted = (ST)Type.tryCastTo(c, instanceOf);
          if (converted != null) {

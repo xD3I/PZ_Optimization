@@ -19,9 +19,15 @@ import org.lwjgl.opengl.GL30;
  */
 public final class GlNames {
    public static final boolean ON = Config.GL_NO_SYNC && Overrides.enabled();
+   /** bakeNoSync: the pools also serve the bake passes' own GL objects (AO, sway), whether or not glNoSync is on. */
+   public static final boolean POOLS = (Config.GL_NO_SYNC || Config.BAKE_NO_SYNC || Config.COMBINER_POOL) && Overrides.enabled();
+   /** combinerPool (tail2): TextureCombiner's composites take pooled names while this is set (render thread), glNoSync or not. */
+   public static boolean combinerScope;
    private static final int[] textures = new int[Math.max(8, Config.GL_NAME_POOL)];
    private static final int[] framebuffers = new int[Math.max(4, Config.GL_NAME_POOL / 4)];
-   private static int texN, fboN;
+   private static final int[] queries = new int[64];
+   private static int texN, fboN, queryN;
+   public static long bakeTexServed, bakeFboServed, queryServed, bakeFallback;
    private static volatile Thread owner;
    private static final HashSet<Long> completeShapes = new HashSet<>();
    public static long texServed, texFallback, fboServed, fboFallback, refills, statusSkipped, statusChecked;
@@ -31,7 +37,7 @@ public final class GlNames {
 
    /** Render thread, right after the swap: tops the texture pool up to full when under three quarters, the framebuffer pool under half. */
    public static void refill() {
-      if (!ON) {
+      if (!POOLS) {
          return;
       }
       Thread t = Thread.currentThread();
@@ -54,17 +60,67 @@ public final class GlNames {
          fboN = framebuffers.length;
          refills++;
       }
+      if (Config.BAKE_NO_SYNC && queryN < queries.length / 2) {
+         int[] fresh = new int[queries.length - queryN];
+         org.lwjgl.opengl.GL15.glGenQueries(fresh);
+         System.arraycopy(fresh, 0, queries, queryN, fresh.length);
+         queryN = queries.length;
+         refills++;
+      }
+      ChunkAo.pollQueries(); // bakeNoSync: the AO multiplies' occlusion queries read here, after the swap, not inside a bake
+   }
+
+   /**
+    * bakeNoSync: a texture name for a bake pass's own object (chunk AO terms and scratch, sway attributes), from the pool on
+    * the render thread; glGenTextures otherwise. A glGen inside a bake made the render thread wait for NVIDIA's driver thread
+    * to work off every draw the bakes queued before it (single baked levels of 10-35 ms on the Louisville horde).
+    */
+   public static int bakeTexture() {
+      if (POOLS && Config.BAKE_NO_SYNC && texN > 0 && Thread.currentThread() == owner) {
+         bakeTexServed++;
+         return textures[--texN];
+      }
+      bakeFallback++;
+      return GL11.glGenTextures();
+   }
+
+   /** bakeNoSync: a framebuffer name for a bake pass (core GL 3.0), pooled on the render thread. */
+   public static int bakeFramebuffer() {
+      if (POOLS && Config.BAKE_NO_SYNC && fboN > 0 && Thread.currentThread() == owner) {
+         bakeFboServed++;
+         return framebuffers[--fboN];
+      }
+      bakeFallback++;
+      return GL30.glGenFramebuffers();
+   }
+
+   /** bakeNoSync: a query object name, pooled on the render thread. */
+   public static int query() {
+      if (POOLS && Config.BAKE_NO_SYNC && queryN > 0 && Thread.currentThread() == owner) {
+         queryServed++;
+         return queries[--queryN];
+      }
+      bakeFallback++;
+      return org.lwjgl.opengl.GL15.glGenQueries();
    }
 
    /** A texture name for TextureID.generateHwId. */
    public static int texture() {
-      if (ON && texN > 0 && Thread.currentThread() == owner) {
+      if ((ON || combinerScope) && texN > 0 && Thread.currentThread() == owner) {
          texServed++;
          return textures[--texN];
       }
       texFallback++;
+      if (GtAb.TIMING) { // tail pass (devFrameSections): the driver round trip's time, read per game frame by GtAb
+         long t0 = System.nanoTime();
+         int id = GL11.glGenTextures();
+         genTexNanos += System.nanoTime() - t0;
+         return id;
+      }
       return GL11.glGenTextures();
    }
+
+   public static volatile long genTexNanos; // tail pass: render thread's time in glGenTextures round trips (dev timing only)
 
    /** A framebuffer name for TextureFBO (core GL 3.0 framebuffers only; {@code core} false = the EXT / ARB path). */
    public static int framebuffer(boolean core) {
@@ -99,6 +155,7 @@ public final class GlNames {
 
    public static String summary() {
       return " | glNames: textures " + texServed + " pooled / " + texFallback + " asked, framebuffers " + fboServed + " / " + fboFallback
-         + ", refills " + refills + ", status checks skipped " + statusSkipped + " / done " + statusChecked;
+         + ", refills " + refills + ", status checks skipped " + statusSkipped + " / done " + statusChecked
+         + (Config.BAKE_NO_SYNC ? ", bake passes: textures " + bakeTexServed + " fbos " + bakeFboServed + " queries " + queryServed + " pooled / " + bakeFallback + " asked" : "");
    }
 }

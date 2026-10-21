@@ -16,7 +16,7 @@ import zombie.util.PooledObject;
 
 public final class GameProfiler {
    private static final String s_currentSessionUUID = UUID.randomUUID().toString();
-   private static final ThreadLocal<GameProfiler> s_instance = ThreadLocal.withInitial(GameProfiler::new);
+   private static final pzopt.Tl<GameProfiler> s_instance = new pzopt.Tl<>(GameProfiler::new); // pzopt: pzopt.Tl (zombie redesign, f8-zomb2)
    private final Stack<GameProfiler.ProfileArea> stack = new Stack<>();
    private final GameProfiler.RecordingFrame currentFrame = new GameProfiler.RecordingFrame();
    private final GameProfiler.RecordingFrame previousFrame = new GameProfiler.RecordingFrame();
@@ -95,7 +95,7 @@ public final class GameProfiler {
    }
 
    public static GameProfiler getInstance() {
-      return s_instance.get();
+      return s_instance.get(); // pzopt: pzopt.Tl, the per-thread instance without the ThreadLocal lookup on the game thread and the frame workers
    }
 
    public void startFrame(String frameInvokerKey) {

@@ -103,6 +103,8 @@ public final class ZoomRetain {
    public static long kept, returned, rebakes, creations, urgent, placeholders, floodFrames;
    /** Allowed bits still pending after the chunk loop (a level that never reached the gate), dropped by FBORenderCell.pzoptZoomSettle. */
    public static long dropped;
+   /** Granted levels whose bake preparation waited with them and ran at the grant, and the square flags it changed (FBORenderCell.pzoptPrepareZoomGranted). */
+   public static long latePrepared, lateFlagFixes;
    /** Dirty flags (bit index) of the returned levels that baked outside the zoom budget. */
    public static final int[] urgentFlags = new int[16];
    /** Dev tally: bakes in the frame the zoom changed, and their dirt / origin (Harness zoom trace). */

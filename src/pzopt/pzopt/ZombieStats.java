@@ -32,7 +32,7 @@ public final class ZombieStats {
 
    /** Game thread, the top of the scheduler's update loop. */
    private static Thread GAME_THREAD;
-   private static final ThreadLocal<float[]> WORKER = ThreadLocal.withInitial(() -> new float[4]); // walked, ran, crawled, frame stamp
+   private static final Tl<float[]> WORKER = new Tl<>(() -> new float[4]); // walked, ran, crawled, frame stamp
    private static final java.util.ArrayList<float[]> WORKERS = new java.util.ArrayList<>();
 
    public static void begin() {

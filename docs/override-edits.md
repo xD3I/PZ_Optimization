@@ -6641,3 +6641,1835 @@ gates (`fixtures_doors_fences_01_66`, `doorTrans`) only bake, and so only cast A
   (`windowsInChunkTexture=true`, bench save, gate at 8006,11200): fix off 10,032 / 12,153 / 10,026 px stale after close /
   open / close (AO view 7,960 / 10,800), fix on 0 / 0 / 0. A first full re-bake also changes a patch of grass AO north-east
   of the spot in both builds (11,640 px in the AO view, pre-existing, a load-time state; not chased).
+
+### The ragdoll question and the body model (2026-10-12, `ragdollGate`, `bodyModelCache`): IsoGameCharacter, IsoZombie, AnimationPlayer, ModelManager, SurvivorDesc (new)
+
+The in-game profiler put `IsoGameCharacter.isRagdoll` at 3-4 % of the Louisville game thread (hottest method of "objects update"
+and of the entity-update filter). The async profiler (no safepoint bias, runs `rag-2-off-prof` / `rag-3-on-prof`) measured
+1.56 % for `isRagdoll` + `isRagdollSimulationActive` together, nearly all of it inside `ModelManager.getBodyModel` and
+`getAnimationPlayer`: stock asks for the animation player, and that first works out the character's body model (animal flag,
+skeleton flag, the gender in its `SurvivorDesc`: a cache miss on the descriptor) and compares it with the player's model (a miss
+on the player), about 60,000 times a frame (the dual-evaluation run counted 131 M calls in ~2,200 frames: every zombie's
+push-apart asks it of every neighbour, postupdate's collision, the entity-update filter, the animation variables).
+
+- `ragdollGate` (pzopt.RagdollGate): `isRagdoll`, `isRagdollSimulationActive` and `isFullyRagdolling` return stock's `false`
+  without asking for the player while no animation player holds a ragdoll controller (a count kept at the two writes of
+  `AnimationPlayer.ragdollController`, `initRagdollController` / `releaseRagdollController`), or when the character's own player
+  (the field, never `getAnimationPlayer()`) has no controller; a character with a controller takes the stock path. The value is
+  always stock's; what is skipped is stock's side effect of replacing a player whose body model changed, which the next
+  `getAnimationPlayer()` makes as stock would. The entity-update filter (`IsoZombie.pzoptBatchSafe`) relied on that side effect
+  (its own stale-player check came after `isRagdoll`), so `pzoptRenewStalePlayer` makes the replacement at the same place and
+  the batch takes the same zombies as before. The same filter's `pzoptRagdollFree` (no controller, no active simulation in
+  the player) answers `true` from the count alone while it is zero (`RagdollGate.noneFor`), so the filter no longer reads the
+  player at all.
+- `bodyModelCache` (pzopt.BodyModelCache): the body model and "the held player carries it" are kept on the character
+  (`pzoptBm*` fields) and dropped exactly when an input changes: the descriptor reference (compared at every use), the
+  descriptor's gender (new `SurvivorDesc` override: `setCharacterGender` and `load` bump a global epoch when the value changes on
+  a descriptor some character keyed its entry on), `IsoZombie.setSkeleton` (the character's entry), `ModelManager.create` (the
+  four body models: epoch), the player (cleared when `getAnimationPlayer` replaces it, by `releaseAnimationPlayer` and by
+  `AnimationPlayer.onReleased`; a player's model is only written at `alloc` and `onReleased`). Animals (their visual's model) and
+  debug sessions (`forceSkeleton`) never use it. `getBodyModel` keeps stock's body as `pzoptStockBodyModel`.
+- Proof: `devRagdollGateCheck` / `devBodyModelCheck` evaluate stock's answer beside every gated / cached one (side-effect free) and
+  count mismatches and skipped replacements (`ragdoll gate:` / `body model cache:` in `zombie_batches=` of pzopt-bench.out).
+- Within-run A/B: GtAb bits `ragdollGate` / `bodyModelCache` (`devGtAlternateKeys`).
+- Measured (Louisville bench, desktop 5120x2160 uncapped, `vrr=off vsync=false`, Enhancements off: own empty
+  `userOptionsFile` + `enhancementsEnabled=false`, runs `rag-20..28`): no ragdoll controller existed in any run (`max_live=0`),
+  every gated call answered globally; dual evaluation 105 M ragdoll calls and 105 M body-model hits + 24 M settled players,
+  0 mismatches, 0 skipped replacements, 76 epoch bumps (`rag-20-check`). Async profiler, game thread: `isRagdoll*` 1.24 % ->
+  0.06 %, `getAnimationPlayer` 1.59 % -> 0.21 %, `getBodyModel` 0.67 % -> 0 % (`rag-21-off-prof` / `rag-22-on-prof`); in-game
+  25 Hz sampler `isRagdoll` 1.5-2.2 % -> 0.00 % (`rag-25`..`28`). Within-run ABBA at 230 ms (`rag-23-ab`, `rag-24-ab`): on 72.0 /
+  71.6 fps vs off 70.1 / 69.6 (+2.7 / +2.9 %), p99 40.1 / 34.9 vs 49.2 / 48.7 ms, game-thread CPU -0.43 / -0.07 ms a frame.
+  Whole-run pairs (off 74.8 / 79.6, on 77.3 / 75.7 fps) are inside the run-to-run spread.
+
+## Zombie game-thread pass (2026-10-13): nearby cars from one grid per frame (`nearVehicleGrid`)
+
+`IsoGameCharacter.getNearVehicle` runs at the top of every zombie's update and, like `isNearSirenVehicle`, looks up the
+sixteen chunks of a four-chunk window round the character through the cell and walks each chunk's vehicle list; downtown
+nearly every one of those lists is empty, so the lookups themselves were 2.4 % of the game thread on the Louisville horde
+(2,678 zombies, Enhancements off). Both methods now first ask `pzopt.VehicleNear` whether any chunk of that same window
+holds a vehicle. It keeps one table per frame of which chunk-map slots hold a chunk with a non-empty vehicle list (a
+summed-area table, so the window is one rectangle query); when the answer is "none", the method returns what its loop would
+have returned with nothing to find (no vehicle, no siren); any other answer runs the stock loop unchanged. Single player
+only (one chunk map, as the cell's chunk lookup reads it with one player); a server, split screen or an ignored chunk map
+always takes the stock loop.
+
+The table is valid for one frame and only while nothing it was built from changed. Two things feed it, and both report
+their changes: `IsoChunk`'s vehicle list is now `pzopt.VehicleList` (an `ArrayList` that bumps a counter before and after
+every size-changing call, iterator and sub-list removals included), and the `IsoChunkMap` override bumps the same counter
+after every write to the chunk grid (setting or clearing a slot, the direct set from the loader, the buffer swap, the four
+scrolls, a teleport, the initial position, the copy, the unload, the dispose). A changed counter makes the next query
+rebuild the table. Rig `devNearVehicleCheck`: one "none" answer in sixteen also runs the stock loop and counts a
+difference (run zomb-3-exact-20261013-004534: 215,765 checked, 0 differences; 3.45 M "none" answers, 1.59 M windows with
+a car went the stock way). Key `nearVehicleGrid` (default on); the getNearVehicle check helper and the counter hooks carry
+the `// pzopt:` markers.
+
+## Zombie game-thread pass (2026-10-13): the zombies' update on the workers by default, players before the flight (`entityUpdateParallel`, `entityUpdatePipeline`, `entityUpdatePlayerFirst`, `postupdateParallel`)
+
+The maintainer accepted the frame-start-reads semantics for the zombie update loop, and the five keys of this pass are now on by
+default: `entityUpdateParallel`, `entityUpdatePipeline`, `entityUpdatePlayerFirst` (new), `postupdateParallel` and
+`nearVehicleGrid`. Before this the first three were opt-in on the tab ("experimental"). What the batched update does
+differently from stock's one-after-another loop is now part of the default game, listed here once:
+
+- Within a simulation bucket, the calm zombies (idle, walking, following a path, no player within 12 squares, nothing physical
+  going on: `entityUpdateSafeStates`) update on the frame workers. The other entities of the frame (players, animals, vehicles,
+  zombies in other states) update on the game thread, in the stock order among themselves.
+- A batched zombie reads another entity's position as it stood when the batch was dispatched (the snapshot of
+  `UpdateBatch`), not as the loop advanced. This is the same Jacobi-style read the separation pass already shipped with.
+- The global random generator hands its numbers out in a different order, so different zombies get different rolls. The
+  generator is seeded randomly every session, so no particular sequence was ever reproducible.
+- Lua `OnZombieUpdate` handlers of the batched zombies run after the batch, in the stock order of the zombies, and see the
+  whole batch's updates. Emitter ticks and Bullet calls are deferred the same way.
+
+`entityUpdatePlayerFirst` (new, in the `MovingObjectUpdateSchedulerUpdateBucket` override and `pzopt.UpdateBatch.playerFirst`).
+With the pipeline, every entity the batch does not take used to be queued for the inline phase that runs under the airborne
+flight, the player included. The player's update writes the zombies it sees: its line-of-sight pass calls their `spotted`,
+which sets the target, the path and the alert state. Those writes ran concurrently with the zombies' own updates on the
+workers, and part of them was lost or overwritten. With the key on, a player updates at its place in the bucket's collection
+loop, before the flight is dispatched: the player now has the order the synchronous batch always gave it, and the animals,
+vehicles and busy zombies still run under the flight.
+
+The behaviour check that found it is the rig `brawl=N` (`pzopt.BrawlRig`, `harness/brawl.py`). 60 hostile zombies spawn 4-30
+tiles round a visible player, who stands still, makes a noise every 4 s and has every hit healed. Each run logs the hits, the
+distances, the targeting and the action states per second, and Jev compares the runs with the key off and on.
+- With the pipeline but without the fix, the horde was clearly less aggressive (Jev 0.95): 20-21 zombies targeting the
+  player instead of 24-25, 11.7 instead of 15 within four tiles, a slower approach, fewer lunges.
+- Without the pipeline, and with the pipeline plus the fix, it matched the key-off runs (Jev 0.98 and 0.92). Runs
+  zomb-br-off1b/off2, on1b/on2, np1/np2, pf1/pf2 of 2026-10-13.
+- Players who had `entityUpdatePipeline` on in an earlier build (it was an opt-in tab entry) had the less aggressive horde.
+
+`postupdateParallel` is unchanged from its 2026-10-06 entry: 0 differences in 692,164 `devPostupdateCheck` comparisons at
+2,775 zombies (run zomb-3-exact). The in-run A/B on the horde gave a postupdate section of 2.44 ms with the key off and 2.08 ms
+with it on (zomb-2-puab).
+
+`IsoZombie.updateInternal` (vehicle hit deferral, part of `physicsDefer`, 2026-10-13). A moving vehicle's update marks the
+zombies it touches for a hit test. The batched zombie then ran that test on its worker: `checkNetworkCollision` ->
+`hitCharacter` -> `onHitByVehicle` -> `slideAwayFromWalls` -> `PolygonalMap2.resolveCollision`, whose
+`CollideWithObstacles` scratch is shared by every caller. In run zomb-9-def (Louisville, defaults with
+`entityUpdateParallel`) it threw on the worker, which turned the batching off. It also left the scratch half-written, so the
+player's own postupdate on the game thread threw in the same code and the game left the world. Players who turned on the
+entity-update tab entry in earlier builds could hit this whenever a car moved through zombies. The branch now asks
+`UpdateBatch.deferVehicleHit` first. On a batch task the zombie and the vehicle are queued (the task still clears the
+field as stock does), and the game thread runs the stock test at the join through the new `IsoZombie.pzoptVehicleHit`, in
+queue order, right after the deferred ragdoll contacts. Off a task the stock branch runs in place. The counters are
+`vehicleHitDeferred=` / `vehicleHitDrained=` on the update-batch line. A vehicle that marks a zombie while that zombie's task
+is running (the vehicles still update under the flight) can lose that frame's test; the vehicle marks it again on the next
+frame while they touch.
+
+## Zombie game-thread pass (2026-10-13): static-state audit of the batched zombie update
+
+After the vehicle-hit crash, `tools/StaticAudit.java` was run over `IsoZombie.update` / `preupdate` / `frameStep` on the
+game jar with the built overrides layered on top. The conservative virtual dispatch reaches 26,818 methods and 4,853
+static fields. Chains through network packets, Lua, asset loading and constructors were set aside, which left 248
+mutable or scratch statics. Every one on a path a calm batched zombie can take was checked against the existing guards
+(the PZMulticore ports: `ZombieGroupManager`, `WorldSoundManager` and `PolygonalMap2.lineClearCollide` under locks, the
+per-thread `PathFindBehavior2`, `WalkTowardState` and `IsoGameCharacter` scratch, `emitterDefer`, `physicsDefer`, the Lua
+replay, `LightingDefer`). These were unguarded and are fixed now:
+
+- `IsoZombie.updateSearchForCorpse`: the static corpse list and `tempo`. Every calm zombie runs this search once its
+  corpse timer expires, and two workers filled and cleared one `ArrayList`. On a frame worker the list and the vector are
+  now the thread's own (`pzopt.WorkerScratch`); on the game thread they are the statics, as in stock.
+- `IsoZombie.updateMovementStatistics`: the static `lastPosition` / `currentPosition` pair, per thread on a worker.
+- `IsoZombie.spottedNew` / `spottedOld` (reached from the update while `bonusSpotTime` runs) and `isTargetInCone`: the
+  static `tempo` / `tempo2`, per thread on a worker.
+- `IsoMovingObject.getFeelerTile`, which every calm zombie's `tryThump` probe calls, and the stock `separate()` body: the
+  static `tempo`, per thread on a worker. The `postupdateParallel` movement tasks already had their own.
+- `PolygonalMap2.resolveCollision`, both forms, with the shared `CollideWithObstacles` scratch. While an entity flight or
+  a postupdate movement batch is out, and on any frame worker, the call runs under the `CollideWithObstacles` lock
+  (`UpdateBatch.collideLockNeeded`); outside those windows the game thread calls it lock-free as before. The known worker
+  path (the vehicle hit test) is deferred to the game thread; the lock covers any other path.
+- `BaseVehicle.getPoly` -> `VehiclePoly.init` on shared static scratch. `getNearVehicle` reaches it through
+  `DistToSquared(vehicle)` whenever a car is near, and the first call after the car moved re-initialises the polygons. With
+  `entityUpdatePlayerFirst` the vehicles now update before the flight, like the players (the vehicle update also marks the
+  zombies it touches for the hit test). `UpdateBatch.dispatchCombined` brings every vehicle's polygon up to date on the
+  game thread before the workers start, so the workers only read them.
+- The vehicle hit test itself: `vehicleHitDefer` (the entry above).
+
+Batch latches (a worker exception turning the batching off for the session) in the runs of this pass: one, in
+zomb-9-def (the vehicle hit). There were none in zomb-4, 5, 6 and 7 (Louisville, 4.8-6.5 M batched updates each), none in
+the eight brawl runs and none in the Rosewood drive. The car-through-horde runs below test the fixes.
+
+## Zombie game-thread pass (2026-10-13): separation memo (`separateMemo`, off), separate batch counters
+
+`IsoZombie.pzoptSeparateCompute` asks each neighbour's `isSolidForSeparate` through `pzopt.SeparateBatch.solid`. Inside the
+separation batch, where the grid and every character are read-only, the answer is memoised per zombie for the frame (the new
+`IsoZombie.pzoptSolidMemo`: frame and answer packed in one int, so a racing worker only recomputes). A frame worker also keeps
+its own `SeparateMask` table of square-to-square blocked answers for the batch; before, only the game thread cached them.
+Rig `devSeparateMemoCheck`: 1,902,610 memoised answers compared with the direct call, 0 differences (zomb-12-sepmemo). The
+in-run ABBA A/B there found no gain (schedUpdate 3.124 -> 3.153 ms, inside the noise). A guess at the reason: the memo's
+writes into the zombies make their cache lines travel between cores. The key stays off and is kept for later A/Bs; with it
+off the compute calls `isSolidForSeparate` directly, as before. `SeparateBatch.describe` is now on the harness
+`zombie_batches=` line.
+
+Measured and dropped in the same pass: `frameSpinUs=300` (the frame workers spinning between the frame's batches). In the
+in-run A/B (new bit `frameSpin`) the process burnt 10.8 ms more CPU a frame and the game thread did not get faster (zomb-11-spin).
+`headOnWorker` showed no gain on the Louisville bench now that `see_all` is gone (zomb-8-howab, `devActionEvalCheck` 1.28 M
+contexts, 0 mismatches); it stays off.
+
+`pzopt.GtAb` has a second, independent alternation group (`devGtAlternate2` + `devGtAlternateKeys2`). One run can flip two
+keys on their own periods. The phase column of pzopt-gtab.out is on1 + 2 * on2, and `harness/gtabsec.py --group 2` splits by
+the second group.
+
+## Zombie game-thread pass (2026-10-13): which zombies stay inline (`entityUpdateMoreStates`, `entityUpdateNearPlayer`)
+
+`IsoZombie.pzoptBatchSafe`, the calm-state filter of the batched update, now reports why it keeps a zombie on the game
+thread (`UpdateBatch.inlineBecause`, with `instrument`: an `inline(...)` census on the update-batch line of
+pzopt-bench.out). On the Louisville bench (zomb-14-census, 2,800 frames) ~315 zombies a frame stayed inline: 158 in
+`GenericDefaultState` (the state machine's default, a state with no body), 156 in `ZombieSittingState` (whose `execute` acts
+only on a multiplayer client), 21 within 12 squares of the player, 5 for a physical reason (ragdoll, falling, fire,
+grapple), and a few in lunge, get-up and thump.
+
+- `entityUpdateMoreStates` (default on): the filter also lets the sitting and default-state zombies go to the workers in
+  single player. Their update is the generic zombie update the idle ones already run on the workers. The in-run ABBA A/B
+  (zomb-15-statesab) gave schedUpdate 2.589 -> 2.540 ms, a small gain: most of that work now waits at the flight's join
+  instead.
+- `entityUpdateNearPlayer` (default off): drops the 12-square rule for calm states, since the players now update before the
+  flight. In the brawl check the horde behaved as with the key off (Jev same 0.92, runs zomb-br-np-near1/2), but there was no
+  gain on the bench (zomb-13-nearab, zomb-15-statesab second group: +0.1 ms, noise). It stays off.
+
+### Chunk-bake bursts on the Louisville horde (2026-10-12/13, worktree agent-a55cd23b0b4d4142c): bake timing, bakeNoSync, bakeCapUs
+
+Goal (maintainer): on the Louisville horde bench a frame's chunk-texture bakes cost at most 15 ms, and frames that bake are
+no slower than frames that do not.
+
+- `FBORenderCell` (all instrumented-run only unless noted, `pzopt.BakeLog.ON`): `renderTilesInternal` times the scheduler
+  plan, the bake preparation + cutaway visit, the occlusion pass and `updateChunkLighting` (`BakeLog.preAdd`);
+  `performRenderTiles` times the chunk loop (`loopBegin` / `loopEnd`) and the AO / relief flushes and pixelLight's
+  `beforeComposite` (`postAdd`); `renderOneChunk` wraps each `renderOneLevel` (`levelBegin` / `levelEnd`, a level counts as
+  a bake when `BakeLog.bake` / `hidden` ran in it); `renderOneLevel` marks the phases (`mark(1..4)`: start, render-info
+  loop, floor / snow / blood, vegetation / corpses / objects, the rest) and queues a render-thread marker after
+  `beginRenderChunkLevel` and after the bake's end (`rtMark`), so the render thread's submission of each baked level is
+  timed. New rows in `pzopt-bakes.out` (`t`, `bt`, `rb`, `ra`; frame-causes.py reads only digit-first rows, unchanged);
+  `harness/bake-times.py` (per-frame bake ms, max level, render-thread bake / AO job time, steps by levels baked, the
+  devBakeHoldFrames A/B paired by block) and `harness/bake-windows.py` (async-profiler samples of heavy vs light frames,
+  bake vs hold blocks, inside slow baked levels / AO jobs).
+- `FBORenderCell.performRenderTiles` (`bakeCapUs`, off by default): the chunk loop's time per granted texture is fed to
+  `BakeScheduler.grantCost` (EWMA); `plan` stops arrivals / overdue / budgeted grants at the number that fits `bakeCapUs`.
+- pzopt only: `BakeScheduler` `devBakeHoldFrames=N` (every other block of N frames grants only the must class: a
+  within-run A/B of what a baking frame costs); `ChunkAo` / `GlNames` / `Sway` `bakeNoSync` (default on): the chunk AO
+  jobs and the sway attribute textures ask the driver nothing inside a bake (framebuffer from `TextureFBO.lastID`, a bake's
+  viewport = its texture, AO jobs after the bakes leave the viewport to a stock `glDoStartFrame` queued by `flush`, names
+  from `GlNames`' pools, no "anything drawn" query, the fade textures' residency from our own record);
+  `devBakeNoSyncCheck=N` compares the recorded state with the driver's every Nth job (0 mismatches over the runs).
+  `glNamePool` default 256 -> 1024 (glNoSync's texture pool ran dry in the frames bringing new zombies).
+- Findings and numbers: the task report of 2026-10-13 (runs `bake-*`, `ne-*`): with every Enhancement on, single baked
+  levels took 10-35 ms of render thread, nearly all in `glGetInteger` / `glGen*` / `glBeginQuery` of the AO pass waiting for
+  NVIDIA's driver thread; bakeNoSync took the render thread's bake time per frame from p99 8.3 / max 25 ms to p99 1.9 /
+  max 8.8 ms. With the Enhancements off (the maintainer's measuring setup since 2026-10-13) the bake passes are cheap
+  (game thread <= ~6 ms, render thread <= ~2 ms a frame in the route); a baking frame costs +0.6 +- 0.2 ms (9 levels,
+  devBakeHoldFrames A/B) and the large gap between frames with many bakes and none is chunk arrival (hand-off, new
+  zombies), not the bakes.
+
+#### bakeRecordParallel (2026-10-13, off by default): the chunk-level bakes recorded on the frame workers
+
+The draw lists of a frame's granted chunk-level bakes (render-info pass, floors, plants, walls, objects) are recorded on the
+frame workers and spliced into the frame's sprite stream at their stock place, so the game thread no longer draws them.
+Every change below is behind `bakeRecordParallel` (keys `bakeRecordLanes` 4, `bakeRecordLead` on, `bakeRecordPrewake` off,
+dev `devBakeRecordCheck=N`, `devBakeRecordSerial`).
+
+- `FBORenderCell.renderOneLevel`'s render-info, floor (+ snow, blood) and object passes moved verbatim into
+  `pzoptBakeInfo` / `pzoptBakeFloors` (+ `pzoptBakeSnow` / `pzoptBakeBlood`) / `pzoptBakeObjects` (+ `pzoptBakeTreesBegin` /
+  `End`); the stock path calls them with IsoCell's static lists. `pzoptBakePrePass` (called after `checkBlackedOutRooms`, before
+  the characters' pre-pass; it takes performRenderTiles' scheduler / zoom-flood / delayed-loading decision itself and sets the
+  render-mode flags performRenderTiles sets first) predicts the levels that bake (on screen, not occluded, dirty, the group's
+  lowest level granted by `BakeScheduler.peek`, or an upper level of a baking group), creates their textures and offsets as
+  `beginRenderChunkLevel` would, caches the N / W neighbour squares' light, and hands them to `pzopt.BakeRecord`.
+  `renderOneLevel` takes the level's unit (`BakeRecord.take`) after `BakeLog.mark(1)`: with one, the info pass is skipped and
+  the floor + object passes are replaced by `pzoptBakeSplice` (devBakeRecordCheck: `pzoptBakeInfoCheck`, then the stock draw,
+  rolled back, then the splice and an entry-by-entry comparison); the bake's tail (trees, AO, relief, end) stays stock.
+  `BakeRecord.chunkDone(c)` after each `renderOneChunk`, `BakeRecord.endFrame()` after the loop. A named inner class
+  `PzoptBakeCell` (an anonymous one renumbers stock's `$1`).
+- What a recording thread may not draw goes to the game thread at its place in the stream (`DrawRecorder.defer`,
+  `pzoptBakeDeferredDraw`): corpses, items, snow, blood, the tree batch begin / end, floors and objects failing
+  `BakeRecord.floorReason` / `TileRecord.deferReason(o, true)`: other classes, light-on sprites, 3D models, clocks, fascias,
+  children, cold sprites, sprites whose roof properties are unknown, roof tiles that may draw a neighbour chunk's tile joined
+  (`pzoptRoofJoinPossible`) or be drawn joined by one (`pzoptRoofJoinTarget`: renderJoinedRoofTile writes the target's
+  render square, depth adjust, alpha and render info around its draw), and walls that may add a seam tile
+  (`TileRecord.seamWall`: `TileSeamModifier.setupWallDepth`, a game class, reads the static `IsoSprite.seamFix2`).
+- Thread-local / per-recorder state: `renderSeamFix2_Floor` / `_Wall` set the seam tile through `pzoptSetSeamFix2` (the
+  recorder's own); `IsoSprite` / `IsoObject` read the bake's texture and offsets through `BakeRecord.renderChunk()` /
+  `xOffset()` / `yOffset()`; `pzoptTranslucentOnly()` / `pzoptCaching()` give a bake recorder the bake's mode; the floor shapers
+  are per thread (`RenderScratch.fsAttached` / `fsDeDiamond` / `fsDiamond`); the info pass's occlusion test is
+  `pzoptIsOccluded` (`FBORenderOcclusion.isOccluded` stores z in a shared `testValue`: parallel info passes read each other's
+  level); `renderMinusFloor_DoorOrWall`'s cutaway window frame list add runs at the splice (`BakeRecord.deferListAdd`).
+- `LightingJNI.updateFBORenderChunk`: a recording thread that finds a square dirty but its light not readable marks the unit
+  unsure (`BakeRecord.lightUnread`), and `FloorDecals.onFloor`'s "size not known yet" too (`BakeRecord.unsure`): such a level
+  bakes the stock way at its own time.
+- `FBORenderCell.PerPlayerData.addChunkWith_TranslucentNonFloor`: membership from an identity set beside the list (its
+  `ArrayList.contains` was 13 % of a baking frame's renderOneLevel); same list, same order.
+- pzopt: `BakeRecord` (units, a work item per level, a level's info pass after the one below it in the same texture,
+  N / W neighbour info before a draw, the lead, lanes, splice, check, counters on `bake_counters=`), `DrawRecorder`
+  (`bakeUnit` fields, `classify` / `moveBake`: entry objects move into the frame's list, spares returned in `fixMoved`),
+  `TileBatch` (raw tile starts on a bake recorder, merge / fold replayed at the splice: `spliceStart`, `spliceMoved`,
+  `spliceDraw`, `snapshot` / `restore`), `RenderScratch`.
+- Measured (Louisville horde bench, Enhancements off, uncapped, 2026-10-13, runs `br-*`): devBakeRecordCheck runs
+  br-check12 0 draw-list mismatches in 178,704 entries (br-check8 0 in 182,873); the rare differences seen otherwise are
+  timing, not threads: an overpass floor whose light the native lighting thread had not delivered when the worker read it,
+  an animated sign / a counter changing layer between the two times, IsoPuddlesGeometry.shouldRender answering differently on
+  its second call (`infoPuddleDecals`). The game thread's time inside the bakes of a baking frame 0.84-0.99 ms -> 0.30-0.37
+  ms; the devBakeHoldFrames step difference (bake blocks vs hold blocks) +0.47 +- 0.14 ms pooled over 8 runs with the key on
+  vs +0.59 +- 0.20 over 3 runs with it off: the splice (~0.28 ms: ~1,500 entries and ~65 deferred draws a frame), the first
+  level recorded by the game thread, the prediction and the stock bake tail stay on the game thread. drive-120-south: off
+  571-574 fps, p99 7.7-8.1 / p99.9 11.2-12.2 ms; on 568 fps, p99 7.3-7.8 / p99.9 10.9-12.1 ms (no regression). Jev parity
+  against a key-off recording of the same build: parity (0.85). Measured and rejected: a task per chunk (neighbour roof
+  joins waited for splices), waking the lanes at the prediction's start (`bakeRecordPrewake`), the first texture the stock way
+  on the game thread.
+
+## The UI latency pass (2026-10-14; UIManager, UIElement, Mouse, PerformanceSettings, KahluaTableImpl, MethodCaller)
+
+Keys `uiVerify`, `uiAnimate`, `uiSlack`, `uiMoveReplay`, `uiMaxHz` (0 = the display refresh), `uiHoverHz` (default now 0 =
+every frame the pointer moves, inside the frame's room), dev key `devUiTruth`. Findings: `docs/findings-ui-latency-2026-10-14.md`.
+The logic is in `pzopt.UiRetained` (schedule) and `pzopt.UiDeps` (read sets); the overrides only call into them.
+
+### se.krka.kahlua.integration.expose.caller.MethodCaller (new override)
+
+- `call`: while a UI element renders fresh (`pzopt.UiDeps.on`, game thread) the outermost Lua -> Java call of the render is
+  handed to `UiDeps.call` after it returned (method, receiver, arguments, result) and `UiDeps.threw` when it threw; calls the
+  Java method makes back into Lua are inside its result and not logged (`enter` / `exit` keep the depth). The call itself and
+  what it returns to Lua are unchanged.
+
+### se.krka.kahlua.j2se.KahluaTableImpl
+
+- New fields `pzoptDepMark` (the last read-set log that recorded this table, one entry per log) and `pzoptDepBorn` (the
+  recording epoch the table was created in: a render's local tables are not tracked).
+- Constructor, `rawget(Object)`, `len`, `iterator`: while a render records, the table (and its metatable chain, which
+  luaIndexCache answers lookups through) joins the render's read set. `rawset` / `wipe` on a value change: a table the
+  recording render read earlier marks its log mutating.
+
+### zombie.ui.UIManager
+
+- `render`: `UiRetained.freshBegin(element)` instead of `freshBegin()` (the element's read set is recorded between it and
+  `freshEnd`); `UiRetained.uiRenderBegin` / `uiRenderEnd` around the UI frame (its overhead for `uiSlack`).
+
+### zombie.ui.UIElement
+
+- `render`: `UiRetained.childBegin(this)` (a child's read set is recorded too and becomes part of its parent's).
+
+### zombie.input.Mouse
+
+- `update`: the harness UI rig's left button (`pzoptUiButton`) and wheel step (`pzoptUiWheel`) are applied after the
+  hardware state is read, so UIManager dispatches presses, drags and wheel steps as for real input. Off unless a rig sets them.
+
+### zombie.core.PerformanceSettings
+
+- New Lua-callable rig methods `pzoptUiButton(boolean)` and `pzoptUiWheel(double)`; `pzoptUiMouseOff` also releases the button.
+
+### pzopt (no game class)
+
+- `UiDeps`: the read sets. Lua table fields with the values read (re-read only when the table's or its class chain's write
+  counts moved), getters (get / is / has / can / are / contains / size / Measure / clamp ... with a result), pointer reads
+  (getMouseX / getMouseY), clock reads (checked at the stock rate), updaters re-run in order (`updateAge`, `updateWetness`),
+  what `UIElement.DrawItemIcon` reads of its item (texture, tint, masks, fluid colour and level) and what an unfocused
+  `UITextBox2` shows; a call with a result that is not a read, a void call passing a game object, a throw, or a Java-rendered
+  element (any UIElement subclass but an unfocused text box) makes the log opaque: that element renders at the stock rate
+  at the latest (uiVerify on: no back-off for it). Fades (`UITransition`) and colours
+  (`ColorInfo`, `Color`) the render steers are value holders. Validation re-checks tables by write count and re-invokes the
+  getters in order, memoised per frame; learned noise (an entry whose change re-rendered the same output) is checked at
+  the stock rate and unlearned when a check at that rate finds it changed the output.
+- `UiRetained`: `anyDirty` every frame (read set changed, the pointer moved over a pointer-reading element or a drag it
+  started, an element in motion: its last fresh render differed from the one before); `uiSlack` grants those renders from
+  the frame's room before the cap (`FrameCap.stepDone`'s step length without the UI's fresh renders) with the stock interval
+  as the floor; `uiMaxHz` caps such UI frames at the display refresh; `uiMoveReplay` replays a dragged window's recording
+  shifted when it learned that the window draws the same after a move; `devUiTruth` (all elements fresh every frame, the
+  schedule and stock's 60 Hz simulated, stale episodes logged as X / Y lines).
+- `FrameCap.stepDone`: hands the step length to `UiRetained.frameWorkDone`.
+- `UiRetained.decideFrame`: `ISInventoryPage.renderDirty` counts only while an inventory page is visible (a visible page's
+  prerender clears it; with both hidden it stayed set and made every frame a UI frame).
+## Zombie redesign pass (2026-10-13, worktree f8-zomb2): the zombie frame's game-thread waits and loops
+
+Goal (Louisville 120 lock, maintainer): zombie work on the game thread at most 1.5 ms a frame. Baseline (run zomb2-base1,
+async-profiler on every thread, Louisville horde, Enhancements off, uncapped): 3.84 ms a frame by `harness/zombieshare.py
+--source asprof`, made of the game thread's share of parallel batches (it joins and runs a tenth of each) and of loops that
+visit every zombie. The workers (8, `frameThreads`) spent ~14 ms a frame on zombie batches: the entity flight 6.9, the
+separation 2.2, the transition evaluations 1.9, the animators 2.1, the bones 1.4, the movement 0.8. 15 workers doubled the
+flight's task time (SMT siblings, preemption: run zomb2-thr15, 113 -> 100 fps): the pool stays at 8.
+
+Every key below is behind a Config key and a `pzopt.ZombAb` alternation name (the pass's own A/B mask on GtAb's two
+groups: one GtAb bit, 40, for all of them). Per-frame timers: `pzopt.ZombTiming`, columns `z_*` after GtAb's sections in
+pzopt-gtab.out (`harness/gtabsec.py`).
+
+### The entity flight streamed during the collection (`entityUpdateStream` + `entityUpdateStreamHoist`)
+
+The combined flight left after the buckets' collection, and the only game-thread work under it was the inline phase
+(~0.12 ms of a ~0.83 ms flight): the game thread then ran ~280 of the ~2,650 tasks itself at the join (0.73 ms). With
+the stream the flight opens before the collection and every batchable zombie is published to the running workers as the
+collection reaches it (`FrameBatch.runStream` / `publish` / `seal`: a worker that claims an index past the published count
+waits for it or for the seal). The tasks see what they saw: no entity updates on the game thread between the opening and
+the inline phase, a task's position snapshot is taken when it is queued (only a zombie's own task moves it; the stamp is
+published with a release store, `frozen()` reads it with an acquire load), the per-task captures, deferrals, the Lua replay
+and the join are the combined flight's. The stream can only open once the frame's in-place entities (the players and the
+vehicles `entityUpdatePlayerFirst` updates at their place) have updated, and on Louisville the player sits behind ~2,150
+of the ~2,400 zombies in the full bucket (run zomb2-ab2: no gain), so `entityUpdateStreamHoist` updates the frame's players
+and vehicles first, in bucket order, before the collection (`MovingObjectUpdateSchedulerUpdateBucket.pzoptHoist`; the
+bucket counts them in `add`). **Behaviour difference (needs the maintainer's approval):** a zombie listed before the
+player is classified calm or not (state, near-player ring, physical flags) after the player's update instead of before it,
+as every zombie listed after the player always was; the old order could hand a zombie the player just shot or shoved to a
+worker in its calm state. In-run A/B (zomb2-ab3b): flight join 0.62 -> 0.40 ms, scheduler update -0.10 ms. A first build
+kept 16 hoisted entities and double-updated the 17th parked car (`Double-update call` in ECSEntity.frameStep, zomb2-ab3).
+
+### Separation: the blocked-edge answers shared (`separateEdgeCache`), the batch ahead of the frame (`separateAsync`, off)
+
+`SeparateMask.blocked` (39 % of the separation batch) cached its square-to-neighbour answers per frame for the game thread
+only; the workers asked the grid each time. The answer now lives on the square (`IsoGridSquare.pzoptSepEdges`: frame stamp,
+computed bits, blocked bits in one long, written whole; a racing worker that loses its bit recomputes it), keyed by the
+separation's frame stamp: the validity the game thread's table always had. Rig `devSeparateEdgeCheck` (1 in 32 asked of the
+grid again): 0 differences in 813,527 (zomb2-rig1). `separateAsync` starts the batch at the end of the scheduler's startFrame
+and joins it at the top of its update (the cell's pre-phases as runway; a chunk-grid or vehicle-list change in between redoes
+it): z_sep 0.34 -> 0.27 ms (zomb2-ab4), but `devSeparateAsyncCheck` found 4 differences in 1,575,411 (zomb2-rig1: something
+in the pre-phases changes an input), so it stays off.
+
+### Postupdate: no-op commits, eligibility and vehicle resolution on the workers (`postupdateNoopSkip`, `postupdateEligibleOnWorker`, `postupdateVehicleOnWorker`)
+
+- `postupdateNoopSkip`: a computed zombie's latched square move that is the stock call with its own square, already in
+  that square's list (only the zombie adds or removes itself there), commits nothing in the loop (`ArrayList.contains` per
+  zombie per frame). pu_loop -0.055 ms (zomb2-ab3b).
+- `postupdateEligibleOnWorker`: the movement batch's eligibility test (animation player, ragdoll, reuse set, state) runs in
+  each zombie's task instead of in the game thread's scan, where it was the first touch of every zombie's animation player.
+  pu_move -0.08 ms (zomb2-ab7).
+- `postupdateVehicleOnWorker`: a zombie whose move comes within reach of a vehicle used to bail to the game thread's stock
+  movement (32-54 a frame on Louisville's parked cars); the task now runs stock's `PolygonalMap2.resolveCollision` under its
+  `CollideWithObstacles` lock (taken while the batch is active), the vehicles' polygons brought up to date on the game thread
+  first (they do not move in the postupdate). `devPostupdateCheck`: 0 differences in 1,901,775, 551,615 vehicle resolutions on
+  the workers (zomb2-rig1).
+
+### Postupdate: transition evaluations and animators streamed under the loop (`postupdateFuse`, `headOnWorker` on)
+
+The evaluations started after the bucket loop and the apply loop waited for them and for the animators (~0.3 ms), then ran
+every zombie's context update. A zombie with no target reads nothing the rest of the loop changes, so right after its loop
+body (its snapshot taken) its evaluation is published to the postupdate stream (`pzopt.PuStream`); when the evaluation
+changes no state, the same task consumes it (`ActionContext.pzoptUpdateNoChange`: the stamp, the context's events cleared,
+no state-changed callback pending, no recorder), arms the capture and runs the animator and model update, the work apply()
+gives a worker after its step 1; apply() skips such a zombie in step 1 (`AnimCapture.fusedGen`) and finishes it in step 3 in
+queue order. The evaluation-done mark is set after that decision (`ActionEval.deferEvalDone`), so the apply loop never sees a
+half-fused zombie. The evaluation runs with the multiplier the flush-time one saw (1), the animator with the zombie's bucket
+multiplier (`UpdateBatch.pomSet`). `devActionEvalCheck` (the streamed evaluations against the apply-time one): 0 mismatches in
+2,893,733 (zomb2-rig1). postupdate 1.97 -> 1.60 ms (zomb2-ab4). `headOnWorker` (existing key, off until now, default on since this
+pass) now runs its head on the streamed task under the loop: pu_loop -0.10 ms (zomb2-ab5). `postupdateStreamMin` (128): a frame
+with fewer zombies in the movement queue (a drive) keeps the synchronous shape, the stream's wake and join being more than a
+handful of zombies save.
+
+### Postupdate: a clean zombie's whole postupdate in its movement task (`postupdateClean`)
+
+A computed zombie whose square move is a no-op, with no target, no hit infos or ballistics, no grapple-only reanimation, and
+(when its animation updates this frame) states whose transitions read no side-effecting variable, finishes the rest of its
+postupdate in its movement task (`IsoZombie.pzoptCleanPostupdate`: attack vars cleared, the unbalance lerp under its bucket
+multiplier, canSeeTarget false; the snapshot left empty and the head to the evaluation task). Its flag sits in a dense array
+in queue order and the bucket loop, which walks the same lists in the same order, compares the entry with the queue by
+reference (`PostupdateBatch.cleanAt`, which looks a few entries ahead when an entity removed during the loop shifted a list):
+the loop never reads a clean zombie. An animating clean zombie joins ActionEval's queue at its place (`appendClean`) and its
+evaluation is published before the loop (`publishCleanEarly`), so the whole loop is its runway. Nothing else in the loop reads
+what the tail writes (the player's, the animals' and the vehicles' postupdates do not read zombies; the other zombies' snapshot
+callbacks touch their own zombie). A clean zombie carries the postupdate's stamp (`IsoZombie.pzoptCleanFrame`) and
+`IsoZombie.postupdate` returns at once for it, so it can never run twice. The first build kept a flag from an earlier frame
+for a zombie whose movement bailed this frame: that zombie got no postupdate at all, and the brawl rig showed it (turn-alerted
+time doubled, thumps gone, Jev "less aggressive" 0.73, runs zomb2-br-on5/6 and noalert1/2; with the key off, noclean1/2, the
+horde matched the off runs); the flag is now cleared at the top of every task. pu_loop 0.755 -> 0.323 ms (zomb2-ab8, before the
+fix: numbers re-measured in zomb2-all3).
+
+### Alerted zombies with the calm ones (`entityUpdateAlerted`, off: behaviour difference)
+
+When a sound reaches the horde (an alarm, a shot, a car) ~300 zombies a frame sit in ZombieTurnAlerted, which is not one of
+the calm states, so their updates ran on the game thread in the inline phase (1.1-1.2 ms a frame, zomb2-prof2). The state
+has no execute of its own (the update is the idle zombie's), its enter sets the turn angle and its exit asks for a path to
+the sound, both where a state change happens. With the key they update on the workers like the idle ones (the frame-start
+read semantics the calm states already have). House-alarm scene (zomb2-ab7): inline 0.87 -> 0.27 ms, scheduler update
+-0.30 ms. Same class of difference as the calm states the maintainer accepted; off until approved.
+
+### The zomb2-all1 hang (fixed before any release)
+
+With every key on, a run hung at frame 19: the game thread waited in `AnimParallel.waitEval` for an evaluation no task would
+run, all workers idle. ActionEval released the postupdate stream's task list at the seal, while workers still had unstarted
+tasks; such a task read a null zombie, threw (caught by the batch) and the evaluation never ran. The list (`pzopt.StreamTasks`)
+is released only after the stream is joined (the next frame's `ActionEval.begin` joins first). `AnimParallel.waitEval` /
+`waitDone` now give up after 200 ms: logged once, the early-evaluation stream off for the session, the evaluation run inline /
+the zombie finished serially (one slow frame instead of a hung game). `tests/pzopt/FrameBatchStreamTest`: 3,000 random
+publish / seal / external-join patterns (every task exactly once, helpOne never claims past an unsealed stream) and a
+deterministic reproduction (releasing at the seal is caught, releasing after the join is clean).
+
+### Smaller ones
+
+- `luaSilentSkip`: a batched zombie's OnZombieUpdate (none in the vanilla Lua) is not captured while no Lua function
+  listens to it (checked when the flight opens, `LuaEventManager.pzoptHasListeners`; a listener added under the flight is
+  counted, `luaSilentLate`, 0 in every run). drain -0.04 ms (zomb2-ab5).
+- `isLocalFast` (default on): `IsoGameCharacter.isLocal()` returns true in single player without the network component
+  lookup; the component answers `!client && !server || !remote`, an absent one true (6.5 % of the flight's self time).
+- `ecsValuesCache` (default on): an entity's ECS component values kept as an array in the map's iteration order
+  (`IsoObject.pzoptEcsValues`, cleared by `ECSEntity.setECSComponent` / `removeECSComponent`, the only writers of the map), so
+  the per-frame `frameStep` visits iterate without an iterator (13 MB/s of allocation on Louisville).
+- `pzopt.Tl`: the hot ThreadLocals of the zombie batches (UpdateBatch's scratch and captures, WorkerScratch, LightingDefer,
+  PostupdateBatch, AnimationPlayer's L_* scratch, GameProfiler's per-thread instance, ...) keep a frame worker's value on its
+  Thread object and the game thread's in a static array; same values (a thread's first fast-path read takes the object it
+  already had). `UpdateBatch.current()`: the flight task's entity in a Worker field.
+- `ActionContext.pzoptSnapshot`: an empty map is not cleared (IdentityHashMap.clear fills its table: a third of submit).
+- Dropped after measurement: `sceneCullParallel` (the on-screen test on the workers: no gain, zomb2-ab1; most of
+  sceneCull is ModelManager.Add), `postupdateMoveStream` (the movement computes as the first tasks of the postupdate stream:
+  the loop waited for them as long as the batch had taken, zomb2-ab6), `frameThreads=15`.
+
+Behaviour: brawl rig (`--flag brawl=60`, harness/brawl.py), 4 runs with this pass's keys off and 4 on (entityUpdateStream,
+separateEdgeCache, postupdateNoopSkip, postupdateFuse, separateAsync, headOnWorker, luaSilentSkip): Jev "same" (0.54); the
+on runs sit inside the off runs' spread on every metric but within-4 (on 15.4 / 12.1 / 15.8 / 13.3 vs off 13.5-13.9),
+which spreads both ways (zomb2-br-*).
+
+### Results of the pass (2026-10-13, full maintainer setup: G1, tieredZombieUpdates, zombieSpawnSpread, lootDefer, zombieReuseSpread, zombieModelAddBudgetUs=500)
+
+- In-run A/B of the exact keys together (zomb2-all3, ABBA 230 ms, 1,977 / 1,847 frames): the zombie sections of the game
+  thread (separation, collection, inline phase, flight join, drain, postupdate, sceneCull, characters draw, FinishAnimation)
+  2.86 -> 2.39 ms a frame; postupdate 1.08 -> 0.70; frame wall -0.54 ms, game-thread CPU -0.56 ms; frames whose zombie sections
+  exceed 8 ms 5 -> 2. The second group (entityUpdateStream with the hoist + entityUpdateAlerted) moved the flight join -0.13 ms
+  but the paired estimate read +1.4 ms of wall (+4.5 ms of process CPU: workers waiting for the next published task spin): off.
+- async-profiler zombie share (zombieshare.py, all threads): zomb2-prof3off (keys off) 2.52 ms a frame, zomb2-prof5 (exact keys)
+  1.98 ms (the latter run had ~0.5 ms of alerted zombies updating inline; scenes differ run to run, the in-run A/B above is the
+  reference).
+- Whole runs, uncapped: keys off 129.7 fps (p50 6.8 / p90 11.5 / p99 17.6 / p99.9 29.4 ms, zomb2-unc0), exact keys 146.5 fps
+  (5.9 / 10.6 / 17.7 / 36.5, zomb2-unc2). Capped at 120: keys off 112.6 fps, 81.8 % of frames within 9 ms (zomb2-lock0); exact keys
+  111.7 fps, 80.2 % (zomb2-lock3): the lock's misses are not zombie work.
+- Exactness rigs, every key on (zomb2-rig2): devActionEvalCheck 0 / 2,518,391, devPostupdateCheck 0 / 79,329 (723,423 vehicle
+  resolutions on the workers), devSeparateEdgeCheck 0 / 526,351, devNearVehicleCheck 0 / 376,940; no batch latch, no bounded
+  wait timing out (waitTimeouts=0). Car through a populated Rosewood (ram, zomb2-ram3-off / ram3b-on): crashes 108 and car
+  condition 3,499 both, no worker exception. Brawl, exact keys, 4 runs against 4 off runs: Jev "same" (0.69).
+- drive-120-south: in-run A/B of the exact keys (zomb2-drive-ab) wall 1.695 vs 1.700 ms, paired +0.03 +- 0.04 ms (6-7 zombie
+  updates a frame there). Two whole-run pairs read 596 / 578 fps on against 611 / 594 off (-2.5 %); isLocalFast and
+  ecsValuesCache are not in that alternation: an open check.
+- Defaults: the exact keys on (separateEdgeCache, postupdateNoopSkip, postupdateFuse, headOnWorker, luaSilentSkip,
+  postupdateEligibleOnWorker, postupdateVehicleOnWorker, postupdateClean, isLocalFast, ecsValuesCache), with tab entries;
+  entityUpdateStream and entityUpdateAlerted off pending the maintainer; separateAsync off (rig differences).
+
+## Game-thread render phase on the Louisville horde (2026-10-13, worktree f8-render1): tileRecordFloors, tileRecordMoveRef
+
+Goal (maintainer, Louisville locked at 120): the game thread's render phase (`GameWindow.renderInternal`) at most 1.5 ms a
+frame. Both changes extend tileRecordParallel (off by default) and only act under it.
+
+- `FBORenderCell.renderTranslucentFloorObjects` (`tileRecordFloors`, default on under tileRecordParallel + tileRecordAsync):
+  each level's translucent floor pass (transparent floors, shore tiles) is recorded per chunk on the frame workers in the same
+  batch as the translucent units (`TileRecord.startFrame` takes the frame's `chunksWithTranslucentFloor` too) and spliced at
+  the pass's own place, in chunk order (`TileRecord.spliceFloorLevel`); a chunk with nothing on the level runs its stock call
+  (state entries only) at its place. New helpers `pzoptRecordChunkTranslucentFloor` (the stock loop body) and
+  `pzoptTranslucentFloorWork`. A transparent floor goes the floor path (`renderFloor`), which bakeRecordParallel made per
+  thread; `TileRecord.deferReason` lets a recording thread draw it when `BakeRecord.floorReason` does (else it is drawn by
+  the game thread at its place). `pzoptRenderFloor` gives a recording thread its own white colour (`PzoptCellScratch.floorCol`)
+  instead of the shared `defColorInfo`, which the game thread's ramp path writes with a square's light meanwhile.
+- `DrawRecorder.move` (`tileRecordMoveRef`, default on under tileRecordParallel): a translucent unit's entries are spliced by
+  moving the entry objects into the frame's list (the frame's spare object past `numSprites` takes the recorder's slot, its
+  drawer cleared) instead of copying every field; all units are recorded before the first splice, so no recording thread
+  touches the arrays then. The entry keeps its drawer (it is the frame's entry; a StartShader's uniform chain is released by
+  the frame's postRender as before).
+- GtAb bits 33 `bakeRecordParallel`, 34 `tileRecordFloors`, 35 `tileRecordMoveRef`, 36 `renderLastFast`, 37 `tileRecordModels`
+  (devGtAlternate within-run A/Bs); new per-frame columns `rt_handoff` (SpriteRenderer.pushFrameDown's wait), `rt_prepop`
+  (prePopulating), `rt_tilesInternal`, `rt_renderlast`, `rt_weather`, `tl_floor` (SpriteRenderer, IsoWorld, FBORenderCell timers).
+- Bounded waits (coordinator, 2026-10-13, after a worker-batch deadlock blocked the shared queue): `recordWaitTimeoutMs` (250)
+  bounds every wait of the recording code: TileRecord's async joins and sync batch (`FrameBatch.joinWithin` / `runWithin`, new:
+  the batch is abandoned so later batches cannot hang on it), BakeRecord's take / worker / endFrame waits. Past it the wait logs,
+  the feature is off for the session and the stock passes draw. Dev `devRecordStallMs` sleeps one recording worker once (the
+  600th recorded frame) to exercise it.
+- `TileRecord` / `DrawRecorder` (`tileRecordBatchSim`, default on under tileRecordParallel): devDrawListCheck found the
+  translucent units inexact since tileVertexDepth (2026-10-09): a unit's first tile start could not merge with the stream
+  before it (2-12 extra entries a pass). A translucent unit now records its tile starts raw (`TileBatch.start`'s raw mode,
+  as a bake unit's), classifies its entries at the unit's end and is spliced through bakeRecordParallel's `moveBake` /
+  TileBatch replay. The moved slots take the frame's spare objects on the recorder's own thread before its next unit
+  (`fixMovedIfAny`; the spares' drawer / future are cleared there instead of in the splice, where each was a cache miss).
+  devDrawListCheck: 0 mismatches in 1.29 M entries (r1-check2), 1 in 2.36 M (r1-check3: a window's light read before the
+  native lighting thread lit its square, the stock pass later in the frame saw it lit; a timing difference).
+- `IsoGameCharacter.renderlast` (`renderLastFast`, default on): the inventory walk for IUpdater items is skipped; every
+  IUpdater of the game (HandWeapon, WeaponPart, Radio, DrainableComboItem, all final) has an empty renderlast. Off with any
+  Java mod in the launch (`ModCompat.javaModsPossible`). `pzopt.RenderLast`.
+- `IsoObjectModelDrawer` (new override, `tileRecordModels`, default on under tileRecordParallel): the drawer pool and the
+  matrix-palette pools under the class lock, the frame-palette cache (`IsoObjectAnimations.getMatrixPaletteForFrame`, its list
+  and shared buffers) under a lock, the highlight / caching modes read as the calling thread sees them
+  (`FBORenderCell.pzoptHighlightRendering` / `pzoptCaching`). `IsoObject.renderModel`: a recording thread scales its own copy of
+  a door's light (stock scales the square's shared light info and restores it). `TileRecord.modelRecordable`: a 3D sprite
+  model is drawn by a recording thread when its model and texture are loaded and ready, it has no texture override, animation
+  player, render effect, highlight or outline; such an object needs no warm sprites (it draws none).
+- `TileRecord.Census`: the instrumented runs' defer census counts by class without building a key string per deferred
+  object (it allocated ~80 strings a frame with both recorders on; ZGC work in the measured frames).
+- `WeatherFxMask.drawFxMask` (`tileRecordWeather`, default on under tileRecordParallel + tileRecordAsync): the mask loop moved verbatim into
+  `pzoptMaskLoop`; with the key, when the masks are final at the translucent dispatch (`pzoptMaskRecordable`: no scan can add
+  masks this frame, the stock gates of the pass hold) the loop is recorded on a frame worker in TileRecord's batch and spliced in
+  place of the loop (`TileRecord.spliceWeather`, which checks the mask list is unchanged; else the stock loop). The loop's
+  `SpriteRenderer.glBlendfuncEnabled` writes go through `pzoptBlend` (a recording thread keeps its own flag, `IndieGL`'s three
+  reads ask `DrawRecorder.blendEnabled()`), `isRenderingMask()` answers a recording thread's own pass (true for the weather unit),
+  and the open-door / object / character calls are drawn by the game thread at their place (`TileRecord.deferMask`, with the
+  loop's flag at that point). devDrawListCheck compares the weather unit too (frames whose loop deferred nothing).
+- `TileRecord` splices seek each unit's own postRender entries (`DrawRecorder.seekPost`, as BakeRecord's): a recorder's units
+  are spliced in another order than recorded (a level's floor units before its translucent ones, the weather parts last), and
+  a DrawModel entry (a recorded door model) could miss the frame's postRender, leaving its drawer on the entry object for the
+  next StartShader (devDrawListCheck "StartShader drawer" differences, r1-fcheck). The check's rollback also clears the rolled
+  back entries' drawers.
+
+## Frame-time tail pass (2026-10-13, worktree `f8-tail1`): animal LOS walk, animal preload, GL syncs
+
+Louisville horde, uncapped; the per-frame attribution tool is `harness/slowframes.py` (sources: pzopt-pacing.out,
+pzopt-gtab.out with `devFrameSections`, asprof / JFR samples, gc.log, the bake / chunk logs).
+- `IsoAnimal.updateLOS` / `pzoptUpdateLosWalk` (`animalLosWalk`, off; exact): the animalLosFast fold walk over
+  `pzopt.AnimalLosWalk`'s array of the cell's moving objects in the set's own iteration order, rebuilt whenever the set
+  changed (`pzopt.CellObjectSet`: `IsoCell.objectList` swapped, while still empty, for a HashSet subclass that counts adds;
+  any removal lowers the size, so `(version, size)` names an unchanged set). Every test reads the live values stock reads; a
+  zombie whose fold tick cannot change an idle animal (`spottedChr` null, `lastAlerted` exactly 0) is passed after reading
+  its x / y only (beyond 10.01 squares on an axis stock's distance is above 10); a non-idle animal's ticks are applied one by
+  one where the fold applies them; a set change inside a `spotted()` call throws as stock's iterator does.
+  `devAnimalLosCheck` lists the stock fold's events from the live set first and replays them on the walk's recorded states:
+  45,588 walks, 0 mismatches (run t1-diag2). In-run A/B (`devGtAlternate` 230 ms, t1-gl1): animalLos 0.393 -> 0.248 ms a frame.
+- `IsoChunkMap(IsoCell)`: `pzopt.CellObjectSet.install(cell)` (the swap above; the cell's field initializer has run, its
+  constructor has not added anything yet).
+- `GameLoadingState`: `pzopt.AnimalPreload.start()` after `BootAsync.joinAnimSets()` (`animalPreload`, off): every animal
+  type's animation set (`AnimationSet.GetAnimationSet`, synchronized in our override) and action group (ActionGroup's own
+  constructor and load on a private instance, after ActionContext's class init registered the condition factories) are
+  parsed on a background thread; `Pacing.stepStart` hands the groups to ActionGroup's map once the loader thread has ended,
+  only for names the game has not loaded itself. Stock parsed them on the game thread in the chunk hand-off that first
+  spawned the type (`IsoChunk.addRatsAfterLoading`): 15-37 ms frames.
+- pzopt only (no override): `TexBcGpu.mips` / `encode` take the current program from ShaderHelper's record
+  (`GlState.currentProgram()`, weatherNoGlGet) instead of `glGetInteger(GL_CURRENT_PROGRAM)`: with NVIDIA's threaded driver
+  each glGet waited for the driver queue, 18-36 ms in the frames that load new zombie clothing (JFR native samples, t1-jfrn1:
+  140 of the call's 165 samples were in frames over 16.7 ms). `LightingDefer.end` / `ActionEval.exitSnapshot`:
+  `ThreadLocal.set(null)` instead of `remove()` (each remove + set allocated a ThreadLocalMap entry, 16 MB/s of the horde's
+  135 MB/s). `GtAb` / `devFrameSections`: per-frame rows without an alternation, plus the game thread's run-queue wait,
+  page faults, the frame hand-off wait, the frame-batch join wait and the render thread's glGenTextures time.
+- `TextureID.generateHwId`: `TexCompress.pollStagingIfLow()` instead of `pollStaging()` (the staging fences are polled per
+  new texture only while less than a quarter of the 128 MB staging buffer is free; RenderThread still polls once a frame
+  after the swap): each glClientWaitSync was a threaded-driver sync per new texture. `devTexCensus` (dev, off):
+  `pzopt.TexCensus.add` counts created textures by folder and size (Louisville route: ~3,600 created in 25 s, ~2,900 of
+  them generated 256-1023 px textures without a path: TextureCombiner's character / item composites; the frames that
+  create them carry the hand-off stalls).
+- `Pacing.collectQueries` calibrates the GPU clock every 8 s instead of every second (glGetInteger64(GL_TIMESTAMP) syncs).
+
+## Frame-time tail pass 2 (2026-10-13, worktree `f8-tail1`, agent tail2): TextureCombiner composites
+
+- `zombie.core.textures.TextureCombiner` (new override, `combinerPool`, off; `devCombinerCensus`, dev): the composites a
+  zombie's body and clothing are drawn with (blood, dirt, holes, tints) come from `createTexture` / `releaseTexture`. With
+  the key on: `releaseTexture` keeps a released composite when stock would (fewer than 100 free of its size) or while the
+  free composites' bytes stay under the VRAM budget (`pzopt.CombinerPool.budgetBytes`: `combinerPoolMb`, 256 MB, scaled
+  down linearly on GPUs under 6 GB, half when the size is unknown), and destroys it otherwise as stock does;
+  `createTexture` (`combinerKeepStorage`) no longer re-specifies the storage of a reused or new composite with
+  `glTexImage2D(null)` (same size and format as it already has; every combine clears the whole framebuffer first, scissor
+  off) but still sets stock's clamp / linear parameters. New `pzoptAfterSwap` (render thread, from `RenderThread` right
+  after the swap and `GlNames.refill`): tops up a reserve of free composites of every size that was asked for
+  (`combinerReserve` a size, at most `combinerReservePerFrame` a frame, same budget rule), each made with stock's reuse
+  parameters and marked (`CombinerPool.READY`) so `createTexture` does not set them again; reserve composites sit under
+  the released ones, which are taken first as in stock (LIFO). The first composite of a size keeps stock's path (its repeat
+  wrap included). The census counts requests / reuses / new / reserve / released / destroyed / free per size and the
+  render-thread time of `combine`, a console line every 10 s.
+- `RenderThread`: the `TextureCombiner.instance.pzoptAfterSwap()` call after the swap.
+- `TextureCombiner.combine` / `createTexture` (`devCombinerCheck=N`, dev): every Nth combine into a reused composite is drawn
+  again into a new composite whose storage is specified the stock way (`CombinerPool.forceFresh`), both are read back and
+  compared byte for byte (run t2-ccheck: 1,550 compared, 0 mismatches). The keep-storage / reserve / budget behaviours read
+  `CombinerPool.active()`, so `devGtAlternateKeys=combinerPool` switches them inside one run (GtAb bit 57).
+- `TextureCombiner.createTexture` (b2): with the key on, new composites take a pooled GL name (`GlNames.combinerScope`; the
+  name pool refills after the swap whenever combinerPool is on), not a glGenTextures round trip.
+- pzopt only: `pacingQueryBuffer` (off): `pzopt.QueryBuf` writes the Pacing GPU timestamps and the overlay's GPU timer
+  results into a persistently mapped GL_QUERY_BUFFER (GL 4.4 / ARB_query_buffer_object) and reads them from client memory
+  instead of polling `glGetQueryObject(GL_QUERY_RESULT_AVAILABLE)` every frame (a threaded-driver sync; 9.4 ms render-thread
+  stall in run t2-cc-on).
+
+## Zombie redesign round 3 (2026-10-13, worktree f8-zomb3): late apply, zombies drawn one frame late, per-worker random streams
+
+Goal (Louisville 120 lock, maintainer): the zombie work the game thread waits on at most 0.5 ms a frame. After round 2 about
+1 ms of it was waits on synchronous worker batches with nothing independent to do: the separation (0.15 ms), the entity
+flight's join (0.37-0.48), the postupdate's movement batch (0.20-0.24), the transition evaluations the apply loop waited
+for (~0.15, `evalWait` in the animator-parallel log line) and the bone join at FinishAnimation (0.06). The maintainer
+approved two behaviour changes for this round (each behind its own key, off until the checks are seen): the late apply
+and drawing zombies one frame late.
+
+### The apply at FinishAnimation (`zombieLateApply`, off: behaviour difference, approved, pzopt.ZombieLate)
+
+`ActionEval.flush` at the end of the postupdate now only seals the postupdate stream (the queued zombies the stream did not
+take join it) and, with the key, holds the queue: the apply (AnimParallel.apply: the state changes and the arming in queue
+order, the animators of the zombies that changed state on the workers, the anim events and the finish in queue order) and
+the bone batch's start run in `IsoWorld.FinishAnimation` (the game's own animation join point before the render, where
+stock's `threadAnimation` debug option joins its whole postupdate). The workers' evaluations and fused animators then
+overlap the rest of the frame's logic. What sees a different order: every game-thread step between the postupdate and
+FinishAnimation (IsoWorld.updateThread, GameEntityManager, AnimalController, the radio, UpdateStuff with the population
+manager, virtual zombies, fire, world sounds, `OnTick` and the `Every*` events, FMOD ambience, ModelManager.update, the
+UI update) sees a queued zombie before this frame's action-state change, its anim events (footsteps and vocal sounds, the
+attack's collision check that marks its target hit, thump strikes on doors / windows / vehicles, the state's anim-event
+hooks) and its animator step. No vanilla Lua event is fired from inside the apply except through those hooks (a hit target's
+damage lands in its own next update; `OnZombieDead` / `OnCharacterDeath` only when an anim event kills). Writes that would
+collide finish the held apply first (counted as touches by reason): the zombie's state machine changing state (death, hit
+reaction, Lua `changeState`; StateMachine.changeState), its removal from the world (IsoZombie.removeFromWorld), ModelManager
+adding, resetting or removing its model, and any game-thread call of its AnimationPlayer's accessors (its player carries
+the in-flight flag while held, AnimBatch.guard). A touch from inside a batch task the game thread runs is only counted (the
+apply cannot start batches there; FinishAnimation runs it). Unguarded reads (Lua reading a variable or the current action
+state) see the pre-apply value and may race with a worker's evaluation or fused animator of that zombie, the exposure stock's
+threadAnimation option has. The frame workers read the frame's `fpsMultiplier` latched at the hold (GameTime: getMultiplier,
+getUnmoddedMultiplier, getRealworldSecondsSinceLastUpdate) instead of the field, which AnimatedModel / IsoDeadBody set to
+100 around their own poses on the game thread. ActionEval.begin finishes a held apply that FinishAnimation missed.
+
+### Zombies drawn one frame late (`zombieDrawLate`, off: behaviour difference, approved, pzopt.ZombieLate / AnimBatch / FrameBatch)
+
+The bone batch (AnimBatch: the bone math, the skin palettes, the shadow pair) is no longer joined at FinishAnimation: it runs
+on a new background lane of the frame workers (`FrameBatch.runBackground` / `joinBackground`: a worker takes one background
+task at a time when no foreground batch has work for it and looks at the foreground again after each, so the render-time
+batches never wait for it or join it; only its owner joins it) through the render, and is joined at the top of the next
+frame (`ZombieLate.frameStart`, GameWindow.frameStep before the logic). The render draws each zombie whose bones are in flight
+with the pose of its previous bone update: `AnimationPlayer.pzoptDrawSnapshot` copies the render outputs (the model
+transforms, every skin palette the last update stored, the angle, the shadow pair) when its bone math is queued, before a
+worker writes the live arrays, and from FinishAnimation to the next frame's start the accessors the render reads serve the
+copy on every thread but the bone task itself (getRenderedAngle, getAngle, pzoptSkinPalette, getSkinTransforms (the copy's
+transforms through the set's bone map when no palette was stored), getModelTransformAt / Count, pzoptShadowParams; the
+bone-index cache is bypassed). A game-thread call of any other guarded accessor joins the batch (logged with its stack, first
+ten). Everything else the render reads of a zombie (position, alpha, outline, model slot, lighting, the cull) was final at
+FinishAnimation: only the bone math runs during the render. The copy is written only while the player is not in flight and
+read only while it is. So a zombie is drawn at its current position with the previous step's pose and facing (at most one
+frame of animation, ~8 ms at 120 fps).
+
+The first build hung (run z3-ld1): the game thread, running a bone task itself inside joinBackground, reached a guarded
+accessor (AnimationPlayer.DoAngles inside the bone math) whose guard joined the background again and waited for the very
+task it was running. The guard never joins while the game thread runs a background task, a nested joinBackground returns at
+once, and the background wait gives up after 200 ms (logged once, the lane off for the session, the completion run: one slow
+frame instead of a hung game). tests/pzopt/FrameBatchBackgroundTest: every background task once under random foreground
+traffic (run, runAsync + join, streams), the foreground completing while every background task is blocked (a join of the
+background would hang), the per-thread flags, the nested join (hangs on the first build, watchdog) and the bounded wait.
+
+### Per-worker random streams (`randPerWorker`, off: statistically identical, not bit-identical)
+
+The game's `Rand` draws from one `CellularAutomatonRNG` whose `next` takes a fair ReentrantLock; eight workers drawing from it
+in the entity flight (the sheet-rope roll every zombie every frame, the sound response, the idle and wander states) spent
+~7 % of the flight's samples there (zomb2-prof5), most of it lock hand-offs. `pzopt.WorkerRand` wraps the game's instance
+(RandStandard.INSTANCE's field, re-wrapped if the game replaces it): every thread but a frame worker draws the game's own
+values in the same order (the wrapper delegates `next` to it), a frame worker draws from its own generator of the same kind.
+Which zombie got which number was already decided by the workers' scheduling; the workers' draws no longer advance the game
+thread's stream.
+
+### An idle animal's line of sight without the walk (`animalLosSkip`, off until its rig and A/B are read; IsoAnimal override, pzopt.AnimalLosSkip)
+
+IsoAnimal extends IsoPlayer, so entityUpdatePlayerFirst updates every animal in place in the buckets' collection, before
+the zombies' flight is dispatched, and each animal's updateLOS walks the cell's whole object set: 0.46-0.48 ms of the game
+thread a frame on the Louisville horde (z3-prof1), all of it ahead of the flight. For an idle animal that walk changes nothing:
+every spotted() call clears spottedChr (already null), ticks lastAlerted towards 0 (already 0) and returns before any branch
+that acts, and the spotted list ends as the animal itself (as it was); the branches that act (a flight, an alert, stress,
+the player acceptance with its random roll, an attack) need a zombie within 10 squares of an animal that flees zombies, a
+non-animal player within 10 squares of a tame animal, or a player anywhere near a wild one. The call site in the animal's
+update skips updateLOS when the animal is idle (spottedChr null, lastAlerted exactly 0, its spotted list exactly itself) and,
+for a tame animal, no non-animal player stands within 11 squares (live positions, any level); a wild animal (every animal of
+the Louisville bench: z3-rig2 counted 23,590 walks of wild animals and nothing else) rolls Rand.Next(AdjustForFramerate(25000))
+once for every moving player its walk hands to spotted(), whatever the distance, and beyond its spotting distance (and 3
+squares) that roll is the call's only effect: the skip requires every such player farther than max(3, spottingDist) + 1
+squares and rolls the same number of times at the same place, so the game's random stream stays bit for bit the one the walk
+would leave (players dropped by the walk's own filters before the roll, other level, no square, invisible, ghost, dead, roll
+nothing; an animal on a smoke square is left to the walk); and, if the animal flees zombies, no zombie stands
+within 12 squares and 2 levels (the frame's zombie positions, snapshotted on a 16-square grid at the scheduler's update before
+the collection: nothing moves a zombie by 2 squares inside the collection; every zombie counts, also those stock's filters
+drop). Everything else takes the stock walk; nothing runs on another thread, and the inside of updateLOS is untouched (so it
+combines with the tail pass's animalLosWalk, which makes the remaining walks cheaper). `devAnimalLosSkipCheck` runs the stock
+walk anyway for every skipped animal and compares what it changed (spottedChr, lastAlerted, the spotted list, stress, the
+alert, the alerted / fighting / attack targets, the behaviour flag, the player acceptance values) with nothing, and the rolls it
+made (RandAbstract's draw counter) with the predicted count. The zombie snapshot is built at the frame's first animal (no cost
+on a drive without animals).
+
+### Animals back under the flight (`entityUpdateAnimalsInline`, off: behaviour difference against today's default)
+
+entityUpdatePlayerFirst moved the players and the vehicles before the combined flight (the player's update writes the
+zombies it sees); because IsoAnimal extends IsoPlayer, the animals went with them, although nothing in an animal's update
+writes a zombie the flight reads, and the flight's only runway (the inline phase) shrank to ~0.06 ms while its join waits
+0.36-0.45 ms. With the key `UpdateBatch.playerFirst` answers false for an animal, so the animals update in the inline phase
+under the flight again, in their stock order among the inline entities: the semantics entityUpdatePipeline shipped with for
+them (a batched zombie's position read as it was when the flight was dispatched, which is what an animal updating before the
+flight reads too). What changes against today's default: an animal now updates after every player and vehicle of the frame
+instead of at its place among them, and a batched zombie reading an animal reads it while the game thread may be updating it
+(as for every other inline entity).
+
+### Results of round 3 (2026-10-13, full maintainer setup + the coordinator's candidate stack, JVM -Xms4096m -XX:MaxGCPauseMillis=10)
+
+In-run A/Bs (pzopt-gtab.out; "zombie sections" = separation, collection, inline phase, flight join, drain, postupdate, sceneCull,
+characters draw, FinishAnimation; alternation periods 230 / 410 ms: a 330 ms second group phase-locks with the game's 1 s periodic
+work and biased every group-2 cell of z3-ld2 / z3-rand1, as it did zomb2-all3's):
+- entityUpdateAlerted, house-alarm scene (z3-alert2): inline phase 0.57 -> 0.18 ms, scheduler update -0.11 ms, frame wall
+  -0.23 ms, frames whose zombie sections exceed 8 ms 11 -> 4. Plain route (z3-alert1): no alerted zombies, no difference.
+- zombieLateApply x zombieDrawLate (z3-ld3, 2x2): zombie sections 2.82 (neither) / 2.95 (late apply alone: the bone batch is
+  then waited for at FinishAnimation) / 2.72 (draw late) / 2.69 (both). Repeat (z3-anim1, draw late with late apply on):
+  3.45 -> 3.29 and 3.42 -> 3.23. The late apply's own gain is the evaluation waits of the apply loop (step 1 0.14 -> 0.07 ms).
+- randPerWorker (z3-rand1): the flight's worker CPU 4.95 -> 3.81 ms a frame, its join 0.59 -> 0.46 ms. frameThreadsAlt=7 in the
+  same run: flight wall +0.06 ms (dropped).
+- animalLosSkip (z3-anim3): the animals' LOS 0.57 -> 0.49 ms; Louisville's animals are all wild and mostly within 12 squares of a
+  zombie, so 4,894 of 35,823 walks were skipped there (13-63 % across runs). Exactness rig (z3-rig4): 0 mismatches in 7,405 checked
+  skips (state and the game thread's own Rand rolls; z3-rig3's 13 roll differences in 17,574 were other threads' draws on the shared
+  generator, which rig4 no longer counts).
+- entityUpdateAnimalsInline (z3-anim3): the flight's join 0.28 -> 0.01 ms, but the animals' updates under the flight ran twice as
+  slow (the inline phase 0.16 -> 1.25 ms, their LOS 0.57 -> 1.07: every zombie position read goes through the frozen snapshot while
+  eight workers share the cores): scheduler update +0.23 ms. Dropped (key kept, off).
+- Every round-3 key together (z3-all2, plain route): zombie sections 3.51 -> 3.15 ms, frame wall 7.56 -> 7.04 ms, game-thread
+  CPU 6.79 -> 6.41 ms, frames with zombie sections > 8 ms 16 -> 10; the postupdate's flush 0.26 -> 0 (its apply work, 0.17 ms, is
+  in FinishAnimation now, with no bone wait), the flight's join 0.56 -> 0.42. House-alarm scene (z3-all1): 3.44 -> 3.22 ms.
+- Waits left on the game thread (z3-all2, on): separation 0.20, flight join 0.42, movement batch 0.35 ms: throughput-bound
+  batches with no independent game-thread work beside them inside the update.
+
+Behaviour: brawl rig (4 runs off, 4 on, Jev): the whole stack "same: yes 0.19", kind more_aggressive 0.51 / same 0.48 (damage per
+second 8.5 vs 7.4 mean, within-4 and targeting slightly higher); isolated: entityUpdateAlerted alone "same" 0.74 (but the thump
+share 0.057-0.097 against 0.036-0.056 off), late apply + draw late + randPerWorker "same" 0.54. Car through Rosewood (z3-ram-off /
+on): 108 crashes, condition 3500 both, no worker exception. drive-120-south in-run A/B of every key (z3-drive-ab1): wall 1.672 ->
+1.706 ms (+2 %, 5.8 zombie updates a frame; the animal snapshot is lazy since). Draw late: brawl frames at zoom 1 show intact
+models and smooth motion frame to frame.
+
+Lock checks at the 120 cap (two runs each): off 110.4 / 110.3 fps, 80.0 / 78.0 % of frames within 9 ms, p99 18.4 / 17.8, p99.9
+41.6 / 41.8 ms; on 111.5 / 112.2 fps, 79.4 / 81.3 %, p99 17.3 / 16.9, p99.9 35.5 / 29.5 ms (mangohud, route window; bake counters
+healthy, ~5.7-6k strong marks). The share of late frames does not move beyond the noise: the lock's misses are not zombie waits.
+
+Open: the postupdate stream (round 2's postupdateFuse) throws in a task now and then, caught by the batch and logged ("postupdate
+stream: a task failed": a null task item, or ActionStateContainer.currentState null in an evaluation): 1 of 71 runs without
+zombieLateApply (zomb2-br-on4), 4 of 24 with it; no bounded wait ever timed out (waitTimeouts=0). The null item is now skipped and
+logged with the stream's state; the root cause is not found. Keep zombieLateApply off until it is.
+
+## The postupdate stream's task failures (2026-10-13, worktree f8-streamfix): no game-thread write beside a zombie's own evaluation task
+
+Round 2's postupdate stream (postupdateFuse / postupdateClean, `pzopt.PuStream`, `StreamTasks`) logged "postupdate stream: a task
+failed" in 5 runs: a null task item (zomb2-br-on4, 07:37) and `ActionStateContainer.currentState` null in an evaluation (z3-ld2,
+z3-prof1, z3-anim3, z3-all2, all four with round 3's `zombieLateApply` + `zombieDrawLate`).
+
+- **The null item** was the bug the zomb2-all1 hang (08:19) found: ActionEval released the task list at the seal while tasks had not
+  started; zomb2-br-on4 ran that build (an NPE on the null zombie, then the `finally`'s `z.getActionContext()`, the logged one). No
+  run since the release moved after the join logged it (round 3's skip-and-log of a null item never fired).
+- **currentState null.** A zombie publishes its evaluation in its `postUpdateAnimating` and goes on with its postupdate; when its
+  move left it off the loaded grid, the end of its own `IsoZombie.postUpdateInternal` (`this.current == null` ->
+  `removeFromWorld()`) removes it from the world while its evaluation task may be running. With `zombieLateApply` that zombie stays
+  held (its apply waits for FinishAnimation, and nothing joins the stream before), and UpdateStuff resets it for reuse in the same
+  window (`VirtualZombieManager.update` / `ReuseSpread.drain` or `resetOne` -> `reuseZombie` -> `IsoZombie.resetForReuse` ->
+  `ActionContext.setGroup` -> `setCurrentState` -> `nextActionStateContainer.clear()`), the container the worker is evaluating:
+  the worker reads `this.currentState` between the clear and the new state (the NPE), or evaluates a half-written container. Round
+  3's guards finished the held apply only later in the reset (`OnAnimDataChanged` reaches the AnimationPlayer guard: the "anim"
+  touches of those runs), so the held apply then ran on a half-reset zombie. Without the late apply the flush waits for every
+  queued evaluation before UpdateStuff, so only the in-loop part of the race was left: the removal itself (path, target, group
+  writes) beside the evaluation reading them. Run sfz3-diag1 (round-3 copy + this fix, both late keys on): 168 removals of a zombie
+  whose evaluation was still running, every one from that `postUpdateInternal` line, 142 held zombies reset for reuse in the window.
+
+The fix (no catch-and-skip; every stream task runs as before):
+
+- `ActionEval.settle(ctx, reason)`: before a game-thread write into a zombie whose evaluation task of this generation is out
+  (`ActionContext.pzoptTaskGen`, stamped by `ActionEval.publish` and the flush's asynchronous evaluation batches) and not done
+  (`pzoptEvalDone`), the evaluation is finished first. Every evaluation task claims its context for the generation with one
+  atomic swap (`ActionContext.pzoptTaskClaim`, `ActionEval.claim`); settle claims too: when no worker has started the evaluation,
+  the game thread runs it right there (as an unfused one: the apply loop finishes the zombie as before) and the task that reaches
+  it later skips it; when a worker is running it, the game thread waits for that one task (bounded at 200 ms, then the stream keys
+  go off for the session as for the other bounded waits). A first version only waited: ~1 ms a removal behind the stream's
+  backlog (runs sf-cap1 / sf-cap2: 100-151 waits, ~100 ms a run). Free when nothing is out (two int compares); never on a frame
+  worker or while the game thread runs a batch task itself (`FrameBatch.gameThreadInTask()`, a task depth counter in `work` /
+  `helpOne`). Callers
+  (pzopt markers): ActionContext `update`, `setCurrentState`, `setPlaybackStateSnapshot`, `reportEvent`, `clearActionContextEvents`;
+  IsoZombie `removeFromWorld`, `resetForReuse`, `Hit`; StateMachine `changeState` (a zombie owner). Stock evaluates a zombie in its
+  own loop slot, before any later write; settle restores that order for every write that reaches it.
+- `ActionEval.begin` lands the previous frame's stream before it moves the generation (a task finishing after the increment
+  stamped its zombie done / evaluated in the new generation, so that frame's apply would take a stale evaluation).
+- `FrameBatch.runStream` returns a token and PuStream publishes, seals and tests only its own stream
+  (`publish(token, n)` / `seal(token, n)` / `streamOpen(token)`); the untokened calls act on whatever batch is pending, so a stream
+  joined and replaced by another user's stream would have been grown past its own task list (a null item).
+- PuStream logs the stack of the first three task failures.
+- Round 3 (f8-zomb3) adds, with the same settle: `IsoZombie.resetForReuse` finishes a held apply first (`ZombieLate.R_REUSE`), and
+  `settle` finishes the held apply of a held zombie before any context write (`R_OTHER`), so the held apply never runs after a
+  write stock would have ordered after it.
+
+Test: `tests/pzopt/ActionEvalSettleTest` (real ActionContext / ActionStateContainer, a proxy owner, FrameBatch streams): (1) a
+worker parked inside a transition condition while the game thread clears the context reproduces the runs' NPE deterministically
+without the guard (`ActionEval.settleOff`) and is clean with it (the write lands after the evaluation); (2) 64 contexts streamed
+while the game thread writes random published ones with every guarded writer: 16-17 failed frames in 150 unguarded, 0 in 400
+guarded (~3,000 settles); (2b) a published evaluation behind tasks that hold every worker: the write runs it on the writing
+thread at once, the task that reaches it skips it (evaluated once); (3) a stream joined and replaced by another stream: the first owner's late publish / seal no longer
+reaches the second (the untokened publish ran its tasks past their list).
+
+## postupdateClean and stock's skipped bucket slot (2026-10-13, worktree f8-cleanfix): MovingObjectUpdateScheduler, IsoZombie, IsoGameCharacter
+
+What stock does. `MovingObjectUpdateSchedulerUpdateBucket.postupdate` walks its list with `for (i = 0; i < size(); ++i)
+list.get(i).postupdate()`. An entity that leaves the world inside its postupdate (a zombie whose move left it without a current
+square: the end of `IsoZombie.postUpdateInternal` calls `removeFromWorld`, which reaches `MovingObjectUpdateScheduler.removeObject`
+and `bucket.remove(object)`) shifts the list under the loop, so the entry right after it moves into the index already run and is
+skipped: stock runs **no** postupdate for that zombie in that frame (no movement, no tail, no head, no transition evaluation, no
+animator); it is run again in its next bucket frame. The same holds for an entity another one removes before the loop reaches it
+(never run that frame), and an entity removed behind the loop also skips the next entry. The reusable-zombie set, the bucket
+loop's other reason to skip, does not change during the loop (VirtualZombieManager.update reuses zombies), so it needed nothing.
+
+The inexactness. postupdateParallel already handled it for an ordinary computed zombie: `PostupdateBatch.finish` puts back the
+movement of a zombie the loop never took. A clean zombie (`postupdateClean`) has `pzoptMoveFrame` 0 because the loop must not take
+it, so nothing was put back: its movement and the tail of its postupdate (the unbalance lerp, canSeeTarget, targetSeenTime, the
+head left to its evaluation task) stayed, and `ActionEval.publishCleanEarly` had sent its evaluation to the stream before the loop,
+so the evaluation ran and, with postupdateFuse, its context update and animator too; only the apply was missing (`cleanEarly -
+cleanAppended`, ~95-100 a Louisville run, e.g. 2,087,864 - 2,087,764 in sf2-rig1).
+
+The fix (keys unchanged, on by default with postupdateClean):
+- A clean zombie's evaluation goes out when the loop reaches it: `ActionEval.appendClean` already published a zombie not yet out
+  (`publishEarly`), so the call in `prepass` is gone. A clean zombie the loop never reaches therefore never has a task (and a
+  game-thread write before its slot, e.g. a reportEvent, no longer settles an evaluation ahead of stock's order).
+- The loop's visit is recorded per movement-queue entry (`PostupdateBatch.reached`): `cleanAt` marks the entry it matches, and
+  `IsoZombie.postupdate` marks it (`reachedAt`, by the queue index the movement task stores in `IsoZombie.pzoptCleanIdx`) for every
+  zombie the loop does call. When `cleanAt`'s eight-entry look-ahead lost the cursor (more removals in a row than that), a clean
+  zombie reached `IsoZombie.postupdate`'s guard and returned without joining ActionEval's queue; the guard now does what
+  `cleanAt` would (`cleanGuard`: `appendClean` for an animating one).
+- `finish` puts back every clean zombie the loop never reached: the movement from the movement task's Snap
+  (`pzoptMoveRestore`, as for the others) and the tail from four values `pzoptCleanPostupdate` saves in the same Snap
+  (`IsoZombie.pzoptCleanUndo`: unbalancedLevel, targetSeenTime, canSeeTarget, pzoptHeadPending; pzoptCleanFrame cleared).
+  `clearAttackVars` needs no undo: only CombatManager fills attack vars, for an IsoLivingCharacter (never a zombie), so a
+  zombie's are always already clear; the context's snapshot map is the evaluation's own scratch, refilled before any read.
+  Counters on the postupdate batch line: `cleanUnreached=` (clean zombies the loop did not reach) and `cleanUndone=`.
+
+`devCleanEarly` (dev) is the old shape (the early publication, nothing put back), the rig's control arm.
+
+Rig `devCleanSkipCheck` (dev): before the movement batch every queued zombie's movement fields (Snap) and the rest of what a
+postupdate writes (`IsoGameCharacter.pzoptSkipPrint` / `IsoZombie.pzoptSkipPrint`: forward direction, turning flags, head marks,
+the context's evaluation mark and current state, the animation tracks' times and count, unbalance, targetSeenTime, canSeeTarget)
+are saved; after the frame's postupdate (ActionEval.flush, AnimBatch.flush) the stream is joined and every entry the loop never
+reached is compared with its saved state: stock left it alone, so nothing may differ. Counted apart: zombies still in the cell
+(`slot=` / `slotDiffs=`, the skipped slot) and zombies removed during the loop (`removed=` / `removedDiffs=`).
+
+Louisville, the full 120-target setup, uncapped, with `devActionEvalCheck` and `devPostupdateCheck` too:
+- control arm cf-rig-before (`devCleanEarly`): 163 entries the loop never reached, all in the skipped slot (none removed), 127 of
+  them clean, and all 127 differ from their pre-postupdate state (first fields: position, altCollide/firstUpdate); the 36 ordinary
+  computed ones were already put back (0). cleanEarly - cleanAppended = 111.
+- fix cf-rig-after: 223 unreached (162 clean, all put back: `cleanUndone=162`), 0 differences; cleanEarly 0.
+- Both: actionEvalCheck 0 mismatches in 3.1 M, postupdateCheck 0 differences in 134-138 k, no stream-task failure, no bounded-wait
+  timeout.
+- Cost at the 120 cap (cf-cap1 / cf-cap2): 112.0 / 113.2 fps, p99 17.2 / 17.0 ms, strongMarks 5.8k / 5.9k, 0 stream-task failures,
+  123-128 clean zombies put back a run; the stream-fix runs before it (sf2-cap1..6) were 110.9-113.1 fps, p99 16.5-17.8 ms.
+
+Test: `tests/pzopt/PostupdateCleanSkipTest` drives the real bucket override's loop over clean zombies (allocated without a
+constructor) and probe entities that remove themselves, the entries ahead of them (also more than the look-ahead, the guard path)
+or one behind them, and a model of stock's loop over the same list: after `finish` exactly the zombies the model ran keep their
+movement task's postupdate and every other one is back to its state before the movement batch (4 fixed shapes, 3,000 random lists).
+
+## The horde's 3D model draws in batches (2026-10-13, worktree `f8-horde`): hordeBatch, zombie LOD boundary
+
+Goal-120 pass on the Louisville horde: in the seconds with ~450 zombies drawn as 3D models the frame was GPU and
+render-thread bound (`moving` GPU section 7-10 ms). Measured with the dev rig `devHordeModes` (per-frame cost modes, GPU
+section `moving.m<d>`, run horde-diag1, ~450 characters, 1,810 mesh draws, 1.95 M indices a frame): stock 7.6 ms GPU;
+without the draw calls (everything else issued) 3.7 ms; one extra attribute push / pop pair per character +0.4 ms;
+without the character draws 0.2 ms. Most of the cost was per-draw state and uniform traffic, not vertex or pixel work.
+
+- `ModelSlotRenderData` (new override, Vineflower of the 42.21 jar, no fix needed): four helpers for `pzopt.HordeBatch`,
+  nothing else changed. `pzoptBatchBegin` is `renderCharacter`'s prelude for a batched character (the texture checks of
+  `checkReady`, the camera's depth mask, the instance list `performRenderCharacter` would draw, or null when it would draw
+  nothing); `pzoptBatchEnd` sets the rendered flag as the stock method does; `pzoptHasOutline` / `pzoptHasDebugDraw` read
+  two private fields; `pzoptRendersTexture` says whether `checkReady` would render a texture now (the clothes' composite
+  or an item texture), so the batch draws what is pending before that render, as the stock order does. In `init` the
+  alpha is multiplied by the zombie's crossfade share (`zombieLodFadeMs`; 1 unless the LOD option is on).
+- `Model`: static helpers for the batch: whether a mesh's vertex buffer is drawable, its handle / buffer names / index
+  count (package-private fields), and `pzoptMeshPointers`, `VertexBufferObject.BeginDraw`'s buffer bindings, pointers and
+  enables (the same switch over the format's element types) issued into the vertex array object the batch has bound; the
+  vertex format is read by reflection once per mesh. `DrawSolid`: the dev rig's counters and modes 1 / 2.
+- `TextureDraw`: in the DrawModel dispatch, after the init future and the car-occupant capture, `HordeBatch.offer` may
+  take a zombie's draw (then nothing else of the stock dispatch runs for it); the dev rig wraps the drawer's render. At the
+  head of `run`, while batch draws are pending, `HordeBatch.beforeOp` decides whether this command ends the run (before
+  foliage sway's draw-buffer switch). The dev counters count other commands.
+- `SpriteRenderer`: before a sprite batch of the ring buffer is drawn, an exact run of zombie draws is drawn first; the
+  dev counter counts the batch.
+- `FBORenderCell`: around `renderMovingObjects` the batch's pass markers (its last batch drawn inside the `moving` GPU
+  section) and the dev rig's per-frame mode marker; the section name carries the dev mode.
+- `IOpenGLState`: `pzoptCurrent()`, the cached value `restore()` would issue (the batch reads the depth-mask, blend and
+  scissor caches that stock's per-instance `GLStateRenderThread.restore()` puts back before the second instance).
+- pzopt only: `pzopt.HordeBatch`, `pzopt.HordeDraw`, `GpuSections.isMarker`, `OccludedOutline.isActive`,
+  `EntityShadow.modelShaderPatched`; build.sh generates `pzopt_horde.vert/.frag` and `pzopt_horde_static.vert` from the
+  game's `basicEffect.vert/.frag` and `basicEffect_static.vert`: the main bodies verbatim, every per-draw uniform a global
+  filled from a draw record in a shader storage buffer, the bone palette (or the static transform) read from a second
+  one, the draw index an instanced attribute advanced by the draw's base instance, and the stock draw's fixed-function alpha
+  test (GREATER 0.01) as a discard (the driver does not apply it to a 4.30 program: fading zombies wrote depth there).
+- What the batch does (key `hordeBatch`, off by default; `exact` = a run ends at anything drawn between two zombies,
+  so the order of everything drawn is stock's; `defer` = the moving pass's zombies drawn at its end in their stock
+  order among themselves, the same picture as a frame whose object set listed them after the other moving objects): the
+  render thread computes, with the stock Java code paths copied (`Core.DoPushIsoStuff`'s camera, the target depth,
+  `Shader.setLight`, ambient / tint / hue / alpha / UV scale, the palette floats, the static transform), the values the
+  stock path would give the shader, writes them into persistent mapped buffers (four sets in turn behind fences;
+  `hordeBatchUpload=subdata` sends them with glBufferSubData), and draws the run with one attribute push / pop, the
+  stock per-draw fixed-function states (first instance of a character with the depth mask on, later ones with the
+  cached states), a vertex array object per mesh, one texture bind and one draw call per instance. Stock path for
+  anything else: non-zombies, debug builds, outlines, imposter cards, zombies in vehicles, an instance whose program is
+  not the plain basicEffect, and frames where an Enhancement hooks the model draws (entity shadows, occluded outlines,
+  object motion, mirrors, sun / lamp shadow casters, foliage sway's MRT). GL 4.3 needed (4.4 for the mappings).
+- Exactness rig `devHordeCheck=N`: every N-th frame one run is drawn by the batch, read back (colour and depth), the
+  framebuffer saved before it is put back, the same characters are drawn by the stock code, read back and compared pixel
+  by pixel; `devHordeCheckVariants` rotates bisect variants; a mismatch logs its box, the per-character state and which
+  stock / batch draws touch the first differing pixel. Run horde-chk13 (exact and defer): 39 runs, 368,535 drawn pixels,
+  0 colour / 0 depth differences.
+- Is exact's "flicker" real (2026-10-14, worktree `f8-hflick`)? Jev parity had called two exact recordings "flicker"
+  (0.44 / 0.53) and flicker.py counted 254-277 transient px/frame against 169-179 for off / defer, on building and road
+  edges. Not a rendering difference: the Louisville bench moves the player by whole-tile teleports, so the camera stands
+  still and jumps ~(25, -12) px every ~10 captured frames, and a few world events at those teleports (the seen area
+  popping open for one frame, a roof revealed chunk by chunk, the whole picture at a wrong offset for two captured frames)
+  carry most of a recording's transients (exact2: one frame held 25,586 of 72,029). They happen in off and defer runs too.
+  Over 13 capped recordings of the route (route seconds 2-24, 1280 px; off 3, exact 5, defer 5) the mean without the top
+  1 % of frames is 22.2 / 22.2 / 22.8 transients per frame, still frames 24.9 / 24.1 / 24.7, frames over 2,000 per run
+  1.7 / 2.2 / 1.4; the plain means overlap (off 33-42, exact 31-52, defer 34-45). In one run alternating stock / exact /
+  defer per frame (`devHordeModes=005566`, run hflick-ab1) with a 1:1 1280x720 gray capture tagged per frame: on
+  consecutive still frames a stock -> exact switch changes a median 0 px more than the stock -> stock pair next to it
+  (n = 245), no pixel changes in 25 or more pairs of any mode pair, flicker.py transients per frame stock 9.1 / exact 9.7
+  / defer 12.8 (defer is another draw order by design). Dev rig `devHordeStateDump=MS` (`pzopt.HordeStateDump`): ~200 GL
+  states (enables, blend / depth / stencil / colour masks, program, vertex array and its 16 attributes, buffer and
+  texture / sampler bindings of units 0-3, viewport, scissor, depth range, pixel store) plus the Java caches the next draws
+  trust (the thirteen GLStateRenderThread values and dirty flags, ShaderHelper's program, DefaultShader.isActive,
+  Texture.lastTextureID, the ring buffer's style / textures / restore flags), read before and after one batch flush and
+  one stock zombie draw at most every MS ms per path; console "horde state:". Run hflick-ab1 (stock 62, exact 63, defer
+  62 samples): both batch tails leave what the stock tail leaves, but for the generic GL_SHADER_STORAGE_BUFFER binding
+  (glBindBufferBase sets it to 0; a stock draw can leave one of the game's storage buffers bound there), which nothing
+  reads (the game's ShaderBuffer / InstancedBuffer and every pzopt user bind their buffer before an upload). `pzopt.FrameCapture`: with devHordeModes set, each index.txt line also carries the presented
+  frame number and that frame's horde mode.
+
+### Zombie LOD boundary (`zombieLodHysteresis`, `zombieLodFadeMs`; part of the `zombieLodDynamic` option, off by default)
+
+The maintainer approved (2026-10-13) the dynamic zombie LOD as an option for the 120 target. Two additions make its
+boundary stable:
+- `IsoWorld.sceneCullZombies`: with the option on, a zombie drawn in 3D right now keeps its model while it ranks within
+  `zombieLodHysteresis` (default 16) places past the 3D cap; a sprite needs a place inside the cap (a score bonus was
+  tried first: the relevance score's +100 / +300 / +1000 steps for sight and distance swamp any small bonus).
+- `IsoWorld.sceneCullZombies`: a zombie that loses its 3D slot keeps its model for `zombieLodFadeMs` (default 300) while
+  the model fades out over the flat sprite (`pzopt.ZombieLod.keepFading`); one that gets a slot back after being a
+  sprite fades its model in (`ZombieLod.won`); `lost` clears the state. `IsoZombie`: four fields for the fade state and
+  this frame's model / sprite shares; `pzoptRenderFlat` draws the sprite under a fading model; the atlas sprite's alpha is
+  multiplied by its share (1 otherwise).
+
+## Frame pacing at the cap (2026-10-13, worktree `f8-pace`): frameQueue, limiterCatchUp
+
+- `zombie.GameWindow.mainThreadStep`, capped branch: `Pacing.stepStart` also gets the cap-grid slot the step serves
+  (`newTime - (accumulator - desiredDt)`: the start itself when on time, earlier when the step starts late), and
+  `accumulator %= desiredDt` became `accumulator = Pacing.limiterRemainder(accumulator, desiredDt)`, which is that same
+  modulo unless `limiterCatchUp` (default 0) is set: then up to that many missed slots stay in the accumulator and the
+  next steps start back to back until the grid is reached again (stock forgets every interval beyond one, so the debt of a
+  burst is never made up).
+- pzopt only: `frameQueue` (off; `frameQueuePct` 99, `frameQueueMarginUs` 300, `frameQueueMaxPct` 300, `frameQueueMinPct`
+  60): `Pacing.queueHold` replaces presentPacing at a cap. The render thread holds each frame's swap until its slot + D,
+  D = the percentile of (hand-off arrival + render submit - slot) over the last 240 frames, clamped to the min / max share
+  of the cap interval; a frame later than that goes at once. Log `pzopt-framequeue.out`, console `frame queue:`.
+
+## Chunk-arrival pass (2026-10-13, worktree `f8-chunk`): render-data pool caps, vision batch A/B
+
+- `zombie.iso.IsoChunkMap.updateInternal`: one call per frame to `pzopt.PoolWarm.frame()` after the loot drain. With
+  `renderPoolMax` (int, 0 = stock) it raises, once, the free-object caps of the character render-data pools
+  (`ModelSlotRenderData`, `ModelInstanceRenderData`, `AnimatedModel.instDataPool`, `ModelInstanceTextureInitializer`,
+  `ModelCameraRenderData`, `ModelInstance.PlayerData`; stock 1,024 / 4,096) through `ObjectPool.setMaxSize` (never lowers
+  them). A cap only decides whether a released object is kept or dropped; every user re-initialises what it takes, as
+  it does with any pooled object, so nothing the game computes changes. On the Louisville horde the releases past the caps
+  were dropped and the next frames made new render data with a new 60-bone palette (the largest class G1 copied in the
+  young pauses). `devPoolLog` (dev) logs every 2 s the squares created (`IsoGridSquare.idMax`), the free squares / objects /
+  trees of the streaming caches, the save / reuse / hand-off queues and the render pools' free / cap.
+- `zombie.iso.LightingJNI.update` (`pzoptUpdateBody`): the existing `lightingVisionParallel` batch is asked through
+  `VisionBatch.active()` (the key and, under `devGtAlternate`, GtAb bit 50) so it can be A/B'd inside one run; a level
+  that was not batched keeps computing its vision bits in `updateChunk`, as before.
+- `zombie.iso.IsoChunkMap.updateInternal` and its slack hand-off producer (`chunkHandoffPaceMs`, int ms, 0 = off,
+  `pzopt.ChunkPace`): every frame accrues a hand-off credit (the queue's largest size since it was last empty, plus 8,
+  spread over the pace); the in-frame hand-off count is capped by the credit after the divisor, and slackWork's producer
+  only offers its staged chunk when a chunk's credit is there. With `chunkHandoffPaceBacklog` (160) or more chunks
+  waiting, or a queue that has not emptied for 1.5 paces (a steady stream: a car), the pace is off. The same chunks join in the same queue order; only the frame each one joins in moves.
+- `zombie.iso.IsoGridSquare.discard`: two dev counters (`pzoptDiscards`, `pzoptDiscardsDropped`: squares handed back to
+  the square cache, and those a full cache dropped) for `devPoolLog`; the cache add itself is unchanged.
+
+## Maintainer defaults (2026-10-14, integration round 3): hordeBatch, zombieLodSpriteLight, randPerWorker, slackWork
+
+The maintainer turned four round-2 / round-3 keys on by default (Config defaults only, no override code changed):
+- `hordeBatch` = `exact` (was `off`): the 3D zombies' model draws batched on the render thread in the stock drawing order;
+  the devHordeCheck rig found 0 colour / 0 depth differences against stock. `defer` stays an option (a different object
+  order); GL < 4.3 keeps the stock path. Tab: Zombies and hordes > "Drawing the horde" (the entry the horde pass added).
+- `zombieLodSpriteLight` = 60 (was 0): when the zombie level of detail is on, the flat sprites take 60 % of their square's
+  light instead of the stock black silhouette. `zombieLodDynamic` itself stays off, so nothing changes until a player
+  turns the level of detail on. Tab: "Detail by distance".
+- `randPerWorker` = on: the frame workers draw Rand from their own CellularAutomatonRNG (pzopt.WorkerRand) instead of the
+  game's lock-guarded generator: the same distribution, not the same sequence as stock (approved by the maintainer). Tab:
+  Zombies and hordes > "On other cores", entry "Zombie dice rolls: one random stream per core".
+- `slackWork` = on: at a frame cap, queued chunk hand-offs (`chunkHandoffSlackWork`, already on), far loot rolls and far
+  zombie spawns (when lootDefer / zombieSpawnSpread queue them; both stay off by default) run in the step's slack before the
+  limiter parks, each while its learned cost fits. Inert uncapped. Tab: Driving > "Chunk streaming", entry "Deferred work in
+  the frame cap's spare time".
+
+## slackWork counts game steps, not limiter passes (2026-10-14)
+
+`SlackWork.run` is called from `Pacing.limiterWait`, and the stock limiter loop calls that on every pass: it parks, then
+spins the last `limiterSpinUs`. So `SlackWork.frame()` advanced once per pass, not per step. Job ages and
+`slackMaxWaitFrames` (600, meant as about 5 s at 120) were therefore reached many times sooner than intended, and more
+than one forced job could run per step. The `slack` total was also summed per pass: integ3-cap2 logged 199 s of slack in
+about 44 s of play. Now only the first call of a game step (keyed by `Pacing.stepStartNs()`) counts a frame and runs jobs.
+A later pass of the same step has less time left than the first had, so nothing that would have fitted is lost.
+
+## The horde's moving pass outside the batched models (2026-10-14, worktree `f8-horde2`): atlas runs, window order, vertex layouts, texture units
+
+Goal-120 round 2 on the Louisville horde seconds (s2, s10, s20-21, s24). Rig `devMovingProf` split the render thread's
+moving pass per command category and measured the pass's GPU time per frame; `devHordeModes` letters alternate variants
+per frame. Findings: the flat atlas zombies' quads (~200-500 a frame, one VBORenderer run each) ~1.3 ms of GPU; the
+batch's runs were short (an atlas quad between most pairs of zombies: ~245 flushes a frame, each an attribute push / pop);
+one texture bind before every model draw ~0.9 ms of GPU; a new mesh's vertex array object waited ~1 ms on the threaded
+driver (248 a route, the 5-26 ms render-thread spikes when the horde comes into view in s2 / s20). All new keys are off by
+default.
+
+- `TextureDraw.run`: at its head the dev rig's category hook (`MovingProf.op`, inert unless devMovingProf) and, while atlas
+  quads are pending, `AtlasBatch.beforeOp` (a run of quads ends at anything but another quad or a `StartShader(0)`; with
+  `hordeBatchOrder=window` a zombie's camera record / model draw does not end it either). In the DrawModel dispatch, after
+  the init future, `AtlasBatch.offer` may take a `DeadBodyAtlas$BodyTextureDepthDrawer` (then nothing else of the stock
+  dispatch runs for it). The dev rig times the init-future wait and the stock drawer render.
+- `SpriteRenderer` (ring buffer sprite batch): the dev rig's category hook (texture of the batch, index count) and, while
+  quads are pending, `AtlasBatch.beforeSprites` (the run is drawn first).
+- `DeadBodyAtlas`: static helpers, nothing of the stock code changed. `pzoptAtlasQuad` computes what
+  `BodyTextureDepthDrawer.render` would draw with its own lines (rectangle, UVs, colour, the two depths from
+  `IsoDepthHelper`, the atlas page and its depth texture) or says it draws nothing / is left to the stock render (an
+  occluded-outline draw, the shader not created yet); `pzoptAtlasRender` (the dev check's stock replay), `pzoptAtlasProgram`,
+  `pzoptIsAtlasDrawer`.
+- `VBORenderer`: `pzoptIdle` (nothing queued: the batch only takes quads then, else the stock render, which would flush that
+  too) and the vertex offset `addQuad` adds (`pzoptDx/Dy/Dz`).
+- `Model`: `pzoptMeshLayout` (a mesh's vertex layout as a key: stride, element types and offsets), `pzoptMeshFormat`
+  (`pzoptMeshPointers`' attributes as GL 4.3 separate attribute formats on buffer binding 0: same sizes, types,
+  normalisation, offsets), `pzoptMeshBind` (the mesh's vertex buffer with its stride and its element buffer).
+- build.sh: `pzopt_hordeu.vert/.frag` + `pzopt_hordeu_static.vert`, the horde programs with the character texture taken
+  from `uniform sampler2D pzoptTex[16]`, indexed by the draw record's unit (ibase.y; dynamically uniform, one record a draw).
+- pzopt only: `pzopt.AtlasBatch` (`atlasBatch`): a run of atlas quads drawn at its end in the stock order from a persistent
+  mapped vertex ring: the first quad under its stock preamble, one `GLStateRenderThread.restore()` then its own depth state
+  for the rest (what every later quad meets in stock after the previous quad's tail), per quad the textures on a page
+  change, the two depth uniforms and `glDrawArrays(GL_QUADS)` with the same four vertices in the same order; the stock tails
+  at the end. `pzopt.HordeBatch`: `hordeBatchVao=format` (one vertex array object per layout, 2 in the route, the mesh's
+  buffers bound per draw), `hordeBatchOrder=window` (the zombies and atlas quads between two other commands drawn as two
+  groups in stock order, the first-come kind first; an arriving item of the first kind may not overlap, on a 192x96 screen
+  grid, an earlier item of the second kind it would jump over (zombie bounds: a model-space box through its MVP,
+  `hordeOrderBox*`), else the window is drawn first; draws that do not overlap commute), `hordeBatchUnits=N` (a run's
+  textures bound in chunks of up to N units), the palette comparison 8 bytes at a time, the camera's projection and fixed
+  model-view steps made once and copied. Dev: `devMovingProf`, `devAtlasCheck`, `devHordeOrderCheck`, `pzopt.FbCheck`,
+  `devHordeModes` a-g, `harness/movingprof.py`.
+- Proof (all 0 colour / 0 depth differences): horde2-vaofmt-chk devHordeCheck 41 runs / 106,722 px; horde2-atlas-chk
+  devAtlasCheck 346 runs / 212,646 px (+ devHordeCheck 22 runs); horde2-order-chk2 devHordeOrderCheck 59 windows /
+  272,005 px (2,960 overlaps that split a window); horde2-rec-chk devHordeCheck 63 runs / 100,109 px (camera caching).
+
+## Maintainer defaults (2026-10-14, integration round 4): horde round 2 keys, gcSlack and players' G1 settings
+
+The maintainer turned these on by default (Config / launcher defaults; no override code changed, the bytecode audit is
+unaffected):
+- Horde round 2 (section above): `hordeBatchVao` = `format` (was `mesh`), `atlasBatch` = on, `hordeBatchOrder` = `window`
+  (was `stock`), `hordeBatchUnits` = 16 (was 0). All four are pixel-exact by their rigs (devHordeCheck, devAtlasCheck,
+  devHordeOrderCheck: 0 colour / 0 depth differences). Where they cannot run the stock path stays: the model batches (and
+  with them the vertex-layout objects, the texture units and the window order) need GL 4.3 storage buffers and never run
+  on a GL 2.1 context or macOS's legacy / core-shim contexts (`HordeBatch.initGl`); the atlas runs need GL 4.4 persistent
+  buffers (`AtlasBatch.init`) and the batch's pass markers, which are not queued once the batch has failed. The units
+  programs only add a `sampler2D` array to a program whose one sampler is a `sampler2D`, so the game's glValidateProgram
+  (every sampler on unit 0) has no type clash on Mesa or AMD; if `pzopt_hordeu` does not compile the batch binds one
+  texture a draw. Tab: Zombies and hordes > "Drawing the horde", beside hordeBatch.
+- `gcSlack` = on, with `gcSlackEarlyPct` = 40 (was 60): at a frame cap the G1 young collection that is due within a few
+  frames runs at the end of a step with slack (eden filled with short-lived filler arrays until the collector runs) instead
+  of mid-step; timing only, no game state. 40 % because the Eden pool's numbers in the game read up to ~180 MB above the
+  eden G1 actually collects at (G1 resizes eden at every collection; the JMX estimate stays 96-112 MB while the GC log shows
+  40-80 MB), so a 60 % trigger came after the natural collection; all the GC pass's validation runs used 40. Inert
+  uncapped and with any collector but G1 (no "G1 Eden Space" pool: `gc slack: off`). The filler is uninitialised through
+  `jdk.internal.misc.Unsafe.allocateUninitializedArray`, which every launcher JSON of the game exports
+  (`--add-exports=java.base/jdk.internal.misc=ALL-UNNAMED`, Linux and Windows; the harness's g1 / stock JSONs too); on a
+  JVM without the export the lookup throws, `GcSlack.uninit()` returns null and the filler is plain `new byte[]` (zeroed,
+  ~0.12 instead of ~0.035 ns a byte, its cost learned per byte like the other); a failed call mid-fill switches to zeroed
+  arrays for good. Tab: "Java memory and garbage collector", entry "Garbage collection in the frame cap's spare time".
+- Players' G1 (`pzopt.GcChoice`, `gcMode=g1`, the default): new key `gcG1Tuned` (default on) writes the GC pass's tuned
+  set for the game's own heap size (HANDOFF-gc "fin4" without `-Xms` / pre-touch; `gcHeap` / `gcHeapFixed` /
+  `gcPreTouch` are unchanged) into the vmArgs array where it switched ZGC to G1: `-XX:+IgnoreUnrecognizedVMOptions
+  -XX:+UnlockExperimentalVMOptions -XX:G1NewSizePercent=2 -XX:G1MaxNewSizePercent=4 -XX:MaxTenuringThreshold=0
+  -XX:ReservedCodeCacheSize=512m -XX:SweeperThreshold=50 -XX:-G1UseAdaptiveIHOP -XX:InitiatingHeapOccupancyPercent=70
+  -XX:G1MixedGCCountTarget=24 -XX:G1MixedGCLiveThresholdPercent=50 -XX:G1HeapWastePercent=10` + the marker
+  `-Dpzopt.gctune=g1[,ignore][,unlock]` (which of the two shared flags were added), and `gcPauseMs` = 0 now means 5 ms
+  with the tuned set (`-XX:MaxGCPauseMillis=5` under the existing `-Dpzopt.gc=g1,pause` marker, so older uninstallers still
+  remove it) and G1's own 200 ms without it; an explicit gcPauseMs wins. `gcMode=auto` (G1 on small machines) and `stock`
+  get no tuned set. Checked on the game's JRE (Zulu 25.0.1, `jre64/bin/java -XX:+PrintFlagsFinal`): every flag exists, none
+  obsolete (`SweeperThreshold` is still a product flag in 25: it sets the code-cache GC threshold since the sweeper went);
+  the experimental three need the unlock before them (HotSpot refuses the launch otherwise: the unlock is written first),
+  and `G1MaxNewSizePercent=4` alone fails against the default `G1NewSizePercent` 5, so the set is all or nothing. An
+  unknown -XX flag stops the JVM before any of our code runs (no boot repair could help), so: the set is written only when
+  the running Java is feature release 25 and the running JVM knows each product flag (HotSpotDiagnosticMXBean; a locked
+  experimental flag is not listed before the unlock); a JSON that already sets one of the flags (a player tuning G1) gets the
+  plain switch; and `-XX:+IgnoreUnrecognizedVMOptions` (read before all other options) keeps a launch alive if a later
+  game update brings a Java that dropped one of them. Windows: the same Zulu 25 JRE, the set goes into the per-version
+  section that holds `-XX:+UseZGC` (`forEachVmArgsDeep`). macOS: GcChoice does not edit the app bundle, unchanged. Every
+  undo removes exactly what was added: `GcChoice.toStock` (in-game uninstall, boot repair) through `tuneToStock`, and
+  `reset_gc` in scripts/pzopt.sh / install.sh and `Reset-Gc` in install.ps1 (a player's own unlock stays). The boot log
+  now prints `gc: this launch's JVM flags: ...` (the running JVM's -XX / -Xm arguments and our markers), in harness runs
+  too. Tab: "Java memory and garbage collector", entry "G1 tuned for steady frames"; gcPauseMs gained 5 and 10 ms choices.
+  Tests: GcChoiceTest (order after the unlock, idempotent, exact undo, a player's unlock / tuning, the Windows section).
+
+## tileRecordParallel: the squares' lazy light refreshes in stock order; the draw-list check's light state (2026-10-14, worktree `f8-twofix`)
+
+devDrawListCheck found one "draw colours" difference a run (integ4-rigs2, r1-check3, r1-check5: a window,
+`fixtures_windows_01_16`, recorded darker than the stock re-run). A translucent draw reads its square's cached light
+(`IsoGridSquare.getLightInfo` returns the JNILighting's ColorInfo by reference, `getVertLight` its cached corners); only the
+lazy refresh (`JNILighting.update`, the first light read of the square in a lighting pass, by whatever code asks first)
+rewrites it, in place. `devDrawListTrace` (runs twofix-chk-off*, -lo-off*) showed:
+
+- the window: the recording read the previous pass's light like stock does, then a later object of the same unit refreshed
+  the square (`IsoLightSwitch.shouldShowOnOverlay` -> `isSeen`, asked by the defer rule); the check's stock re-run came
+  later in the frame and read the refreshed light. A check artefact, not a frame difference.
+- a real difference behind it: the defer rule (`TileRecord.deferReason`) asks a light switch's `shouldShowOnOverlay`, whose
+  `isSeen` refreshes the square, before the switch's draw; stock asks it after the draw (`IsoObject.hasAnimatedAttachments`).
+  The recording drew outdoor lamps (`lighting_outdoor_01_*`, IsoLightSwitch) with the new pass's light one frame early
+  (twofix-lo-off2: 7 differences once the check was fixed).
+- the native answers a square's dirty bit once a pass (asked again after a refresh it says "not dirty"), and a chunk the
+  native lighting thread is still lighting can answer "not dirty" to the recording and be readable a few ms later
+  (twofix-chk-off f:4537): timing, the same race stock's own pass runs.
+
+Edits:
+- `LightingJNI.JNILighting.update()`: on a checked frame (`pzopt.LightTrace.on`) every refresh runs under the square's
+  monitor through `pzopt.LightTrace`: a recording thread's first refresh saves the square's state (`pzoptSaveLight`), the
+  check's stock re-run of a square the recording refreshed loads the values the recording read instead of asking the native
+  again (`LightTrace.replay`), and `devDrawListTrace` logs it. New `pzoptTick()`, `pzoptStaleSync()` (`pzoptStale()` under
+  the monitor a refresh holds while units record), `pzoptSaveLight()` / `pzoptLoadLight()` (every field a refresh writes),
+  `pzoptTraceStale` (dev).
+- `FBORenderCell.renderTranslucent(IsoObject)`: on a checked frame, the draw-list index and square of each stock re-run draw
+  (`LightTrace.object`; with devDrawListTrace also the light every draw reads).
+- `IsoLightSwitch`: new `pzoptOverlayIfSeen()`, `shouldShowOnOverlay`'s answer for a seen square without asking `isSeen`.
+- pzopt only: `tileRecordLightOrder` (default on; tileRecordParallel only): a light switch on a square the current lighting
+  pass has not read is asked only `pzoptOverlayIfSeen` by the defer rule: deferred when it could show its overlay, recorded
+  otherwise (its own stock code then refreshes the square after its draw, as in stock); after any deferred object (or
+  deferred items) on such a square the unit's later objects on that square are deferred too (the deferred one's stock code
+  refreshes at the splice), reason `lightOrder`.
+  devDrawListCheck: the stock re-run of level z (floor pass, then object pass) starts from the light the squares had before
+  the units at or after its place refreshed them, and the frame goes on with the recording's state after it; the squares
+  the re-run refreshed itself go back to their state before it, and the frame's own next refresh of each takes what the
+  re-run read (the splice after the re-run had drawn a deferred lamp with the re-run's refresh); a difference
+  of a draw on a square the recording asked for and the native did not answer, while the re-run's refresh read it (same Java
+  update counter), is counted as `late-light` and not as a mismatch. `devDrawListTrace` (dev): `pzopt.LightTrace` explains
+  every difference. `GtAb` bit 48 `frameQueue` (`devGtAlternateKeys=frameQueue`) alternates frameQueue within a run.
+
+## f8-sight pass (2026-10-14): the horde's first sight on Louisville (`renderPrewarm` on, `zombieFirstSightSprite` off)
+
+Maintainer's decisions (2026-10-14, integration round 5): `renderPrewarm` is on by default (exact: the same GL objects,
+made at the first frame of the world instead of at the first 3D zombie; tab "Zombies and hordes" > "Drawing the horde",
+"Prepare the horde's drawing while the world loads"). `zombieFirstSightSprite` (+ `zombieCompositeBudgetUs`) stays off by
+default, a player option next to the zombie level-of-detail entries ("Detail by distance"): it changes what is drawn for a
+moment (a waiting zombie is its lit sprite). The pass's `compositeCache` (released composites parked under the exact key of
+their combine) was dropped before the merge: 0.8-1.3 % hits even with 1 GB, since a zombie's blood / dirt per body part
+makes its composite inputs differ every time.
+
+- `ModelSlotRenderData` (`zombieFirstSightSprite`, `pzopt.FirstSight`): `init` sets `pzoptSkipTexture` when the character's
+  first clothing composite waits this frame; `checkReady` then does not call the texture creator's `render()` (not ready,
+  as stock while the creator's textures load; a first composite has nothing ready from before, so nothing is drawn) and
+  times the renders it does (the budget's cost estimate); `pzoptRendersTexture` says no for a waiting one.
+- `IsoWorld.sceneCullZombies`: `FirstSight.beginCull` once a frame (the budget from the cost estimate) and the zombie's
+  nearest-first place (`FirstSight.won`); a zombie that waited last frame and loses its slot skips the LOD fade-out (it is
+  the sprite already). `pzopt.CharDraw.start` (game thread, before the draw-data tasks): while a drawn zombie waits for its first
+  composite, every zombie is tested first, then `FirstSight.grant` gives the frame's first composites to the nearest waiting
+  zombies (cull rank) and holds every waiting one at the start of the LOD's sprite -> model crossfade (sprite alone, model
+  alpha 0); the ones past the count skip the composite (`pzoptSkipTexture`), the granted ones may still wait one more frame
+  when the render thread's composites this frame passed `zombieCompositeBudgetUs` (`pzoptSightEligible`,
+  `FirstSight.overBudget`, at least one a frame). Without a waiting zombie the tasks overlap the tests as before.
+- `IsoZombie`: `pzoptSightRank`, `pzoptSightPend`, `pzoptSightDefer` fields. `IsoGameCharacter`: `pzoptUpdateModelTextures()` (a texture
+  creator is made at the next render).
+- `RenderThread`: `pzopt.FirstSight.afterSwap()` after the swap (census, `renderPrewarm`).
+- pzopt only (`renderPrewarm`): once the world exists, `HordeBatch.initGl` (its four programs and buffers, made at the first
+  batched zombie: a 27 ms render-thread frame at the route's first sight), `AtlasBatch.init`, `CombinerPool.budgetBytes` (a VRAM query), the composite shaders (`SmartTexture`'s first
+  `add`) and, with combinerPool, `TextureCombiner.pzoptPrewarm`: one composite of each size seen on the route (32..512 squares,
+  64x128, 32x64, 32x128, 256x64, 128x64, 512x256) made and released the stock way, so the framebuffer exists and the reserve
+  fills it before the first zombie (the session's first composite made 11 new textures and a framebuffer: 12-17 ms).
+- Dev `devPrewarmParts` (bits, default all): 1 the horde batch's programs / buffers, 2 the atlas batch buffer, 4 the combiner pool's
+  VRAM query + composite sizes, 8 the composite shaders (drive bisection, HANDOFF-sight.md: a palette-compare JIT warm-up was dropped).
+- Dev census (`devFirstSightCensus`): `TextureCombiner` counts combines, new composites and new framebuffers (and logs a new
+  framebuffer's size), `ModelSlotRenderData.checkReady` brackets the creator's render (`FirstSight.composing` / `composed`).
+- Measured (HANDOFF-sight.md, Louisville LOD 128 cap 120): the first sight's 27 ms render-thread frame and its 12-17 ms first
+  composite are gone with `renderPrewarm` (first composite 2.1-3.3 ms); with `zombieFirstSightSprite` too, the composites a
+  frame drop from 29-34 (13-17 ms render thread) to 9-10 (2.7-3.7 ms), max frame 17.7-25.1 ms vs 21.8-39.1 off. Drive bench
+  (drive-120-south) with both keys 233.7-233.8 fps / 99.2-99.3 % <= 9 ms vs 233.8-234.7 / 99.2-99.4 % off.
+
+## The chunk hand-off's border recalc without its repeats (2026-10-14/15, worktree `f8-handoff`): IsoChunk, IsoGridSquare, IsoChunkMap, PropertyContainer, IsoWorld, WorldStreamer
+
+`handoffRecalcFast` (on by default since 2026-10-15: exact, `devHandoffRecalcCheck`; tab: Driving > Chunk streaming), `pzopt.HandoffRecalc`. A streamed chunk's hand-off
+(`IsoChunk.loadInMainThread`, game thread) recalculates its border squares against the loaded neighbours: the new squares'
+`RecalcAllWithNeighbours`, the border loop of `IsoChunk.RecalcAllWithNeighbour` per level and direction, the four corners'
+`RecalcAllWithNeighbours` per level. That phase is about half of a hand-off's game-thread time, and most of it repeats itself:
+- every `ReCalculateAll` calls `RecalcPropertiesIfNeeded` on both squares, and a loaded chunk's square stays dirty after a
+  recompute (`propertiesDirty = chunk == null || chunk.loaded`), so each call recomputes (about 15 recomputes per square and
+  hand-off); nothing in the phase changes a recompute's inputs (objects, room, roof, rain, fire, water) and its side effects
+  are flags nobody reads before the phase ends (lighting / physics "check later", the puddle recalc, the obstacle cache);
+- every `ReCalculateAll` calls `setBlockedGridPointers` on both squares (ten lookups and up to eight path tests each); those
+  pointers are only written during the phase, so only a square's last call counts.
+During the phase (now the stock code moved unchanged to `IsoChunk.pzoptRecalcPhase`):
+- `IsoGridSquare.RecalcPropertiesIfNeeded`: the first call per square and phase recomputes, the others return;
+- `IsoGridSquare.setBlockedGridPointers(cellGetSquare)`: deferred, with the square's own pathMatrix at the call kept (its
+  path tests read only that); applied (`pzoptApplyPointers`, the stock body with that pathMatrix) before a direct pointer
+  write (`IsoChunk.RecalcAllWithNeighbour`, dz 0: `pzopt.HandoffRecalc.flush2`), before the first recompute of the square or
+  of the square above it (a recompute that changed stale properties would change what the deferred call reads), and at the
+  end of the phase.
+Proof: `devHandoffRecalcCheck` runs each chunk's phase twice, fast and then (squares restored: matrices, the ten pointers,
+nav, the solid-floor cache, the properties and their derived fields) stock, whose result stays, and compares the three
+matrices, the ten pointers and nav of every square within two of the chunk, and the set of squares whose properties were
+recomputed: Louisville 777 chunks (handoff-chk6), 0 differences; with the memo / workers variants below also 0 over
+Louisville 736 + 778 + 737 and drive-120-south 2,446 + 2,469 chunks.
+Cost of the phase per chunk (Louisville at the cap, within-run alternation): stock 416-459 us mean, fast 207-299 us.
+
+Measured and left off:
+- `handoffRecalcMemo` (pzopt.HandoffRecalc.store/memo): a pair's collide / path / vision bit kept for its repeats within the
+  phase. Exact (0 differences over 778 + 2,469 chunks) but a pair repeats only 1.3 times: the bookkeeping (slot set-up, the
+  stairs / slope exclusion: pairs that read neighbour pointers doGridNav changes) cost more than it saved (762 vs 260 us).
+- `handoffRecalcParallel` (+ `handoffRecalcParallelMin`): the bits of the pairs the phase asks for computed on the frame
+  workers before it (fork-join, every lazy write suppressed on the workers, property recomputes asked for inside a
+  computation recorded and applied on a hit, a stale recompute drops the entries within reach). Exact (0 differences over
+  736 + 737 + 2,446 chunks), but the fork costs 100-400 us a chunk: only chunks of 1,600+ pairs gain (60-180 us).
+- Hooks: `IsoGridSquare.ReCalculateCollide / ReCalculatePathFind / ReCalculateVisionBlocked` (memo lookup, store),
+  `TreatAsSolidFloor` (no cache fill while the workers read), `RecalcPropertiesIfNeeded` (records on a worker).
+Census (instrumented runs, console "chunk hand-off:"): `pzopt.HandoffParts` (doLoadGridsquare's time by part:
+recalc, stories, update, vehicles, squares, erosion, pathfind, buildings, loot, rest), the phase cost by mode, chunks handed
+off in the frame vs in the slack, per-frame in-frame hand-off time, the queue wait (`IsoChunk.pzoptQueuedNs`, set where
+`WorldStreamer` / `RecalcPool` queue the chunk).
+
+`propIdCache` (on by default since 2026-10-15: exact, `devPropIdCheck` 17.8 M lookups compared, 0 mismatches; tab: Driving > Chunk
+streaming), `pzopt.PropIds`: `PropertyContainer.has / get(IsoPropertyType)` looked
+the id up by name in TilePropertyAliasMap's HashMap on every call (0.8 % of the Louisville game thread; 10 % of a hand-off
+through RecalcProperties' `has(FUEL_AMOUNT)`). The ids are kept per type for the alias map's generation; `IsoWorld` bumps the
+generation right after `TilePropertyAliasMap.Generate` (its only caller).
+
+The slack scheduler of the hand-off (timing-only; on by default since 2026-10-15, the maintainer's decision, with tab entries in Driving >
+Chunk streaming: `chunkHandoffCost=chunk`, `chunkHandoffSlackMaxWait=6`, `chunkHandoffForceAnyFrame=true`,
+`chunkHandoffFrameBudgetUs=1500`; GtAb `chunkHandoffSched`, bit 61, switches all four together): the census showed the hand-off producer's estimate (a learned cost per square, at least half a slowly decaying peak,
+learned from slack hand-offs only) stuck high after one heavy chunk, so the staged chunk waited up to 600 frames while the queue
+grew past `chunkHandoffSlackBacklog` (24) and a few frames a run then handed off the backlog in the frame (each > 4 ms).
+- `chunkHandoffCost=chunk` (`square` = the 2026-10-05 model): the running mean of a whole hand-off, learned from the in-frame ones too.
+- `chunkHandoffSlackMaxWait` (6; 0 = `slackMaxWaitFrames`, 600): `SlackWork.Producer.maxWaitFrames()` lets the hand-off producer force a
+  staged chunk that does not fit after its own wait; `chunkHandoffForceAnyFrame` (`Producer.forceAnyFrame()`) forces it into
+  the next slack, light frame or not (still one forced job a frame).
+- `chunkHandoffFrameBudgetUs` (1500; 0 = stock): a backlog's in-frame hand-off (queue >= `chunkHandoffSlackBacklog`, below
+  `chunkHandoffPaceBacklog` 160, so a world load or teleport keeps the stock count) stops once the frame's hand-offs took the
+  budget (at least one chunk, at most the stock count); the rest join in the slack (the producer stays registered). Edit in
+  `IsoChunkMap.updateInternal`'s hand-off loop (`// pzopt` lines), which also times each in-frame hand-off for the chunk model.
+No other stock code changed for these (IsoChunkMap's producer and SlackWork are pzopt code).
+
+### Louisville 120 frame tails, round 6 (2026-10-14, worktree f8-tail6): bakeSlackCap, gcSlackFit, hordePaletteMismatch, renderPrewarmOutlines
+
+- `FBORenderCell.performRenderTiles`: the chunk loop's per-grant timing (fed to `BakeScheduler.grantCost`) also runs with
+  `bakeSlackCap` (it ran with `bakeCapUs` only).
+- pzopt only; `bakeSlackCap` and `gcSlackFit` off by default, `hordePaletteMismatch` and `renderPrewarmOutlines` on by default
+  since 2026-10-15 (maintainer, round-6 merge; tab entries next to the horde drawing entries / renderPrewarm):
+  - `BakeScheduler.plan` (`bakeSlackCap`): at a cap, the overdue and budgeted grants stop at the number whose measured cost
+    (EWMA per grant) still fits the step: interval - time used before the plan - the rest of the step (EWMA of the last steps'
+    length after their plan, less their bakes) - `bakeSlackMarginUs` (700); at least `bakeSlackMin` (2) a frame; a level 4x
+    past its class's longest wait still goes (up to bakeFrameBudgetHard). Held levels keep their texture (the scheduler's
+    usual deferral). GtAb key `bakeSlackCap` (bit 62; 58 in the pass's worktree, moved at the merge).
+  - `GcSlack` / `Pacing` / `SlackWork` (`gcSlackFit`, needs frameQueue): a scheduled young collection runs only where the
+    filler plus the expected pause (p75 of the last eight measured) delay no swap of the frame queue and drop no limiter slot
+    (`Pacing.planPause`: right away, or after the render thread's next swap, which the game thread waits for; checked against
+    the held frame, the frames already pushed and the step the pause delays); tried at each step start and in the slack.
+    GtAb key `gcSlackFit` (bit 63; 59 in the worktree). `gcSlackFillChunkKb` (256): the filler array size.
+    `gcSlackFitStart` (on): also at a step's start (moves the pause onto the game thread's timeline; quiet runs t6-fin1/2 were
+    below the baseline, so the measured setting is off), `gcSlackFitOverUs` (-1; 500 = only inside the game thread's idle time),
+    `gcSlackFitFallbackMb` (0; 56 in the runs): with that little eden left the slack rule (v1) runs instead of a natural pause.
+  - `HordeBatch.sameBits` (`hordePaletteMismatch`): the palette-sharing compare as one `MemorySegment.mismatch` of the two
+    ranges' raw bytes; LWJGL's FFM `memGetLong` walks the stack (`MemorySegment.reinterpret` is caller-sensitive) on every
+    call until C2 has compiled it, ~0.6 ms of render thread a frame at the horde's first sight. Same result: dev check
+    `devHordePaletteCheck` 228,114 compares, 0 disagreed. GtAb key `hordePaletteMismatch` (bit 49; 60 in the worktree).
+  - `FirstSight.prewarm` (`renderPrewarmOutlines`): the outline passes' lazy setup at the prewarm, as their first use does it:
+    `ModelOutlines.checkFBOs` and its three programs, `ModelSlotRenderData.solidColor` / `solidColorStatic`,
+    `FBORenderObjectOutline.Drawer2.outlineShader` (a 10-11 ms render-thread frame at their first use on the route); it costs
+    the three screen-sized outline framebuffers' VRAM from the start.
+- Measured (HANDOFF-tail6.md): gcSlackFit's pauses are followed by an interval > 9 ms 15 % of the time vs 42 % for gcSlack's
+  end-of-step placement (99 vs 78 pauses), but the step-start placement delays the game thread and the whole runs are not better
+  than the baseline; bakeSlackCap halves the frames with 20+ bakes without a frame-time gain (short-period within-run A/B);
+  hordePaletteMismatch and renderPrewarmOutlines remove their first-sight costs from the profile (whole runs within the noise).
+
+## Frame queue, round 2 (2026-10-15, worktree `f8-pace2`): GPU-inclusive D, slew, decay, hold spin, GC placement
+
+pzopt only, no override changed; every key off by default (frameQueue itself is off by default).
+- What the metrics measure: the overlay log / goal.py and MangoHud's frametime are swap-return intervals on the render thread
+  (run integ6-lod2: 102 vs 103 frames over 9 ms; swap-call intervals 63; the flips in present.txt 167). With frameQueue the swap
+  call was on the 8.33 ms cadence for 97.9 % of frames, but 8 % of frames were still drawing on the GPU at their swap call (GPU
+  done 0.7-10 ms after it), so the flip came late and NVIDIA's swap blocked until about then: 111 of the 168 on-screen intervals
+  over 9 ms had their swap call on time.
+- `frameQueueGpu`: `Pacing.queueHold` files a frame's slot -> ready sample with its GL timestamp query slot; `collectQueries`
+  adds it to the percentile window when the GPU time comes back, plus the GPU's time past the end of the render submit
+  (`max(0, gpu_done - beforeSwap)`). The render thread is assumed free at the hand-off, as before, so the hold never feeds back.
+- `frameQueueSlewUs`: D moves towards the percentile at most this much per frame (a 15-frame recomputation raised D by 1-4 ms at
+  once: 22 of 63 late swap calls); with a slew the percentile is recomputed every frame.
+- `frameQueueDecayUsPerS`: D falls at most this fast (the 240-frame window forgot a burst in 2 s; D dropped to 7-10 ms in calm
+  stretches and the next slow step was late).
+- `frameQueueSpinUs` (1000 = the old hold): the hold parks to that many us before the target and spins the rest, with the render
+  thread's timer slack at 1 ns.
+- `gcSlackQueue` (off | swap | hold | slack) + `gcSlackQueueFillUs`: where gcSlack's scheduled young collection runs under
+  frameQueue. The v1 placement (the game thread's slack) overlapped the end of the held frame's hold in ~a third of the pauses.
+  `swap` and `hold` run the filler from a `pzopt-gc-after-swap` thread right after a held swap / inside a hold with room;
+  `slack` keeps the game thread's slack but only while the render thread holds a frame whose swap is at least the planned pause
+  + 0.6 ms away (planned with the longest of the last eight pauses + 0.3 ms, relaxed to their mean over ~25 steps of waiting), and
+  stops the filler that far short of the swap. The thread's filler is kept out of gcSlack's eden rate (it inflated it to a
+  collection every step in the first try) and its collections are counted as scheduled.
+- Numbers: Louisville cap 120 with the zombie LOD, goal metric 96.5-96.7 % <= 9 ms / p99 10.6-11.1 (integ6-lod1..3) -> 97.8-98.8 %
+  / p99 9.3-10.5 (pace2-q1..q17 without the two disturbed ones), flips 93.9-94.4 % -> 96.3-97.7 %; step start -> screen 15.5-16.4
+  -> 18.1-20.6 ms mean. Drive-120-south: 98.3 % / p99 9.8 / max 20.8 -> 99.2 % / 8.8 / 17.2, flips 93.2 -> 98.5 %, latency 9.4 ->
+  16.9 ms. `gcSlackQueue=slack`: its own pauses 35 of 35 without a late frame (pace2-q16, q17), but waiting for room lets 4-7
+  natural pauses a run come first; GC-overlapping late frames 8-14 -> 4-5 a run.
+
+## Frame queue on by default at a frame cap (maintainer, 2026-10-15; integration round 7, worktree `integ-r7`)
+
+pzopt only (Pacing, FrameCap, Config, the tab Lua), no override changed. Maintainer's decision: the frame queue is on whenever
+a frame cap is set, with f8-pace2's settings: `frameQueue=true`, `frameQueueGpu=true`, `frameQueueSlewUs=500`,
+`frameQueueDecayUsPerS=1000`, `frameQueueMaxPct=260`, `gcSlackQueue=slack` (gcSlack itself has been on since 2026-10-14).
+`frameQueueSpinUs` stays 1000 (the old hold: pace2 measured no effect of a shorter spin). Price: input delay, +3-7 ms step start
+-> screen at a 120 cap (drive-120-south: 10.9 ms mean with presentPacing, 14.2 with the queue and these settings; Louisville
+horde ~20 ms), for an even cadence (drive frames within 9 ms 92.3 % in pace-drv-cap-base on the round-2 build, 97.5 % with the round-1 queue, 99.5 % in pace2-drv2).
+
+Where it acts: `Pacing.stepStart` decides per capped step (`stepQueued`, game thread) and the frame carries it through the
+hand-off ring (`ringQueued` -> `frameQueued` on the render thread); `beforeSwap` takes the queue only for such a frame, every
+other frame takes presentPacing's path exactly as before the change. `Pacing.queueAllowed` keeps the queue out of:
+- uncapped steps: `stepStart(now, 0)` short-circuits before any check; nothing else runs per frame (the GcSlack queue
+  modes only add a volatile store per swap);
+- menus, the pause menu and the loading screen (`GameWindow.isIngameState()`, `GameLoadingState`, `FrameCap.pauseMenuUp()`):
+  the menu cap gains nothing from an even beat and the cursor should not lag; the loading screen's long frames also filled D's
+  window (samples up to 250 ms), so D started the world at its 260 % ceiling and decayed for ~10 s. Menu frames feed no
+  samples, so D carries over from the last world frames;
+- vsync on a fixed refresh (`Display.isVSyncEnabledPzopt() && !Vrr.active()`): the swap already waits for the vblank; a hold
+  only moves a frame to a later vblank (delay, no cadence gain), and with the cap at or above the refresh the hold stacks on
+  the swap's own block. With variable refresh vsync only matters above the range, so the queue stays on there;
+- a cap that is only vrrCap's (`FrameCap.vrrOnlyCapNow()`: the player chose Uncapped and VRR caps the frames): an uncapped
+  player is unaffected. With the player's own cap under VRR the queue replaces presentPacing=auto's hold (one hold either way,
+  never both: `beforeSwap` returns after `queueHold`);
+- macOS, Metal bridge or not: Apple's compositor presents on the refresh grid like vsync, the bridge paces its own presents
+  (presentPacing=auto is off there too), and the queue was never measured on a Mac;
+- `reflexSleep` (opt-in): it drives the hand-off queue towards empty, the frame queue keeps it about two frames deep.
+The state changes are logged once each: `frame queue state: on (capped world)` / `frame queue state: off (<reason>)`.
+Not restricted: every in-game cap of the combo (24-500 fps; D is a percentage of the interval: at 30 fps its 60 % floor holds
+a frame at least 20 ms after its slot, at 300-500 fps the 260 % ceiling is 5-9 ms; not measured at those caps), split screen (one hand-off
+per frame for all players: nothing per player in the queue), Windows (the hold waits with `Pacing.waitUntil`, the same
+park-then-spin presentPacing=auto has used there by default since 2026-09-25). `gcSlackQueue=slack` only acts while
+`Pacing.queueActive()` (now also `stepQueued`), else gcSlack's own rule as before.
+Tab: "Frame queue: every frame on the cap's beat (adds input delay)" and "Frame queue: count the GPU's drawing time" in
+Performance > Smoothness and pacing > Frame pacing (`frameQueue` also in the Simple view and under "Screen tears or judders"),
+"Spare-time garbage collection under the frame queue" (`gcSlackQueue`) after gcSlack; EFFECTS render +1 for both queue keys.
+
+## Louisville 120: residual late frames (f8-resid, 2026-10-15)
+
+Census of the goal-metric misses (swap-return intervals > 9 ms) of quiet Louisville cap-120 runs with the zombie LOD and the
+pace2 frame-queue set: ~42 a run, of which the game step ~22 (two thirds in the horde's first-sight burst at route seconds
+1.8-2.2 and the second burst at 10.4-10.9), "GPU" ~11 (about half of them a swap call that was on time but blocked 0.5-2 ms
+after the GPU had already finished), GC ~8.
+
+- `lookupMemo` (exact, off): new overrides `zombie/FileGuidTable` and
+  `zombie/core/skinnedmodel/advancedanimation/AnimationVariableHandlePool`. Both answer lookups from a `TreeMap` ordered by
+  `String.CASE_INSENSITIVE_ORDER`, whose every compare folds the case of both strings character by character. The guid table
+  is asked ~20 times for every zombie being dressed (each clothing item's file path), so a spawn or model-add burst spent 8-20
+  ms a second of game thread there. With the key, each lookup first checks a hash memo keyed by the caller's exact string that
+  holds what the tree answered for that string (a "none" marker for a miss). The guid table's two memos are made on first
+  use (the constructor stays stock) and dropped in `loaded()` and `clear()`, the only methods that change its trees; the
+  handle pool's memo lives in `pzopt.LookupMemo` (the class initializer stays stock) and needs no invalidation because the
+  pool only grows and a name's handle is never replaced. The handle pool's lookup still takes the stock lock on a memo miss.
+  Dev check `devLookupMemoCheck`: every memo hit is compared with the tree's answer (resid-memochk: 3.1 M hits, 0 mismatches).
+- `burstGovernor` (timing only, off; `burstLateUs` 1000, `burstWorkPct` 95, `zombieSpawnBurstUs` 150, `zombieModelAddBurstUs`
+  150): a heavy step (it started more than burstLateUs after its cap slot, or the previous step's work before the hand-off
+  took more than burstWorkPct of the interval) gives zombieSpawnSpread's queue (`ZombiePopulationManager.pzoptDrainSpawns`)
+  the smaller budget and a minimum of one creation instead of zombieSpawnMin, and zombieModelAddBudgetUs's promotions in
+  `IsoWorld.sceneCullZombies` the smaller budget; the max-age rule of the spawn queue still creates any zombie that waited
+  zombieSpawnMaxAgeMs. Census in the frame queue's log line.
+- Not override edits, same pass: `bakeBudgetGpu` (timing only, off): bakeBudgetAdaptive's render-side cost becomes the render
+  submit plus the GPU's time past it (frameQueueGpu's timestamps, `Pacing.lastGpuPastNs`), so a frame whose GPU ran long halves
+  the next frames' bake budget. `devGtPhaseRandom` (dev): GtAb's alternation starts at a random point of its cycle; with the
+  cycle anchored at the first world frame, Louisville's horde first sight lands in the same phase every run (an A/A placebo at
+  370 / 430 ms read 5.0 / 2.6 % "on" vs 1.6 / 1.2 % "off"). GtAb `coreIsolate`: CorePlacement polls the phase every 5 ms and
+  swaps coreIsolate's masks for every-CPU masks in the off phase (measured: isolation worse, 1.67 vs 0.75 % outside the bursts).
+- Lock set found (Louisville cap 120, LOD 128, pace2 frame queue): the above plus `-XX:-UseTypeSpeculation`,
+  `lightingStrongFrameMs=9` and a fixed frame-queue depth (`frameQueueMinPct=260` = frameQueueMaxPct): runs resid-cfb6 / cfb7
+  99.53 / 99.03 % <= 9 ms, p99 8.81 / 8.99 ms, p99.9 10.14 / 13.98 ms, max 15.1 / 16.7 ms, 120.0 / 119.9 fps; drive-120-south
+  99.4 % / p99 8.6 (resid-drivef1/2). Step start -> on screen 19.0-19.6 -> 22.0 ms on Louisville, 14-17 -> 22.1 ms on the drive.
+
+## Present-path swap blocks (f9-present, 2026-10-15)
+
+The "swap blocked 0.5-2 ms after the GPU had finished" misses of the Louisville lock runs (~8 a run outside the bursts, plus
+most swap blocks of GPU-late frames) were MangoHud's: run.sh preloads MangoHud with `config/mangohud-benchmark.conf`
+(`full`, every GPU stat over NVML, a log row every frame) and its `glXSwapBuffers` hook is where the render thread waited.
+`devSwapProbe` samples showed the render thread inside the GLX swap in a futex wait or spinning, with Xwayland and KWin
+idle, the driver's worker thread running or in D state on the nvidia kernel driver's rwlock (`os_acquire_rwlock_write`),
+and MangoHud's `mangohud-nvidia` polling thread running / holding `os_acquire_rwlock_read`. The same lock set with
+`run.sh --no-mangohud` (in-game overlay log only, which is what goal.py reads): 0-3 swap blocks a run instead of 48-69, no
+blocks even in frames whose GPU was still busy at the swap call (with MangoHud a third of those blocked), and the "gpu"
+miss class fell from 15-18 to 0-4 a run (f9p-nomh1/2 vs f9p-mh1/2). Native Wayland (EGL) has no swap blocks either, but
+NVIDIA's EGL runs no threaded-optimisation worker, so the render submit took 4.45 ms p50 instead of 1.57 (resid-wl1 vs
+resid-cfb6; GLX with `__GL_THREADED_OPTIMIZATIONS=0`: 3.56) and the render thread held the game thread at the hand-off.
+
+- `devSwapProbe` (dev, off; `devSwapProbeSampleUs` 300, `devSwapProbePeriodUs` 100): `org.lwjglx.opengl.Display.update` and
+  `processMessages` call `pzopt.SwapProbe.mark` at the boundaries of the swap, the event pump, the Keyboard / Mouse polls,
+  the cursor update and the focus query (`glfwGetWindowAttrib(FOCUSED)`, a synchronous `XGetInputFocus` on X11; split off
+  its `setDisplayFocused` line by a mark before and after, the call itself unchanged). One `F` row per frame in
+  `pzopt-swapprobe.out` with each segment's microseconds; a sampler thread reads, while a segment lasts past the threshold,
+  the render thread's `/proc/self/task/TID/syscall` + `wchan` (with the fd's target), Xwayland's and kwin_wayland's main
+  thread state + wchan, and every non-Java thread of the process that is not asleep (`S` rows). Marks outside
+  `update(true)` are ignored. Analysis: f9-present's `probe.py`, `blkgpu.py`, `swapblk.py` (HANDOFF-present.md).
+- Not override edits, same pass: `frameQueueRtHold` (timing only, off; `frameQueueRtPrio` 1): the render thread switches to
+  SCHED_FIFO (with SCHED_RESET_ON_FORK) for frameQueue's hold (1) or the hold and the swap (2), through `sched_setscheduler`
+  on itself (FFM; needs RLIMIT_RTPRIO > 0, refused otherwise and logged once). Only with a short hold spin
+  (`frameQueueSpinUs` != 1000): with the 1 ms spin, the FIFO render thread kept the GL driver's worker off a shared CPU and
+  the next swap waited for it (f9p-rtab1-3: 141-160 swap blocks > 0.5 ms in the FIFO phase, 1-2 outside). The frame-queue
+  log line now counts holds that ended > 0.2 ms after their target. GtAb keys `frameQueueRtHold` (bit 55) and
+  `frameQueueSpin` (bit 39: off phase = the 1 ms spin of waitUntil). devSwapProbe adds `H` rows: a late hold's run-queue
+  wait and on-CPU time from `/proc/thread-self/schedstat`. Of 56 holds that ended > 0.5 ms late (7 runs) 17 overlapped a GC
+  pause (the parked render thread woke into the safepoint); most of the rest waited 0.4-1.7 ms on the run queue.
+
+## The player's line of sight and the scheduler's startFrame on the frame workers (f9-los, 2026-10-15): IsoPlayer, LightingJNI, MovingObjectUpdateScheduler
+
+Asked for after the flip pass (f8-flip): on the Ayaneo Flip (Ryzen AI 9 HX 370, single-thread bound, 11 frame workers mostly
+idle) the Louisville horde spends ~1.1-1.2 ms a frame in `IsoPlayer.updateLOS` even with `playerLosFast`, and ~0.35-0.4 ms in
+`MovingObjectUpdateScheduler.startFrame` with `schedulerClassifyParallel`. Two keys, both off by default, both exact.
+
+### `playerLosParallel` (new `pzopt.PlayerLosBatch`; IsoPlayer, LightingJNI)
+
+- `IsoPlayer.updateLOS`: a third branch beside the stock loop and the `playerLosNative` experiment,
+  `pzoptUpdateLosParallel`. `PlayerLosBatch.start` walks the cell's object set into an array and streams it to the workers
+  in chunks of 64 (one `FrameBatch.runAsync` batch; a first version streamed the chunks during the walk and kept the
+  workers spinning: +3-7 ms of CPU a frame on the flip).
+  Per object a worker computes what the stock loop reads before any side effect: the class filters, the distance (the same
+  `IsoUtils.DistanceTo` float expression), the square, and the could-see / can-see bits. The game thread then runs the stock
+  loop body in the set's order with those answers (`await` per chunk: it waits for the chunk or runs an unclaimed chunk
+  itself, `FrameBatch.helpOne`); the body is the stock body with `bServer` / `bClient` false.
+- An object keeps the stock reads at its place in the loop (flag `SERIAL`) when its square's light would be refreshed by the
+  read (`JNILighting.pzoptPeekVis` answers -1: the refresh writes the square, invalidates its level, runs the room-seen
+  hooks), when it is a zombie that could not or cannot be seen from its square and is in `ClimbThroughWindowState` (the
+  head square: an animation-player read that may replace the player), a corpse reanimated for grappling, or another player
+  (or the player itself).
+- A zombie that neither could nor can be seen ends in stock's "not visible" branch with only `setTargetAlpha(player, 0)`:
+  no spot test (it needs could-see), no alpha snap (it needs a target of 1), the detection range and asleep test only pick
+  the branch. The worker writes that target alpha and marks it `DONE`; the game thread never touches the object (most of
+  the horde out of view). The only stock reader of another object's target alpha inside the loop is a grapple-only corpse
+  reading its grappler's (`grappledBy.getTargetAlpha()`): `PlayerLosBatch.grapplerAlpha` answers with the value from before
+  the worker's write when the grappler comes later in the loop. Not with `isSeeEveryone()` (stock sets alpha and target to
+  1 first).
+- Why nothing the game thread does in the loop changes a later object's worker reads: the loop writes target alphas, the
+  spot test writes the spotting zombie (target, facing, last-seen) and the player (XP, targeted flag), a lazy refresh writes
+  only its own square, positions and squares do not move inside the loop, and the set cannot change (stock would throw).
+  A refresh of a square the workers may be reading at the same moment (a SERIAL object on it): `updateFBORenderChunk` now
+  issues `VarHandle.releaseFence()` before it stores the new tick (marked, behaviour unchanged), and the peek reads the
+  tick, `acquireFence()`, then the bits, so a new tick comes with the bits that refresh wrote; a square whose tick is old
+  and whose native dirty flag is set is never read on a worker.
+- `JNILighting.pzoptPeekVis` (new): the bits `bCouldSee` / `bCanSee` would answer when asking would not refresh the square
+  (no chunk, counter -1, already read in this lighting pass, or the native's `getSquareDirty` false: the native getter is a
+  pure read, lightingReadParallel's disassembly). `pzoptNotDirty(n)` adds the `notDirty` counts the skipped stock reads
+  would have made (two per not-dirty square; the counter is never read).
+- `playerLosFast` can now alternate in-run (ZombAb name `playerLosFast`): a pass after a stock pass rebuilds the identity
+  set first (`PlayerLos.invalidate`: the stock path may have cleared and refilled the stack to the same size).
+- Guards: single player, `PerformanceSettings.fboRenderChunk`, more than one worker, no entity flight / asynchronous batch
+  pending, not inside a batch task. A task that throws turns the rest of its chunk `SERIAL` and the pass off.
+- Rig `devPlayerLosCheck`: at each object's place the game thread re-reads stock's distance, square, could-see / can-see
+  (head squares included) and compares; for a skipped object it checks the reason (physics / vehicle, no square, or stock
+  could and can not see it, no see-everyone, not grapple-only). The reads it repeats refresh nothing (the peek said so).
+
+### `schedulerFillParallel` (pzopt.SchedulerClassify; MovingObjectUpdateScheduler, MovingObjectUpdateSchedulerUpdateBucket, IsoZombie)
+
+With `schedulerClassifyParallel`, what was left of startFrame on the game thread: the missing-square test while walking the
+object set (a field of every object: a cache miss each), its share of the classification batch, and the bucket fill
+(`pzoptAdd` → `bucket.add`: `getID`, the player / vehicle test, the list append, the zombie / frame-mod test of the
+separation queue: more misses on every object). Now:
+- the classification task also tests the square (null: the object is left to the game thread, whose stock steps
+  `setCurrentSquareFromPosition` + classify run after the batch in the set's order; the classification never reads another
+  object's square) and makes every read the fill needs (`getID() % frameMod`, player / vehicle, zombie, due this frame);
+- the game thread then fills in the set's order from those arrays (`MovingObjectUpdateScheduler.pzoptAddTail` →
+  `MovingObjectUpdateSchedulerUpdateBucket.pzoptAddAt`: `add()` with the index and the in-place test given; then the
+  instrument count and the separation queue as `pzoptAdd`), touching no object;
+- `IsoZombie.getMinimumSimulationLevel` (new override, active only with this key and ecsLookupFast): IsoGameCharacter's rule
+  with the state machine component from the `ecsLookupFast` field instead of IsoMovingObject's `tryGetECSComponent` (the
+  component map's hash probe was ~70 % of the classification on the flip, asprof f8f-asp). The component is registered
+  once in the constructor and never replaced; with the field still empty the stock path answers. The scheduler is the only
+  caller in the game.
+- First tries, dropped: the set streamed to the workers during the walk (`FrameBatch.runStream`: eleven workers spinning on
+  unpublished chunks for the whole walk, more CPU on a power-limited laptop, -0.02 ms) and one fill task per simulation level
+  (one level holds most of the horde: 1,080-2,066 at full, 374-1,914 at 1/16 a frame on the flip).
+- Rigs: `devSchedFillCheck` compares every list of every level's bucket (order, size, in-place count) with a serial fill of
+  the same classification, and every zombie's memoised minimum level with the stock lookup; `devSchedCheck` keeps checking
+  the classification itself.
+
+### Exactness and results (f9-los, 2026-10-15)
+
+Rigs (Louisville horde route, both keys on): flip f9l-chk2 / chk4 and desktop f9l-desk-chk: `devPlayerLosCheck` 0 mismatches in
+10.3 M + 10.2 M + 14.9 M checks, `devSchedCheck` 0 in 9.0 M + 8.8 M + 12.8 M, `devSchedFillCheck` 0 in 115 k + 111 k + 159 k bucket
+lists and 0 in 17.5 M + 25.4 M memoised minimum levels. **Timing-only:** flip f9l-chk1 (1 in 10.3 M) and chk3 (2 in 9.6 M) had a
+square the worker found "not dirty" (the native's `getSquareDirty` false, tick of an older pass) that the native reported dirty
+later in the same loop, so stock's read at the object's place refreshed it (could/can bits of one object differ for that frame).
+The native's flag changed while the game thread was in the loop: the lighting thread (`LightingThread`, `DoLightingUpdateNew`)
+runs beside the game thread, so stock's own answer for such a square depends on when its read happens; the worker's answer is
+stock's at a few microseconds earlier. Everything else the workers read is fixed for the loop.
+
+Flip (Ryzen AI 9 HX 370, balanced, Louisville uncapped, round-8 "now" args, 11 workers). In-run A/Bs (pzopt-gtab.out, route
+window; periods 770 / 530 ms in ab5 — a 500 ms group in ab1-ab4 aliased with something on a 1 s cycle and showed whole-frame
+deltas far beyond its own section's):
+
+| run | key | its section off -> on (ms) | frame wall on - off (ms) |
+|---|---|---|---|
+| f9l-ab1 (2x2) | playerLosFast | player 1.117 -> 1.101 (parallel off), 0.504 -> 0.361 (parallel on) | (500 ms group, not used) |
+| f9l-ab3 / ab4 / ab5 | playerLosParallel | player 1.13 -> 0.42, 1.07 -> 0.39, 1.25 -> 0.42; scheduler update -0.67 / -0.67 / -0.68 | -0.40 / -0.59 / -0.72 (ab5 paired 2 s bins -0.83 +- 0.78) |
+| f9l-ab4 / ab5 | schedulerFillParallel | startFrame 0.435 -> 0.317, 0.430 -> 0.326 | ab5 -0.36 (paired -0.11 +- 0.94) |
+
+Whole runs (devFrameSections on, Tctl < 60 C before each, alternating order): playerLosFast on (def) 74.8 / 70.4 / 79.7 fps,
+off (nofast) 74.2 / 79.1 fps (a third, nofast4, 49 fps, was slow from the settle window on in every section: discarded) — player
+1.17 vs 1.18-1.21 ms; + playerLosParallel 82.1 / 84.1 fps (p50 11.2-11.5, p99 22.7-22.9 ms, player 0.38-0.40 ms); + both 85.9 /
+84.7 fps (p50 10.9-11.2, p99 21.8-22.0, p99.9 27.0-30.1 ms, player 0.38-0.39, startFrame 0.315-0.318 ms); game thread 94-95 %,
+CPU 28 %, GPU 30 %, socket 37-38 W (36 with the keys off). Desktop (round-8 lock set, cap 120): both keys on f9l-desk-on2 99.3 %
+<= 9 ms, p99 8.9, p99.9 13.3, max 16.5 ms vs keys off f9l-desk-off 99.2 %, 8.9, 16.2, 17.8 (quiet runs, ext 0.28 / 0.31,
+strongMarks 5.8k, settle frames clean); in-run at the cap (f9l-desk-ab): player 0.354 -> 0.167 ms, startFrame 0.229 -> 0.174 ms,
+game-thread CPU -0.06 / -0.11 ms, process CPU +2.4 ms a frame for the LOS batch.
+
+## Louisville 120: the first-sight and cutaway bursts, GC (f9-burst, 2026-10-15)
+
+Every key below is off by default.
+
+- `bodyAtlasPrewarm` (exact; `bodyAtlasPrewarmPerFrame` 2, `bodyAtlasPrewarmDelayFrames` 60): `zombie/iso/IsoWorld`, one
+  call (`pzopt.BodyAtlasPrewarm.tick()`) right before `DeadBodyAtlas.instance.render()` in the render phase. A zombie drawn as
+  a flat sprite (`IsoZombie.renderTextureInsteadOfModel`: the zombie LOD's atlas zombies) takes its picture from one of
+  DeadBodyAtlas's 128 generic zombie bodies (sex x idle / walktoward x direction x animation frame 0-3), made the first time
+  any zombie asks for it: a render job that poses the generic zombie on the game thread (`RenderJob.renderMain`) and draws it
+  into the atlas, a zombie whose texture is not ready yet is not drawn. On the Louisville route nearly all were made in the
+  frames the horde first came into view. The tick makes the same `getBodyTexture(female, "zombie", state, dir, frame,
+  trackTime)` calls (trackTime as renderTextureInsteadOfModel computes it) a few a frame once the world has run 60 frames.
+  The generic body parameters carry no world state (`BodyParams.init` with a human visual: ambient 1, no lights, outside, the
+  shared `CharacterTextureVisual` of each sex), so each texture is the one the later call would have made; only the moment
+  and the atlas slot of later entries change.
+- `zombieSpawnAgedCapUs` (timing only; 0 = before): `zombie/popman/ZombiePopulationManager.pzoptDrainSpawns`, the queued far
+  zombies past `zombieSpawnMaxAgeMs` were all created in the frame they aged; now they stop after this much time a frame (a
+  burstGovernor heavy step: after `zombieSpawnBurstUs`), unless they waited three times `zombieSpawnMaxAgeMs`. Census: the
+  "zombie spawn spread" line counts the zombies created only because they had aged (`aged`).
+- `zombieSpawnSlackBudgetUs` (timing only; 0 = before): the same method, at a frame cap the frame's spawn budget is what the
+  last step left of the cap interval (`Pacing.lastWorkNs`) less this margin, up to `zombieSpawnMaxUs`, instead of
+  `zombieSpawnBudgetUs` / the backlog rule; with no room left no zombie is created that frame (the max-age rule still
+  applies). The route's spawn queue (up to ~390 far zombies after the first chunk rows) was drained at 600 us a frame right
+  through the horde's first sight (0.5-0.65 ms of the burst frames); census: all of those were budget creations, none aged.
+- `zombieSpawnHeavyMin` (timing only; 1 = before): the same method, a burstGovernor heavy step created at least one queued
+  zombie; 0 lets it create none (aged ones still go under zombieSpawnAgedCapUs).
+- `zombieModelAddHeavyEvery` (timing only; 0 = before): `zombie/iso/IsoWorld.sceneCullZombies`, a zombie that would get its
+  3D model (`ModelManager.Add`, then its texture creator's init and clothing composite) in a burstGovernor heavy step waits
+  as a flat sprite unless this is every Nth heavy step in a row (`Pacing.heavyAddHold`); before, every heavy step still gave
+  at least one zombie its model. Census `heavy-step add holds (candidates)` in the frame queue's log line.
+- Not an override edit: `zombieCompositeMaxPerFrame` (timing only; 0 = before): `pzopt.FirstSight.overBudget` also stops a
+  frame's first clothing composites at this count; each one costs ~0.2 ms of GPU that zombieCompositeBudgetUs's render-thread
+  budget does not see (gpuSections sub-section `moving.composite`, new: 0.6-1.5 ms of GPU in the bursts' heavy frames).
+- Found on the way: `bakeRecordParallel` is not exact on integ-r8: `devBakeRecordCheck=8` on the Louisville lock set counted 31
+  mismatches in 86,519 entries (684 checks; "draw flags flipped ... singleCol false/true" on street floor tiles) plus 2 info
+  mismatches. It stays off (it also showed no burst gain).
+- `zombie/ai/ZombieGroupManager.preupdate`: census only (instrumented runs or `devZombieGroupCensus`): `pzopt.ZombieGroupCensus`
+  logs the group count, members (sum / largest), the free pool and the slowest sweep every 10 s ("zombie groups:"). Reason:
+  f9p-L12 spent ~16 % of its game thread in ZombieGroup.update for the whole route and failed the lock with 33-46 ms steps at
+  the first sight; no other of 17 runs had that frame in its game-thread profile.
+- Not override edits: `aotNoIndy` (`pzopt.AotCache`): the record / use launcher forms also carry
+  `-XX:+UnlockDiagnosticVMOptions -XX:-AOTInvokeDynamicLinking`, stripped together on a reset (AotCache, `scripts/pzopt.sh`,
+  `install.sh`; `install.ps1` strips the second flag only). With the game's Zulu 25.0.1 every recording session's AOT cache
+  assembly (the JVM's child at exit) died in `ArchiveHeapWriter::compute_ptrmap` ("Metadata ... should have been archived":
+  an archived invokedynamic object refers to a class the cache excludes, the pre-Java-6 trove / lwjgl.util classes); the
+  game folder holds such hs_err files from the maintainer's sessions of 2026-10-10 and 10-12, so aotCache never produced a
+  cache and its launcher went record -> use (cache missing) -> record. Without AOT-linked invokedynamic the assembly works
+  and keeps all method profiles (28,423 MethodTrainingData from one Louisville session).
+
+## Defaults 2026-10-15 (maintainer; integration round 10, worktree `integ-r10`)
+
+No override changed: Config defaults, GcChoice's jitSteady flags, the installers' undo lists, run.sh's mirror of the player
+JVM flags, the tab Lua and two tests. The maintainer approved for players (the keys are described in the f8-resid, f9-burst
+and f9-los sections above):
+
+| key | was | now | kind |
+|---|---|---|---|
+| `playerLosParallel` | false | true | exact (devPlayerLosCheck; single player only, the key stays inert on a server) |
+| `schedulerFillParallel` | false | true | exact (devSchedFillCheck; with schedulerClassifyParallel, on since 2026-09-27) |
+| `lookupMemo` | false | true | exact (devLookupMemoCheck) |
+| `bodyAtlasPrewarm` | false | true | exact (the same atlas textures, made earlier) |
+| `aotNoIndy` | false | true | fix: the players' aotCache (on by default) finally gets a cache (`-XX:+UnlockDiagnosticVMOptions -XX:-AOTInvokeDynamicLinking` on the record and use launches) |
+| `burstGovernor` (burstLateUs 1000, burstWorkPct 95, zombieSpawnBurstUs 150, zombieModelAddBurstUs 150 unchanged) | false | true | timing only |
+| `zombieSpawnSlackBudgetUs` | 0 | 1500 | timing only (acts with zombieSpawnSpread) |
+| `zombieSpawnHeavyMin` | 1 | 0 | timing only (zombieSpawnSpread + burstGovernor) |
+| `zombieSpawnMaxAgeMs` | 1000 | 3000 | timing only (zombieSpawnSpread) |
+| `zombieSpawnAgedCapUs` | 0 | 600 | timing only (zombieSpawnSpread) |
+| `zombieModelAddHeavyEvery` | 0 | 4 | timing only (zombieModelAddBudgetUs > 0 + burstGovernor) |
+| `zombieCompositeMaxPerFrame` | 0 | 3 | timing only (zombieFirstSightSprite) |
+| `bakeBudgetGpu` | false | true | timing only |
+| `lightingStrongFrameMs` | 0 | 9 | timing only |
+| `frameQueueMinPct` | 60 | 260 | timing only: with frameQueueMaxPct 260 (default since round 7) a fixed D of 2.6 cap intervals |
+| JVM `-XX:-UseTypeSpeculation` | - | in jitSteady's flags | timing only (C2 code shape; no semantic change) |
+
+Already default before this round and unchanged: `frameQueue`, `frameQueueGpu`, `frameQueueSlewUs=500`,
+`frameQueueDecayUsPerS=1000`, `frameQueueMaxPct=260`, `gcSlackQueue=slack`, `gcSlack` (slew and decay only act while D moves, so
+they are inert with the fixed D). Not made default (left as they were): the zombie LOD keys, `zombieFirstSightSprite`,
+`bakeRecordParallel`, `frameQueueRtHold`, the core-isolation keys, the desktop lock's GC flags (8 GB heap, MaxGCPauseMillis=5 ...),
+and the lock's other opt-ins (`zombieSpawnSpread`, `zombieModelAddBudgetUs`, `lootDefer`, `zombieReuseSpread`, `tileRecordParallel`,
+`glNoSync`, `animalLosWalk`, `animalPreload`, `combinerPool`, `pacingQueryBuffer`). So for players the spawn / model-add pacing
+keys and `zombieCompositeMaxPerFrame` are inert until those parents are turned on; `burstGovernor` itself then only counts
+heavy steps.
+
+Where the JVM flag goes: `GcChoice.JIT_FLAGS` (jitSteady, on by default, written into the launcher JSON's top-level and
+per-platform vmArgs after the marker `-Dpzopt.jit=steady` on Linux and Windows; the macOS app bundle's Info.plist is never
+edited, so Mac players get neither the jit flags, the tuned G1 set nor the AOT cache, as before). The undo (GcChoice, scripts/pzopt.sh,
+install.sh, install.ps1, Uninstall) removes every argument that sets one of JIT_FLAGS' flags once the marker is there; an older
+install's marker with only the two trap-limit flags is upgraded at the next boot (apply() undoes, then writes the three). A
+player's own `-XX:±UseTypeSpeculation` or trap-limit flag keeps the section stock. run.sh adds the same three flags to every
+optimized run (as it already did for the trap limits), so harness runs measure what players get. `-XX:+IgnoreUnrecognizedVMOptions`
+stays in the tuned-G1 set (gcG1Tuned) and covers a later Java without one of these flags.
+
+Price of the fixed D: every capped world frame reaches the screen 2.6 cap intervals after its slot (21.7 ms at 120 fps; at a
+60 fps cap 43 ms, at 30 fps 87 ms; the old 60 % floor let D drop to 10 / 20 ms there). f8-resid measured +0.44 points of frames
+within 9 ms for about +2.5 ms mean latency at the 120 cap; lower caps were not measured.
+
+Tab entries added (Performance pages): bakeBudgetGpu (Bake budgets), lookupMemo (Cheaper checks), bodyAtlasPrewarm (Drawing the
+horde), zombieCompositeMaxPerFrame (Detail by distance), a "Horde first sight" subcategory (burstGovernor, burstLateUs,
+burstWorkPct, zombieSpawnBurstUs, zombieModelAddBurstUs, zombieModelAddHeavyEvery, zombieSpawnSlackBudgetUs, zombieSpawnHeavyMin,
+zombieSpawnMaxAgeMs, zombieSpawnAgedCapUs), frameQueueMinPct / frameQueueMaxPct (Frame pacing), aotNoIndy (Boot);
+playerLosParallel and schedulerFillParallel placed under "On other cores"; lightingStrongFrameMs gained the choice 9; the
+jitSteady tip names the type-speculation flag.
+
+Verification (desktop, 2026-10-15 ~21:25-21:50, build audit 9,152 compared / 0 mismatches, tests green): the round-9 lock set with
+every now-default key removed from the run arguments (left: frameCapFps=120, the zombie LOD props, zombieFirstSightSprite, the
+lock's non-default opt-ins and GC flags, --no-mangohud; -XX:-UseTypeSpeculation now from run.sh's jitSteady flags) locked in
+4 of 4 consecutive runs (i10-l1..l4: 119.56-119.92 fps, 99.06-99.73 % <= 9 ms, p99 8.41-8.97, p99.9 11.76-16.68, max 15.2-17.1;
+crashed=0, strongMarks 5.7-6.1k, strongPastBudget 0, settle roofs uniform black). drive-120-south at the cap: 99.82 %, p99 8.37,
+p99.9 9.30, max 16.7. Player-like Louisville (fresh-install JVM flags, empty options file, no LOD, cap 120): new defaults
+106.5 / 107.5 fps, p99 36.0 / 32.4 ms vs the previous defaults 108.3 / 108.5 fps, p99 29.6 / 31.7; the new defaults with
+frameQueueMinPct=60 109.0 / 109.6 fps, p99 27.8 / 27.3: without the LOD the fixed D costs ~2 fps and ~5-8 ms of p99 (the other
+new keys gain ~1 fps). Uncapped player-like: 124.5 fps, crashed=0. aotCache cycle with aotNoIndy: record wrote a 127 MB cache
+(28,018 MethodTrainingData), the next launch "Using AOT-linked classes: true", "aot: running from the AOT cache", no hs_err.
+
+### Round 11 (maintainer 2026-10-15, worktree `integ-r11`): fixed frame-queue D only at high caps, burst parents on
+
+Two further decisions of the maintainer:
+
+1. **The fixed D only at caps of 100 fps or more.** New keys `frameQueueFixedMinFps` (100) and `frameQueueLowCapMinPct` (60):
+   `pzopt.Pacing.queueMinPct(interval)` returns `frameQueueMinPct` (260, with frameQueueMaxPct 260 a fixed D of 2.6 intervals,
+   21.67 ms at 120 fps) when the cap in force rounds to frameQueueFixedMinFps or more, else `frameQueueLowCapMinPct`, i.e. the
+   adaptive queue of before (D = p99 of slot -> ready + margin between 60 % and 260 % of the interval: floors 10 ms at 60 fps and
+   20 ms at 30 fps instead of a fixed 43 / 87 ms). The cap is read per frame (the interval queueHold gets), so a cap changed in game
+   moves between the two rules at once (slew and decay smooth the step). `frameQueueFixedMinFps=0` = frameQueueMinPct at every cap.
+   The 10 s console line "frame queue: ... D x ms (p99 of slot -> ready, last y, floor z)" now names the floor in force; the
+   start-up line names both ranges. Tab (Frame pacing): "Frame queue: fixed holding time from (fps)" (0 / 60 / 100 / 144) and
+   "Frame queue: shortest holding time at low caps (% of a frame)" (Everything view); the frameQueueMinPct tip says where it applies.
+   Test: `tests/pzopt/PacingQueueFloorTest` (120 / 240 / 100 -> 260, 99 / 60 / 30 -> 60).
+
+2. **The burst parents on by default (timing only):** `zombieSpawnSpread` false -> true, `zombieModelAddBudgetUs` 0 -> 500,
+   `zombieFirstSightSprite` false -> true. With them round 10's pacing keys act for players (zombieSpawnSlackBudgetUs 1500,
+   zombieSpawnHeavyMin 0, zombieSpawnMaxAgeMs 3000, zombieSpawnAgedCapUs 600, zombieModelAddHeavyEvery 4,
+   zombieCompositeMaxPerFrame 3, and burstGovernor's spawn / model-add budgets). `zombieSpawnSpread` creates the zombies the native
+   population turns real from a queue (a zombie within 25 squares of a player and the first 3 s of a load at once, as stock; none
+   waits past zombieSpawnMaxAgeMs), so zombies appear a few frames later, never fewer; `zombieModelAddBudgetUs` puts the 3D model of
+   zombies past 500 us of model building a frame off to the next frames (nearest first); `zombieFirstSightSprite` spreads the first
+   clothing composites and draws the waiting zombie as its lit sprite.
+
+   **zombieFirstSightSprite without zombieLodDynamic** (code change, needed for players: the key was inert unless the zombie LOD
+   was on, and the LOD stays off by default). `FirstSight.active()` no longer asks for `ZombieLod.active()` (single player only, as
+   before). In `IsoWorld.sceneCullZombies` without the LOD the cull loop keeps the stock counts (510 models, numberZombiesBlended)
+   and only runs the crossfade machinery the first sight uses: `ZombieLod.clock()` (the crossfade clock) and
+   `FirstSight.beginCull()` before the loop, `ZombieLod.sightFade(z)` for a zombie in the 3D places (advances a first-sight fade-in,
+   nothing else; the LOD's sprite <-> model fades past the cap are not started), `ZombieLod.endFade(z)` for a zombie that drops out
+   of the 3D places or off the model list (no fade-out: stock pops), and `FirstSight.won(z, rank)` for the nearest-first composite
+   grants. The sprite light: `ZombieLod.spriteLight(IsoZombie)` (IsoZombie.renderTextureInsteadOfModel) gives every flat sprite
+   zombieLodSpriteLight (60 %) of its square's light with the LOD, as before; without it only a new zombie's sprite
+   (`FirstSight.newSprite`: drawn under its model while it waits for the first composite or fades in, or put off its model this frame
+   by zombieModelAddBudgetUs, stamped in the cull loop as `IsoZombie.pzoptAddWait`); the stock far sprites past the 510 nearest stay
+   black. Edited lines carry `// pzopt:` markers (IsoWorld.sceneCullZombies, IsoZombie field + renderTextureInsteadOfModel).
+
+   Tab: "Zombie creation queue: new zombies spread over frames" (zombieSpawnSpread, new) and "Horde first sight: 3D models given per
+   frame (us)" (zombieModelAddBudgetUs, new: 0 / 250 / 500 / 1000) in the "Horde first sight" subcategory; the zombieFirstSightSprite
+   tip lost "needs zombie detail follows the frame cap" and "off by default"; burstGovernor's tip says both budgets are on.
+
+Verification (desktop, 2026-10-15 22:05-22:30; build audit 9,152 compared / 965 edited / 0 mismatches, tests green incl.
+PacingQueueFloorTest). Lock check (round 10's lock set less zombieFirstSightSprite / zombieSpawnSpread / zombieModelAddBudgetUs,
+now defaults): first set i11-l1..l4 119.36 / 119.56 / 119.28 / 119.76 fps, 98.99 / 99.16 / 98.79 / 99.43 % <= 9 ms (l1 and l3
+missed by 0.01 / 0.21 points with external load ext 2.7 / 3.2 cores: kswapd, ZFS; l2 / l4 passed at ext 1.7 / 1.2); second
+set i11-l5..l8 4 of 4 locked: 119.84-119.88 fps, 99.60-99.77 %, p99 8.38-8.42, p99.9 14.1-16.7, max 16.68-16.79, ext 0.3-0.5,
+crashed=0, strongMarks 5.8-5.9k, settle roofs uniform black. drive-120-south i11-d1: 119.94 fps, 99.89 %, p99 8.36, p99.9 9.18,
+max 14.3. Player-like Louisville (fresh-install JVM flags, empty options file, no LOD) at cap 120: i11-p120 / p120b 114.6 / 116.8 fps,
+91.9 / 94.8 % <= 9 ms, p99 16.7 / 15.7, p99.9 22.1 / 18.7, max 23.6 / 20.1 ms, 0 frames > 33 ms (round 10: 106.5 / 107.5 fps,
+89.8 / 91.7 %, p99 36.0 / 32.4, max 140 / 141, 26-28 frames > 33 ms). Same build with the three parents off (i11-p120off): 111.1 fps,
+93.7 %, p99 21.5, p99.9 88.1, max 255 ms, 21 > 33 ms; with only zombieFirstSightSprite off (i11-p120nofs): 116.2 fps, 94.6 %,
+p99 16.7, p99.9 27.9, max 33.7. Uncapped i11-punc 126.3 fps (round 10: 124.5). Low caps: i11-p60 59.96 fps, p99 17.31, max 29.2,
+jitter 0.10 ms, console D 42.5 -> 34.6 -> 24.6 -> 24.4 ms with floor 10.00 ms (slot -> ready p99 ~25 ms); i11-p30 30.03 fps, p99
+33.36, max 33.4, jitter 0.02 ms, D 86.3 -> 80.7 -> 70.7 -> 60.7 ms with floor 20.00 ms (the adaptive D falls at frameQueueDecayUsPerS,
+1 ms/s, from the 260 % clamp it reached at the world's start). Visual (route s0.9-1.8 crops): the new zombies waiting for their model
+are lit sprites; with first sight off the zombieModelAddBudgetUs waits were black silhouettes (i11-p120nofs).
+
+**Fast settle at low caps** (2026-10-15, after the runs above; maintainer's aim: low input delay at low caps). Round 11's
+adaptive D at 60 / 30 fps learned from the world's start bursts (slot -> ready 77-411 ms in the first 3 s), sat at the 260 %
+ceiling (43 / 87 ms) and fell only at frameQueueDecayUsPerS (1 ms/s): ~20 s at 60 fps, ~67 s at 30, so the 30 fps route ran at
+D 56-86 ms. `pzopt.Pacing.queueD` (the D update, factored out of queueHold) now has low-cap rules, all only where
+`Pacing.lowCap(interval)` (cap below frameQueueFixedMinFps); at 100 fps or more the code path is the old one, unchanged:
+
+- `frameQueueLowCapCalmMs` (1000): when the queue turns on (`Pacing.queueTurnedOn`, called by queueAllowed on its off -> on
+  transition: a world loaded, a menu or the pause menu closed) or the cap interval changes by more than 1 %, D restarts at its
+  floor (frameQueueLowCapMinPct) with an empty window (`queueRestart`; an existing D slews there) and `addQueueSample` drops the
+  samples until the frames have been ready within one cap interval of their slot for that long (at most `Q_CALM_MAX_NS`, 10 s).
+  Console: "frame queue: low cap N fps, D learns after x s at its floor y ms (...)". 0 = learn from the first frame (round 11).
+- `frameQueueLowCapDecayPct` (25): D falls at most 25 % of the cap interval a second (4.2 ms/s at 60, 8.3 at 30) instead of
+  frameQueueDecayUsPerS's fixed 1 ms/s (12 % of an interval at 120, 3 % at 30). 0 = frameQueueDecayUsPerS.
+- `frameQueueLowCapMarginPct` (20): added to D on top of frameQueueMarginUs (3.3 ms at 60, 6.7 ms at 30). A D that falls within
+  seconds sits near the p99, so each rise of the slow frames came late; replayed through round 11's logged lags (on-screen
+  intervals in the route window, `fqsweep3.py` in the session scratchpad) margin 0 / 10 / 15 / 20 % gave 21-29 / 18 / 16 / 14
+  intervals > 0.5 ms long at 60 fps (round 11's slow D: 14, at D 23.1 ms on the route) and 4 / 1 / 1 / 0 at 30 (round 11: 0 at
+  D 63.6 ms); 20 %: D 23.2 / 26.5 ms there.
+- The slew stays frameQueueSlewUs (500 us a frame) at low caps. A first build with a slew in percent of the interval (12 %:
+  2 ms a frame at 60, 4 ms at 30) and a 10 % margin made each rise of D a run of 2-4 ms longer frames: i11f-p60 p99 17.78, max
+  22.2, jitter 0.08 ms; i11f-p30 p99 34.63, max 38.1, jitter 0.11 ms.
+
+Tab (Frame pacing, Everything view): "Frame queue at low caps: start from the shortest holding time (ms of steady frames)",
+"... how fast the holding time falls (% of a frame per second)", "... safety margin (% of a frame)"; the frameQueueFixedMinFps
+tip says the low-cap queue starts at its floor and settles within seconds. Test: `PacingQueueFloorTest` drives
+addQueueSample + queueD per frame: 120 fps D = 21.67 ms every frame through bursts and a queue restart; 120 -> 60 slews to the
+10 ms floor at <= 0.5 ms a frame; 3 s of 40-240 ms start bursts keep D at the floor; D learns after 1 s of calm frames; a 25 ms
+burst raises D to 25 + 0.3 + 3.33 ms at 0.5 ms a frame; back at the floor within 9.5 s, falling <= 4.17 ms/s; 60 -> 30 restarts
+at the 20 ms floor through bursts; a never-calm scene learns after 10 s. Build: audit 9,152 compared / 965 edited / 0 mismatches.
+
+Runs (desktop, player-like Louisville as above, `player.sh i11g-p60|p30 --prop frameCapFps=60|30`): D learns 4.4 s (60) / 3.6 s
+(30) after the queue turned on; 10 s console lines D mean/last (floor 10 / 20 ms):
+- 60 cap, round 11 i11-p60: 42.47/39.62, 34.61/29.61, 24.63/20.89, 24.43/22.94 ms; now i11g-p60: 13.58/17.44, 16.80/20.34,
+  26.30/26.13, 26.11/24.91 ms (per second: 10.0 to +4 s, 13-17 ms from +5 s = the GPU-inclusive slot -> ready p99 + margin;
+  23-29 ms on the heavier route, where round 11's D had come down to the same level). Route: 59.98 fps, p99 17.17, p99.9 18.68,
+  max 20.0, jitter 0.04 ms (round 11: 17.31 / 21.90 / 29.2 / 0.10); frames > interval + 0.6 / 2 / 4 ms: 3 / 2 / 0 (round 11:
+  16 / 5 / 3); the queue's late counter per 10 s after the start bursts 1 / 0 / 1 (round 11 0 / 1 / 1).
+- 30 cap, round 11 i11-p30: 86.32/85.77, 80.74/75.74, 70.71/65.72, 60.69/55.70 ms; now i11g-p30: 24.37/26.28, 22.00/23.37,
+  34.19/35.72, 38.80/35.40 ms (per second: 20.0 to +3 s, 24-27 ms at +4-10 s, 21 ms at +14-18 s, 35-40 ms on the route: its
+  GPU-inclusive p99 ~30 ms + 6.97). Route: 29.98 fps, p99 33.84, p99.9 35.55, max 35.5, jitter 0.05 ms (round 11: 33.36 / 33.42 /
+  33.4 / 0.02 at D 51-86 ms): 44 frames 0.3-0.6 ms long (D rising at the 0.5 ms slew), 3 > +0.6 ms, 1 > +2 ms (35.5 ms); the queue's
+  late counter per 10 s after the start bursts 1 / 0 / 0 (round 11 0 / 0 / 0). About 30-50 ms less input delay for one 2 ms-late frame in 25 s.
+- Lock (lock.sh, 120 fps, fixed D 21.67 ms on every 10 s line, no low-cap line): i11g-l1 119.96 fps, 99.83 % <= 9 ms, p99 8.377,
+  p99.9 10.12, max 16.68, ext 0.28; i11g-l2 119.72 fps, 99.53 %, p99 8.428, p99.9 16.681, max 16.70, ext 0.20; both PASS, crashed 0,
+  strongMarks 5.8-6.0k, strongPastBudget 0; settle frames (route -17 / -1 s) of all four runs uniform black roofs.
+
+## Linux "won't launch" reports (Discord, 2026-10-17)
+
+Two players on hybrid Intel + RTX 3050 laptops (Fedora 44, CachyOS) whose game closed on start with the mod installed.
+
+- `pzopt.GcChoice` (not an override): `heapToPzopt` set gcHeap=auto's `-Xmx` (4096 MB with few mods) but, with
+  `gcHeapFixed=false`, left a player's own larger `-Xms` (`-Xms5120m -Xmx5120m`), and the next launch's JVM refused to start
+  ("Initial heap size set to a larger value than the maximum heap size") before console.txt existed, so the posted log was
+  the previous, working session. Since 981b0602 (2026-10-05). Now a larger `-Xms` is lowered to the new `-Xmx`; the
+  `-Dpzopt.heap=` marker keeps the player's sizes, so every undo (GcChoice, pzopt.sh, install.sh, install.ps1) restores them;
+  `save` refuses to write a launcher JSON whose `-Xms` exceeds its `-Xmx` (`heapConflict`, `sizeMb`). `GcChoiceTest`.
+- `org.lwjglx.opengl.Display.create`: when `glfwCreateWindow` fails on the Wayland platform that HDR selected
+  (`pzopt.Hdr.windowFailed`: hdr / hdrAuto, not `zomboid.wayland=1`, X11 available), GLFW is terminated, initialised again on
+  X11 (the platform the game itself picks), `Keyboard.create()` is made (init() skips it on Wayland, create(PixelFormat) only
+  makes it on Wayland), `monitor` re-read, and `create()` runs again: an SDR X11 window, `Hdr.windowCreated` logs the fallback
+  as the HDR state. The report: the FP16 EGL window under the NVIDIA driver failed with "EGL: Failed to create window
+  surface: EGL failed to allocate resources" (it opened with the iGPU only). The `hdr: auto` note is logged before the retry.
+  Dev key `devHdrWindowFail` throws the first HDR window away so the path runs on any Wayland desktop.
+
+## Zombie phasing fix (2026-10-18): no bare stand-in sprite for `zombieFirstSightSprite`
+
+Workshop reports since the 10-16 release ("zombies briefly naked / phasing"): a zombie hit with a melee weapon, killed, dragged as
+a corpse or losing its hat, and the first sight of a horde (~1.5 s), showed naked grey-white figures. The stand-in drawn while a
+zombie waited for its clothing composite is `IsoZombie.renderTextureInsteadOfModel`'s DeadBodyAtlas picture, the game's generic
+male / female body without clothes, lit at zombieLodSpriteLight. Two ways in: `ModelManager.Reset` (a hit, a helmet fall, a death,
+a corpse drag, an outfit change) gives the zombie a fresh model instance whose texture is the plain body texture and clears its
+ready list, so `FirstSight.pending` took a zombie that had been drawn clothed for one that never had a composite and held it as
+the bare sprite; and at a horde's first sight every zombie past the frame's grants (3 a frame) was that sprite until its turn.
+Also, a zombie put off its model by zombieModelAddBudgetUs was lit (the same bare body) while the key was on.
+
+- `pzopt.FirstSight` (no override logic beyond fields): `pending` stamps a zombie whose model has its composite
+  (`IsoZombie.pzoptClothedNs`); a zombie stamped in the last 2 s is never held (stock order: its new composite is made in the frame
+  it is drawn; nothing of it is drawn before, as stock after a reset); `anyPending` scans every candidate so every one is stamped.
+  A corpse being dragged (a new zombie made from the body, `IsoDeadBody.reanimateZombieForGrapple`, `isReanimatedForGrappleOnly`)
+  never waits either.
+  Without zombieLodDynamic (the default) a waiting zombie draws nothing (no sprite, no crossfade: stock's not-ready state; its
+  model shows at its stock alpha once the composite is made) and waits at most `zombieFirstSightMaxWaitMs` (new key, 250 ms):
+  the grants a frame rise past zombieCompositeBudgetUs / zombieCompositeMaxPerFrame to the even rate that meets every waiting
+  zombie's deadline (k zombies due within f frames need k / f a frame; those grants skip the render thread's budget,
+  `IsoZombie.pzoptSightForce`, `FirstSight.eligible` false for them). A hard bound that granted every due zombie at once
+  made 82-91 ms frames (up to 140 composites in one frame). With zombieLodDynamic the LOD's own sprite is held as before. `newSprite` no longer lights
+  a zombie put off its model by zombieModelAddBudgetUs (it is the stock unlit far sprite, as with the key off).
+- `IsoZombie`: field `pzoptAddWait` removed; `pzoptSightForce`, `pzoptSightKept`, `pzoptSightWaitNs`, `pzoptClothedNs` added.
+- `IsoWorld.sceneCullZombies`: the `pzoptAddWait` stamp removed.
+- Census line (devFirstSightCensus / instrument): clothed zombies after a model reset kept in stock order (events, zombie-frames),
+  grants past the max wait, LOD sprites held. Findings: `docs/findings-zombie-phasing-2026-10-18.md`.
+
+## zoomRetain: a level waiting for the zoom plan is prepared before it bakes (2026-10-18, Discord bug report, ismaello)
+
+Report (2026-10-09, AMD, Riverside house at 6287,5454): roofs missing from outside when the chunk loaded off screen (load
+zoomed in, zoom out), fixed by walking in and out; rarely, roofs that stay up after walking in. `prepareChunksForUpdating`
+skipped every level waiting for the zoomRetain plan (a zoom-out dirties ~200 levels at once), and the plan let it bake later
+in `renderOneLevel`, so that bake read `ChunkLevelData.squareFlags` (bit 1 = draw the square, the cutaway / collapsed-building
+decision) from the level's last preparation, whatever had changed since.
+
+- `FBORenderCell.prepareChunksForUpdating`: a waiting level is marked in the new `IsoChunk.pzoptZoomUnprepared[player]`
+  (bit `z + 32`, cleared in `removeFromWorld` and when the level is prepared); a level with cutaway / collapse dirt
+  (2048 / 16384) is prepared at once, as the bakeScheduler's held levels below already were.
+- `FBORenderCell.renderOneLevel`, zoom gate: a level the plan grants (or that cannot be held) whose preparation waited is
+  prepared there first (`pzoptPrepareZoomGranted`), then baked.
+- Counters `ZoomRetain.latePrepared` / `lateFlagFixes` (squares whose bit 1 the late preparation changed) in the periodic
+  bake line and the harness's `zoom step N trace`; `devCutawayLog` logs every preparation that changed a flag. A/B key
+  `devZoomStaleFlags` (default false) puts the stale flags back after the preparation (the old bakes).
+- Measured on the desktop (runs `rf-load-*`, `rf2-inout-*`, `rf2-porch-*`, judge `harness/roof-judge.py` + Jev): no rig
+  reproduced the report in any variant; ~750-4,200 late preparations a run and 0 changed flags, so this closes a hole the
+  report may come from but has not been shown to. Roof boxes settle like stock (0-5 % of the box apart; Jev `same_in_all`
+  0.76 / 0.82, the fix worse than stock 0.08); on the release base (runs `rf3-inout-*`) every box is 0.0 % off stock,
+  Jev `same_in_all` 0.99, the fix matches stock 0.89. Standing on the porch square 6292,5462 hides the whole upper house in stock too.
+  Shipped as a safety change (maintainer, 2026-10-18).
+
+### Built-in benchmark (2026-10-18, docs/plan-builtin-benchmark.md): PerformanceSettings, no other override
+
+- `PerformanceSettings.pzoptBenchmark(cmd, arg)`: the one Lua entry point of `media/lua/client/pzopt/pzopt_benchmark.lua`
+  (main menu "BENCHMARK" item, setup dialog, the pass's world, HUD, report), forwarded to `pzopt.Benchmark.call`.
+- Everything else is pzopt code: `HarnessFlags` takes a pass's harness flags from the benchmark plan when there is no
+  harness flag file (`BenchPlan`), `Config` merges the pass's pinned settings into its pzopt.properties layer (stock pass
+  `enabled=false`, overlay hidden, frame log on), `Harness` calls `Benchmark.onWorldReady / onRouteStart / onTick /
+  onRouteEnd` and steps its route by a fixed time per frame with `fixed_step` (timedemo), `Overlay` / `Pacing` hand
+  their per-frame rows to `BenchRecorder`, `Stats` counts loaded chunks without the instrument flag.
+
+### Voxel lighting (2026-10-18, `pzopt.VoxelLight`, key `voxelLight`, off by default)
+
+- `FBORenderCell.renderOneLevel`, the god rays' occupancy hook: a chunk level whose objects changed (add / remove / modify)
+  also refreshes the shared occupancy when voxel lighting wants it (`pzopt.VoxelLight.wantsOccupancy()`), as it already did
+  for god rays and entity shadows. Voxel lighting traces its lamp, room and sky light through that occupancy
+  (`docs/findings-voxel-lighting-2026-10-18.md`). No other override changes.

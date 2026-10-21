@@ -73,7 +73,7 @@ public class PipelineTest {
    }
 
    public static void main(String[] args) throws Exception {
-      Check.check(!Config.ENTITY_UPDATE_PIPELINE, "entityUpdatePipeline defaults to off (gt-offload: the overlap window measured empty, 2026-09-27)");
+      Check.check(Config.ENTITY_UPDATE_PIPELINE, "entityUpdatePipeline defaults to on (zombie pass 2026-10-13, with entityUpdatePlayerFirst)");
 
       GameTime gt = GameTime.getInstance();
       long captured0 = UpdateBatch.getLuaCapturedCount();

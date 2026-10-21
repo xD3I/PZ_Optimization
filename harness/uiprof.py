@@ -137,7 +137,7 @@ if marks:
         o = out["interactions"][name]
         print(f"  {name:16s} {len(v):2d} {o['handler_ms']:10.2f} {o['to_ui_ms']:8.2f} {o['first_render_us']:13.0f} {o['frame_ms']:8.2f} {worst:8.2f}")
 # 3. scenes (ui_script=scenes): the seconds wholly inside each scene_* mark's span
-scene_marks = [(int(l.split()[1]) // 1000, l.split()[2]) for l in lines if l.startswith("M ") and l.split()[2].startswith("scene_")]
+scene_marks = [(int(l.split()[1]) // 1000, l.split()[2]) for l in lines if l.startswith("M ") and l.split()[2].startswith(("scene_", "lat_"))]
 if scene_marks:
     seg = collections.OrderedDict()
     cur = None
@@ -192,5 +192,44 @@ if scene_marks:
                 print(f"      {t[:30]:30s} {v[0] / fr:6.2f} {v[2] / fr:6.2f} {v[4] / fr:6.2f}   {v[1] / g['n']:6.0f} {v[3] / g['n']:6.0f} {v[5] / g['n']:6.0f}")
         mx = f"{st.median(g['umax']):.0f}/{st.median(g['rmax']):.0f}" if g["umax"] else "-"
         print(f"  {name:16s} {g['n']:2d} {g['frames'] / g['n']:6.1f} {ui:9.1f} {pct:7.2f} {g['upd'] / fr:10.1f} {g['ren'] / max(g['uif'], 1):15.0f} {g['uif'] / g['n']:7.1f} {mx:>14s}  {secs}; {top}")
+# 4. devUiTruth: what each schedule showed against the truth (every element fresh every frame), per scene and cause
+xs = [l.split() for l in lines if l.startswith("X ")]
+ys = [l for l in lines if l.startswith("Y ")]
+if xs:
+    def scene_at(ms):
+        name = None
+        for mt, nm in scene_marks:
+            if mt <= ms:
+                name = nm
+        return name or "-"
+    def pct(v, q):
+        v = sorted(v)
+        return v[min(len(v) - 1, int(q * len(v)))] if v else float("nan")
+    print("\n  devUiTruth: stale episodes (the screen shows something other than the truth) per scene, schedule "
+          "(ret = uiRetained, stock = uiRenderFPS) and cause; ms = time until the screen matched the truth again")
+    print(f"  {'scene':16s} {'sched':5s} {'cause':7s} {'n':>5s} {'p50 ms':>7s} {'p95 ms':>7s} {'max ms':>7s} {'p50 fr':>6s} {'p95 fr':>6s}  worst elements")
+    groups = collections.OrderedDict()
+    for p in xs:
+        t_ms = int(p[1]) // 1000
+        sc = scene_at(t_ms)
+        key = (sc, "ret" if p[2] == "s" else "stock", p[4])
+        g = groups.setdefault(key, dict(ms=[], fr=[], el=collections.Counter()))
+        g["ms"].append(int(p[6]) / 1000); g["fr"].append(int(p[5])); g["el"][p[3]] += int(p[6]) / 1000
+    out["truth"] = {}
+    for (sc, sched, cause), g in sorted(groups.items(), key=lambda kv: ([m[1] for m in scene_marks] + ["-"]).index(kv[0][0]) if kv[0][0] in [m[1] for m in scene_marks] else 999):
+        el = ", ".join(f"{k} {v:.0f}" for k, v in g["el"].most_common(3))
+        out["truth"][f"{sc}/{sched}/{cause}"] = dict(n=len(g["ms"]), p50_ms=pct(g["ms"], .5), p95_ms=pct(g["ms"], .95), max_ms=max(g["ms"]),
+                                                    p50_frames=pct(g["fr"], .5), p95_frames=pct(g["fr"], .95))
+        print(f"  {sc[:16]:16s} {sched:5s} {cause:7s} {len(g['ms']):5d} {pct(g['ms'], .5):7.1f} {pct(g['ms'], .95):7.1f} {max(g['ms']):7.1f} {pct(g['fr'], .5):6d} {pct(g['fr'], .95):6d}  {el}")
+    # share of frames with any stale element, per scene
+    per = collections.OrderedDict()
+    for l in ys:
+        f = dict(x.split("=", 1) for x in l.split()[2:])
+        sc = scene_at(int(l.split()[1]) - 1000)
+        g = per.setdefault(sc, [0, 0, 0])
+        g[0] += int(f["frames"]); g[1] += int(f["stale_fr_s"]); g[2] += int(f["stale_fr_k"])
+    print(f"\n  {'scene':20s} {'frames':>7s} {'stale ret %':>11s} {'stale stock %':>13s}   (frames on which some element on screen differs from the truth)")
+    for sc, (n, s1, s2) in per.items():
+        print(f"  {sc[:20]:20s} {n:7d} {100 * s1 / max(n, 1):11.1f} {100 * s2 / max(n, 1):13.1f}")
 if a.json:
     Path(a.json).write_text(json.dumps(out, indent=1))

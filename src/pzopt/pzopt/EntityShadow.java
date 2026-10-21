@@ -47,6 +47,11 @@ public final class EntityShadow {
    /** Tests: patch the bindless variant. */
    static boolean testBindless, testGl43;
    private static volatile boolean patched; // a model program carries the patch (set when the first one is patched)
+
+   /** Whether a model program carries the entity-shadow patch (pzopt.HordeBatch keeps the model draws on the stock path then). */
+   public static boolean modelShaderPatched() {
+      return patched;
+   }
    private static final java.util.concurrent.atomic.AtomicBoolean STOCK_LOGGED = new java.util.concurrent.atomic.AtomicBoolean(); // the "stay stock" line once
    private static long binds, perPixelBinds, constBinds, probeBinds, uniformBinds, dedupSkips, memoHits;
    private static int checks, devGets;

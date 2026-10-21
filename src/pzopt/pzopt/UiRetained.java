@@ -74,9 +74,41 @@ public final class UiRetained {
       int checkFrom = -1;
       se.krka.kahlua.j2se.KahluaTableImpl table;
       int writes;
+      final UiDeps.Log deps = new UiDeps.Log(); // uiVerify: what its last fresh render read
+      long dirtyFrame = -1; // uiVerify / uiAnimate: the frame decision found it must render fresh
+      boolean pressedInside; // a mouse button went down over it and is still held (a drag that started here)
+      boolean invalidFresh; // this fresh render was caused by a read-set mismatch (learn noise if it drew the same)
+      int changeRun; // consecutive fresh renders that each drew something else (in motion while > 0)
+      boolean moveInvariant; // uiMoveReplay: after a move it drew its previous commands shifted by the move (learned)
+      boolean moveReplay; // this frame: replay translated to the new position instead of rendering
+      boolean truthMoved; // devUiTruth: this frame's simulated replay was a moved one
+      UiDeps.Log noiseFrom; // the log whose mismatch caused it
+      long lastGetterCheckNs; // uiVerify: when its getters were last re-invoked (tables and the pointer: every frame)
+      long getterCostNs; // what that full validation cost
       String mod; // uiRetainedMods off: the mod whose function the element (or a class it derives from) carries, else null
       boolean modded; // it or an element drawn inside its last fresh render is mod-drawn: rendered at the stock rate
+      // devUiTruth: what this frame's schedule decided, and what each schedule shows against the truth
+      int decision = D_FRESH;
+      int writesBefore;
+      long truthHash;
+      long truthFrame = -1;
+      long shownSched = ABSENT;
+      long shownStock = ABSENT;
+      final Episode epSched = new Episode();
+      final Episode epStock = new Episode();
    }
+
+   /** devUiTruth: one stretch of frames in which a schedule shows something other than the truth. */
+   private static final class Episode {
+      long startNs;
+      long startFrame = -1;
+      String cause;
+   }
+
+   private static final int D_FRESH = 0;
+   private static final int D_REPLAY = 1;
+   private static final int D_HOLD = 2;
+   private static final long ABSENT = Long.MIN_VALUE + 1;
 
    private static final IdentityHashMap<UIElementInterface, Rec> recs = new IdentityHashMap<>();
    private static boolean active;
@@ -120,6 +152,16 @@ public final class UiRetained {
    }
    private static int lastKeyEvents;
    private static boolean checking;
+   // devUiTruth
+   private static boolean truth;
+   private static boolean schedFrame;
+   private static boolean stockFrame;
+   private static float stockAcc;
+   private static boolean frameClickKey;
+   private static boolean frameEvent;
+   private static final int[] truthStale = new int[4]; // element-frames stale (sched, stock), frames with any (sched, stock)
+   private static int truthFrames;
+   private static int truthNear; // devUiTruth: move-replayed elements within 1 px of the truth (not counted stale)
    private static int statFresh;
    private static int statReplay;
    private static int statChecked;
@@ -147,7 +189,8 @@ public final class UiRetained {
          return;
       }
       active = true;
-      checking = Config.DEV_UI_RETAINED_CHECK;
+      truth = Config.DEV_UI_TRUTH;
+      checking = Config.DEV_UI_RETAINED_CHECK && !truth;
       now = System.nanoTime();
       frameNo++;
       int x = Mouse.getXA();
@@ -165,17 +208,38 @@ public final class UiRetained {
       statUiEvents += uiEvents - lastUiEvents;
       lastUiEvents = uiEvents;
       padActive = GameWindow.activatedJoyPad != null;
+      buttonHeld = Mouse.isButtonDown(0) || Mouse.isButtonDown(1);
+      if (Mouse.isButtonPressed(0) || Mouse.isButtonPressed(1)) {
+         for (Map.Entry<UIElementInterface, Rec> en : recs.entrySet()) {
+            en.getValue().pressedInside = en.getValue().recorded && inside(en.getKey(), en.getValue());
+         }
+      }
       freshAll = click || key || event;
       if (click || key) {
          lastInputNs = now;
       }
-      inventoryDirty = luaFlag("ISInventoryPage", "renderDirty");
+      // ISInventoryPage.renderDirty is cleared by a visible inventory page's prerender: with both pages hidden it stays set and
+      // made every frame a UI frame (the HUD at 240 UI frames a second, 2026-10-14); it only counts while a page shows
+      inventoryDirty = luaFlag("ISInventoryPage", "renderDirty") && inventoryShown();
       boolean due = now >= nextBaseNs;
       boolean input = freshAll || inventoryDirty;
+      if (!due) {
+         trig[0] += freshAll ? 1 : 0;
+         trig[1] += inventoryDirty ? 1 : 0;
+      }
       if (!due && !input) {
          input = anyInputFresh();
+         trig[2] += input ? 1 : 0;
+      }
+      if ((Config.UI_VERIFY || Config.UI_ANIMATE) && now >= nextOptionalNs && anyDirty()) {
+         trig[3] += !due && !input ? 1 : 0;
+         input = true; // uiVerify / uiAnimate: an element shows something else now: render the UI in this frame
       }
       if (due || input) {
+         // uiMaxHz: the next UI frame no input asked for waits for the next refresh tick (a tick grid, not "a refresh
+         // after this one": at 240 fps on a 165 Hz display that rule gave every second frame, 120 Hz)
+         long period = minOptionalNs();
+         nextOptionalNs = period <= 0L ? 0L : Math.max(nextOptionalNs + period, now - period);
          Core.getInstance().uiRenderAccumulator = 1.0e6F;
          if (due) {
             nextBaseNs = now + baseNs();
@@ -186,6 +250,19 @@ public final class UiRetained {
          statUiFrames++;
       } else {
          Core.getInstance().uiRenderAccumulator = -1.0e6F;
+      }
+      if (truth) {
+         // the truth renders every frame; the schedule's choice is kept for the simulation, stock's is simulated
+         schedFrame = due || input;
+         frameClickKey = click || key;
+         frameEvent = event;
+         Core.getInstance().uiRenderAccumulator = 1.0e6F;
+         float step = 30.0F / Math.max(1, Core.getInstance().getOptionUIRenderFPS());
+         stockAcc += zombie.GameTime.getInstance().getThirtyFPSMultiplier();
+         stockFrame = stockAcc >= step;
+         if (stockFrame) {
+            stockAcc %= step;
+         }
       }
       if (now >= nextCleanupNs) {
          cleanup();
@@ -208,15 +285,147 @@ public final class UiRetained {
          if (inside != r.hovered) {
             return true;
          }
-         if ((inside || e.isCapture()) && now - r.lastHoverNs >= hoverNs()) {
-            return true;
+         if (Config.UI_HOVER_HZ > 0 && (inside || e.isCapture()) && now - r.lastHoverNs >= hoverNs() && !verified(r)) {
+            return true; // uiHoverHz > 0: the old rate rule (0: anyDirty decides, inside the frame's room)
          }
       }
       return false;
    }
 
+   /** uiVerify: the element's replay is decided by its read set (no timers needed for pointer or passive changes). */
+   private static boolean verified(Rec r) {
+      return Config.UI_VERIFY && r.deps.verifiable();
+   }
+
+   /** uiAnimate: its output changed in its last fresh renders (it is moving): fresh every frame while it does. */
+   private static boolean animating(Rec r) {
+      // its last fresh render drew something else than the one before (a scroll easing, a fade, a moving map) and that was
+      // recently: render again next frame; one identical render ends it
+      return Config.UI_ANIMATE && r.recorded && r.replayable && r.changeRun > 0 && now - r.lastChangeNs < 100_000_000L;
+   }
+
+   /**
+    * Does the pointer's movement matter to this element: over it (or just left it), capture, it follows the pointer, or a
+    * button pressed over it is still held (dragging an item, a window, the map).
+    */
+   private static boolean mouseRelevant(UIElementInterface e, Rec r) {
+      boolean inside = inside(e, r);
+      return inside || inside != r.hovered || e.isCapture() || r.deps.selfPositioned() || r.pressedInside && buttonHeld;
+   }
+
+   private static boolean buttonHeld;
+   // uiSlack: the game thread's frame work without the UI's fresh renders, and the fixed cost of a UI frame
+   private static long freshNsThisFrame;
+   private static long truthNsThisFrame; // devUiTruth's extra renders this frame
+   private static long baseWorkEma;
+   private static long uiFrameOverheadEma;
+   private static int statDenied;
+
+   /** Pacing.limiterWait: the game thread finished this frame's work after workNs and now waits for the cap. */
+   public static void frameWorkDone(long workNs) {
+      long base = Math.max(0L, workNs - freshNsThisFrame - truthNsThisFrame);
+      truthNsThisFrame = 0L;
+      baseWorkEma = baseWorkEma == 0L ? base : baseWorkEma + (base - baseWorkEma) / 8;
+      freshNsThisFrame = 0L;
+   }
+
+   private static long uiRenderStartNs;
+   private static long uiRenderFreshAtStart;
+
+   /** UIManager.render on a UI frame, start and end: its time without the fresh renders is the overhead of a UI frame. */
+   public static void uiRenderBegin() {
+      uiRenderStartNs = System.nanoTime();
+      uiRenderFreshAtStart = freshNsThisFrame + truthNsThisFrame;
+   }
+
+   public static void uiRenderEnd() {
+      if (!active || uiRenderStartNs == 0L) {
+         return;
+      }
+      long o = Math.max(0L, System.nanoTime() - uiRenderStartNs - (freshNsThisFrame + truthNsThisFrame - uiRenderFreshAtStart));
+      uiFrameOverheadEma = uiFrameOverheadEma == 0L ? o : uiFrameOverheadEma + (o - uiFrameOverheadEma) / 8;
+      uiRenderStartNs = 0L;
+   }
+
+   /** What the frame has left before the cap for UI renders nobody clicked for (0 uncapped or unknown: stock rate). */
+   private static long slackNs() {
+      long cap = Pacing.capIntervalNs();
+      if (baseWorkEma <= 0L) {
+         return 0L;
+      }
+      if (cap <= 0L) {
+         return baseWorkEma / 5L; // uncapped: a fifth of the frame for the UI's renders on pointer moves and motion
+      }
+      return cap * 85L / 100L - baseWorkEma;
+   }
+   private static long nextOptionalNs;
+
+   /**
+    * uiMaxHz: UI frames that no click, key or UI event caused (pointer moves, animations, read-set changes) come at most
+    * this often; 0 = the display's refresh rate (a UI frame the display never shows only costs).
+    */
+   private static long minOptionalNs() {
+      double hz = Config.UI_MAX_HZ > 0 ? Config.UI_MAX_HZ : Config.UI_MAX_HZ < 0 ? 0.0 : Vrr.refreshHz();
+      return hz <= 0.0 ? 0L : (long)(1e9 / hz);
+   }
+   private static final java.util.HashMap<String, Integer> dirtyWhy = new java.util.HashMap<>();
+
+   /** uiVerify: the read set says rendering it again would draw something else (memoised for the frame). */
+   private static boolean depsChanged(UIElementInterface e, Rec r) {
+      UiDeps.skipNoisy = now - r.lastFreshNs < baseNs(); // learned-noisy reads are checked at the stock rate
+      // the getters (Java state: item names, stats) are re-invoked at a period that keeps their cost near 1 % of the time,
+      // never longer than the stock interval; tables and the pointer every frame
+      long period = Math.min(baseNs(), r.getterCostNs * 100L);
+      boolean full = now - r.lastGetterCheckNs >= period;
+      UiDeps.skipGetters = !full;
+      int v = UiDeps.validate(r.deps, frameNo);
+      UiDeps.skipGetters = false;
+      if (full && r.deps.validFrame == frameNo) {
+         r.lastGetterCheckNs = now;
+         r.getterCostNs = r.deps.validNs;
+      }
+      return v == UiDeps.INVALID || v == UiDeps.MOUSE && mouseRelevant(e, r);
+   }
+
+   /**
+    * uiVerify / uiAnimate, every frame: does some visible top-level element need a fresh render now (its read set changed,
+    * the pointer moved over a pointer-reading element, or it is animating)? Marks each such element for this frame.
+    */
+   private static boolean anyDirty() {
+      boolean any = false;
+      long budget = slackNs();
+      long spent = uiFrameOverheadEma;
+      ArrayList<UIElementInterface> ui = UIManager.getUI();
+      for (int i = 0; i < ui.size(); i++) {
+         UIElementInterface e = ui.get(i);
+         Rec r = recs.get(e);
+         if (r == null || !r.recorded || !e.isVisible()) {
+            continue;
+         }
+         boolean anim = animating(r); // in motion: renders anyway, no need to check its read set
+         boolean dirty = !anim && (verified(r) ? depsChanged(e, r) : mouseMoved && Config.UI_HOVER_HZ <= 0 && mouseRelevant(e, r));
+         if (anim || dirty) {
+            // uiSlack: a fresh render no click or key asked for fits in what the frame has left before the cap, or the
+            // element has waited the stock interval (never later than stock); otherwise it waits for a frame with room
+            boolean floor = now - r.lastFreshNs >= baseNs();
+            if (!floor && Config.UI_SLACK && spent + r.costNs > budget) {
+               statDenied++;
+               continue;
+            }
+            spent += r.costNs;
+            r.dirtyFrame = frameNo;
+            any = true;
+            if (UiProfile.enabled()) {
+               String why = anim ? "anim" : !verified(r) ? "hover" : r.deps.validResult == UiDeps.MOUSE ? "mouse" : String.valueOf(r.deps.mismatch);
+               dirtyWhy.merge(r.name + ":" + why, 1, Integer::sum);
+            }
+         }
+      }
+      return any;
+   }
+
    private static long hoverNs() {
-      return 1_000_000_000L / Math.max(1, Config.UI_HOVER_HZ);
+      return Config.UI_HOVER_HZ <= 0 ? 0L : 1_000_000_000L / Config.UI_HOVER_HZ;
    }
 
    private static boolean inside(UIElementInterface e, Rec r) {
@@ -235,6 +444,15 @@ public final class UiRetained {
 
    private static double absY(UIElementInterface e) {
       return e instanceof UIElement u ? u.getAbsoluteY() : e.getY();
+   }
+
+   private static boolean inventoryShown() {
+      for (Map.Entry<UIElementInterface, Rec> en : recs.entrySet()) {
+         if (en.getValue().inventory && en.getKey().isVisible()) {
+            return true;
+         }
+      }
+      return false;
    }
 
    private static boolean luaFlag(String table, String key) {
@@ -279,6 +497,14 @@ public final class UiRetained {
          return false;
       }
       GLState.startFrame();
+      if (truth && !schedFrame) {
+         if (e.isVisible()) { // the schedule renders no UI this frame: the screen keeps what it showed
+            Rec r = rec(e);
+            r.decision = D_HOLD;
+            r.writesBefore = writesOf(e);
+         }
+         return false;
+      }
       if (!e.isVisible()) {
          Rec hidden = recs.get(e);
          if (hidden != null) {
@@ -291,15 +517,104 @@ public final class UiRetained {
       boolean fresh = needsFresh(e, r, inside);
       r.hovered = inside;
       if (fresh) {
+         r.decision = D_FRESH;
+         return false;
+      }
+      if (truth) {
+         r.decision = D_REPLAY; // rendered fresh for the truth; the schedule shows its recording
+         r.writesBefore = writesOf(e);
+         if (r.moveReplay) { // what the schedule shows: the recording moved, as the real replay below does
+            r.moveReplay = false;
+            translate(r, (float)(absX(e) - r.gx), (float)(absY(e) - r.gy));
+            r.gx = absX(e);
+            r.gy = absY(e);
+            r.truthMoved = true;
+         }
          return false;
       }
       if (checking) {
          r.checkFrom = state().numSprites;
          return false;
       }
+      if (r.moveReplay) {
+         r.moveReplay = false;
+         translate(r, (float)(absX(e) - r.gx), (float)(absY(e) - r.gy));
+         r.gx = absX(e);
+         r.gy = absY(e);
+         statMoveReplay++;
+      }
       copyOut(r);
       statReplay++;
       return true;
+   }
+
+   private static int statMoveReplay;
+   private static final int[] trig = new int[4]; // UI frames off the stock beat by trigger: input / inventory flag / hover / dirty
+
+   /** uiMoveReplay: the recording moved by (dx, dy) in place (quads, its bounds, its hash). */
+   private static void translate(Rec r, float dx, float dy) {
+      for (int i = 0; i < r.n; i++) {
+         TextureDraw d = r.cmds[i];
+         if (d.type == TextureDraw.Type.glDraw) {
+            d.x0 += dx;
+            d.x1 += dx;
+            d.x2 += dx;
+            d.x3 += dx;
+            d.y0 += dy;
+            d.y1 += dy;
+            d.y2 += dy;
+            d.y3 += dy;
+         }
+      }
+      r.bx0 += dx;
+      r.bx1 += dx;
+      r.by0 += dy;
+      r.by1 += dy;
+      r.hash = hash(r.cmds, 0, r.n);
+   }
+
+   /**
+    * uiMoveReplay's learning: are the new commands the recording shifted by (dx, dy)? Positions within 1/64 px (the fresh
+    * render adds the offset in double before rounding to float), everything else (textures, uvs, colours, state) exact.
+    */
+   private static boolean sameShifted(Rec r, TextureDraw[] now, int from, int to, float dx, float dy) {
+      if (to - from != r.n) {
+         moveDiff(r, "count " + r.n + "->" + (to - from));
+         return false;
+      }
+      for (int i = 0; i < r.n; i++) {
+         TextureDraw a = r.cmds[i];
+         TextureDraw b = now[from + i];
+         if (b == null || a.type != b.type) {
+            return false;
+         }
+         if (a.type == TextureDraw.Type.glDraw) {
+            if (!near(a.x0 + dx, b.x0) || !near(a.x1 + dx, b.x1) || !near(a.x2 + dx, b.x2) || !near(a.x3 + dx, b.x3)
+               || !near(a.y0 + dy, b.y0) || !near(a.y1 + dy, b.y1) || !near(a.y2 + dy, b.y2) || !near(a.y3 + dy, b.y3)
+               || a.tex != b.tex || a.tex1 != b.tex1 || a.tex2 != b.tex2 || a.u0 != b.u0 || a.v0 != b.v0 || a.u2 != b.u2 || a.v2 != b.v2
+               || a.col0 != b.col0 || a.col1 != b.col1 || a.col2 != b.col2 || a.col3 != b.col3 || a.flipped != b.flipped) {
+               moveDiff(r, "#" + i + " quad x0 " + (a.x0 + dx) + "/" + b.x0 + " y0 " + (a.y0 + dy) + "/" + b.y0 + " tex " + (a.tex == b.tex) + " uv " + (a.u0 == b.u0 && a.v0 == b.v0) + " col " + (a.col0 == b.col0));
+               return false;
+            }
+         } else if (!java.util.Arrays.equals(key(a), key(b))) {
+            moveDiff(r, "#" + i + " " + a.type + " " + java.util.Arrays.toString(key(a)) + "/" + java.util.Arrays.toString(key(b)));
+            return false;
+         }
+      }
+      return true;
+   }
+
+   private static int moveDiffs;
+
+   private static void moveDiff(Rec r, String what) {
+      if (UiProfile.enabled() && moveDiffs < 40) {
+         moveDiffs++;
+         Log.info("ui move replay: " + r.name + " not shifted: " + what);
+      }
+   }
+
+   private static boolean near(float a, float b) {
+      return Math.abs(a - b) <= 1.0F; // the game rounds text to whole pixels: a move can land a glyph 1 px off; the stock-rate fresh render re-anchors it
    }
 
    /**
@@ -307,7 +622,7 @@ public final class UiRetained {
     * recorded commands were copied in and the child's Lua and its subtree are skipped (uiRetainedChildren).
     */
    public static boolean replayChild(UIElement e) {
-      if (!active || !Config.UI_RETAINED_CHILDREN) {
+      if (!active || !Config.UI_RETAINED_CHILDREN || truth) {
          return false;
       }
       GLState.startFrame();
@@ -324,26 +639,38 @@ public final class UiRetained {
          return false;
       }
       copyOut(r);
+      if (Config.UI_VERIFY) {
+         UiDeps.sub(r.deps); // the parent's fresh render now shows what this child's read set produced
+      }
       statReplay++;
       return true;
    }
 
    /** UIElement.render of a child rendered fresh: start of its commands (-1 when not retaining children). */
-   public static int childBegin() {
-      return active && Config.UI_RETAINED_CHILDREN ? freshBegin() : -1;
+   public static int childBegin(UIElement e) {
+      if (!active || !Config.UI_RETAINED_CHILDREN || truth) {
+         return -1;
+      }
+      int from = freshBegin();
+      if (Config.UI_VERIFY) {
+         UiDeps.begin(rec(e).deps, e);
+      }
+      return from;
    }
 
    private static boolean needsFresh(UIElementInterface e, Rec r, boolean inside) {
       if (!r.recorded || !r.replayable || freshAll || padActive || r.modded) {
          return true; // r.modded: a mod draws in it; its drawing may change with state the replay cannot see (stock rate)
       }
-      if (r.table != null && r.table.pzoptWrites != r.writes) {
-         return true; // its Lua table changed since it was recorded (a field set by its update, its parent, a handler)
+      if (r.table != null && r.table.pzoptWrites != r.writes && !verified(r)) {
+         return true; // its Lua table changed since it was recorded (a field set by its update, its parent, a handler); a read
+                      // set knows which of its fields the render read (a dragged window's own x / y are not among them)
       }
-      if (r.streak < Config.UI_RETAINED_STREAK || now - r.lastChangeNs < Config.UI_RETAINED_STATIC_MS * 1_000_000L) {
-         return true; // changed recently (an animation, a fade): fresh on every UI frame
+      boolean verified = verified(r);
+      if (!verified && (r.streak < Config.UI_RETAINED_STREAK || now - r.lastChangeNs < Config.UI_RETAINED_STATIC_MS * 1_000_000L)) {
+         return true; // changed recently (an animation, a fade): fresh on every UI frame (read-set elements: uiAnimate)
       }
-      if (now - lastInputNs < Config.UI_RETAINED_SETTLE_MS * 1_000_000L) {
+      if (!verified && now - lastInputNs < Config.UI_RETAINED_SETTLE_MS * 1_000_000L) {
          return true; // just after input its consequences arrive (a transfer ends, an item gets equipped): stock rate
       }
       if (r.costNs < (r.child ? Config.UI_RETAINED_CHILD_CHEAP_US : Config.UI_RETAINED_CHEAP_US) * 1000L) {
@@ -352,7 +679,17 @@ public final class UiRetained {
       if (r.inventory && inventoryDirty) {
          return true;
       }
-      if (absX(e) != r.gx || absY(e) != r.gy || e.getWidth() != r.gw || e.getHeight() != r.gh || e.getMaxDrawHeight() != r.gmax) {
+      if (e.getWidth() != r.gw || e.getHeight() != r.gh || e.getMaxDrawHeight() != r.gmax) {
+         return true;
+      }
+      if (absX(e) != r.gx || absY(e) != r.gy) {
+         // uiMoveReplay: a window being dragged draws the same thing elsewhere; replay it shifted (a compositor moving a
+         // layer) while it has rendered fresh within the stock interval, so content changes during the move come at the
+         // stock rate at the latest
+         if (Config.UI_MOVE_REPLAY && r.moveInvariant && !r.child && now - r.lastFreshNs < baseNs()) {
+            r.moveReplay = true;
+            return false;
+         }
          return true;
       }
       if (now >= r.nextFreshNs) {
@@ -361,7 +698,15 @@ public final class UiRetained {
       if (inside != r.hovered) {
          return true;
       }
-      return (inside && mouseMoved || e.isCapture()) && now - r.lastHoverNs >= hoverNs();
+      if (verified) {
+         boolean changed = r.dirtyFrame == frameNo || depsChanged(e, r); // uiVerify: exactly when what it read changed
+         r.invalidFresh = changed && (r.deps.validResult == UiDeps.INVALID || r.deps.validResult == UiDeps.MOUSE) && r.deps.validFrame == frameNo;
+         return changed;
+      }
+      if (Config.UI_HOVER_HZ <= 0) {
+         return r.dirtyFrame == frameNo; // the pointer moved over it and the frame had room (anyDirty)
+      }
+      return (inside && mouseMoved || e.isCapture() || mouseMoved && r.pressedInside && buttonHeld) && now - r.lastHoverNs >= hoverNs();
    }
 
    public static int freshBegin() {
@@ -373,9 +718,27 @@ public final class UiRetained {
       return state().numSprites;
    }
 
+   /** UIManager.render: a top-level element renders fresh (its read set is recorded from here to freshEnd). */
+   public static int freshBegin(UIElementInterface e) {
+      int from = freshBegin();
+      if (from >= 0 && Config.UI_VERIFY && e instanceof UIElement u && e.isVisible()) {
+         Rec r = rec(e);
+         if (!truth || r.decision == D_FRESH) {
+            UiDeps.begin(r.deps, u);
+         }
+      }
+      return from;
+   }
+
    public static void freshEnd(UIElementInterface e, int from, long costNs) {
       if (!active || from < 0) {
          return;
+      }
+      if (Config.UI_VERIFY) {
+         Rec lr = recs.get(e);
+         if (lr != null) {
+            UiDeps.end(lr.deps);
+         }
       }
       boolean innerMods = !spanMods.isEmpty() && spanMods.remove(spanMods.size() - 1);
       GenericSpriteRenderState st = state();
@@ -384,11 +747,44 @@ public final class UiRetained {
          return;
       }
       Rec r = rec(e);
+      if (truth && r.decision != D_FRESH) {
+         // devUiTruth: a render the schedule would not have run; it gives the truth, the schedule learns nothing from it
+         long th = hash(st.sprite, from, to);
+         r.truthHash = th;
+         r.truthFrame = frameNo;
+         if (r.decision == D_REPLAY) {
+            r.shownSched = r.hash;
+            if (r.truthMoved) {
+               r.truthMoved = false;
+               if (th != r.hash && sameShifted(r, st.sprite, from, to, 0.0F, 0.0F)) {
+                  r.shownSched = th; // uiMoveReplay drew it within 1 px of the truth (a rounded glyph): counted apart
+                  truthNear++;
+               }
+            }
+         }
+         if (r.table != null) {
+            r.writes += r.table.pzoptWrites - r.writesBefore; // what this extra render wrote into its own table
+         }
+         if (stockFrame) {
+            r.shownStock = th;
+         }
+         r.decision = D_FRESH;
+         truthNsThisFrame += costNs; // not the schedule's work: kept out of uiSlack's accounting
+         return;
+      }
       r.modded = r.mod != null || innerMods;
       if (r.modded && !spanMods.isEmpty()) {
          spanMods.set(spanMods.size() - 1, Boolean.TRUE); // the element whose fresh render drew this one is mod-drawn too
       }
       long h = hash(st.sprite, from, to);
+      if (truth) {
+         r.truthHash = h;
+         r.truthFrame = frameNo;
+         r.shownSched = h;
+         if (stockFrame) {
+            r.shownStock = h;
+         }
+      }
       if (checking && r.checkFrom == from) {
          // devUiRetainedCheck: this render stood in for a replay; compare, keep the schedule as it was
          r.checkFrom = -1;
@@ -405,8 +801,26 @@ public final class UiRetained {
       r.checkFrom = -1;
       statFresh++;
       boolean same = r.recorded && h == r.hash;
+      if (Config.UI_MOVE_REPLAY && r.recorded && !r.child && r.replayable && (absX(e) != r.gx || absY(e) != r.gy)
+         && e.getWidth() == r.gw && e.getHeight() == r.gh) {
+         // it moved since its recording: did it draw the recording shifted by the move? (learn / unlearn move invariance)
+         r.moveInvariant = sameShifted(r, st.sprite, from, to, (float)(absX(e) - r.gx), (float)(absY(e) - r.gy));
+         r.invalidFresh = false; // its own x / y changed; no noise to learn from this render
+      }
+      if (r.invalidFresh && Config.UI_VERIFY) {
+         if (same) {
+            UiDeps.learnNoise(r.deps); // the read that changed did not change what it draws: check it at the stock rate
+         } else {
+            UiDeps.unlearnNoise(r.deps); // a learned-noisy read changed what it draws after all: every frame again
+         }
+      }
+      if (!r.child) {
+         freshNsThisFrame += costNs;
+      }
+      r.invalidFresh = false;
       record(r, st, from, to, h);
       r.streak = same ? r.streak + 1 : 0;
+      r.changeRun = same ? 0 : r.changeRun + 1;
       if (!same) {
          r.lastChangeNs = now;
       }
@@ -415,12 +829,14 @@ public final class UiRetained {
       if (r.hovered || e.isCapture()) {
          r.lastHoverNs = now;
       }
-      if (freshAll) {
-         r.streak = 0;
+      if (freshAll && !verified(r)) {
+         r.streak = 0; // after input, elements without a read set keep the stock rate for a while (uiVerify's know exactly)
       }
       long base = baseNs();
       long interval = base;
-      if (r.streak > 0 && costNs >= Config.UI_RETAINED_CHEAP_US * 1000L) {
+      if (r.streak > 0 && costNs >= Config.UI_RETAINED_CHEAP_US * 1000L && !(Config.UI_VERIFY && !r.deps.verifiable())) {
+         // back off while it draws the same; with uiVerify only elements whose read set is checked do (an opaque one, a Java
+         // element such as the clock, renders at the stock rate: never later than stock)
          interval = Math.min(Config.UI_RETAINED_MAX_MS * 1_000_000L, base << Math.min(r.streak, 6));
       }
       r.nextFreshNs = now + Math.max(base, interval);
@@ -439,8 +855,90 @@ public final class UiRetained {
    public static void loopEnd() {
       if (active) {
          GLState.startFrame();
+         UiDeps.reset();
+         if (truth) {
+            truthCompare();
+         }
       }
       spanMods.clear(); // a render that threw between freshBegin and freshEnd leaves its entry behind
+   }
+
+   private static int writesOf(UIElementInterface e) {
+      return e instanceof UIElement u && u.getTable() instanceof se.krka.kahlua.j2se.KahluaTableImpl t ? t.pzoptWrites : 0;
+   }
+
+   /**
+    * devUiTruth, after the element loop: per top-level element, the truth (this frame's fresh output, or absent) against
+    * what the uiRetained schedule and stock's schedule show; a stretch of differing frames is an episode, logged when it
+    * ends with the cause seen on its first frame (input = click / key, event = UI Lua event, hover = the mouse moved over
+    * the element, mouse = the mouse moved elsewhere, passive = nothing the player did).
+    */
+   private static void truthCompare() {
+      truthFrames++;
+      boolean anySched = false;
+      boolean anyStock = false;
+      for (Map.Entry<UIElementInterface, Rec> en : recs.entrySet()) {
+         Rec r = en.getValue();
+         if (r.child) {
+            continue;
+         }
+         long t = r.truthFrame == frameNo ? r.truthHash : ABSENT;
+         if (t == ABSENT) {
+            if (schedFrame) {
+               r.shownSched = ABSENT;
+            }
+            if (stockFrame) {
+               r.shownStock = ABSENT;
+            }
+         }
+         if (t == ABSENT && r.shownSched == ABSENT && r.shownStock == ABSENT && r.epSched.startFrame < 0 && r.epStock.startFrame < 0) {
+            continue;
+         }
+         String cause = null;
+         boolean s = r.shownSched != t;
+         boolean k = r.shownStock != t;
+         if (s || k || r.epSched.startFrame >= 0 || r.epStock.startFrame >= 0) {
+            cause = cause(en.getKey(), r);
+         }
+         anySched |= episode(r, r.epSched, s, true, cause);
+         anyStock |= episode(r, r.epStock, k, false, cause);
+      }
+      if (anySched) {
+         truthStale[2]++;
+      }
+      if (anyStock) {
+         truthStale[3]++;
+      }
+   }
+
+   private static boolean episode(Rec r, Episode ep, boolean stale, boolean sched, String cause) {
+      if (stale) {
+         truthStale[sched ? 0 : 1]++;
+         if (ep.startFrame < 0) {
+            ep.startFrame = frameNo;
+            ep.startNs = now;
+            ep.cause = cause;
+         }
+         return true;
+      }
+      if (ep.startFrame >= 0) {
+         UiProfile.truthEpisode(sched ? "s" : "k", r.name, ep.cause, frameNo - ep.startFrame, (now - ep.startNs) / 1000L);
+         ep.startFrame = -1;
+      }
+      return false;
+   }
+
+   private static String cause(UIElementInterface e, Rec r) {
+      if (frameClickKey) {
+         return "input";
+      }
+      if (frameEvent) {
+         return "event";
+      }
+      if (mouseMoved) {
+         return inside(e, r) || e.isCapture() ? "hover" : "mouse";
+      }
+      return "passive";
    }
 
    // ── elements a mod draws (uiRetainedMods off, mod compatibility 2026-10-01) ─────────────────────────────────────
@@ -833,6 +1331,36 @@ public final class UiRetained {
          }
       }
       UiProfile.retainedStats(statUiFrames, statInputFrames, statFresh, statReplay, statChecked, statStale, recs.size(), statUiEvents);
+      if (Config.UI_VERIFY) {
+         int verifiable = 0;
+         int top = 0;
+         StringBuilder opaque = new StringBuilder();
+         for (Rec r : recs.values()) {
+            if (!r.child && r.recorded) {
+               top++;
+               if (r.deps.verifiable()) {
+                  verifiable++;
+               } else if (opaque.length() < 400) {
+                  opaque.append(opaque.length() == 0 ? " opaque_top=" : ",").append(r.name).append(':').append(r.deps.why());
+               }
+            }
+         }
+         StringBuilder dw = new StringBuilder();
+         dirtyWhy.entrySet().stream().sorted((a, b) -> b.getValue() - a.getValue()).limit(8)
+            .forEach(en -> dw.append(dw.length() == 0 ? " dirty=" : ",").append(en.getKey().replace(' ', '_')).append('=').append(en.getValue()));
+         dirtyWhy.clear();
+         UiProfile.depsStats("top=" + top + " verifiable=" + verifiable + " trig=" + trig[0] + "/" + trig[1] + "/" + trig[2] + "/" + trig[3] + " denied=" + statDenied + " move_replays=" + statMoveReplay + " slack_us=" + slackNs() / 1000L
+            + " overhead_us=" + uiFrameOverheadEma / 1000L + " " + UiDeps.stats() + dw + opaque);
+         statDenied = 0;
+         statMoveReplay = 0;
+         java.util.Arrays.fill(trig, 0);
+      }
+      if (truth) {
+         UiProfile.truthStats(truthFrames, truthStale, truthNear);
+         truthFrames = 0;
+         truthNear = 0;
+         java.util.Arrays.fill(truthStale, 0);
+      }
       statUiEvents = 0;
       statUiFrames = 0;
       statInputFrames = 0;

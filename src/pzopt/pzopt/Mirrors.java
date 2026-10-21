@@ -643,6 +643,7 @@ public final class Mirrors {
       // planes the models are mirrored in: axis, c (relative), lateral lo / hi (absolute), zlo, zhi, iso rect u0 v0 u1 v1 (relative)
       final float[] planes = new float[MAXP * 10];
       final boolean[] planeMirror = new boolean[MAXP]; // a mirror's plane (else windows only): people placed by mirrorsView*
+      final float[] planeDrop = new float[MAXP]; // a mirror plane's viewDrop (paneDrop: lower for a full-length mirror)
       final Object[] planeRoom = new Object[MAXP]; // the room the plane's panes hang in (ANY_ROOM: windows), people elsewhere are not mirrored
       int nP;
       int modelsQueued, skip, nClear;
@@ -825,7 +826,10 @@ public final class Mirrors {
          // moved). A long age refresh stays as a safety net. Windows and outdoor mirrors keep the age refresh. (dev skip bit
          // 33554432: the age refresh for every pane, before 2026-10-08)
          // (each pane's room checked every 16 frames, staggered: a few dozen squares walked per check)
-         boolean check = passFrame && !fresh && r.prop == 0 && (skipNow & 33554432) == 0 && ((frames >> 2) + (tl.x >> 4) + (tl.y >> 4) & 3) == 0;
+         // (a prop mirror, the gym's panels, is a wall mirror with a room too: on the prop age refresh alone its pane went
+         // re-marched ~0.8 s after the player left the room, smeared meanwhile, 2026-10-16; dev skip2 bit 16: the age refresh)
+         boolean roomPane = r.prop == 0 || r.prop == Props.MIRROR && r.mirror && (Config.DEV_MIRRORS_SKIP2 & 16) == 0;
+         boolean check = passFrame && !fresh && roomPane && (skipNow & 33554432) == 0 && ((frames >> 2) + (tl.x >> 4) + (tl.y >> 4) & 3) == 0;
          long sig = check ? MirrorGeometry.signature(r) : 0L;
          long soft = MirrorGeometry.SIG[1];
          // objects or the seen state at once; the light and the cutaway (they change all the time while the player walks:
@@ -834,7 +838,7 @@ public final class Mirrors {
          boolean changed = sig != 0L && tl.sig != 0L && (sig != tl.sig || soft != tl.soft && frames - tl.refreshed >= 120 && (camStill >= 10 || frames - tl.refreshed >= 480));
          int reuse = tl.sig != 0L && (skipNow & 33554432) == 0 ? Config.MIRRORS_STATIC_REUSE * 20 : Config.MIRRORS_STATIC_REUSE; // (a pane with a room: its room check refreshes it)
          // a prop's reflection is refreshed less often (mirrorsPropStaticReuse): what it shows changes only when the world does
-         if (r.prop != 0) {
+         if (r.prop != 0 && !(roomPane && tl.sig != 0L)) {
             reuse = Config.MIRRORS_PROP_STATIC_REUSE;
          }
          boolean due = passFrame && (fresh || vis > tl.vis + 0.05F || reuse <= 0 || (skipNow & 256) != 0 || Config.DEV_MIRRORS_VIEW == 5 || Config.DEV_MIRRORS_VIEW == 6
@@ -868,12 +872,20 @@ public final class Mirrors {
          }
          tl.light = r.light;
          if (sig != 0L || tl.sig == 0L) {
-            tl.sig = sig != 0L ? sig : passFrame && r.prop == 0 && (skipNow & 33554432) == 0 ? MirrorGeometry.signature(r) : 0L;
+            tl.sig = sig != 0L ? sig : passFrame && roomPane && (skipNow & 33554432) == 0 ? MirrorGeometry.signature(r) : 0L;
             tl.soft = MirrorGeometry.SIG[1];
          }
          int geo = geometry ? MirrorGeometry.collect(f.geo, r, tl) : 0;
          pack(f, r, f.sData, f.nS, false);
          f.sData[f.nS * TEX * 4 + 28] = geo > 0 ? 1F : 0F;
+         boolean closed = geo > 0 && MirrorGeometry.roomClosed(r);
+         if (closed) {
+            f.sData[f.nS * TEX * 4 + 29] = -f.sData[f.nS * TEX * 4 + 29]; // (the room closed to the camera: withGeom takes the geometry)
+         }
+         if (Config.DEV_MIRRORS_LOG && closed != tl.closed) {
+            Log.info(String.format(java.util.Locale.ROOT, "mirrors: dev pane %s (axis %d, c %.2f): room %s to the camera epoch_ms=%d", r.key instanceof zombie.iso.IsoObject ko && ko.square != null ? ko.square.x + "," + ko.square.y + "," + ko.square.z : "?", r.axis, r.c, closed ? "closed" : "open", System.currentTimeMillis()));
+         }
+         tl.closed = closed;
          f.sTex[f.nS++] = r.tex;
       }
       if (f.geo.n > 1) {
@@ -990,7 +1002,7 @@ public final class Mirrors {
       // a mirrored person's distance on the scale of the room behind the glass: the room is marched with the camera's drop
       // (the floor d squares out shows d / 3 levels up), people with viewDrop (d S levels up); scaled by 3 S their feet meet
       // the reflected floor where they stand on it instead of sinking into it (the floor covered the shins at S = 1/6)
-      d[o + 30] = 3F * viewDrop(r.mirror, skipNow);
+      d[o + 30] = 3F * (r.mirror ? paneDrop(r, skipNow) : viewDrop(false, skipNow));
       d[o + 31] = Float.isNaN(r.topC) ? -1000F : r.topC; // a prop's top: the model layer's people mirrored in it show on its top texels
       // a prop: its class, alpha mode, top reach, flip; its square (relative)
       d[o + 32] = r.prop;
@@ -1015,6 +1027,7 @@ public final class Mirrors {
       float light = -1F; // the pane's own light when it was last marched
       long sig, soft; // MirrorGeometry.signature (objects, seen) and its soft part (light, cutaway) at the last march (0: none, the age refresh)
       long refreshed = -1L;
+      boolean closed; // its room was closed to the camera at the last march (MirrorGeometry.roomClosed)
       volatile int visPx = -1; // the pane's pixels the composite drew (visibility feedback, 1-3 frames late; -1 unknown)
       volatile long visSerial = -1L;
    }
@@ -1174,6 +1187,7 @@ public final class Mirrors {
          zD = (2F * c - r.u1 - r.v0) / 6F;
       }
       float zlo = Math.min(Math.min(zA, zB), Math.min(zC, zD)), zhi = Math.max(Math.max(zA, zB), Math.max(zC, zD));
+      float drop = r.mirror ? paneDrop(r, zlo, zhi, skipNow) : 0F;
       float cRel = c - (r.axis == 0 ? f.view.oy : f.view.ox);
       float ou = f.view.ox - f.view.oy, ov = f.view.ox + f.view.oy;
       // one plane per room: panes of two rooms on one wall line are two planes (dev skip bit 4194304: merged whatever the
@@ -1184,7 +1198,8 @@ public final class Mirrors {
          int o = i * 10;
          // (within 0.1 of a square: a sliding door's leaf runs 0.06 in front of its fixed pane on its own track; as two
          // planes each placed its own copy of the people, a doubled image over the leaf)
-         if ((int)f.planes[o] == r.axis && Math.abs(f.planes[o + 1] - cRel) < 0.1F && zlo < f.planes[o + 5] + 0.5F && zhi > f.planes[o + 4] - 0.5F && (anyRoom || f.planeRoom[i] == room)) {
+         if ((int)f.planes[o] == r.axis && Math.abs(f.planes[o + 1] - cRel) < 0.1F && zlo < f.planes[o + 5] + 0.5F && zhi > f.planes[o + 4] - 0.5F && (anyRoom || f.planeRoom[i] == room)
+               && !(r.mirror && f.planeMirror[i] && f.planeDrop[i] != drop)) { // (one viewDrop per plane: its people are placed once)
             f.planes[o + 2] = Math.min(f.planes[o + 2], lo);
             f.planes[o + 3] = Math.max(f.planes[o + 3], hi);
             f.planes[o + 4] = Math.min(f.planes[o + 4], zlo);
@@ -1193,6 +1208,9 @@ public final class Mirrors {
             f.planes[o + 7] = Math.min(f.planes[o + 7], r.v0 - ov);
             f.planes[o + 8] = Math.max(f.planes[o + 8], r.u1 - ou);
             f.planes[o + 9] = Math.max(f.planes[o + 9], r.v1 - ov);
+            if (r.mirror && !f.planeMirror[i]) {
+               f.planeDrop[i] = drop;
+            }
             f.planeMirror[i] |= r.mirror;
             return;
          }
@@ -1201,6 +1219,7 @@ public final class Mirrors {
          return;
       }
       f.planeMirror[f.nP] = r.mirror;
+      f.planeDrop[f.nP] = drop;
       f.planeRoom[f.nP] = room;
       int o = f.nP++ * 10;
       f.planes[o] = r.axis;
@@ -1284,6 +1303,36 @@ public final class Mirrors {
    }
 
    /**
+    * viewDrop of a mirror pane. A full-length mirror (its glass from the floor up, the gym's panels) keeps the whole person
+    * in the glass: at the cabinets' d / 6 levels up, a person 1.4 squares out already lost their head over the glass's top
+    * edge (the maintainer's gym, 2026-10-16). Its drop is lowered so the head (0.85 levels) reaches the glass's top 2 squares
+    * out. Dev skip2 bit 2: every mirror at mirrorsViewDropPct.
+    */
+   static float paneDrop(Refl r, float zlo, float zhi, int skip) {
+      float s = viewDrop(true, skip);
+      if ((Config.DEV_MIRRORS_SKIP2 & 2) != 0 || (skip & (1048576 | 2097152)) != 0 || zlo - r.z > 0.15F || zhi - zlo < 0.8F) {
+         return s;
+      }
+      return Math.min(s, Math.max(0F, zhi - r.z - 0.85F) / 2F);
+   }
+
+   static float paneDrop(Refl r, int skip) {
+      float c = r.c, zA, zB, zC, zD;
+      if (r.axis == 0) {
+         zA = (r.u0 + 2F * c - r.v0) / 6F;
+         zB = (r.u1 + 2F * c - r.v1) / 6F;
+         zC = (r.u0 + 2F * c - r.v1) / 6F;
+         zD = (r.u1 + 2F * c - r.v0) / 6F;
+      } else {
+         zA = (2F * c - r.u0 - r.v0) / 6F;
+         zB = (2F * c - r.u1 - r.v1) / 6F;
+         zC = (2F * c - r.u0 - r.v1) / 6F;
+         zD = (2F * c - r.u1 - r.v0) / 6F;
+      }
+      return paneDrop(r, Math.min(Math.min(zA, zB), Math.min(zC, zD)), Math.max(Math.max(zA, zB), Math.max(zC, zD)), skip);
+   }
+
+   /**
     * Game thread, TextureDraw.drawModel: the planes (bit mask over the frame's planes) a character / vehicle shows in. A model
     * at distance d in front of a plane is seen at the pane's points (lateral + L d, height + S d, viewLateral / viewDrop);
     * those must fall on a pane.
@@ -1332,7 +1381,7 @@ public final class Mirrors {
          }
          float cAbs = f.planes[p + 1] + (f.planes[p] == 0F ? f.view.oy : f.view.ox);
          float d = f.planes[p] == 0F ? y - cAbs : x - cAbs;
-         float vl = viewLateral(f.planeMirror[i], skipNow), vs = viewDrop(f.planeMirror[i], skipNow);
+         float vl = viewLateral(f.planeMirror[i], skipNow), vs = f.planeMirror[i] ? f.planeDrop[i] : viewDrop(false, skipNow);
          float dMax = vs > 0.001F ? (f.planes[p + 5] - z) / vs : Config.MIRRORS_REACH;
          if (d < 0.05F - r * 0.5F || d > dMax + r + 0.5F) {
             continue;
@@ -1632,7 +1681,7 @@ public final class Mirrors {
    private static boolean FULL, STATIC_FBO, liveReads; // (decided once from the context's capabilities)
    private static int atlasFbo;
 
-   private static final String[] UNIFORMS = {"Data", "WorldColor", "WorldDepth", "Sprite", "Masks", "StaticTex", "LayerColor", "LayerDepth", "mapA", "mapC", "vp", "march", "layerMap", "dev", "Static", "first", "depthTest", "Glass", "GlassTex", "Vis", "visRow", "visOn", "GeomTex", "PropTex", "StaticMip", "skyTop", "sunTop", "LayerTopColor", "LayerTopDepth", "HiZ", "gloss", "metal"};
+   private static final String[] UNIFORMS = {"Data", "WorldColor", "WorldDepth", "Sprite", "Masks", "StaticTex", "LayerColor", "LayerDepth", "mapA", "mapC", "vp", "march", "layerMap", "dev", "Static", "first", "depthTest", "Glass", "GlassTex", "Vis", "visRow", "visOn", "GeomTex", "PropTex", "StaticMip", "skyTop", "sunTop", "LayerTopColor", "LayerTopDepth", "HiZ", "gloss", "metal", "skip2"};
 
    private static boolean ensurePrograms() {
       if (staticProg != 0) {
@@ -1941,6 +1990,7 @@ public final class Mirrors {
       GL20.glUniform4f(u[11], Math.max(4, Math.min(64, Config.MIRRORS_STEPS)), Config.MIRRORS_THICKNESS_PCT / 100F, Config.MIRRORS_STAND_IN_PCT / 100F, Math.max(2, Config.MIRRORS_STEP_PX));
       int view = Config.DEV_MIRRORS_VIEW_TOGGLE_MS > 0 && (System.currentTimeMillis() / Config.DEV_MIRRORS_VIEW_TOGGLE_MS & 1L) == 1L ? 0 : Config.DEV_MIRRORS_VIEW;
       GL20.glUniform4f(u[13], view, f.skip, "off".equals(Config.MIRRORS_STATIC) ? 0F : 1F, 0F);
+      GL20.glUniform1i(u[32], Config.DEV_MIRRORS_SKIP2);
    }
 
    // the rows go up through a persistently mapped pixel-unpack ring (one region per data texture): the texture update then
@@ -2518,7 +2568,7 @@ public final class Mirrors {
                   }
                   int o = k * 10;
                   float cAbs = this.f.planes[o] == 2F ? this.f.planes[o + 1] : this.f.planes[o + 1] + (this.f.planes[o] == 0F ? this.f.view.oy : this.f.view.ox);
-                  CAMERA.setUp(p, (int)this.f.planes[o], cAbs, viewLateral(this.f.planeMirror[k], this.f.skip), viewDrop(this.f.planeMirror[k], this.f.skip));
+                  CAMERA.setUp(p, (int)this.f.planes[o], cAbs, viewLateral(this.f.planeMirror[k], this.f.skip), this.f.planeMirror[k] ? this.f.planeDrop[k] : viewDrop(false, this.f.skip));
                   if (!calibrated) {
                      calibrated = CAMERA.calibrate(this.f);
                   }
@@ -3251,6 +3301,7 @@ public final class Mirrors {
          "uniform vec4 layerMap;", // on, 1 / k, z0, w0: iso depth of a layer texel = w0 + (ndc z - z0) / k
          stat ? "" : "uniform vec4 depthTest;", // (z: the layer's resolution scale)
          "uniform vec4 dev;", // view, skip bits, static on
+         "uniform int skip2;", // devMirrorsSkip2
          "flat in int inst;",
          "in vec2 sUv;",
          "in vec2 mUv;",
@@ -3544,7 +3595,22 @@ public final class Mirrors {
          // a pure black hit where the room has a texel is a hole in the frame this pass reads (an object drawn later: the
          // counter's cut-out under the basin), not a black surface: the room's geometry, lit by the same squares, stands in
          "   bool hole = max(r.r, max(r.g, r.b)) < 0.09 && (int(dev.y) & 268435456) == 0;", // (the cut-out reads 18 / 255)
-         "   if (real && tR <= tG + g7.y && !furnWins && !hole) return r;",
+         // a marched hit well in front of the room's geometry is a thickness hit (the ray passed behind a thin rack upright
+         // and the march took its pixels: a torn, streaky second copy beside the geometry's own rack, the maintainer's gym,
+         // 2026-10-16); what the room really holds there is in the geometry (dev skip2 bit 1: the march's hit wins as before)
+         // and the switch between the two is a blend over the tolerance's upper half: a hard switch drew a jagged comb along
+         // the reflected wall where neighbouring rays fell either side of it (a wider band let the rack's pixels show faintly)
+         // (a negative tolerance: the room is closed to the camera, MirrorGeometry.roomClosed; the frame shows its walls' outer
+         // faces where the room was, and a marched hit there agrees with the geometry's far wall by chance). The geometry's
+         // colour then, with the march's distance code: the mirrored people are clipped by it, and the geometry's code cut
+         // the player walking in at the bathroom door into two images (2026-10-16)
+         "   if (real && !furnWins && !hole && g7.y < 0.0 && abs(tR - tG) < -g7.y) return dev.x == 5.0 ? vec4(0.0, 1.0, 1.0, r.a) : vec4(g.rgb, r.a);",
+         "   if (real && !furnWins && !hole && g7.y > 0.0) {",
+         "      float dd = tR - tG;",
+         "      float a = (skip2 & 1) != 0 ? step(g7.y, dd) : smoothstep(0.5 * g7.y, g7.y, abs(dd));",
+         "      if (a < 0.001) return r;",
+         "      if (a < 0.999 && dev.x != 5.0) return vec4(mix(r.rgb, g.rgb, a), a < 0.5 ? r.a : g.a);",
+         "   }",
          "   return dev.x == 5.0 ? vec4(0.0, 1.0, 1.0, g.a) : g;",
          "}",
          // the mirrored people's line of sight (losOut's code) shortened by the room's furniture within a square of the glass:

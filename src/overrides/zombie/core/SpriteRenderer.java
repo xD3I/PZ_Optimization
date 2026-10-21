@@ -492,7 +492,9 @@ public final class SpriteRenderer {
    }
 
    public void prePopulating() {
+      long pzoptT = pzopt.GtAb.begin(); // pzopt: devGtAlternate section timer
       this.states.getPopulating().prePopulating();
+      pzopt.GtAb.end(pzopt.GtAb.S_PREPOP, pzoptT); // pzopt
    }
 
    public void postRender() {
@@ -742,7 +744,9 @@ public final class SpriteRenderer {
          AbstractPerformanceProfileProbe var4 = this.waitForReadySlotToOpen.profile();
 
          try {
+            long pzoptT = pzopt.GtAb.begin(); // pzopt: devGtAlternate section timer
             this.waitForReadySlotToOpen();
+            pzopt.GtAb.end(pzopt.GtAb.S_HANDOFF, pzoptT); // pzopt
          } catch (Throwable var9) {
             if (var4 != null) {
                try {
@@ -1425,6 +1429,10 @@ public final class SpriteRenderer {
 
                   this.ops.clear();
                } else {
+                  if (pzopt.MovingProf.active) pzopt.MovingProf.sprites(this.texture0, this.length); // pzopt: devMovingProf, a sprite batch of the moving pass (dev rig)
+                  if (pzopt.HordeDraw.LOG) pzopt.HordeDraw.other(); // pzopt: horde model draws, dev: a sprite batch between character draws
+                  if (pzopt.HordeBatch.pending != 0) pzopt.HordeBatch.beforeSprites(); // pzopt: hordeBatch, an exact run of zombie draws ends before a sprite batch
+                  if (pzopt.AtlasBatch.pending != 0) pzopt.AtlasBatch.beforeSprites(); // pzopt: atlasBatch, a run of atlas quads ends before a sprite batch
                   if (this.style != RingBuffer.this.lastRenderedStyle) {
                      if (RingBuffer.this.lastRenderedStyle != null
                         && (

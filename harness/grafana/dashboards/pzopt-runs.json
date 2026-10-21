@@ -440,7 +440,7 @@
      "rawQuery": true,
      "editorMode": "code",
      "format": "table",
-     "rawSql": "WITH d AS (SELECT substring(label from '(daily|dstorm|dspin|dlou|dhorde)-') AS b, substring(label from '(?:daily|dstorm|dspin|dlou|dhorde)-([0-9]{4}|stock[0-9]*)-') AS k,\n             to_char(started, 'YYYY') AS y, run, fps_mean FROM runs\n           -- laptop runs come back from the queue as <machine>-<label>\n           WHERE label ~ '^((flip|dell|mac)-)?(daily|dstorm|dspin|dlou|dhorde)-([0-9]{4}|stock[0-9]*)-[0-9]+$' AND machine = ${hmachine:sqlstring}\n             AND valid AND fps_mean IS NOT NULL AND run NOT IN ('dhorde-0928-1-20261002-193510', 'dhorde-0928-2-20261002-194213', 'dlou-0928-1-20261002-193344', 'dlou-0928-2-20261002-194047', 'dlou-0929-1-20261002-194911', 'dhorde-0929-1-20261002-195036', 'dlou-0929-2-20261002-195608', 'dhorde-0929-2-20261002-195732', 'dlou-0930-1-20261002-200302', 'dhorde-0930-1-20261002-200424', 'dlou-0930-2-20261002-200954', 'dhorde-0930-2-20261002-201117', 'dlou-1001-1-20261002-201645', 'dhorde-1001-1-20261002-201807', 'dlou-1001-2-20261002-202331', 'dhorde-1001-2-20261002-202455', 'dlou-1002-1-20261002-203044', 'dhorde-1002-1-20261002-203206', 'dlou-1002-2-20261002-203729', 'dhorde-1002-2-20261002-203850', 'dlou-stock4221-1-20261002-204441', 'dhorde-stock4221-1-20261002-204612', 'dlou-stock4221-2-20261002-205218', 'dhorde-stock4221-2-20261002-205351', 'dhorde-0928-3-20261002-205538', 'dhorde-0928-4-20261002-205716', 'dlou-0925-1-20261002-210535', 'dhorde-0925-1-20261002-210655', 'dlou-0925-2-20261002-211433', 'dhorde-0925-2-20261002-211552', 'dlou-0926-1-20261002-212145', 'dhorde-0926-1-20261002-212415', 'dlou-0926-2-20261002-213014', 'dhorde-0926-2-20261002-213134', 'dlou-0927-1-20261002-213656', 'dhorde-0927-1-20261002-213814', 'dlou-0927-2-20261002-214329', 'dhorde-0927-2-20261002-214449', 'dhorde-0926-3-20261002-215024', 'dhorde-0926-4-20261002-215220', 'dhorde-0925-3-20261002-215405', 'dlou-0925-5-20261004-183109', 'dlou-0925-6-20261004-184001', 'dlou-0926-5-20261004-183405', 'dlou-0926-6-20261004-184300', 'dlou-0927-5-20261004-183703', 'dlou-0927-6-20261004-184558', 'dlou-0928-5-20261004-175512', 'dlou-0928-6-20261004-181612', 'dlou-0929-5-20261004-175814', 'dlou-0929-6-20261004-181913', 'dlou-0930-5-20261004-180115', 'dlou-0930-6-20261004-182212', 'dlou-1001-5-20261004-180415', 'dlou-1001-6-20261004-182512', 'dlou-1002-5-20261004-180714', 'dlou-1002-6-20261004-182811', 'dlou-1003-5-20261004-174910', 'dlou-1003-6-20261004-181014', 'dlou-1004-5-20261004-175211', 'dlou-1004-6-20261004-181313', 'dlou-stock-5-20261004-184721', 'dlou-stock4221-5-20261004-174223', 'dlou-stock4221-6-20261004-174547')),\no AS (SELECT to_date(y || k, 'YYYYMMDD') AS day, b, percentile_cont(0.5) WITHIN GROUP (ORDER BY fps_mean) AS fps FROM d WHERE k !~ '^stock' GROUP BY 1, 2),\nst AS (SELECT b, substring(k from 'stock(.*)') AS g, percentile_cont(0.5) WITHIN GROUP (ORDER BY fps_mean) AS fps FROM d WHERE k ~ '^stock' GROUP BY 1, 2)\nSELECT o.day::timestamptz + interval '12 hours' AS time,\n  max(o.fps) FILTER (WHERE o.b = 'daily') AS \"120 km/h drive\", (SELECT fps FROM st WHERE st.b = 'daily' AND st.g = CASE WHEN o.day >= '2026-09-28' THEN '4221' ELSE '' END) AS \"stock \u00b7 120 km/h drive\",\n  max(o.fps) FILTER (WHERE o.b = 'dstorm') AS \"120 km/h drive, fog + storm\", (SELECT fps FROM st WHERE st.b = 'dstorm' AND st.g = CASE WHEN o.day >= '2026-09-28' THEN '4221' ELSE '' END) AS \"stock \u00b7 120 km/h drive, fog + storm\",\n  max(o.fps) FILTER (WHERE o.b = 'dspin') AS \"spin south, fog + storm\", (SELECT fps FROM st WHERE st.b = 'dspin' AND st.g = CASE WHEN o.day >= '2026-09-28' THEN '4221' ELSE '' END) AS \"stock \u00b7 spin south, fog + storm\",\n  max(o.fps) FILTER (WHERE o.b = 'dlou') AS \"Louisville horde\", (SELECT fps FROM st WHERE st.b = 'dlou' AND st.g = CASE WHEN o.day >= '2026-09-28' THEN '4221' ELSE '' END) AS \"stock \u00b7 Louisville horde\",\n  max(o.fps) FILTER (WHERE o.b = 'dhorde') AS \"horde shooting, riverside\", (SELECT fps FROM st WHERE st.b = 'dhorde' AND st.g = CASE WHEN o.day >= '2026-09-28' THEN '4221' ELSE '' END) AS \"stock \u00b7 horde shooting, riverside\",\n  to_char(o.day, 'YYYYMMDD')::int AS \"build\",\n  CASE WHEN o.day IN ('2026-09-19', '2026-09-20', '2026-09-21', '2026-09-22', '2026-09-23', '2026-09-24', '2026-09-25', '2026-09-26', '2026-09-27', '2026-09-28', '2026-09-29', '2026-09-30', '2026-10-01', '2026-10-02', '2026-10-03', '2026-10-04', '2026-10-05', '2026-10-06', '2026-10-07', '2026-10-08', '2026-10-09', '2026-10-10', '2026-10-11') THEN to_char(o.day, 'YYYYMMDD')::int END AS \"\u2022\",\n  CASE WHEN o.day IN ('2026-09-19', '2026-09-20', '2026-09-21', '2026-09-22', '2026-09-23', '2026-09-24', '2026-09-25', '2026-09-26', '2026-09-27', '2026-09-28', '2026-09-29', '2026-09-30', '2026-10-01', '2026-10-02', '2026-10-03', '2026-10-04', '2026-10-05', '2026-10-06', '2026-10-07', '2026-10-08', '2026-10-09', '2026-10-10', '2026-10-11') THEN to_char(o.day, 'YYYYMMDD')::int END AS \"\u2022 \",\n  CASE WHEN o.day IN ('2026-09-19', '2026-09-20', '2026-09-21', '2026-09-22', '2026-09-23', '2026-09-24', '2026-09-25', '2026-09-26', '2026-09-27', '2026-09-28', '2026-09-29', '2026-09-30', '2026-10-01', '2026-10-02', '2026-10-03', '2026-10-04', '2026-10-05', '2026-10-06', '2026-10-07', '2026-10-08', '2026-10-09', '2026-10-10', '2026-10-11') THEN to_char(o.day, 'YYYYMMDD')::int END AS \"\u2022  \",\n  CASE WHEN o.day IN ('2026-09-19', '2026-09-20', '2026-09-21', '2026-09-22', '2026-09-23', '2026-09-24', '2026-09-25', '2026-09-26', '2026-09-27', '2026-09-28', '2026-09-29', '2026-09-30', '2026-10-01', '2026-10-02', '2026-10-03', '2026-10-04', '2026-10-05', '2026-10-06', '2026-10-07', '2026-10-08', '2026-10-09', '2026-10-11') THEN to_char(o.day, 'YYYYMMDD')::int END AS \"\u2022   \",\n  CASE WHEN o.day IN ('2026-09-19', '2026-09-20', '2026-09-21', '2026-09-22', '2026-09-23', '2026-09-24', '2026-09-25', '2026-09-26', '2026-09-27', '2026-09-28', '2026-09-29', '2026-10-03', '2026-10-05') THEN to_char(o.day, 'YYYYMMDD')::int END AS \"\u2022    \",\n  CASE WHEN o.day IN ('2026-09-19', '2026-09-20', '2026-09-21', '2026-09-22', '2026-09-23', '2026-09-24', '2026-09-25', '2026-09-26') THEN to_char(o.day, 'YYYYMMDD')::int END AS \"\u2022     \",\n  CASE WHEN o.day IN ('2026-09-22', '2026-09-23', '2026-09-24', '2026-09-26') THEN to_char(o.day, 'YYYYMMDD')::int END AS \"\u2022      \",\n  CASE WHEN o.day IN ('2026-09-22', '2026-09-24') THEN to_char(o.day, 'YYYYMMDD')::int END AS \"\u2022       \",\n  CASE WHEN o.day IN ('2026-09-24') THEN to_char(o.day, 'YYYYMMDD')::int END AS \"\u2022        \"\nFROM o GROUP BY o.day ORDER BY o.day",
+     "rawSql": "WITH d AS (SELECT substring(label from '(daily|dstorm|dspin|dlou|dhorde)-') AS b, substring(label from '(?:daily|dstorm|dspin|dlou|dhorde)-([0-9]{4}|stock[0-9]*)-') AS k,\n             to_char(started, 'YYYY') AS y, run, fps_mean FROM runs\n           -- laptop runs come back from the queue as <machine>-<label>\n           WHERE label ~ '^((flip|dell|mac)-)?(daily|dstorm|dspin|dlou|dhorde)-([0-9]{4}|stock[0-9]*)-[0-9]+$' AND machine = ${hmachine:sqlstring}\n             AND valid AND fps_mean IS NOT NULL AND run NOT IN ('dhorde-0928-1-20261002-193510', 'dhorde-0928-2-20261002-194213', 'dlou-0928-1-20261002-193344', 'dlou-0928-2-20261002-194047', 'dlou-0929-1-20261002-194911', 'dhorde-0929-1-20261002-195036', 'dlou-0929-2-20261002-195608', 'dhorde-0929-2-20261002-195732', 'dlou-0930-1-20261002-200302', 'dhorde-0930-1-20261002-200424', 'dlou-0930-2-20261002-200954', 'dhorde-0930-2-20261002-201117', 'dlou-1001-1-20261002-201645', 'dhorde-1001-1-20261002-201807', 'dlou-1001-2-20261002-202331', 'dhorde-1001-2-20261002-202455', 'dlou-1002-1-20261002-203044', 'dhorde-1002-1-20261002-203206', 'dlou-1002-2-20261002-203729', 'dhorde-1002-2-20261002-203850', 'dlou-stock4221-1-20261002-204441', 'dhorde-stock4221-1-20261002-204612', 'dlou-stock4221-2-20261002-205218', 'dhorde-stock4221-2-20261002-205351', 'dhorde-0928-3-20261002-205538', 'dhorde-0928-4-20261002-205716', 'dlou-0925-1-20261002-210535', 'dhorde-0925-1-20261002-210655', 'dlou-0925-2-20261002-211433', 'dhorde-0925-2-20261002-211552', 'dlou-0926-1-20261002-212145', 'dhorde-0926-1-20261002-212415', 'dlou-0926-2-20261002-213014', 'dhorde-0926-2-20261002-213134', 'dlou-0927-1-20261002-213656', 'dhorde-0927-1-20261002-213814', 'dlou-0927-2-20261002-214329', 'dhorde-0927-2-20261002-214449', 'dhorde-0926-3-20261002-215024', 'dhorde-0926-4-20261002-215220', 'dhorde-0925-3-20261002-215405', 'dlou-0925-5-20261004-183109', 'dlou-0925-6-20261004-184001', 'dlou-0926-5-20261004-183405', 'dlou-0926-6-20261004-184300', 'dlou-0927-5-20261004-183703', 'dlou-0927-6-20261004-184558', 'dlou-0928-5-20261004-175512', 'dlou-0928-6-20261004-181612', 'dlou-0929-5-20261004-175814', 'dlou-0929-6-20261004-181913', 'dlou-0930-5-20261004-180115', 'dlou-0930-6-20261004-182212', 'dlou-1001-5-20261004-180415', 'dlou-1001-6-20261004-182512', 'dlou-1002-5-20261004-180714', 'dlou-1002-6-20261004-182811', 'dlou-1003-5-20261004-174910', 'dlou-1003-6-20261004-181014', 'dlou-1004-5-20261004-175211', 'dlou-1004-6-20261004-181313', 'dlou-stock-5-20261004-184721', 'dlou-stock4221-5-20261004-174223', 'dlou-stock4221-6-20261004-174547')),\no AS (SELECT to_date(y || k, 'YYYYMMDD') AS day, b, percentile_cont(0.5) WITHIN GROUP (ORDER BY fps_mean) AS fps FROM d WHERE k !~ '^stock' GROUP BY 1, 2),\nst AS (SELECT b, substring(k from 'stock(.*)') AS g, percentile_cont(0.5) WITHIN GROUP (ORDER BY fps_mean) AS fps FROM d WHERE k ~ '^stock' GROUP BY 1, 2)\nSELECT o.day::timestamptz + interval '12 hours' AS time,\n  max(o.fps) FILTER (WHERE o.b = 'daily') AS \"120 km/h drive\", (SELECT fps FROM st WHERE st.b = 'daily' AND st.g = CASE WHEN o.day >= '2026-09-28' THEN '4221' ELSE '' END) AS \"stock \u00b7 120 km/h drive\",\n  max(o.fps) FILTER (WHERE o.b = 'dstorm') AS \"120 km/h drive, fog + storm\", (SELECT fps FROM st WHERE st.b = 'dstorm' AND st.g = CASE WHEN o.day >= '2026-09-28' THEN '4221' ELSE '' END) AS \"stock \u00b7 120 km/h drive, fog + storm\",\n  max(o.fps) FILTER (WHERE o.b = 'dspin') AS \"spin south, fog + storm\", (SELECT fps FROM st WHERE st.b = 'dspin' AND st.g = CASE WHEN o.day >= '2026-09-28' THEN '4221' ELSE '' END) AS \"stock \u00b7 spin south, fog + storm\",\n  max(o.fps) FILTER (WHERE o.b = 'dlou') AS \"Louisville horde\", (SELECT fps FROM st WHERE st.b = 'dlou' AND st.g = CASE WHEN o.day >= '2026-09-28' THEN '4221' ELSE '' END) AS \"stock \u00b7 Louisville horde\",\n  max(o.fps) FILTER (WHERE o.b = 'dhorde') AS \"horde shooting, riverside\", (SELECT fps FROM st WHERE st.b = 'dhorde' AND st.g = CASE WHEN o.day >= '2026-09-28' THEN '4221' ELSE '' END) AS \"stock \u00b7 horde shooting, riverside\",\n  to_char(o.day, 'YYYYMMDD')::int AS \"build\",\n  CASE WHEN o.day IN ('2026-09-19', '2026-09-20', '2026-09-21', '2026-09-22', '2026-09-23', '2026-09-24', '2026-09-25', '2026-09-26', '2026-09-27', '2026-09-28', '2026-09-29', '2026-09-30', '2026-10-01', '2026-10-02', '2026-10-03', '2026-10-04', '2026-10-05', '2026-10-06', '2026-10-07', '2026-10-08', '2026-10-09', '2026-10-10', '2026-10-11', '2026-10-12', '2026-10-13', '2026-10-14', '2026-10-15') THEN to_char(o.day, 'YYYYMMDD')::int END AS \"\u2022\",\n  CASE WHEN o.day IN ('2026-09-19', '2026-09-20', '2026-09-21', '2026-09-22', '2026-09-23', '2026-09-24', '2026-09-25', '2026-09-26', '2026-09-27', '2026-09-28', '2026-09-29', '2026-09-30', '2026-10-01', '2026-10-02', '2026-10-03', '2026-10-04', '2026-10-05', '2026-10-06', '2026-10-07', '2026-10-08', '2026-10-09', '2026-10-10', '2026-10-11', '2026-10-12', '2026-10-13', '2026-10-14', '2026-10-15') THEN to_char(o.day, 'YYYYMMDD')::int END AS \"\u2022 \",\n  CASE WHEN o.day IN ('2026-09-19', '2026-09-20', '2026-09-21', '2026-09-22', '2026-09-23', '2026-09-24', '2026-09-25', '2026-09-26', '2026-09-27', '2026-09-28', '2026-09-29', '2026-09-30', '2026-10-01', '2026-10-02', '2026-10-03', '2026-10-04', '2026-10-05', '2026-10-06', '2026-10-07', '2026-10-08', '2026-10-09', '2026-10-10', '2026-10-11', '2026-10-12', '2026-10-13', '2026-10-14', '2026-10-15') THEN to_char(o.day, 'YYYYMMDD')::int END AS \"\u2022  \",\n  CASE WHEN o.day IN ('2026-09-19', '2026-09-20', '2026-09-21', '2026-09-22', '2026-09-23', '2026-09-24', '2026-09-25', '2026-09-26', '2026-09-27', '2026-09-28', '2026-09-29', '2026-09-30', '2026-10-01', '2026-10-02', '2026-10-03', '2026-10-04', '2026-10-05', '2026-10-06', '2026-10-07', '2026-10-08', '2026-10-09', '2026-10-11', '2026-10-12', '2026-10-13', '2026-10-14', '2026-10-15') THEN to_char(o.day, 'YYYYMMDD')::int END AS \"\u2022   \",\n  CASE WHEN o.day IN ('2026-09-19', '2026-09-20', '2026-09-21', '2026-09-22', '2026-09-23', '2026-09-24', '2026-09-25', '2026-09-26', '2026-09-27', '2026-09-28', '2026-09-29', '2026-10-03', '2026-10-05') THEN to_char(o.day, 'YYYYMMDD')::int END AS \"\u2022    \",\n  CASE WHEN o.day IN ('2026-09-19', '2026-09-20', '2026-09-21', '2026-09-22', '2026-09-23', '2026-09-24', '2026-09-25', '2026-09-26') THEN to_char(o.day, 'YYYYMMDD')::int END AS \"\u2022     \",\n  CASE WHEN o.day IN ('2026-09-22', '2026-09-23', '2026-09-24', '2026-09-26') THEN to_char(o.day, 'YYYYMMDD')::int END AS \"\u2022      \",\n  CASE WHEN o.day IN ('2026-09-22', '2026-09-24') THEN to_char(o.day, 'YYYYMMDD')::int END AS \"\u2022       \",\n  CASE WHEN o.day IN ('2026-09-24') THEN to_char(o.day, 'YYYYMMDD')::int END AS \"\u2022        \"\nFROM o GROUP BY o.day ORDER BY o.day",
      "hide": false
     }
    ],
@@ -828,6 +828,18 @@
            },
            "20261011": {
             "text": "build a4cd303"
+           },
+           "20261012": {
+            "text": "build 29a9d56"
+           },
+           "20261013": {
+            "text": "build 4be8d4e"
+           },
+           "20261014": {
+            "text": "build f964083"
+           },
+           "20261015": {
+            "text": "build a0cc7a4"
            }
           }
          }
@@ -946,6 +958,18 @@
            },
            "20261011": {
             "text": "Puddle ripples: footsteps and wheels ring the puddles (off by default)"
+           },
+           "20261012": {
+            "text": "Puddle ripples: raindrop rings and continuous car wakes"
+           },
+           "20261013": {
+            "text": "Zombie update on the frame workers by default"
+           },
+           "20261014": {
+            "text": "Hordes: 3D zombies drawn in batches, distant ones as lit sprites"
+           },
+           "20261015": {
+            "text": "Frame queue at frame caps: steadier pacing"
            }
           }
          }
@@ -1064,6 +1088,18 @@
            },
            "20261011": {
             "text": "Sliding glass doors reflect"
+           },
+           "20261012": {
+            "text": "Mirrors: one reflection per mirror"
+           },
+           "20261013": {
+            "text": "Ragdoll checks off the game thread"
+           },
+           "20261014": {
+            "text": "Louisville 120: zombie postupdate and tile recording on the workers"
+           },
+           "20261015": {
+            "text": "Player sight and the zombie scheduler on the workers"
            }
           }
          }
@@ -1182,6 +1218,18 @@
            },
            "20261011": {
             "text": "Windows: G1 + heap settings apply, uninstall removes every file, HDR screenshot fix"
+           },
+           "20261012": {
+            "text": "Ambient occlusion follows an opened gate"
+           },
+           "20261013": {
+            "text": "Chunk bakes without driver round trips"
+           },
+           "20261014": {
+            "text": "UI: hover, drag and scroll at the frame rate"
+           },
+           "20261015": {
+            "text": "First sight of a horde: spawns, models and clothing spread over frames"
            }
           }
          }
@@ -1297,6 +1345,18 @@
            },
            "20261011": {
             "text": "Windows: per-frame worker waits no longer sleep 1 ms"
+           },
+           "20261012": {
+            "text": "Mods: AOT cache keeps other mods' classes, animation cache keyed on a mod's skeleton"
+           },
+           "20261013": {
+            "text": "Vehicle-hit crash fix"
+           },
+           "20261014": {
+            "text": "Garbage collection and spare work in the frame cap's slack"
+           },
+           "20261015": {
+            "text": "Cheaper chunk hand-off at chunk borders"
            }
           }
          }
@@ -1678,7 +1738,7 @@
      "maxWidth": 360
     }
    },
-   "timeFrom": "27d",
+   "timeFrom": "35d",
    "hideTimeOverride": true,
    "id": 5,
    "gridPos": {
@@ -1706,7 +1766,7 @@
      "rawQuery": true,
      "editorMode": "code",
      "format": "table",
-     "rawSql": "WITH d AS (SELECT substring(label from '(daily|dstorm|dspin|dlou|dhorde)-') AS b, substring(label from '(?:daily|dstorm|dspin|dlou|dhorde)-([0-9]{4}|stock[0-9]*)-') AS k,\n             to_char(started, 'YYYY') AS y, run, fps_mean FROM runs\n           -- laptop runs come back from the queue as <machine>-<label>\n           WHERE label ~ '^((flip|dell|mac)-)?(daily|dstorm|dspin|dlou|dhorde)-([0-9]{4}|stock[0-9]*)-[0-9]+$' AND machine = ${hmachine:sqlstring}\n             AND valid AND fps_mean IS NOT NULL AND run NOT IN ('dhorde-0928-1-20261002-193510', 'dhorde-0928-2-20261002-194213', 'dlou-0928-1-20261002-193344', 'dlou-0928-2-20261002-194047', 'dlou-0929-1-20261002-194911', 'dhorde-0929-1-20261002-195036', 'dlou-0929-2-20261002-195608', 'dhorde-0929-2-20261002-195732', 'dlou-0930-1-20261002-200302', 'dhorde-0930-1-20261002-200424', 'dlou-0930-2-20261002-200954', 'dhorde-0930-2-20261002-201117', 'dlou-1001-1-20261002-201645', 'dhorde-1001-1-20261002-201807', 'dlou-1001-2-20261002-202331', 'dhorde-1001-2-20261002-202455', 'dlou-1002-1-20261002-203044', 'dhorde-1002-1-20261002-203206', 'dlou-1002-2-20261002-203729', 'dhorde-1002-2-20261002-203850', 'dlou-stock4221-1-20261002-204441', 'dhorde-stock4221-1-20261002-204612', 'dlou-stock4221-2-20261002-205218', 'dhorde-stock4221-2-20261002-205351', 'dhorde-0928-3-20261002-205538', 'dhorde-0928-4-20261002-205716', 'dlou-0925-1-20261002-210535', 'dhorde-0925-1-20261002-210655', 'dlou-0925-2-20261002-211433', 'dhorde-0925-2-20261002-211552', 'dlou-0926-1-20261002-212145', 'dhorde-0926-1-20261002-212415', 'dlou-0926-2-20261002-213014', 'dhorde-0926-2-20261002-213134', 'dlou-0927-1-20261002-213656', 'dhorde-0927-1-20261002-213814', 'dlou-0927-2-20261002-214329', 'dhorde-0927-2-20261002-214449', 'dhorde-0926-3-20261002-215024', 'dhorde-0926-4-20261002-215220', 'dhorde-0925-3-20261002-215405', 'dlou-0925-5-20261004-183109', 'dlou-0925-6-20261004-184001', 'dlou-0926-5-20261004-183405', 'dlou-0926-6-20261004-184300', 'dlou-0927-5-20261004-183703', 'dlou-0927-6-20261004-184558', 'dlou-0928-5-20261004-175512', 'dlou-0928-6-20261004-181612', 'dlou-0929-5-20261004-175814', 'dlou-0929-6-20261004-181913', 'dlou-0930-5-20261004-180115', 'dlou-0930-6-20261004-182212', 'dlou-1001-5-20261004-180415', 'dlou-1001-6-20261004-182512', 'dlou-1002-5-20261004-180714', 'dlou-1002-6-20261004-182811', 'dlou-1003-5-20261004-174910', 'dlou-1003-6-20261004-181014', 'dlou-1004-5-20261004-175211', 'dlou-1004-6-20261004-181313', 'dlou-stock-5-20261004-184721', 'dlou-stock4221-5-20261004-174223', 'dlou-stock4221-6-20261004-174547')),\ne AS (SELECT run, min(t) AS t0, min(t) FILTER (WHERE text ~ 'continuing latest save') AS tc FROM events\n      WHERE run IN (SELECT run FROM d) GROUP BY run),\nlt AS (SELECT d.k, d.y, extract(epoch FROM e.tc - e.t0) AS boot,\n         extract(epoch FROM (SELECT min(x.t) FROM events x WHERE x.run = e.run AND x.t > e.tc AND x.text ~ 'world ready') - e.tc) AS load\n       FROM e JOIN d USING (run)),\no AS (SELECT to_date(y || k, 'YYYYMMDD') AS day, percentile_cont(0.5) WITHIN GROUP (ORDER BY boot) AS boot, percentile_cont(0.5) WITHIN GROUP (ORDER BY load) AS load FROM lt\n      WHERE k !~ '^stock' GROUP BY 1),\nls AS (SELECT substring(k from 'stock(.*)') AS g, percentile_cont(0.5) WITHIN GROUP (ORDER BY boot) AS boot, percentile_cont(0.5) WITHIN GROUP (ORDER BY load) AS load FROM lt\n       WHERE k ~ '^stock' GROUP BY 1)\nSELECT o.day::timestamptz + interval '12 hours' AS time,\n  o.boot AS \"boot\", (SELECT boot FROM ls WHERE ls.g = CASE WHEN o.day >= '2026-09-28' THEN '4221' ELSE '' END) AS \"stock \u00b7 boot\",\n  o.load AS \"load\", (SELECT load FROM ls WHERE ls.g = CASE WHEN o.day >= '2026-09-28' THEN '4221' ELSE '' END) AS \"stock \u00b7 load\",\n  to_char(o.day, 'YYYYMMDD')::int AS \"build\",\n  CASE WHEN o.day IN ('2026-09-19', '2026-09-20', '2026-09-21', '2026-09-22', '2026-09-23', '2026-09-24', '2026-09-25', '2026-09-26', '2026-09-27', '2026-09-28', '2026-09-29', '2026-09-30', '2026-10-01', '2026-10-02', '2026-10-03', '2026-10-04', '2026-10-05', '2026-10-06', '2026-10-07', '2026-10-08', '2026-10-09', '2026-10-10', '2026-10-11') THEN to_char(o.day, 'YYYYMMDD')::int END AS \"\u2022\",\n  CASE WHEN o.day IN ('2026-09-19', '2026-09-20', '2026-09-21', '2026-09-22', '2026-09-23', '2026-09-24', '2026-09-25', '2026-09-26', '2026-09-27', '2026-09-28', '2026-09-29', '2026-09-30', '2026-10-01', '2026-10-02', '2026-10-03', '2026-10-04', '2026-10-05', '2026-10-06', '2026-10-07', '2026-10-08', '2026-10-09', '2026-10-10', '2026-10-11') THEN to_char(o.day, 'YYYYMMDD')::int END AS \"\u2022 \",\n  CASE WHEN o.day IN ('2026-09-19', '2026-09-20', '2026-09-21', '2026-09-22', '2026-09-23', '2026-09-24', '2026-09-25', '2026-09-26', '2026-09-27', '2026-09-28', '2026-09-29', '2026-09-30', '2026-10-01', '2026-10-02', '2026-10-03', '2026-10-04', '2026-10-05', '2026-10-06', '2026-10-07', '2026-10-08', '2026-10-09', '2026-10-10', '2026-10-11') THEN to_char(o.day, 'YYYYMMDD')::int END AS \"\u2022  \",\n  CASE WHEN o.day IN ('2026-09-19', '2026-09-20', '2026-09-21', '2026-09-22', '2026-09-23', '2026-09-24', '2026-09-25', '2026-09-26', '2026-09-27', '2026-09-28', '2026-09-29', '2026-09-30', '2026-10-01', '2026-10-02', '2026-10-03', '2026-10-04', '2026-10-05', '2026-10-06', '2026-10-07', '2026-10-08', '2026-10-09', '2026-10-11') THEN to_char(o.day, 'YYYYMMDD')::int END AS \"\u2022   \",\n  CASE WHEN o.day IN ('2026-09-19', '2026-09-20', '2026-09-21', '2026-09-22', '2026-09-23', '2026-09-24', '2026-09-25', '2026-09-26', '2026-09-27', '2026-09-28', '2026-09-29', '2026-10-03', '2026-10-05') THEN to_char(o.day, 'YYYYMMDD')::int END AS \"\u2022    \",\n  CASE WHEN o.day IN ('2026-09-19', '2026-09-20', '2026-09-21', '2026-09-22', '2026-09-23', '2026-09-24', '2026-09-25', '2026-09-26') THEN to_char(o.day, 'YYYYMMDD')::int END AS \"\u2022     \",\n  CASE WHEN o.day IN ('2026-09-22', '2026-09-23', '2026-09-24', '2026-09-26') THEN to_char(o.day, 'YYYYMMDD')::int END AS \"\u2022      \",\n  CASE WHEN o.day IN ('2026-09-22', '2026-09-24') THEN to_char(o.day, 'YYYYMMDD')::int END AS \"\u2022       \",\n  CASE WHEN o.day IN ('2026-09-24') THEN to_char(o.day, 'YYYYMMDD')::int END AS \"\u2022        \"\nFROM o ORDER BY o.day",
+     "rawSql": "WITH d AS (SELECT substring(label from '(daily|dstorm|dspin|dlou|dhorde)-') AS b, substring(label from '(?:daily|dstorm|dspin|dlou|dhorde)-([0-9]{4}|stock[0-9]*)-') AS k,\n             to_char(started, 'YYYY') AS y, run, fps_mean FROM runs\n           -- laptop runs come back from the queue as <machine>-<label>\n           WHERE label ~ '^((flip|dell|mac)-)?(daily|dstorm|dspin|dlou|dhorde)-([0-9]{4}|stock[0-9]*)-[0-9]+$' AND machine = ${hmachine:sqlstring}\n             AND valid AND fps_mean IS NOT NULL AND run NOT IN ('dhorde-0928-1-20261002-193510', 'dhorde-0928-2-20261002-194213', 'dlou-0928-1-20261002-193344', 'dlou-0928-2-20261002-194047', 'dlou-0929-1-20261002-194911', 'dhorde-0929-1-20261002-195036', 'dlou-0929-2-20261002-195608', 'dhorde-0929-2-20261002-195732', 'dlou-0930-1-20261002-200302', 'dhorde-0930-1-20261002-200424', 'dlou-0930-2-20261002-200954', 'dhorde-0930-2-20261002-201117', 'dlou-1001-1-20261002-201645', 'dhorde-1001-1-20261002-201807', 'dlou-1001-2-20261002-202331', 'dhorde-1001-2-20261002-202455', 'dlou-1002-1-20261002-203044', 'dhorde-1002-1-20261002-203206', 'dlou-1002-2-20261002-203729', 'dhorde-1002-2-20261002-203850', 'dlou-stock4221-1-20261002-204441', 'dhorde-stock4221-1-20261002-204612', 'dlou-stock4221-2-20261002-205218', 'dhorde-stock4221-2-20261002-205351', 'dhorde-0928-3-20261002-205538', 'dhorde-0928-4-20261002-205716', 'dlou-0925-1-20261002-210535', 'dhorde-0925-1-20261002-210655', 'dlou-0925-2-20261002-211433', 'dhorde-0925-2-20261002-211552', 'dlou-0926-1-20261002-212145', 'dhorde-0926-1-20261002-212415', 'dlou-0926-2-20261002-213014', 'dhorde-0926-2-20261002-213134', 'dlou-0927-1-20261002-213656', 'dhorde-0927-1-20261002-213814', 'dlou-0927-2-20261002-214329', 'dhorde-0927-2-20261002-214449', 'dhorde-0926-3-20261002-215024', 'dhorde-0926-4-20261002-215220', 'dhorde-0925-3-20261002-215405', 'dlou-0925-5-20261004-183109', 'dlou-0925-6-20261004-184001', 'dlou-0926-5-20261004-183405', 'dlou-0926-6-20261004-184300', 'dlou-0927-5-20261004-183703', 'dlou-0927-6-20261004-184558', 'dlou-0928-5-20261004-175512', 'dlou-0928-6-20261004-181612', 'dlou-0929-5-20261004-175814', 'dlou-0929-6-20261004-181913', 'dlou-0930-5-20261004-180115', 'dlou-0930-6-20261004-182212', 'dlou-1001-5-20261004-180415', 'dlou-1001-6-20261004-182512', 'dlou-1002-5-20261004-180714', 'dlou-1002-6-20261004-182811', 'dlou-1003-5-20261004-174910', 'dlou-1003-6-20261004-181014', 'dlou-1004-5-20261004-175211', 'dlou-1004-6-20261004-181313', 'dlou-stock-5-20261004-184721', 'dlou-stock4221-5-20261004-174223', 'dlou-stock4221-6-20261004-174547')),\ne AS (SELECT run, min(t) AS t0, min(t) FILTER (WHERE text ~ 'continuing latest save') AS tc FROM events\n      WHERE run IN (SELECT run FROM d) GROUP BY run),\nlt AS (SELECT d.k, d.y, extract(epoch FROM e.tc - e.t0) AS boot,\n         extract(epoch FROM (SELECT min(x.t) FROM events x WHERE x.run = e.run AND x.t > e.tc AND x.text ~ 'world ready') - e.tc) AS load\n       FROM e JOIN d USING (run)),\no AS (SELECT to_date(y || k, 'YYYYMMDD') AS day, percentile_cont(0.5) WITHIN GROUP (ORDER BY boot) AS boot, percentile_cont(0.5) WITHIN GROUP (ORDER BY load) AS load FROM lt\n      WHERE k !~ '^stock' GROUP BY 1),\nls AS (SELECT substring(k from 'stock(.*)') AS g, percentile_cont(0.5) WITHIN GROUP (ORDER BY boot) AS boot, percentile_cont(0.5) WITHIN GROUP (ORDER BY load) AS load FROM lt\n       WHERE k ~ '^stock' GROUP BY 1)\nSELECT o.day::timestamptz + interval '12 hours' AS time,\n  o.boot AS \"boot\", (SELECT boot FROM ls WHERE ls.g = CASE WHEN o.day >= '2026-09-28' THEN '4221' ELSE '' END) AS \"stock \u00b7 boot\",\n  o.load AS \"load\", (SELECT load FROM ls WHERE ls.g = CASE WHEN o.day >= '2026-09-28' THEN '4221' ELSE '' END) AS \"stock \u00b7 load\",\n  to_char(o.day, 'YYYYMMDD')::int AS \"build\",\n  CASE WHEN o.day IN ('2026-09-19', '2026-09-20', '2026-09-21', '2026-09-22', '2026-09-23', '2026-09-24', '2026-09-25', '2026-09-26', '2026-09-27', '2026-09-28', '2026-09-29', '2026-09-30', '2026-10-01', '2026-10-02', '2026-10-03', '2026-10-04', '2026-10-05', '2026-10-06', '2026-10-07', '2026-10-08', '2026-10-09', '2026-10-10', '2026-10-11', '2026-10-12', '2026-10-13', '2026-10-14', '2026-10-15') THEN to_char(o.day, 'YYYYMMDD')::int END AS \"\u2022\",\n  CASE WHEN o.day IN ('2026-09-19', '2026-09-20', '2026-09-21', '2026-09-22', '2026-09-23', '2026-09-24', '2026-09-25', '2026-09-26', '2026-09-27', '2026-09-28', '2026-09-29', '2026-09-30', '2026-10-01', '2026-10-02', '2026-10-03', '2026-10-04', '2026-10-05', '2026-10-06', '2026-10-07', '2026-10-08', '2026-10-09', '2026-10-10', '2026-10-11', '2026-10-12', '2026-10-13', '2026-10-14', '2026-10-15') THEN to_char(o.day, 'YYYYMMDD')::int END AS \"\u2022 \",\n  CASE WHEN o.day IN ('2026-09-19', '2026-09-20', '2026-09-21', '2026-09-22', '2026-09-23', '2026-09-24', '2026-09-25', '2026-09-26', '2026-09-27', '2026-09-28', '2026-09-29', '2026-09-30', '2026-10-01', '2026-10-02', '2026-10-03', '2026-10-04', '2026-10-05', '2026-10-06', '2026-10-07', '2026-10-08', '2026-10-09', '2026-10-10', '2026-10-11', '2026-10-12', '2026-10-13', '2026-10-14', '2026-10-15') THEN to_char(o.day, 'YYYYMMDD')::int END AS \"\u2022  \",\n  CASE WHEN o.day IN ('2026-09-19', '2026-09-20', '2026-09-21', '2026-09-22', '2026-09-23', '2026-09-24', '2026-09-25', '2026-09-26', '2026-09-27', '2026-09-28', '2026-09-29', '2026-09-30', '2026-10-01', '2026-10-02', '2026-10-03', '2026-10-04', '2026-10-05', '2026-10-06', '2026-10-07', '2026-10-08', '2026-10-09', '2026-10-11', '2026-10-12', '2026-10-13', '2026-10-14', '2026-10-15') THEN to_char(o.day, 'YYYYMMDD')::int END AS \"\u2022   \",\n  CASE WHEN o.day IN ('2026-09-19', '2026-09-20', '2026-09-21', '2026-09-22', '2026-09-23', '2026-09-24', '2026-09-25', '2026-09-26', '2026-09-27', '2026-09-28', '2026-09-29', '2026-10-03', '2026-10-05') THEN to_char(o.day, 'YYYYMMDD')::int END AS \"\u2022    \",\n  CASE WHEN o.day IN ('2026-09-19', '2026-09-20', '2026-09-21', '2026-09-22', '2026-09-23', '2026-09-24', '2026-09-25', '2026-09-26') THEN to_char(o.day, 'YYYYMMDD')::int END AS \"\u2022     \",\n  CASE WHEN o.day IN ('2026-09-22', '2026-09-23', '2026-09-24', '2026-09-26') THEN to_char(o.day, 'YYYYMMDD')::int END AS \"\u2022      \",\n  CASE WHEN o.day IN ('2026-09-22', '2026-09-24') THEN to_char(o.day, 'YYYYMMDD')::int END AS \"\u2022       \",\n  CASE WHEN o.day IN ('2026-09-24') THEN to_char(o.day, 'YYYYMMDD')::int END AS \"\u2022        \"\nFROM o ORDER BY o.day",
      "hide": false
     }
    ],
@@ -1926,6 +1986,18 @@
            },
            "20261011": {
             "text": "build a4cd303"
+           },
+           "20261012": {
+            "text": "build 29a9d56"
+           },
+           "20261013": {
+            "text": "build 4be8d4e"
+           },
+           "20261014": {
+            "text": "build f964083"
+           },
+           "20261015": {
+            "text": "build a0cc7a4"
            }
           }
          }
@@ -2044,6 +2116,18 @@
            },
            "20261011": {
             "text": "Puddle ripples: footsteps and wheels ring the puddles (off by default)"
+           },
+           "20261012": {
+            "text": "Puddle ripples: raindrop rings and continuous car wakes"
+           },
+           "20261013": {
+            "text": "Zombie update on the frame workers by default"
+           },
+           "20261014": {
+            "text": "Hordes: 3D zombies drawn in batches, distant ones as lit sprites"
+           },
+           "20261015": {
+            "text": "Frame queue at frame caps: steadier pacing"
            }
           }
          }
@@ -2162,6 +2246,18 @@
            },
            "20261011": {
             "text": "Sliding glass doors reflect"
+           },
+           "20261012": {
+            "text": "Mirrors: one reflection per mirror"
+           },
+           "20261013": {
+            "text": "Ragdoll checks off the game thread"
+           },
+           "20261014": {
+            "text": "Louisville 120: zombie postupdate and tile recording on the workers"
+           },
+           "20261015": {
+            "text": "Player sight and the zombie scheduler on the workers"
            }
           }
          }
@@ -2280,6 +2376,18 @@
            },
            "20261011": {
             "text": "Windows: G1 + heap settings apply, uninstall removes every file, HDR screenshot fix"
+           },
+           "20261012": {
+            "text": "Ambient occlusion follows an opened gate"
+           },
+           "20261013": {
+            "text": "Chunk bakes without driver round trips"
+           },
+           "20261014": {
+            "text": "UI: hover, drag and scroll at the frame rate"
+           },
+           "20261015": {
+            "text": "First sight of a horde: spawns, models and clothing spread over frames"
            }
           }
          }
@@ -2395,6 +2503,18 @@
            },
            "20261011": {
             "text": "Windows: per-frame worker waits no longer sleep 1 ms"
+           },
+           "20261012": {
+            "text": "Mods: AOT cache keeps other mods' classes, animation cache keyed on a mod's skeleton"
+           },
+           "20261013": {
+            "text": "Vehicle-hit crash fix"
+           },
+           "20261014": {
+            "text": "Garbage collection and spare work in the frame cap's slack"
+           },
+           "20261015": {
+            "text": "Cheaper chunk hand-off at chunk borders"
            }
           }
          }
@@ -2776,7 +2896,7 @@
      "maxWidth": 360
     }
    },
-   "timeFrom": "27d",
+   "timeFrom": "35d",
    "hideTimeOverride": true,
    "id": 6,
    "gridPos": {
@@ -3613,7 +3733,7 @@
      "sort": "desc"
     }
    },
-   "timeFrom": "20d",
+   "timeFrom": "28d",
    "hideTimeOverride": true,
    "id": 12,
    "gridPos": {

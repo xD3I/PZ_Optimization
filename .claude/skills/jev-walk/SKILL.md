@@ -43,6 +43,7 @@ harness/queue.sh submit run --install opt --name <session> --intent "..." --prog
 | `explore=mirror director=jev` | the walk: every mirror of the building (or of the `mirror_corners` room), stations in front of each |
 | `mirror_cols` / `mirror_rows` | station grid along the wall / out from it (default `-0.5,0.5` / `1.0,1.8`); a grid blocked by furniture is moved out / sideways |
 | `mirror_only=N`, `mirror_secs=S` | walk only the N-th mirror; cap the walk (default 10 + 25 s a mirror) |
+| `mirror_pick=a,b,...` | these mirrors of the walking order in this order, repeats allowed: `1,4,1` leaves a mirror's room for the next one and comes back (2026-10-16) |
 | `mirror_laps=N` | the mirrors N times, every other pass reversed (back and forth) |
 | `mirror_corners=x,y,z` / `auto[:minW,minH]` | a mirror in each corner of that room (auto: the most free one-rect room within 80 squares whose corner spots can be stood on); NW / NE north wall, SW west wall, SE east wall (seen from the back, listed only); `mirror_corner_sprites=a,b,c,d` |
 | `mirror_corners=pair` | a corner room with another room behind its south wall: the walk starts in that room (the mirrors' room unseen), goes in and comes back between passes; judge with `harness/mirrors/room-judge.py` |

@@ -486,6 +486,10 @@ public final class DynRes {
       }
       try {
          GL33.glQueryCounter(queryIds[2 * q + 1], GL33.GL_TIMESTAMP);
+         if (queryBuf != null) { // pacingQueryBuffer (tail2)
+            queryBuf.request(2 * q, queryIds[2 * q]);
+            queryBuf.request(2 * q + 1, queryIds[2 * q + 1]);
+         }
          slotCpuBegin[q] = cpuBeginNs;
          slotCpuEnd[q] = System.nanoTime();
          slotScale[q] = RenderScale.scale();
@@ -516,8 +520,11 @@ public final class DynRes {
       }
       queryIds = new int[2 * SLOTS];
       GL15.glGenQueries(queryIds);
+      queryBuf = QueryBuf.create(2 * SLOTS, "dynRes"); // pacingQueryBuffer (tail2): no per-frame result polling
       calibrate(System.nanoTime());
    }
+
+   private static QueryBuf queryBuf; // pacingQueryBuffer (tail2)
 
    private static void calibrate(long now) {
       long before = System.nanoTime();
@@ -528,17 +535,29 @@ public final class DynRes {
    }
 
    private static void collect(long now) {
-      if (now - lastCalibrationNs > 1_000_000_000L) {
+      if (now - lastCalibrationNs > (queryBuf != null ? 8_000_000_000L : 1_000_000_000L)) { // pacingQueryBuffer (tail2): every 8 s as Pacing (glGetInteger64(GL_TIMESTAMP) waits for the threaded driver)
          calibrate(now);
       }
       // oldest first, so the controller sees the frames in order
       for (int k = 0; k < SLOTS; k++) {
          int q = (nextSlot + k) % SLOTS;
-         if (slotFrame[q] == 0L || GL15.glGetQueryObjecti(queryIds[2 * q + 1], GL15.GL_QUERY_RESULT_AVAILABLE) == 0) {
+         if (slotFrame[q] == 0L) {
             continue;
          }
-         long t0 = GL33.glGetQueryObjecti64(queryIds[2 * q], GL15.GL_QUERY_RESULT);
-         long t1 = GL33.glGetQueryObjecti64(queryIds[2 * q + 1], GL15.GL_QUERY_RESULT);
+         long t0, t1;
+         if (queryBuf != null) { // pacingQueryBuffer (tail2): from client memory
+            t0 = queryBuf.get(2 * q);
+            t1 = queryBuf.get(2 * q + 1);
+            if (t0 == -1L || t1 == -1L) {
+               continue;
+            }
+         } else {
+            if (GL15.glGetQueryObjecti(queryIds[2 * q + 1], GL15.GL_QUERY_RESULT_AVAILABLE) == 0) {
+               continue;
+            }
+            t0 = GL33.glGetQueryObjecti64(queryIds[2 * q], GL15.GL_QUERY_RESULT);
+            t1 = GL33.glGetQueryObjecti64(queryIds[2 * q + 1], GL15.GL_QUERY_RESULT);
+         }
          long frame = slotFrame[q];
          slotFrame[q] = 0L;
          float gpuMs = Math.max(0L, t1 - t0) / 1.0e6F;

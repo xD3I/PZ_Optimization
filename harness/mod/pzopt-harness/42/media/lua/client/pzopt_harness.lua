@@ -48,250 +48,167 @@ end
 
 local pending = nil
 local quitAtMs = nil
--- options_tab=<tab name> (2026-09-24, menu checks without xdotool, e.g. on the Mac): stay on the main menu, open
--- Options on that tab, log the tab names, 3 s later write Zomboid/Screenshots/pzopt-options.png, quit 2 s after.
--- options_search=<text> (Optimizations tab): typed into the tab's search box 1 s after opening, so a section far down
--- the page is on the screenshot (e.g. options_search=HDR).
--- options_select=<key> (2026-09-26): the preview panel of every options page shows that setting (its clips, text, bars)
--- instead of the page's first row, re-selected every tick until the screenshot (a mouse over the list would pick another).
--- Since 2026-10-04 the settings are one tab, "PZ Optimization" (PzoptOptionsTab); options_tab=Optimizations / Enhancements
--- / Profiler open it on the matching page. options_nav=<page> shows a page of it: home | cat:<category id>:<subcategory,
--- 0 = Overview>[:simple|advanced|everything] | problems[:<n>] | search:<text> (category ids in
--- src/lua/client/pzopt/pzopt_optimizations_layout.lua). options_shots=<page>;<page>;... shows each in turn and writes
--- Screenshots/pzopt-options-<n>.png per page (1.5 s each), then quits.
+-- The options rigs (2026-09-24, retargeted 2026-10-18 to the main menu's PZ OPTIMIZATION screen, pzopt_mainscreen_menu.lua:
+-- the game's Options screen has no PZ Optimization tab any more). Each stays on the main menu, opens the screen and quits
+-- when done (no Continue). The flag names are the tab-era ones:
+-- options_tab=<name>: open the screen (PZ Optimization = home; the old tab names Optimizations / Enhancements / Profiler
+--   open those groups), log its page, 3 s later write Zomboid/Screenshots/pzopt-options.png, quit 2 s after.
+-- options_nav=<page>: the page shown first: a menu node (home, perf, vis/light, perf/drive/1, problems/2, bench/setup...),
+--   key:<setting key> (that setting on its page, the cursor on it), or the tab-era forms home | cat:<category id>:<sub,
+--   0 = the category's page>[:simple|advanced|everything] | problems[:<n>] | search:<text>.
+-- options_search=<text>: typed into the screen's search box 1 s after opening (its results page shows; _ for a space).
+-- options_select=<key>: that setting on its page with its detail (impact chart, clips), as key:<key>.
+-- options_clips=1|0: the before / after clips of a setting's detail on / off (previewClips, saved: give the run a scratch
+--   -Dpzopt.userOptionsFile) before the first page shows.
+-- options_shots=<page>;<page>;...: shows each page in turn and writes Screenshots/pzopt-options-<n>.png per page (1.5 s
+--   each), then quits.
 local optionsCheck = nil
-local OLD_TABS = { Optimizations = "home", Enhancements = "cat:image:0", Profiler = "cat:overlay:0" }
-local applyNav -- (set below; the read rig above it calls it)
--- options_joy=<step>,<step>,... (2026-10-04): the tab's controller navigation without a pad: the steps call the page's
--- own joypad handlers as the game does for a pad (focus = gain focus; down / up / left / right; a = A, never B: it leaves
--- the screen), one every 0.6 s, logging the focused element and the page after each ("[pzopt-harness] joy: ..."); shot
--- writes Screenshots/pzopt-joy-<n>.png. Quits when done.
+local OLD_TABS = { Optimizations = "perf", Enhancements = "vis", Profiler = "tools", ["PZ Optimization"] = "home" }
+local LEVELS = { simple = 1, advanced = 2, everything = 3 }
+-- options_joy=<step>,<step>,...: the screen's controller navigation without a pad: the steps call its own joypad handlers
+--   as the game does for a pad (focus = gain focus; up / down / left / right; a, b, x, y, lb, rb, back = those buttons),
+--   one every 0.6 s, logging the focused element and the page after each ("[pzopt-harness] joy: ..."); shot writes
+--   Screenshots/pzopt-joy-<n>.png. Quits when done. (benchmark-pad-check.sh walks the screen with a real virtual pad.)
 local JOY = { id = 0, player = 0 }
--- options_read=1 (2026-10-04, "is every setting readable at 1080p"): walks every page of the PZ Optimization tab (home,
--- each category's Overview in Simple, each subcategory in Everything, every problem, a search) and every scroll stop of it.
--- Per page one geometry audit: READOVL lines for visible elements that overlap, READOUT lines for elements outside their
--- column (under the sidebar or the preview, past the right edge). Per scroll stop a screenshot pzopt-read-<n>.png and one
--- READROW line per setting whose label is fully on screen (its label rectangle in screen pixels, the text shown and the
--- setting's label: a "..." cut shows as shown ~= full). harness/options-readability.py OCRs every label from the shots and
--- asks Jev whether every setting is readable.
-local function readRect(el)
-    return el:getAbsoluteX(), el:getAbsoluteY(), el:getWidth(), el:getHeight()
-end
-local function readDesc(el)
-    return tostring(el.Type) .. ":" .. string.gsub(tostring(el.pzoptLabel or el.title or el.name or ""), "%s", "_")
-end
-local function readPages(S)
-    local pages = { "home" }
-    for _, g in ipairs(S.tree.groups) do
-        for _, cat in ipairs(g.cats) do
-            table.insert(pages, "cat:" .. cat.id .. ":0:simple")
-            for i = 1, #cat.subs do table.insert(pages, "cat:" .. cat.id .. ":" .. i .. ":everything") end
-        end
-    end
-    for i = 1, #S.tree.problems do table.insert(pages, "problems:" .. i) end
-    table.insert(pages, "search:shadow")
-    return pages
-end
-local function readAudit(mo, spec)
-    local S = mo.pzoptSearch
-    local panel, G = S.panel, S.G
-    local home = string.sub(spec, 1, 4) == "home"
-    local left = home and 0 or (S.sidebar:getX() + S.sidebar:getWidth())
-    local right = (S.preview:getIsVisible() and S.preview:getX()) or (panel:getWidth() - G.sbar)
-    local els = {}
-    for _, item in ipairs(S.items) do
-        if not item.hidden then
-            for _, e in ipairs(item.elems) do
-                local el = e.el
-                if el:getIsVisible() and el:getWidth() > 2 and el:getHeight() > 2 and not item.background then
-                    table.insert(els, { el = el, item = item, x = el:getX(), y = el:getY(), w = el:getWidth(), h = el:getHeight() })
-                end
-            end
-        end
-    end
-    local n = 0
-    for i = 1, #els do
-        local a = els[i]
-        if a.x < left - 1 or a.x + a.w > right + 1 then
-            print(string.format("[pzopt-harness] READOUT page=%s el=%s x=%d w=%d left=%d right=%d", spec, readDesc(a.el), a.x, a.w, left, right))
-        end
-        for j = i + 1, #els do
-            local b = els[j]
-            local ox = math.min(a.x + a.w, b.x + b.w) - math.max(a.x, b.x)
-            local oy = math.min(a.y + a.h, b.y + b.h) - math.max(a.y, b.y)
-            if ox > 1 and oy > 1 and a.item ~= b.item then
-                n = n + 1
-                if n <= 40 then
-                    print(string.format("[pzopt-harness] READOVL page=%s a=%s b=%s overlap=%dx%d at=%d,%d", spec, readDesc(a.el), readDesc(b.el), ox, oy, math.max(a.x, b.x), math.max(a.y, b.y)))
-                end
-            end
-        end
-    end
-    if not home then
-        for _, b in ipairs(S.sidebar.buttons or {}) do
-            if b.pzoptFits == false then
-                print(string.format("[pzopt-harness] READSIDE page=%s entry=%s", spec, string.gsub(tostring(b.pzoptLabel), "%s", "_")))
-            end
-        end
-    end
-    print(string.format("[pzopt-harness] READPAGE page=%s elements=%d overlaps=%d", spec, #els, n))
-end
-local function readRows(mo, spec, shot)
-    local S = mo.pzoptSearch
-    local panel = S.panel
-    local top = panel:getAbsoluteY()
-    local bottom = top + panel:getHeight()
-    local right = S.preview:getIsVisible() and S.preview:getAbsoluteX() or (panel:getAbsoluteX() + panel:getWidth())
-    local n = 0
-    for _, row in ipairs(S.keyRows) do
-        if not row.hidden and row.entry then
-            local label
-            for _, e in ipairs(row.elems) do
-                if e.el.Type == "ISLabel" and (not label or e.el:getY() < label:getY()) then label = e.el end
-            end
-            if label and label:getIsVisible() then
-                local x, y, w, h = readRect(label)
-                local more = row.labelMore or {}
-                local lineH = getTextManager():getFontHeight(UIFont.Small) + 2
-                local info = row.elems[#row.elems].el -- the line(s) under the label: a wrapped name's rest first
-                local bottomAll = y + h + #more * lineH
-                if y >= top and bottomAll <= bottom and x + w <= right then
-                    n = n + 1
-                    local shown = tostring(label.name)
-                    for _, l in ipairs(more) do shown = shown .. " " .. l end
-                    print(string.format("[pzopt-harness] READROW n=%d page=%s key=%s x=%d y=%d w=%d h=%d text=%s|shown=%s|full=%s", shot,
-                        spec, row.entry.key, x, y, w, h, tostring(label.name), shown, tostring(row.entry.label)))
-                    for i, l in ipairs(more) do
-                        print(string.format("[pzopt-harness] READCONT n=%d page=%s key=%s x=%d y=%d w=%d h=%d text=%s", shot, spec,
-                            row.entry.key, info:getAbsoluteX(), info:getAbsoluteY() + (i - 1) * lineH, getTextManager():MeasureStringX(UIFont.Small, l),
-                            lineH, l))
-                    end
-                end
-            end
-        end
-    end
-    -- the header's texts (read back by OCR too: text drawn over them, like the search hint once, makes them fail)
-    if S.panel:getYScroll() == 0 then
-        local function txt(el, text)
-            if el and el:getIsVisible() and text and text ~= "" then
-                local x, y, w, h = readRect(el)
-                print(string.format("[pzopt-harness] READTXT n=%d page=%s x=%d y=%d w=%d h=%d text=%s", shot, spec, x, y, w, h, text))
-            end
-        end
-        txt(S.viewLabel.elems[1].el, S.viewLabel.elems[1].el.name)
-        for _, v in ipairs(S.viewButtons) do txt(v.elems[1].el, v.elems[1].el.pzoptLabel) end
-        txt(S.clipsLabel, S.clipsLabel.name)
-        txt(S.status, S.status.name)
-        -- the empty strips between the search line's elements (text spilling out of one, like the search hint at 1920 x 1080
-        -- once, shows up there, not inside the next element's own rectangle)
-        local line = { S.entry, S.viewLabel.elems[1].el }
-        for _, v in ipairs(S.viewButtons) do table.insert(line, v.elems[1].el) end
-        for _, el in ipairs({ S.status, S.clips, S.clipsLabel }) do table.insert(line, el) end
-        local ey = S.entry:getAbsoluteY()
-        local onLine = {}
-        for _, el in ipairs(line) do
-            if el:getIsVisible() and math.abs(el:getAbsoluteY() - ey) < 4 then table.insert(onLine, el) end
-        end
-        table.sort(onLine, function(p, q) return p:getAbsoluteX() < q:getAbsoluteX() end)
-        for i = 1, #onLine - 1 do
-            local ax = onLine[i]:getAbsoluteX() + onLine[i]:getWidth()
-            local bx = onLine[i + 1]:getAbsoluteX()
-            if bx - ax >= 6 then
-                print(string.format("[pzopt-harness] READGAP n=%d page=%s x=%d y=%d w=%d h=%d between=%s|%s", shot, spec, ax + 2,
-                    ey + 4, bx - ax - 4, S.entry:getHeight() - 8, readDesc(onLine[i]), readDesc(onLine[i + 1])))
-            end
-        end
-    end
-    return n
-end
-local function readTick(c, ms, now)
-    local mo = ms.mainOptions
-    local S = mo.pzoptSearch
-    local r = c.read
-    if not S then
-        print("[pzopt-harness] READ: no pzoptSearch on the options screen")
-        c.readDone, c.shotMs = true, now
-        return
-    end
-    if not r.pages then
-        r.pages, r.page, r.shot, r.at = readPages(S), 0, 0, now
-        print(string.format("[pzopt-harness] READWIN x=%d y=%d w=%d h=%d screen=%dx%d pages=%d", mo:getAbsoluteX(), mo:getAbsoluteY(),
-            mo:getWidth(), mo:getHeight(), getCore():getScreenWidth(), getCore():getScreenHeight(), #r.pages))
-    end
-    if now < r.at then return end
-    if r.step == "shoot" then
-        if r.scroll == 0 then readAudit(mo, r.pages[r.page]) end -- (once the page is laid out: a search runs 120 ms late)
-        r.shot = r.shot + 1
-        local rows = readRows(mo, r.pages[r.page], r.shot)
-        getCore():TakeFullScreenshot("pzopt-read-" .. r.shot .. ".png")
-        print(string.format("[pzopt-harness] READSHOT n=%d page=%s scroll=%d rows=%d", r.shot, r.pages[r.page], r.scroll, rows))
-        r.step, r.at = "scroll", now + 450
-        return
-    end
-    if r.step == "scroll" then
-        local panel = S.panel
-        local maxScroll = math.max(0, panel:getScrollHeight() - panel:getHeight())
-        if r.scroll < maxScroll then
-            r.scroll = math.min(maxScroll, r.scroll + math.floor(panel:getHeight() * 0.8))
-            panel:setYScroll(-r.scroll)
-            r.step, r.at = "shoot", now + 450
-            return
-        end
-    end
-    r.page = r.page + 1
-    if r.page > #r.pages then
-        print("[pzopt-harness] READ: done, " .. r.shot .. " screenshots")
-        c.readDone, c.shotMs = true, now
-        return
-    end
-    local spec = r.pages[r.page]
-    applyNav(mo, spec)
-    S.panel:setYScroll(0)
-    r.scroll = 0
-    r.step, r.at = "shoot", now + (string.sub(spec, 1, 7) == "search:" and 900 or 500)
+-- options_read=1: the readability tour of every settings page of the screen (home, each group, each category, each
+--   subcategory and each further page of its list in the Everything view, Fix a problem and each problem, a search) through
+--   the benchmark's BENCHREAD rig (PzoptBenchRead): every text drawn with its rectangles, a screenshot
+--   Screenshots/pzopt-bench-ui-read-<n>-<stop>.png per stop. harness/options-readability.py <run> collects them and runs
+--   harness/benchmark-readability.py (Jev).
+
+local function menuScreen()
+    return PzoptMainMenu and (PzoptMainMenu.instance() or PzoptMainMenu.show())
 end
 
-local function joyDescribe(mo)
-    local panel = mo.pzoptPanel
-    local child = panel and panel:getJoypadFocus()
-    local what = "none"
-    if child then
-        what = tostring(child.Type) .. " '" .. tostring(child.pzoptLabel or child.title or child.name or (child.options and child.options[1]) or "") .. "'"
-            .. (child.pzoptFixed and " [sidebar]" or "")
+-- the node a page spec names (see options_nav above); nil + key for key:<key>, nil + nil + text for a search
+local function navNode(spec)
+    spec = spec or "home"
+    if OLD_TABS[spec] then return OLD_TABS[spec] end
+    local parts = {}
+    for part in string.gmatch(spec .. ":", "([^:]*):") do table.insert(parts, part) end
+    local kind = parts[1] ~= "" and parts[1] or "home"
+    if kind == "key" then return nil, parts[2] end
+    if kind == "search" then return nil, nil, string.sub(spec, 8) end
+    if kind == "problems" then return (parts[2] and parts[2] ~= "") and ("problems/" .. parts[2]) or "problems" end
+    if kind == "cat" then
+        for _, g in ipairs((PzoptSettingsLayout or {}).groups or {}) do
+            for _, c in ipairs(g.cats or {}) do
+                if c.id == parts[2] then
+                    local sub = tonumber(parts[3]) or 0
+                    return g.id .. "/" .. c.id .. (sub > 0 and ("/" .. sub) or ""), nil, nil, LEVELS[parts[4] or ""]
+                end
+            end
+        end
+        return "home"
     end
-    local S = mo.pzoptSearch
-    return what .. " line " .. tostring(panel and panel.joypadIndexY) .. "/" .. tostring(panel and #panel.joypadButtonsY)
-        .. " page '" .. tostring(S and S.crumb) .. "' scroll " .. tostring(panel and math.floor(-panel:getYScroll()))
+    return spec
 end
-local function joyStep(mo, step, n)
-    local panel = mo.pzoptPanel
+
+local function applyNav(spec)
+    local m = menuScreen()
+    if not m then return nil end
+    local node, key, text, level = navNode(spec)
+    if level then m:setView(level) end
+    if text then
+        m.search:setText(text)
+        m:runSearch(text)
+    elseif key then
+        m:openKey(key)
+    else
+        m:selectNode(node, "master")
+    end
+    return m
+end
+
+local function joyDescribe(m)
+    if not m then return "no screen" end
+    local el = m.joypadButtons and m.joypadButtons[1]
+    local name = el and (el.name or el.title) or "-"
+    return "pane " .. tostring(m.pane) .. " row " .. tostring(m.joypadIndexY) .. " el '" .. tostring(name) .. "' page "
+        .. tostring(m.selected) .. (m.help and "+help" or "") .. (m.prompt and "+prompt" or "")
+end
+local JOY_BUTTONS = { a = "AButton", b = "BButton", x = "XButton", y = "YButton", lb = "LBumper", rb = "RBumper", back = "Back" }
+local function joyStep(m, step, n)
     if step == "focus" then
-        panel.joyfocus = JOY
-        MainOptions.onGainJoypadFocusCurrentTab(panel, JOY)
-        panel:restoreJoypadFocus(JOY)
-    elseif step == "down" then panel:onJoypadDirDown(JOY)
-    elseif step == "up" then panel:onJoypadDirUp(JOY)
-    elseif step == "left" then panel:onJoypadDirLeft(JOY)
-    elseif step == "right" then panel:onJoypadDirRight(JOY)
-    elseif step == "a" then panel:onJoypadDown(Joypad.AButton, JOY)
+        m:onGainJoypadFocus(JOY)
+    elseif step == "down" then m:onJoypadDirDown(JOY)
+    elseif step == "up" then m:onJoypadDirUp(JOY)
+    elseif step == "left" then m:onJoypadDirLeft(JOY)
+    elseif step == "right" then m:onJoypadDirRight(JOY)
+    elseif JOY_BUTTONS[step] then m:onJoypadDown(Joypad[JOY_BUTTONS[step]], JOY)
     elseif step == "shot" then getCore():TakeFullScreenshot("pzopt-joy-" .. n .. ".png")
     end
 end
 
-applyNav = function(mo, spec)
-    local parts = {}
-    for part in string.gmatch(spec .. ":", "([^:]*):") do table.insert(parts, part) end
-    local kind = parts[1] ~= "" and parts[1] or "home"
-    if kind == "search" then
-        PzoptOptionsNavigate(mo, "home")
-        local S = mo.pzoptSearch
-        if S and S.entry then S.entry:setText(string.sub(spec, 8)) end
-        return
+-- options_read's stops: a page per stop, a long list's further pages as stops of their own (the stops a stop returns run
+-- next), the Everything view throughout
+local function readName(node)
+    return "opt-" .. string.gsub(node, "/", "-")
+end
+local function listPageStops(name)
+    local m = PzoptMainMenu.instance()
+    local out = {}
+    if not m then return out end
+    local n, vis = #m.list.items, m.list:visibleCount()
+    local i, p = vis + 1, 2
+    while i <= n do
+        local target = i
+        table.insert(out, { name = name .. "-p" .. p, fn = function()
+            local mm = PzoptMainMenu.instance()
+            mm.list.top = target
+            mm.list:setSelected(target)
+            mm:showDetail()
+        end })
+        i, p = i + vis, p + 1
     end
-    PzoptOptionsNavigate(mo, kind, parts[2] ~= "" and parts[2] or nil, parts[3], parts[4] ~= "" and parts[4] or nil)
+    return out
+end
+local function pageStop(node, children)
+    return { name = readName(node), fn = function()
+        local m = PzoptMainMenu.instance()
+        m:selectNode(node, "master")
+        local more = listPageStops(readName(node))
+        if children then
+            for _, it in ipairs(m.page.items or {}) do
+                if it.kind == "node" and it.id and string.find(it.id, "^" .. string.gsub(node, "%p", "%%%0") .. "/") then
+                    table.insert(more, pageStop(it.id, string.find(it.id, "/[^/]+/") == nil))
+                end
+            end
+        end
+        return more
+    end }
+end
+local function readStops(c)
+    local stops = {
+        { name = "opt-home", fn = function()
+            local m = PzoptMainMenu.instance()
+            m.forceHints = true
+            m:setView(3)
+            m:selectNode("home", "master")
+            return listPageStops("opt-home")
+        end },
+    }
+    for _, g in ipairs((PzoptSettingsLayout or {}).groups or {}) do table.insert(stops, pageStop(g.id, true)) end
+    table.insert(stops, pageStop("problems", false))
+    for i = 1, #((PzoptSettingsLayout or {}).problems or {}) do table.insert(stops, pageStop("problems/" .. i, false)) end
+    table.insert(stops, { name = "opt-search", fn = function()
+        local m = PzoptMainMenu.instance()
+        m.search:setText("shadow")
+        m:runSearch("shadow")
+        return listPageStops("opt-search")
+    end })
+    table.insert(stops, { name = "opt-done", fn = function()
+        local m = PzoptMainMenu.instance()
+        m.search:setText("")
+        m:runSearch("")
+        m:setView(1)
+        m:selectNode("home", "master")
+        c.readDone = true
+    end })
+    return stops
 end
 -- compat_check=1 (2026-10-02): stay on the main menu, log the pzopt menu items, write Screenshots/pzopt-menu.png, open
--- the "PZ OPTIMIZATION MOD COMPATIBILITY CHECK" dialog through the item's own click handler, log its text, write
+-- the mod compatibility dialog (PzoptCompatDialog.show), log its text, write
 -- Screenshots/pzopt-compat.png, close it and quit. With `--mod pzopt-compat-javafixture` (harness/compat/make-java-fixture.sh)
 -- the dialog lists the fixture's jars and the two settings it switches off. compat_choose=performance|compatibility
 -- presses that choice's button after the first screenshot, logs the profile state and writes
@@ -315,14 +232,14 @@ local function compatTick()
         getCore():TakeFullScreenshot("pzopt-menu.png")
         c.menuMs = now
     elseif not c.openedMs and now - c.menuMs >= 2000 then
-        local item = ms.pzoptCompatOption
-        if not item then
+        -- the check's dialog (pzopt_mainscreen_compat.lua; the main menu's PZ OPTIMIZATION screen shows the same scan as a page)
+        if not PzoptCompatDialog then
             print("[pzopt-harness] compat check: item NOT FOUND, quitting")
             compatCheck = false
             getCore():quit()
             return
         end
-        item.onMouseDown(item, 0, 0)
+        PzoptCompatDialog.show()
         local dlg = PzoptCompatDialog and PzoptCompatDialog.instance
         print("[pzopt-harness] compat check: dialog " .. (dlg and "open" or "NOT OPEN"))
         if dlg then
@@ -354,64 +271,28 @@ local function compatTick()
     end
 end
 
-local function selectPreview(mo, key)
-    local n = 0
-    for _, field in ipairs({ "pzoptPreview", "pzoptEnhancementPreview", "pzoptProfilerPreview" }) do
-        local pv = mo[field]
-        for _, row in ipairs(pv and pv.rows or {}) do
-            if row.entry and row.entry.key == key then
-                pv:select(row)
-                n = n + 1
-            end
-        end
-    end
-    return n
-end
-
-local function findSearchBox(el, depth)
-    if not el or depth > 8 then return nil end
-    if el.Type == "ISTextEntryBox" and el.tooltip and string.find(el.tooltip, "Type words from a setting", 1, true) then return el end
-    for _, ch in pairs(el.children or {}) do
-        local f = findSearchBox(ch, depth + 1)
-        if f then return f end
-    end
-    return nil
-end
-
--- options_io=1 (2026-10-01): the tabs' "Export settings" / "Import settings..." buttons, 1 s after opening: Export (logs
--- the text and whether Zomboid/pzopt/settings-export.ini matches the clipboard), then Import of that text plus IO_CHANGES
--- and an unknown key through the dialog's OK, logs each control before / after and the result dialog; screenshots
--- pzopt-io-{1-export,2-import,3-result}.png. Never presses Apply (nothing is saved) and puts the clipboard back. Pass
--- `--vmarg -Dpzopt.userOptionsFile=<copy>` so the export file lands beside a copy, not in the player's Zomboid/pzopt/.
+-- options_io=1 (2026-10-01; the screen's Export settings / Import settings... since 2026-10-18): 1 s after opening, Export
+-- (PzoptSettings.exportSettings: logs the text and whether Zomboid/pzopt/settings-export.ini matches the clipboard), then
+-- the import of that text plus IO_CHANGES and an unknown key (PzoptSettings.importSettings, the Import box's OK), logs
+-- each value before / after and the import's message; screenshots pzopt-io-{1-export,2-import,3-result}.png, then the
+-- settings back from the first export and the clipboard restored. The screen saves at once: pass `--vmarg
+-- -Dpzopt.userOptionsFile=<copy>` so the import writes a copy, not the player's Zomboid/pzopt/options.ini.
 local IO_CHANGES = { treesInChunkTexture = "false", fogScalePct = "50", overlayStats = "full", spriteFilter = "sharp" }
-
-local function findButton(el, title, depth)
-    if not el or depth > 8 then return nil end
-    if el.Type == "ISButton" and el.title == title then return el end
-    for _, ch in pairs(el.children or {}) do
-        local f = findButton(ch, title, depth + 1)
-        if f then return f end
-    end
-    return nil
-end
-
-local function optionByKey(mo, key)
-    for _, field in ipairs({ "pzoptOptions", "pzoptEnhancementOptions", "pzoptProfilerOptions" }) do
-        for _, o in ipairs(mo[field] or {}) do
-            if o.pzoptKey == key then return o end
-        end
-    end
-    return nil
-end
 
 local function ioLog(s)
     print("[pzopt-harness] options io: " .. s)
 end
 
--- options_profile=<button text, _ for a space> (2026-10-07, the low-end presets): 1 s after the tab opens, press that profile's button on
--- the home page, log every pzopt control that is not at its default ("profile: key=value") and the stock Display options a
--- profile sets, write Screenshots/pzopt-profile.png, 1.5 s later apply them as the Apply button does, log the stock values again ("profile applied: ..."), then quit (via the
--- screenshot step). Give the run a scratch -Dpzopt.userOptionsFile: Apply saves the choice.
+local function nextValue(key)
+    local p = getPerformance()
+    local v = p:getPzoptOptionSaved(key)
+    return v ~= "" and v or (p:getPzoptOptionDefault(key) .. " (default)")
+end
+
+-- options_profile=<preset title, _ for a space> (2026-10-07, the low-end presets): 1 s after the screen opens, apply the
+-- home page's preset with that title (PzoptSettings.presets), log its message, every pzopt setting off its default
+-- ("profile: key=value") and the stock Display options a preset sets, write Screenshots/pzopt-profile.png, then quit (via
+-- the screenshot step). It saves at once: give the run a scratch -Dpzopt.userOptionsFile.
 local function stockState()
     local core, perf = getCore(), getPerformance()
     local function v(f) local ok, r = pcall(f); return ok and tostring(r) or "?" end
@@ -423,87 +304,81 @@ local function stockState()
         .. " textureCompression=" .. v(function() return core:getOptionTextureCompression() end)
 end
 
-local function profileStep(mo, name)
+local function profileStep(name)
     name = string.gsub(name, "_", " ") -- the flag cannot carry spaces through the queue's remote command line
-    local b = findButton(mo, name, 0)
-    if not b then print("[pzopt-harness] profile: button '" .. name .. "' NOT FOUND"); return end
-    b.onclick(b.target, b)
-    local n = 0
-    for _, field in ipairs({ "pzoptOptions", "pzoptEnhancementOptions" }) do
-        for _, o in ipairs(mo[field] or {}) do
-            local cur = o.pzoptCurrent and o:pzoptCurrent()
-            local okd, def = pcall(function() return getPerformance():getPzoptOptionDefault(o.pzoptKey) end)
-            if not okd then def = nil end
-            if cur ~= nil and def ~= nil and tostring(cur) ~= tostring(def) then
-                print("[pzopt-harness] profile: " .. tostring(o.pzoptKey) .. "=" .. tostring(cur))
+    local preset = nil
+    for _, pr in ipairs(PzoptSettings and PzoptSettings.presets() or {}) do
+        if pr.title == name then preset = pr end
+    end
+    if not preset then print("[pzopt-harness] profile: preset '" .. name .. "' NOT FOUND"); return end
+    print("[pzopt-harness] profile: before " .. stockState())
+    local msg = preset.apply()
+    local p, n = getPerformance(), 0
+    for page = 1, 2 do
+        for _, k in ipairs(PzoptSettings.pageKeys(page)) do
+            local saved = p:getPzoptOptionSaved(k)
+            if saved ~= "" and saved ~= p:getPzoptOptionDefault(k) then
+                print("[pzopt-harness] profile: " .. k .. "=" .. saved)
                 n = n + 1
             end
         end
     end
-    local fr = mo.gameOptions:get("framerate")
-    local frText = fr and fr.control and fr.control.options and fr.control.options[fr.control.selected]
-    print("[pzopt-harness] profile: '" .. name .. "' pressed, " .. n .. " pzopt control(s) off their default; framerate combo '"
-        .. tostring(type(frText) == "table" and (frText.text or frText[1]) or frText) .. "'; before apply " .. stockState())
+    print("[pzopt-harness] profile: '" .. name .. "' applied (" .. tostring(msg) .. "), " .. n .. " pzopt setting(s) off their default; "
+        .. "after " .. stockState())
+    local m = PzoptMainMenu.instance()
+    if m then m:refreshPage() end
     getCore():TakeFullScreenshot("pzopt-profile.png")
 end
 
-local function profileApply(mo)
-    local ok, err = pcall(function() mo:apply(false) end)
-    print("[pzopt-harness] profile applied" .. (ok and "" or (" (apply error " .. tostring(err) .. ")")) .. ": " .. stockState())
-end
-
 -- one step per call, 1.5 s apart; true when done
-local function ioStep(mo, io, now)
+local function ioStep(io, now)
     if now < (io.at or 0) then return false end
     local s = io.step or 0
     if s == 0 then
         io.clip = Clipboard.getClipboard() or ""
-        local b = findButton(mo, "Export settings", 0)
-        if not b then ioLog("Export button NOT FOUND"); return true end
-        b.onclick(b.target)
+        local msg = PzoptSettings.exportSettings()
         io.text = Clipboard.getClipboard() or ""
         local n = 0
         for line in string.gmatch(io.text, "[^\n]+") do
             if string.match(line, "^[%w_]+=") then n = n + 1 end
             ioLog("  " .. line)
         end
+        ioLog("export: " .. msg)
         ioLog("export " .. n .. " keys, " .. #io.text .. " chars, file "
             .. (getPerformance():getPzoptSettingsExportFile() == io.text and "matches the clipboard" or "DIFFERS from the clipboard"))
+        local m = PzoptMainMenu.instance()
+        if m then m:selectNode("home", "master", "export") end
     elseif s == 1 then
         getCore():TakeFullScreenshot("pzopt-io-1-export.png")
     elseif s == 2 then
-        if mo.pzoptTransferModal then mo.pzoptTransferModal:destroy() end
         local extra = { "noSuchKey=1" }
         for k, v in pairs(IO_CHANGES) do
             table.insert(extra, k .. "=" .. v)
-            local o = optionByKey(mo, k)
-            ioLog("before " .. k .. "=" .. (o and o:pzoptCurrent() or "NO CONTROL"))
+            ioLog("before " .. k .. "=" .. nextValue(k))
         end
-        Clipboard.setClipboard(io.text .. table.concat(extra, "\n") .. "\n")
-        local b = findButton(mo, "Import settings...", 0)
-        if not b then ioLog("Import button NOT FOUND"); return true end
-        b.onclick(b.target)
-        local m = mo.pzoptTransferModal
-        ioLog("import dialog " .. ((m and m.entry) and (#m.entry:getText() .. " chars prefilled") or "NOT OPEN"))
+        local text = io.text .. table.concat(extra, "\n") .. "\n"
+        Clipboard.setClipboard(text)
+        ioLog("import source " .. #PzoptSettings.importSource() .. " chars (the clipboard: " .. #text .. ")")
+        local msg = PzoptSettings.importSettings(text)
+        ioLog("result: " .. tostring(msg))
+        for k, want in pairs(IO_CHANGES) do
+            local cur = nextValue(k)
+            ioLog("after " .. k .. "=" .. cur .. (cur == want and " ok" or (" WANTED " .. want)))
+        end
+        local m = PzoptMainMenu.instance()
+        if m then m:selectNode("home", "master", "import") end
     elseif s == 3 then
         getCore():TakeFullScreenshot("pzopt-io-2-import.png")
     elseif s == 4 then
-        local m = mo.pzoptTransferModal
-        m:onClick(m.yes)
-        local r = mo.pzoptTransferModal
-        ioLog("result: " .. string.gsub(tostring(r and r.text), "\n", " | "))
-        for k, want in pairs(IO_CHANGES) do
-            local o = optionByKey(mo, k)
-            local cur = o and o:pzoptCurrent() or "NO CONTROL"
-            ioLog("after " .. k .. "=" .. cur .. (cur == want and " ok" or (" WANTED " .. want)))
-        end
-        ioLog("options changed=" .. tostring(mo.gameOptions.changed))
+        -- the settings back as the first export had them
+        ioLog("restore: " .. tostring(PzoptSettings.importSettings(io.text ~= "" and io.text or "# none\nenabled=true\n")))
+        local m = PzoptMainMenu.instance()
+        if m then m:refreshPage() end
     elseif s == 5 then
         getCore():TakeFullScreenshot("pzopt-io-3-result.png")
     else
-        if mo.pzoptTransferModal then mo.pzoptTransferModal:destroy() end
         Clipboard.setClipboard(io.clip)
-        ioLog("done (nothing applied, clipboard restored)")
+        ioLog("done (settings restored from the first export, clipboard restored)")
         return true
     end
     io.step, io.at = s + 1, now + 1500
@@ -513,28 +388,32 @@ end
 local function optionsTick()
     local c = optionsCheck
     local ms = MainScreen.instance
-    if not ms or (ms.delay and ms.delay > 0) then return end
+    if not ms or (ms.delay and ms.delay > 0) or not ms.pzoptMenuOption then return end
     local now = getTimestampMs()
     if not c.openedMs then
-        local mo = ms.mainOptions
-        mo:toUI()
-        mo:setVisible(true)
-        local names = {}
-        for _, v in ipairs(mo.tabs.viewList) do table.insert(names, v.name) end
-        local tab = c.tab
-        if OLD_TABS[tab] and PzoptOptionsTab then
-            c.nav = c.nav or OLD_TABS[tab]
-            tab = PzoptOptionsTab
+        local m = menuScreen()
+        if not m then
+            print("[pzopt-harness] options: the PZ OPTIMIZATION screen NOT FOUND")
+            optionsCheck = false
+            getCore():quit()
+            return
         end
-        local found = mo.tabs:activateView(tab)
-        print("[pzopt-harness] options: tabs " .. table.concat(names, " | ") .. "; " .. tab .. (found and " shown" or " NOT FOUND"))
-        if c.nav and PzoptOptionsNavigate then
-            applyNav(mo, c.nav)
-            print("[pzopt-harness] options: page " .. c.nav)
-        end
+        if c.clips and PzoptSettings then PzoptSettings.setClipsOn(c.clips == "1" or c.clips == "true") end
+        local nav = c.nav or OLD_TABS[c.tab or ""] or "home"
+        if c.select then nav = "key:" .. c.select end
+        applyNav(nav)
+        print("[pzopt-harness] options: PZ OPTIMIZATION screen shown, page " .. tostring(m.selected) .. " (" .. nav .. ")")
         c.openedMs = now
+    elseif c.read and not c.readStarted then
+        if now < c.openedMs + 1500 then return end
+        c.readStarted = true
+        PzoptBenchRead.begin(readStops(c))
+        print("[pzopt-harness] options: readability tour started")
     elseif c.read and not c.readDone then
-        if now >= c.openedMs + 1500 then readTick(c, ms, now) end
+        return
+    elseif c.read and not c.shotMs then
+        c.shotMs = now + 2000 -- the tour's last stop is logged and shot
+        print("[pzopt-harness] READ: done")
     elseif c.joy and not c.joyDone then
         if now < (c.joyAt or (c.openedMs + 1500)) then return end
         local i = (c.joyIndex or 0) + 1
@@ -542,8 +421,9 @@ local function optionsTick()
             c.joyDone, c.shotMs = true, now
             return
         end
-        local ok, err = pcall(joyStep, ms.mainOptions, c.joy[i], i)
-        print("[pzopt-harness] joy: " .. i .. " " .. c.joy[i] .. (ok and "" or (" ERROR " .. tostring(err))) .. " -> " .. joyDescribe(ms.mainOptions))
+        local m = PzoptMainMenu.instance()
+        local ok, err = pcall(joyStep, m, c.joy[i], i)
+        print("[pzopt-harness] joy: " .. i .. " " .. c.joy[i] .. (ok and "" or (" ERROR " .. tostring(err))) .. " -> " .. joyDescribe(PzoptMainMenu.instance()))
         c.joyIndex, c.joyAt = i, now + 600
     elseif c.shots and not c.shotsDone then
         -- one page every 1.5 s, the screenshot 1 s after showing it
@@ -560,28 +440,21 @@ local function optionsTick()
                 c.shotsDone, c.shotMs = true, now
                 return
             end
-            applyNav(ms.mainOptions, c.shots[i])
+            applyNav(c.shots[i])
             c.shotIndex, c.shotAt, c.shotTaken = i, now + 1000, false
         end
     elseif c.search and not c.searched and now - c.openedMs >= 1000 then
         c.searched = true
-        local box = findSearchBox(ms.mainOptions, 0)
-        if box then box:setText(c.search) end
-        print("[pzopt-harness] options: search '" .. c.search .. "'" .. (box and " typed" or ": search box NOT FOUND"))
-    elseif c.profile and not c.profilePressed and now - c.openedMs >= 1000 then
-        c.profilePressed = true
-        profileStep(ms.mainOptions, c.profile)
-    elseif c.profile and not c.profileDone and now - c.openedMs >= 2500 then
+        local m = PzoptMainMenu.instance()
+        m.search:setText(c.search)
+        m:runSearch(c.search)
+        print("[pzopt-harness] options: search '" .. c.search .. "' typed, page " .. tostring(m.selected) .. ", "
+            .. tostring(m.page and m.page.count or 0) .. " results")
+    elseif c.profile and not c.profileDone and now - c.openedMs >= 1000 then
         c.profileDone = true
-        profileApply(ms.mainOptions)
+        profileStep(c.profile)
     elseif c.io and not c.ioDone and now - c.openedMs >= 1000 then
-        c.ioDone = ioStep(ms.mainOptions, c.io, now)
-    elseif c.select and not c.shotMs and now - c.openedMs >= 1000 and now - c.openedMs < 3000 then
-        local n = selectPreview(ms.mainOptions, c.select)
-        if not c.selectLogged then
-            c.selectLogged = true
-            print("[pzopt-harness] options: preview on '" .. c.select .. "' (" .. n .. " page(s))")
-        end
+        c.ioDone = ioStep(c.io, now)
     elseif not c.shotMs and now - c.openedMs >= 3000 then
         getCore():TakeFullScreenshot("pzopt-options.png")
         print("[pzopt-harness] options: screenshot requested")
@@ -614,7 +487,12 @@ local function onMainMenuEnter()
         appendFlag("consumed=1")
         return
     end
-    if flags.options_tab and flags.options_tab ~= "" then
+    local anyOptions = false
+    for _, k in ipairs({ "options_tab", "options_nav", "options_shots", "options_read", "options_joy", "options_io", "options_profile",
+                         "options_select", "options_search", "options_clips" }) do
+        if flags[k] and flags[k] ~= "" then anyOptions = true end
+    end
+    if anyOptions then
         if optionsCheck == nil then
             appendFlag("consumed=1")
             local shots = nil
@@ -622,7 +500,8 @@ local function onMainMenuEnter()
                 shots = {}
                 for s in string.gmatch(flags.options_shots, "[^;]+") do table.insert(shots, s) end
             end
-            optionsCheck = { tab = flags.options_tab, search = flags.options_search ~= "" and flags.options_search or nil,
+            optionsCheck = { tab = flags.options_tab ~= "" and flags.options_tab or nil, search = (flags.options_search and flags.options_search ~= "") and (string.gsub(flags.options_search, "_", " ")) or nil,
+                clips = flags.options_clips ~= "" and flags.options_clips or nil,
                 nav = flags.options_nav ~= "" and flags.options_nav or nil, shots = shots,
                 read = (flags.options_read and flags.options_read ~= "") and {} or nil,
                 joy = (flags.options_joy and flags.options_joy ~= "") and (function()
@@ -753,6 +632,13 @@ local function onFETick()
         end
         print("[pzopt-harness] continuing latest save " .. tostring(MainScreen.latestSaveWorld) .. " (" .. tostring(MainScreen.latestSaveGameMode) .. ")")
         MainScreen.continueLatestSave(MainScreen.latestSaveGameMode, MainScreen.latestSaveWorld)
+        if flags.stock_drive and flags.inputlag == "1" then
+            -- no pzopt.Harness presses click-to-start in an uninstalled game: the input driver's script (run.sh
+            -- --inputlag) clicks it, so it starts now instead of after the player exists
+            local w = getFileWriter("pzopt-inputlag-ready.txt", true, false)
+            if w then w:write("ready_epoch_ms=" .. tostring(getTimestampMs()) .. "\n"); w:close() end
+            print("[pzopt-stockdrive] loading; the input driver clicks click-to-start")
+        end
     end
 end
 
@@ -922,42 +808,65 @@ local function glassTick()
     glass = false
 end
 
--- options_check=S (2026-09-23): S seconds into the world, activate the Optimizations tab of the in-game options
--- screen (built lazily on first activation since the lazy-tab change) through the stock tab path, without
--- showing the screen, and log whether it built, its control count and whether building left the screen
--- "changed" (it must not: Accept would then save untouched values).
-local optionsCheck = nil
+-- options_check=S (2026-09-23; since 2026-10-18 the settings are the PZ OPTIMIZATION screen, not an Options tab): S seconds
+-- into the world, log the in-game options screen's lazy build (pending / created, the key bindings it loaded) and build it
+-- through toUI as opening it does, then open the pause menu, the PZ OPTIMIZATION screen from its item (logs the page and
+-- the screen's size, writes Screenshots/pzopt-options-check.png), close it back onto the pause menu and resume.
+-- (pzmenu_check is the fuller in-game check: the overlay toggle and a live key.)
+local ingameOptions = nil
 local function optionsCheckTick()
-    if optionsCheck == false then return end
+    if ingameOptions == false then return end
     if not getPlayer() then return end
-    if optionsCheck == nil then
+    local now = getTimestampMs()
+    if ingameOptions == nil then
         local flags = readFlags()
-        if not flags or not flags.options_check or flags.options_check == "" then optionsCheck = false; return end
-        optionsCheck = { atMs = getTimestampMs() + (tonumber(flags.options_check) or 10) * 1000 }
+        if not flags or not flags.options_check or flags.options_check == "" then ingameOptions = false; return end
+        ingameOptions = { atMs = now + (tonumber(flags.options_check) or 10) * 1000, step = 0 }
     end
-    if getTimestampMs() < optionsCheck.atMs then return end
-    optionsCheck = false
-    local mo = MainScreen.instance and MainScreen.instance.mainOptions
-    if not mo then print("[pzopt-harness] options check: no in-game MainOptions"); return end
-    local keys = {}
-    for _, k in ipairs({"Forward", "Backward", "Left", "Right", "Run", "Interact", "Toggle Inventory", "Aim"}) do
-        table.insert(keys, k .. "=" .. tostring(getCore():getKey(k)))
+    local c = ingameOptions
+    if now < c.atMs then return end
+    c.atMs = now + 2000
+    local ms = MainScreen.instance
+    local function menuKey()
+        local k = getCore():getKey("Main Menu")
+        return k ~= 0 and k or Keyboard.KEY_ESCAPE
     end
-    print("[pzopt-harness] options check: screen pending=" .. tostring(mo.pzoptCreatePending) .. " created=" .. tostring(mo.pzoptCreated)
-        .. ", keys " .. table.concat(keys, " "))
-    local tui = getTimestampMs()
-    mo:toUI() -- opening the screen calls toUI first (MainScreen)
-    print("[pzopt-harness] options check: toUI (builds a deferred screen) " .. (getTimestampMs() - tui) .. " ms, tabs=" .. tostring(mo.tabs ~= nil)
-        .. " pending=" .. tostring(mo.pzoptCreatePending))
-    local before = mo.pzoptBuilt
-    local nBefore = #mo.gameOptions.options
-    local t0 = getTimestampMs()
-    mo.tabs:activateView(PzoptOptionsTab or "Optimizations")
-    print(string.format("[pzopt-harness] options check: built before=%s after=%s in %d ms, controls=%d, game options %d -> %d, changed=%s, active=%s",
-        tostring(before), tostring(mo.pzoptBuilt), getTimestampMs() - t0, mo.pzoptOptions and #mo.pzoptOptions or -1,
-        nBefore, #mo.gameOptions.options, tostring(mo.gameOptions.changed), tostring(mo.tabs:getActiveView() == mo.pzoptPanel)))
-    mo.tabs:activateView(PzoptOptionsTab or "Optimizations") -- a second activation must not build again
-    print("[pzopt-harness] options check: second activation, game options " .. #mo.gameOptions.options)
+    if c.step == 0 then
+        local mo = ms and ms.mainOptions
+        if not mo then print("[pzopt-harness] options check: no in-game MainOptions"); ingameOptions = false; return end
+        local keys = {}
+        for _, k in ipairs({"Forward", "Backward", "Left", "Right", "Run", "Interact", "Toggle Inventory", "Aim"}) do
+            table.insert(keys, k .. "=" .. tostring(getCore():getKey(k)))
+        end
+        print("[pzopt-harness] options check: screen pending=" .. tostring(mo.pzoptCreatePending) .. " created=" .. tostring(mo.pzoptCreated)
+            .. ", keys " .. table.concat(keys, " "))
+        local tui = getTimestampMs()
+        mo:toUI() -- opening the screen calls toUI first (MainScreen)
+        local names = {}
+        for _, v in ipairs(mo.tabs and mo.tabs.viewList or {}) do table.insert(names, v.name) end
+        print("[pzopt-harness] options check: toUI (builds a deferred screen) " .. (getTimestampMs() - tui) .. " ms, pending="
+            .. tostring(mo.pzoptCreatePending) .. ", tabs " .. table.concat(names, " | "))
+        ToggleEscapeMenu(menuKey())
+        print("[pzopt-harness] options check: pause menu open=" .. tostring(ms:isVisible()) .. " item=" .. tostring(ms.pzoptMenuOption and ms.pzoptMenuOption.name))
+    elseif c.step == 1 then
+        if not ms.pzoptMenuOption then print("[pzopt-harness] options check: no PZ OPTIMIZATION item in the pause menu"); ingameOptions = false; return end
+        ms.pzoptMenuOption.onMouseDown(ms.pzoptMenuOption, 0, 0)
+        local m = PzoptMainMenu.instance()
+        print("[pzopt-harness] options check: PZ OPTIMIZATION screen open=" .. tostring(m ~= nil) .. " page=" .. tostring(m and m.selected)
+            .. " size=" .. tostring(m and m.width) .. "x" .. tostring(m and m.height) .. " in game=" .. tostring(ms.inGame))
+    elseif c.step == 2 then
+        getCore():TakeFullScreenshot("pzopt-options-check.png")
+    elseif c.step == 3 then
+        local m = PzoptMainMenu.instance()
+        if m then m:close("options_check") end
+        print("[pzopt-harness] options check: screen closed, pause menu open=" .. tostring(ms:isVisible()))
+    else
+        ToggleEscapeMenu(menuKey())
+        print("[pzopt-harness] options check: done, resumed (pause menu open=" .. tostring(ms:isVisible()) .. ")")
+        ingameOptions = false
+        return
+    end
+    c.step = c.step + 1
 end
 
 -- pause_menu=S (2026-09-23): S seconds into the world, open the pause menu the way Esc does (ToggleEscapeMenu),
@@ -1037,10 +946,11 @@ local function inputLagTick()
     if inputLag == nil then
         local flags = readFlags()
         if not flags or flags.inputlag ~= "1" then inputLag = false; return end
-        inputLag = { readyMs = now + 6000, check = 0 }
+        if flags.stock_drive then inputLag = { ready = true, check = 0, stock = true } -- the drive stays seated (stockDriveTick)
+        else inputLag = { readyMs = now + 6000, check = 0 } end
     end
     local player = getPlayer()
-    if player:getVehicle() then
+    if player:getVehicle() and not inputLag.stock then
         -- the bench save starts in the drive bench's car: W/S would be throttle / brake. Get out on foot first
         if not inputLag.exiting then
             inputLag.exiting = true
@@ -1069,6 +979,92 @@ local function inputLagTick()
         print("[pzopt-inputlag] script done, quitting")
         inputLag = false
         getCore():quit()
+    end
+end
+
+-- stock_drive=1 (2026-10-18, the car flicker on a truly uninstalled game: `--install stock --inputlag
+-- harness/inputlag/stock-click.txt`): the drive mode in Lua with the game's own calls only, since pzopt.Harness is not
+-- there. On the bench save (the player stands at the KY-60 path start, 8010,11204): stock_drive_hour (1) o'clock,
+-- weather stopped, grid power on and the light switches within 50 tiles on (Scene.lightsOnAround), a Base.RaceCar12
+-- spawned facing east with headlights on and the player seated, the camera zoomed out, then the game's cruise control
+-- (setRegulator) at stock_drive_kmh (120) with no steering: the road runs straight east. A line every second
+-- ([pzopt-stockdrive] t= pos= kmh= yaw=); quits after stock_drive_secs (35) of driving.
+local stockDrive = nil
+local function stockDriveTick()
+    if stockDrive == false then return end
+    local player = getPlayer()
+    if not player then return end
+    local now = getTimestampMs()
+    if stockDrive == nil then
+        local flags = readFlags()
+        if not flags or not flags.stock_drive then stockDrive = false; return end
+        stockDrive = { t0 = now, step = 0, hour = tonumber(flags.stock_drive_hour) or 1,
+            kmh = tonumber(flags.stock_drive_kmh) or 120, secs = tonumber(flags.stock_drive_secs) or 35, logMs = 0 }
+        appendFlag("started=1") -- back at the menu = the run is over (the menu quits to the desktop)
+    end
+    local s = stockDrive
+    local dt = now - s.t0
+    if s.step == 0 then
+        s.step = 1
+        local gt = getGameTime()
+        gt:setLastTimeOfDay(s.hour); gt:setTimeOfDay(s.hour)
+        getClimateManager():stopWeatherAndThunder()
+        getWorld():setHydroPowerOn(true)
+        local shut = math.ceil(getWorld():getWorldAgeDays()) + 30
+        local opt = getSandboxOptions():getOptionByName("ElecShutModifier")
+        if opt:getValue() < shut then opt:setValue(shut) end
+        local on, px, py = 0, math.floor(player:getX()), math.floor(player:getY())
+        for z = 0, 3 do for y = py - 50, py + 50 do for x = px - 50, px + 50 do
+            local sq = getCell():getGridSquare(x, y, z)
+            if sq then
+                local objs = sq:getObjects()
+                for i = 0, objs:size() - 1 do
+                    local o = objs:get(i)
+                    if instanceof(o, "IsoLightSwitch") and not o:isActivated() then o:setActive(true, false, true); on = on + 1 end
+                end
+            end
+        end end end
+        print(string.format("[pzopt-stockdrive] hour %.1f, weather stopped, hydro power on, ElecShutModifier %d, %d switches on, player at %d,%d,%d vehicle=%s",
+            s.hour, opt:getValue(), on, px, py, math.floor(player:getZ()), tostring(player:getVehicle())))
+    elseif s.step == 1 and dt >= 2000 then
+        s.step = 2
+        local v = player:getVehicle()
+        if not v then
+            local sq = getCell():getGridSquare(math.floor(player:getX()), math.floor(player:getY()), 0)
+            v = addVehicleDebug("Base.RaceCar12", IsoDirections.E, 0, sq)
+            if not v then print("[pzopt-stockdrive] could not spawn the car"); stockDrive = false; return end
+            v:repair()
+            player:getInventory():AddItem(v:createVehicleKey())
+            v:setAngles(0, 90, 0) -- addVehicleDebug adds up to 11 deg of random heading; the road runs due east
+            if not v:enter(0, player) then print("[pzopt-stockdrive] could not seat the player"); stockDrive = false; return end
+        end
+        s.v = v
+        v:setHeadlightsOn(true)
+        print("[pzopt-stockdrive] car " .. tostring(v:getScriptName()) .. " at " .. string.format("%.1f,%.1f", v:getX(), v:getY()) .. ", player seated " .. tostring(player:getVehicle() == v))
+    elseif s.step == 2 and dt >= 4000 then
+        s.step = 3
+        local v = s.v
+        v:setAngles(0, 90, 0)
+        v:setKeysInIgnition(true)
+        v:engineDoRunning()
+        for _ = 1, 12 do getCore():doZoomScroll(0, 1) end
+        v:setRegulator(true)
+        v:setRegulatorSpeed(s.kmh)
+        s.driveMs = now
+        print("[pzopt-stockdrive] drive start epoch_ms=" .. tostring(now) .. " engine=" .. tostring(v:isEngineRunning()) .. " regulator " .. s.kmh)
+    elseif s.step == 3 then
+        local v = s.v
+        if now - s.logMs >= 1000 then
+            s.logMs = now
+            print(string.format("[pzopt-stockdrive] t=%.0f pos=%.1f,%.1f kmh=%.1f yaw=%.1f headlights=%s zoom=%.2f epoch_ms=%d",
+                (now - s.driveMs) / 1000, v:getX(), v:getY(), v:getCurrentSpeedKmHour(), v:getAngleY(), tostring(v:getHeadlightsOn()),
+                getCore():getZoom(0), now))
+        end
+        if now - s.driveMs >= s.secs * 1000 then
+            print("[pzopt-stockdrive] done, quitting")
+            stockDrive = false
+            getCore():quit()
+        end
     end
 end
 
@@ -1117,11 +1113,340 @@ local function worldMapTick()
     print("[pzopt-map] step " .. i .. " zoom=" .. string.format("%.3f", ui.mapAPI:getZoomF()) .. " base=" .. string.format("%.3f", base))
 end
 
+-- pzmenu_check=S (2026-10-18): S seconds into the world (the bench save), the PZ Optimization menu over the pause menu:
+-- Esc opens the pause menu, its PZ OPTIMIZATION item opens the screen, the Profiler's overlay toggle (live) and a live
+-- Profiler key change at once, the screen closes back onto the pause menu, Esc resumes; every step is a [pzopt-harness]
+-- pzmenu line and an in-game screenshot (Screenshots/pzopt-pzmenu-<n>.png). With pzmenu_read=1 the same screens are the
+-- readability tour's stops (BENCHREAD lines + Screenshots/pzopt-bench-ui-read-*.png, harness/benchmark-readability.py).
+local pzmenu = nil
+local PZMENU_KEY = "overlayGraph" -- a live Profiler key (Profiler > Performance overlay > Overlay)
+local function pzmenuTick()
+    if pzmenu == false then return end
+    if not getPlayer() then return end
+    if pzmenu == nil then
+        local flags = readFlags()
+        if not flags or not flags.pzmenu_check or flags.pzmenu_check == "" then pzmenu = false; return end
+        pzmenu = { at = getTimestampMs() + (tonumber(flags.pzmenu_check) or 10) * 1000, step = 0, read = flags.pzmenu_read == "1" }
+    end
+    local now = getTimestampMs()
+    if now < pzmenu.at then return end
+    local ms = MainScreen.instance
+    local function log(t) print("[pzopt-harness] pzmenu: " .. t) end
+    local function shot(n) getCore():TakeFullScreenshot("pzopt-pzmenu-" .. n .. ".png") end
+    local st = pzmenu.step
+    pzmenu.step = st + 1
+    pzmenu.at = now + 2500
+    if pzmenu.read and st == 0 then
+        -- the readability tour over the pause menu (its stops; the tour logs and shoots each one). The "ig-" names keep its
+        -- screenshots (Screenshots/pzopt-bench-ui-read-NN-<name>.png) apart from a main-menu tour's on the same machine
+        local stops = {
+            { name = "ig-pause", fn = function() ToggleEscapeMenu(escapeKey()) ms.bottomPanel.pzoptReadRoot = true end },
+            { name = "ig-pzmenu", fn = function()
+                ms.bottomPanel.pzoptReadRoot = nil
+                ms.pzoptMenuOption.onMouseDown(ms.pzoptMenuOption, 0, 0)
+                PzoptMainMenu.instance().forceHints = true
+            end },
+            { name = "ig-pzmenu-tools-overlay-1", fn = function() PzoptMainMenu.instance():select("tools/overlay/1") end },
+            { name = "ig-pzmenu-search", fn = function()
+                local m = PzoptMainMenu.instance()
+                m.search:setText("shadow")
+                m:runSearch("shadow")
+            end },
+            { name = "ig-pzmenu-clips", fn = function()
+                local m = PzoptMainMenu.instance()
+                m.search:setText("")
+                m:runSearch("")
+                if PzoptSettings then PzoptSettings.setClipsOn(true) end
+                m:openKey("fogPass")
+            end },
+            { name = "ig-pzmenu-perf-drive-1", fn = function()
+                if PzoptSettings then PzoptSettings.setClipsOn(false) end
+                PzoptMainMenu.instance():select("perf/drive/1")
+            end },
+            { name = "ig-pzmenu-restart-prompt", fn = function() PzoptMainMenu.instance():devStep("vehicleSmooth", 1) end },
+            { name = "ig-pzmenu-restart-later", fn = function() PzoptMainMenu.instance():hideRestartPrompt() end },
+            { name = "ig-pzmenu-bench-setup", fn = function()
+                local m = PzoptMainMenu.instance()
+                m.forceNoPrompt = true
+                m:devStep("vehicleSmooth", -1)
+                m.forceNoPrompt = nil
+                m:select("bench/setup")
+            end },
+            { name = "ig-pzmenu-help", fn = function() PzoptMainMenu.instance():setHelp(true) end },
+            { name = "ig-pause-again", fn = function()
+                local m = PzoptMainMenu.instance()
+                m:setHelp(false)
+                m:close()
+                ms.bottomPanel.pzoptReadRoot = true
+            end },
+            { name = "ig-resumed", fn = function()
+                ms.bottomPanel.pzoptReadRoot = nil
+                ToggleEscapeMenu(escapeKey()) -- the game runs again (quit_after then quits to the desktop, not to the main menu)
+                print("[pzopt-harness] pzmenu: resumed, pause menu open=" .. tostring(ms:isVisible()))
+            end },
+        }
+        PzoptBenchRead.begin(stops)
+        pzmenu = false
+        log("readability tour over the pause menu started (" .. #stops .. " stops)")
+        return
+    end
+    if st == 0 then
+        ToggleEscapeMenu(escapeKey())
+        log("pause menu open=" .. tostring(ms and ms:isVisible()) .. " item=" .. tostring(ms and ms.pzoptMenuOption and ms.pzoptMenuOption.name))
+        shot(1)
+    elseif st == 1 then
+        ms.pzoptMenuOption.onMouseDown(ms.pzoptMenuOption, 0, 0)
+        local m = PzoptMainMenu.instance()
+        log("screen open=" .. tostring(m ~= nil) .. " page=" .. tostring(m and m.selected) .. " in game=" .. tostring(ms.inGame))
+        shot(2)
+    elseif st == 2 then
+        local m = PzoptMainMenu.instance()
+        m:select("tools/overlay/1")
+        local p = getPerformance()
+        log("overlay before: visible=" .. tostring(p:isPzoptOverlayVisible()) .. " sampling=" .. tostring(p:isPzoptOverlaySampling()))
+        m:activateItem(1) -- the toggle row (first on the page): shows the overlay (and switches the measuring on if it was off)
+        log("overlay after the toggle: visible=" .. tostring(p:isPzoptOverlayVisible()) .. " sampling=" .. tostring(p:isPzoptOverlaySampling()))
+        pzmenu.keyBefore = p:getPzoptOption(PZMENU_KEY)
+        m:devStep(PZMENU_KEY, 1)
+        log("live key " .. PZMENU_KEY .. ": " .. tostring(pzmenu.keyBefore) .. " -> " .. p:getPzoptOption(PZMENU_KEY) .. " (in force now)")
+    elseif st == 3 then
+        shot(3) -- the overlay over the menu, a few seconds into its measuring
+        log("overlay showing: visible=" .. tostring(getPerformance():isPzoptOverlayVisible()))
+    elseif st == 4 then
+        local m = PzoptMainMenu.instance()
+        m:devStep(PZMENU_KEY, -1)
+        m:close()
+        log("screen closed: screen=" .. tostring(PzoptMainMenu.instance() ~= nil) .. " pause menu open=" .. tostring(ms:isVisible())
+            .. " " .. PZMENU_KEY .. "=" .. getPerformance():getPzoptOption(PZMENU_KEY))
+        shot(4)
+    elseif st == 5 then
+        ToggleEscapeMenu(escapeKey())
+        log("resumed: pause menu open=" .. tostring(ms:isVisible()))
+    elseif st == 6 then
+        getPerformance():togglePzoptOverlay()
+        log("done (overlay visible=" .. tostring(getPerformance():isPzoptOverlayVisible()) .. ")")
+        pzmenu = false
+    end
+end
+
+-- pzmenu_masters=S (2026-10-18, the category master switches): S seconds into the world, the PZ Optimization screen over
+-- the pause menu; Enhancements > Lighting and shadows: god rays on (live), then its category switch off and on again (its
+-- row, A): the setting in force follows at once; Optimizations > Driving: its switch off asks for the restart (the
+-- prompt), LATER, back on: nothing waits. Each step is a "[pzopt-harness] masters:" line and a screenshot
+-- (Screenshots/pzopt-masters-<n>.png). Runs on the run's own options file (--vmarg -Dpzopt.userOptionsFile=<scratch>).
+local masters = nil
+local function mastersTick()
+    if masters == false then return end
+    if not getPlayer() then return end
+    if masters == nil then
+        local flags = readFlags()
+        if not flags or not flags.pzmenu_masters or flags.pzmenu_masters == "" then masters = false; return end
+        masters = { at = getTimestampMs() + (tonumber(flags.pzmenu_masters) or 10) * 1000, step = 0 }
+    end
+    local now = getTimestampMs()
+    if now < masters.at then return end
+    local ms = MainScreen.instance
+    local p = getPerformance()
+    local function log(t) print("[pzopt-harness] masters: " .. t) end
+    local function shot(n) getCore():TakeFullScreenshot("pzopt-masters-" .. n .. ".png") end
+    local function row1(m) m.list:setSelected(1) return m.list.items[1] end
+    local st = masters.step
+    masters.step = st + 1
+    masters.at = now + 2000
+    if st == 0 then
+        ToggleEscapeMenu(escapeKey())
+        ms.pzoptMenuOption.onMouseDown(ms.pzoptMenuOption, 0, 0)
+        PzoptSettings.set("godRays", "true")
+        log("godRays saved true: in force " .. p:getPzoptOption("godRays") .. ", catLightEnabled " .. p:getPzoptOption("catLightEnabled"))
+    elseif st == 1 then
+        local m = PzoptMainMenu.instance()
+        m:selectNode("vis/light", "master")
+        local it = row1(m)
+        m:activateItem(1)
+        log("category switch " .. tostring(it and it.master) .. " A: now " .. p:getPzoptOption("catLightEnabled") .. ", godRays in force "
+            .. p:getPzoptOption("godRays") .. " (live: false expected), restart prompt " .. tostring(m.prompt == true))
+        shot(1)
+    elseif st == 2 then
+        local m = PzoptMainMenu.instance()
+        m:activateItem(1)
+        log("category switch A again: catLightEnabled " .. p:getPzoptOption("catLightEnabled") .. ", godRays in force " .. p:getPzoptOption("godRays")
+            .. " (true expected)")
+        PzoptSettings.set("godRays", "")
+    elseif st == 3 then
+        local m = PzoptMainMenu.instance()
+        m:selectNode("perf/drive", "master")
+        local it = row1(m)
+        m:activateItem(1)
+        log("category switch " .. tostring(it and it.master) .. " A: saved " .. tostring(p:getPzoptOptionSaved("catDriveEnabled"))
+            .. ", in force " .. p:getPzoptOption("catDriveEnabled") .. " (next launch), restart prompt " .. tostring(m.prompt == true))
+        shot(2)
+    elseif st == 4 then
+        local m = PzoptMainMenu.instance()
+        m:hideRestartPrompt()
+        m:activateItem(1)
+        log("category switch A again: saved '" .. p:getPzoptOptionSaved("catDriveEnabled") .. "', prompt " .. tostring(m.prompt == true)
+            .. ", reminder " .. tostring(m:reminder() ~= nil))
+        shot(3)
+    elseif st == 5 then
+        PzoptMainMenu.instance():close("masters rig")
+        ToggleEscapeMenu(escapeKey())
+        log("done")
+        masters = false
+    end
+end
+
+-- pzmenu_final=S (2026-10-19, the one in-game pass of round 3): S seconds into the world, the pause menu, its PZ OPTIMIZATION
+-- item, a search ("fog": the results), a setting whose impact chart has rows (fogScalePct: GPU, VRAM), a category switch
+-- (Enhancements > Lighting and shadows: live, god rays follow at once; Optimizations > Driving: the restart prompt, LATER,
+-- back on), the screen closed, the game's own Options from the pause menu (its tabs: no pzopt tab), Back, resume. Every
+-- step is a "[pzopt-harness] final:" line and a screenshot (Screenshots/pzopt-final-<n>.png); "final: PASS" or
+-- "final: FAIL <what>" at the end. Runs on the run's own options file (--vmarg -Dpzopt.userOptionsFile=<scratch>).
+local final = nil
+local function finalTick()
+    if final == false then return end
+    if not getPlayer() then return end
+    if final == nil then
+        local flags = readFlags()
+        if not flags or not flags.pzmenu_final or flags.pzmenu_final == "" then final = false; return end
+        final = { at = getTimestampMs() + (tonumber(flags.pzmenu_final) or 10) * 1000, step = 0, fails = {} }
+    end
+    local now = getTimestampMs()
+    if now < final.at then return end
+    local ms = MainScreen.instance
+    local p = getPerformance()
+    local function log(t) print("[pzopt-harness] final: " .. t) end
+    local function check(ok, what) if not ok then table.insert(final.fails, what) end log((ok and "ok " or "FAIL ") .. what) end
+    local function shot(n) getCore():TakeFullScreenshot("pzopt-final-" .. n .. ".png") end
+    local st = final.step
+    final.step = st + 1
+    final.at = now + 2000
+    if st == 0 then
+        ToggleEscapeMenu(escapeKey())
+        ms.pzoptMenuOption.onMouseDown(ms.pzoptMenuOption, 0, 0)
+        check(PzoptMainMenu.instance() ~= nil and PzoptMainMenu.instance():isVisible(), "the screen opened from the pause menu")
+        shot(1)
+    elseif st == 1 then
+        local m = PzoptMainMenu.instance()
+        m.search:setText("fog")
+        m:runSearch("fog")
+        local n = m.page and m.page.count or 0
+        local first = m.list.items[1] and tostring(m.list.items[1].id) or "-"
+        check(m.selected == "search" and n > 0, "search \"fog\": " .. n .. " results, first " .. first)
+        shot(2)
+    elseif st == 2 then
+        local m = PzoptMainMenu.instance()
+        m.search:setText("")
+        m:runSearch("")
+        m:openKey("fogScalePct")
+        local it = m.list.items[m.list.selected or 0]
+        local rows = PzoptSettings.effectRows("fogScalePct")
+        check(it and it.id == "fogScalePct" and m.impactChart ~= nil and rows > 0,
+            "fogScalePct on its page, impact chart with " .. rows .. " rows (" .. tostring(m.impactChart ~= nil) .. ")")
+        shot(3)
+    elseif st == 3 then
+        local m = PzoptMainMenu.instance()
+        PzoptSettings.set("godRays", "true")
+        m:selectNode("vis/light", "master")
+        m.list:setSelected(1)
+        m:activateItem(1)
+        check(p:getPzoptOption("catLightEnabled") == "false" and p:getPzoptOption("godRays") == "false" and not m.prompt,
+            "Lighting and shadows switch off: live (god rays " .. p:getPzoptOption("godRays") .. "), no restart prompt")
+        m:activateItem(1)
+        check(p:getPzoptOption("catLightEnabled") == "true" and p:getPzoptOption("godRays") == "true", "Lighting and shadows switch on again: god rays " .. p:getPzoptOption("godRays"))
+        PzoptSettings.set("godRays", "")
+        m:selectNode("perf/drive", "master")
+        m.list:setSelected(1)
+        m:activateItem(1)
+        check(p:getPzoptOptionSaved("catDriveEnabled") == "false" and m.prompt == true, "Driving switch off: saved for the next launch, restart prompt shown")
+        shot(4)
+    elseif st == 4 then
+        local m = PzoptMainMenu.instance()
+        m:hideRestartPrompt()
+        m:activateItem(1)
+        check(p:getPzoptOptionSaved("catDriveEnabled") == "" and not m.prompt and m:reminder() == nil, "Driving switch on again: nothing waits")
+        m:close("final rig")
+        check(PzoptMainMenu.instance() == nil and ms:isVisible(), "closed onto the pause menu")
+    elseif st == 5 then
+        MainScreen.onMenuItemMouseDownMainMenu(ms.optionsOption, 0, 0)
+    elseif st == 6 then
+        local mo = ms.mainOptions
+        local names, has = {}, false
+        for _, v in ipairs(mo and mo.tabs and mo.tabs.viewList or {}) do
+            table.insert(names, tostring(v.name))
+            if v.name == "PZ Optimization" or v.name == "Optimizations" or v.name == "Enhancements" or v.name == "Profiler" then has = true end
+        end
+        check(#names > 0 and not has, "the game's Options: tabs " .. table.concat(names, " | ") .. " (no pzopt tab)")
+        shot(5)
+        if mo then mo:onOptionMouseDown(mo.backButton, 0, 0) end
+    elseif st == 7 then
+        if ms:isVisible() then ToggleEscapeMenu(escapeKey()) end
+        log(#final.fails == 0 and "PASS" or ("FAIL " .. table.concat(final.fails, "; ")))
+        final = false
+    end
+end
+
+-- options_screen=1 (2026-10-18): at the main menu, the game's own Options screen opened from its item; logs its tab names
+-- ("[pzopt-harness] options screen: tabs ...", PZ Optimization must not be one) and writes Screenshots/pzopt-options-screen.png,
+-- then closes it and quits; the run's save is not continued, and the rig quits after 90 s whatever happened.
+local optionsScreen = nil
+local function optionsScreenTick()
+    if optionsScreen == false then return end
+    local ms = MainScreen.instance
+    if optionsScreen == nil then
+        local flags = readFlags()
+        if not flags or flags.options_screen ~= "1" then optionsScreen = false; return end
+        optionsScreen = { at = getTimestampMs() + 6000, step = 0, deadline = getTimestampMs() + 90000 }
+        -- stays on the main menu: the run's save is not continued
+        pending = nil
+        appendFlag("consumed=1")
+    end
+    if getTimestampMs() > optionsScreen.deadline then -- never got to act (no main menu): the run must not hold the machine
+        print("[pzopt-harness] options screen: gave up after 90 s (no main menu); quitting")
+        optionsScreen = false
+        getCore():quit()
+        return
+    end
+    if not ms or ms.inGame or (ms.delay and ms.delay > 0) or getTimestampMs() < optionsScreen.at then return end
+    local st = optionsScreen.step
+    optionsScreen.step = st + 1
+    optionsScreen.at = getTimestampMs() + 2500
+    if st == 0 then
+        MainScreen.onMenuItemMouseDownMainMenu(ms.optionsOption, 0, 0)
+    elseif st == 1 then
+        local mo = ms.mainOptions
+        local names = {}
+        for _, v in ipairs(mo and mo.tabs and mo.tabs.viewList or {}) do table.insert(names, tostring(v.name)) end
+        local has = false
+        for _, n in ipairs(names) do if n == "PZ Optimization" or n == "Optimizations" or n == "Enhancements" or n == "Profiler" then has = true end end
+        print("[pzopt-harness] options screen: tabs " .. table.concat(names, " | ") .. "; a pzopt tab: " .. tostring(has))
+        getCore():TakeFullScreenshot("pzopt-options-screen.png")
+    elseif st == 2 then
+        local mo = ms.mainOptions
+        if mo then mo:setVisible(false) end
+        if ms.bottomPanel then ms.bottomPanel:setVisible(true) end
+        print("[pzopt-harness] options screen: closed; quitting")
+        optionsScreen = false
+        getCore():quit()
+    end
+end
+Events.OnFETick.Add(function()
+    local ok, err = pcall(optionsScreenTick)
+    if not ok then print("[pzopt-harness] options screen: rig error " .. tostring(err)); optionsScreen = false end
+end)
+
 local function onTickEvenPaused()
+    local okf, errf = pcall(finalTick)
+    if not okf then print("[pzopt-harness] final: FAIL rig error " .. tostring(errf)); final = false end
+    local okm, errm = pcall(mastersTick)
+    if not okm then print("[pzopt-harness] masters: rig error " .. tostring(errm)); masters = false end
+    local okz, errz = pcall(pzmenuTick)
+    if not okz then print("[pzopt-harness] pzmenu: rig error " .. tostring(errz)); pzmenu = false end
     local ok5, err5 = pcall(worldMapTick)
     if not ok5 then print("[pzopt-map] rig error " .. tostring(err5)); worldMap = false end
     local ok4, err4 = pcall(inputLagTick)
     if not ok4 then print("[pzopt-inputlag] rig error " .. tostring(err4)); inputLag = false end
+    local ok6, err6 = pcall(stockDriveTick)
+    if not ok6 then print("[pzopt-stockdrive] rig error " .. tostring(err6)); stockDrive = false; getCore():quit() end
     local ok3, err3 = pcall(pauseMenuTick)
     if not ok3 then print("[pzopt-harness] pause menu: rig error " .. tostring(err3)); pauseMenu = false end
     local okg, errg = pcall(glassTick)
@@ -1129,10 +1454,18 @@ local function onTickEvenPaused()
     local ok, err = pcall(lureTick)
     if not ok then print("[pzopt-harness] lure: rig error " .. tostring(err)); lure = false end
     local ok2, err2 = pcall(optionsCheckTick)
-    if not ok2 then print("[pzopt-harness] options check: rig error " .. tostring(err2)); optionsCheck = false end
+    if not ok2 then print("[pzopt-harness] options check: rig error " .. tostring(err2)); ingameOptions = false end
     if quitAtMs and getTimestampMs() >= quitAtMs then
         quitAtMs = nil
         print("[pzopt-harness] quit_after reached, quitting")
+        -- from the pause menu getCore():quit() goes to the main menu instead of the desktop (a run waited for an exit that
+        -- never came, 2026-10-18): the PZ Optimization screen and the pause menu close first, then the game quits
+        pcall(function()
+            local m = PzoptMainMenu and PzoptMainMenu.instance and PzoptMainMenu.instance()
+            if m then m:close("quit_after") end
+            local ms = MainScreen.instance
+            if ms and ms.inGame and ms:isVisible() then ToggleEscapeMenu(escapeKey()) end
+        end)
         getCore():quit()
     end
 end

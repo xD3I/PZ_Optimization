@@ -1881,10 +1881,20 @@ public final class PolygonalMap2 {
    }
 
    public Vector2f resolveCollision(IsoGameCharacter chr, float nx, float ny, Vector2f finalPos) {
+      if (pzopt.UpdateBatch.collideLockNeeded()) { // pzopt: zombie pass static audit, CollideWithObstacles' scratch is shared: serialised while a frame worker may be in here (a batch in flight, or this is a worker)
+         synchronized (this.collideWithObstacles) { // pzopt
+            return GameClient.client && chr.isSkipResolveCollision() ? finalPos.set(nx, ny) : this.collideWithObstacles.resolveCollision(chr, nx, ny, finalPos); // pzopt
+         } // pzopt
+      } // pzopt
       return GameClient.client && chr.isSkipResolveCollision() ? finalPos.set(nx, ny) : this.collideWithObstacles.resolveCollision(chr, nx, ny, finalPos);
    }
 
    public boolean resolveCollision(IsoGameCharacter chr, float radius, Vector2f finalPos) {
+      if (pzopt.UpdateBatch.collideLockNeeded()) { // pzopt: zombie pass static audit, as above
+         synchronized (this.collideWithObstacles) { // pzopt
+            return GameClient.client && chr.isSkipResolveCollision() ? false : this.collideWithObstacles.resolveCollision(chr, radius, finalPos); // pzopt
+         } // pzopt
+      } // pzopt
       return GameClient.client && chr.isSkipResolveCollision() ? false : this.collideWithObstacles.resolveCollision(chr, radius, finalPos);
    }
 

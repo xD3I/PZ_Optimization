@@ -1016,7 +1016,7 @@ public final class LightingJNI {
                      IsoWorld.instance.currentCell.invalidatePeekedRoom(playerIndex);
                   }
 
-                  if (pzopt.VisionBatch.ENABLED) { // pzopt: the dirty levels' vision tests on the workers first (lightingVisionParallel)
+                  if (pzopt.VisionBatch.active()) { // pzopt: the dirty levels' vision tests on the workers first (lightingVisionParallel; GtAb bit 50)
                      int n = 0; // pzopt
                      IsoChunk[] dirty = pzoptVisionChunks; // pzopt
                      for (int cy = 0; cy < IsoChunkMap.chunkGridWidth; cy++) { // pzopt
@@ -1392,7 +1392,7 @@ public final class LightingJNI {
       private static final int RESULT_LIGHTS_PER_SQUARE = 6;
       // pzopt: lightingReadParallel. The array getSquareLighting fills is per thread: the per-level reads of a pass run on the
       // frame workers (pzopt.LightingBatch); the game thread keeps its own copy for the serial paths.
-      private static final ThreadLocal<int[]> pzoptLightInts = ThreadLocal.withInitial(() -> new int[49]);
+      private static final pzopt.Tl<int[]> pzoptLightInts = new pzopt.Tl<>(() -> new int[49]); // pzopt: pzopt.Tl (zombie redesign, f8-zomb2)
       private static final byte VIS_SEEN = 1;
       private static final byte VIS_CAN_SEE = 2;
       private static final byte VIS_COULD_SEE = 4;
@@ -1659,6 +1659,18 @@ public final class LightingJNI {
       private void update() {
          if (this.playerIndex != -1 && PerformanceSettings.fboRenderChunk) {
             java.util.ArrayList<Runnable> pzoptDefer = pzopt.LightingDefer.current(); // pzopt: entityUpdateParallel, a batched entity reading light
+            if (pzopt.LightTrace.CHECK && pzopt.LightTrace.on) { // pzopt: devDrawListCheck, a checked tileRecordParallel frame: the recording's refreshes are undone for the stock re-run (devDrawListTrace: every refresh logged)
+               synchronized (this) { // pzopt
+                  int pzoptBefore = this.updateTick; // pzopt
+                  int pzoptLight = pzopt.LightTrace.packed(this.lightInfo); // pzopt
+                  if (!pzopt.LightTrace.replay(this, pzoptBefore)) { // pzopt: the stock re-run's refresh of a square the recording refreshed takes the values the recording read (the native answers a square once a pass)
+                     pzopt.LightTrace.beforeRefresh(this, pzoptBefore); // pzopt: a recording thread's first refresh of the square saves its state
+                     this.updateFBORenderChunk(); // pzopt
+                  } // pzopt
+                  pzopt.LightTrace.light(this, this.square, this.playerIndex, pzoptBefore, this.updateTick, pzoptLight, this.lightInfo, this.cacheVertLight[0], this.pzoptTraceStale); // pzopt
+               } // pzopt
+               return; // pzopt
+            } // pzopt
             if (pzoptDefer != null || pzopt.DrawRecorder.recording) { // pzopt: one refresh of this square at a time; its side effects to the game thread at the join (tileRecordParallel: also the game thread's own refreshes while units record)
                synchronized (this) { // pzopt
                   this.updateFBORenderChunk(); // pzopt
@@ -1844,10 +1856,13 @@ public final class LightingJNI {
                if (this.updateTick != LightingJNI.updateCounter[this.playerIndex]) {
                   if (!LightingJNI.getSquareDirty(this.playerIndex, this.square.x, this.square.y, this.square.z + 32)) {
                      notDirty++;
+                     if (this.updateTick == -1 && pzoptDefer != null) pzopt.BakeRecord.lightUnread(false); // pzopt: bakeRecordParallel, a never-lit square read ahead of its bake
                   } else {
                      dirty++;
                      int[] lightInts = pzoptLightInts.get(); // pzopt: lightingReadParallel, thread-local scratch
-                     if (LightingJNI.getSquareLighting(this.playerIndex, this.square.x, this.square.y, this.square.z + 32, lightInts)) {
+                     boolean pzoptRead = LightingJNI.getSquareLighting(this.playerIndex, this.square.x, this.square.y, this.square.z + 32, lightInts); // pzopt
+                     if (!pzoptRead && pzoptDefer != null) pzopt.BakeRecord.lightUnread(true); // pzopt: bakeRecordParallel, dirty but its light not readable yet
+                     if (pzoptRead) { // pzopt
                         boolean pzoptWasWhite = this.pzoptBake; // pzopt: pixelLight, a lazy refresh in the middle of a bake reads and writes the real values (and re-decides white by the new visibility)
                         this.pzoptUnwhiten(); // pzopt
                         byte pzoptWasVis = this.vis; // pzopt: pixelLight, only a visibility change re-bakes
@@ -2021,6 +2036,7 @@ public final class LightingJNI {
                            this.pzoptWhiten(); // pzopt
                         } // pzopt
 
+                        java.lang.invoke.VarHandle.releaseFence(); // pzopt: playerLosParallel, the refreshed visibility bits are visible to a worker that sees the new tick (pzoptPeekVis)
                         this.updateTick = LightingJNI.updateCounter[this.playerIndex];
                         if ((this.vis & 1) != 0) {
                            // pzopt: lightingReadParallel. On a frame worker the room / meta hooks are recorded for the game thread
@@ -2058,6 +2074,107 @@ public final class LightingJNI {
        * read stored (the visibility bits, the light colour, the dark multipliers, the light level, the vertex lights);
        * true when everything matches. Game thread, after a parallel batch, for a sample of its squares.
        */
+      /** pzopt: devDrawListTrace, the lighting pass this square's light was last read for. */
+      public int pzoptTick() { // pzopt
+         return this.updateTick; // pzopt
+      } // pzopt
+
+      /**
+       * pzopt: playerLosParallel, a frame worker. The visibility bits bCouldSee / bCanSee would answer now, when asking them
+       * would not refresh this square: already read in this lighting pass, or the native says it did not change (then
+       * bit 3 is set: stock's read counts it in notDirty). -1 when the read would refresh the square (the game thread
+       * reads it at its place in the loop). Reads only; the native's getSquareDirty is a pure read (lightingReadParallel).
+       */
+      public int pzoptPeekVis() { // pzopt
+         if (this.playerIndex == -1 || !PerformanceSettings.fboRenderChunk || pzopt.LightTrace.CHECK && pzopt.LightTrace.on || pzopt.DrawRecorder.recording) { // pzopt
+            return -1; // pzopt
+         } // pzopt
+         if (this.square.chunk == null) { // pzopt: updateFBORenderChunk does nothing
+            return this.vis & 7; // pzopt
+         } // pzopt
+         int pzoptCounter = LightingJNI.updateCounter[this.playerIndex]; // pzopt
+         int pzoptTick = this.updateTick; // pzopt: the game thread may refresh this square while the batch runs (a serial object on it): its refresh stores the tick last, after a release fence
+         java.lang.invoke.VarHandle.acquireFence(); // pzopt: so a new tick read here comes with the bits that refresh wrote
+         if (pzoptCounter == -1 || pzoptTick == pzoptCounter) { // pzopt: read in this pass already (before the batch or by that refresh): no further refresh this pass
+            return this.vis & 7; // pzopt
+         } // pzopt
+         if (!LightingJNI.getSquareDirty(this.playerIndex, this.square.x, this.square.y, this.square.z + 32)) { // pzopt
+            return this.vis & 7 | 8; // pzopt
+         } // pzopt
+         return -1; // pzopt
+      } // pzopt
+
+      /** pzopt: playerLosParallel, game thread: the notDirty reads the workers' peeks stood in for. */
+      public static void pzoptNotDirty(int count) { // pzopt
+         notDirty += count; // pzopt
+      } // pzopt
+
+      public int pzoptTraceStale = -1; // pzopt: devDrawListTrace, the traced frame a translucent draw read this square's light before its refresh
+
+      /** pzopt: devDrawListCheck, everything a refresh rewrites (the check's stock re-run starts from the state before the recording). */
+      public int[] pzoptSaveLight() { // pzopt
+         int n = this.lightsCount; // pzopt
+         int[] st = new int[21 + 9 * n]; // pzopt
+         st[0] = this.updateTick; // pzopt
+         st[1] = this.vis; // pzopt
+         st[2] = Float.floatToRawIntBits(this.lightInfo.r); // pzopt
+         st[3] = Float.floatToRawIntBits(this.lightInfo.g); // pzopt
+         st[4] = Float.floatToRawIntBits(this.lightInfo.b); // pzopt
+         st[5] = Float.floatToRawIntBits(this.lightInfo.a); // pzopt
+         st[6] = Float.floatToRawIntBits(this.cacheDarkMulti); // pzopt
+         st[7] = Float.floatToRawIntBits(this.cacheTargetDarkMulti); // pzopt
+         st[8] = this.lightLevel; // pzopt
+         st[9] = this.square.lightLevel; // pzopt
+         System.arraycopy(this.cacheVertLight, 0, st, 10, 8); // pzopt
+         st[18] = n; // pzopt
+         st[19] = this.pzoptLightAcc; // pzopt
+         st[20] = this.pzoptLightAccFrame; // pzopt
+         for (int i = 0; i < n; i++) { // pzopt
+            IsoGridSquare.ResultLight l = this.lights[i]; // pzopt
+            int k = 21 + 9 * i; // pzopt
+            st[k] = l.id; st[k + 1] = l.x; st[k + 2] = l.y; st[k + 3] = l.z; st[k + 4] = l.radius; // pzopt
+            st[k + 5] = Float.floatToRawIntBits(l.r); st[k + 6] = Float.floatToRawIntBits(l.g); st[k + 7] = Float.floatToRawIntBits(l.b); st[k + 8] = l.flags; // pzopt
+         } // pzopt
+         return st; // pzopt
+      } // pzopt
+
+      public void pzoptLoadLight(int[] st) { // pzopt: devDrawListCheck
+         this.updateTick = st[0]; // pzopt
+         this.vis = (byte)st[1]; // pzopt
+         this.lightInfo.r = Float.intBitsToFloat(st[2]); // pzopt
+         this.lightInfo.g = Float.intBitsToFloat(st[3]); // pzopt
+         this.lightInfo.b = Float.intBitsToFloat(st[4]); // pzopt
+         this.lightInfo.a = Float.intBitsToFloat(st[5]); // pzopt
+         this.cacheDarkMulti = Float.intBitsToFloat(st[6]); // pzopt
+         this.cacheTargetDarkMulti = Float.intBitsToFloat(st[7]); // pzopt
+         this.lightLevel = st[8]; // pzopt
+         this.square.lightLevel = st[9]; // pzopt
+         System.arraycopy(st, 10, this.cacheVertLight, 0, 8); // pzopt
+         int n = st[18]; // pzopt
+         this.lightsCount = n; // pzopt
+         this.pzoptLightAcc = st[19]; // pzopt
+         this.pzoptLightAccFrame = st[20]; // pzopt
+         for (int i = 0; i < n; i++) { // pzopt
+            if (this.lights == null) this.lights = new ResultLight[6]; // pzopt
+            if (this.lights[i] == null) this.lights[i] = new ResultLight(); // pzopt
+            IsoGridSquare.ResultLight l = this.lights[i]; // pzopt
+            int k = 21 + 9 * i; // pzopt
+            l.id = st[k]; l.x = st[k + 1]; l.y = st[k + 2]; l.z = st[k + 3]; l.radius = st[k + 4]; // pzopt
+            l.r = Float.intBitsToFloat(st[k + 5]); l.g = Float.intBitsToFloat(st[k + 6]); l.b = Float.intBitsToFloat(st[k + 7]); l.flags = st[k + 8]; // pzopt
+         } // pzopt
+      } // pzopt
+
+      /**
+       * pzopt: tileRecordStaleLight. The current lighting pass has not read this square yet (a later lazy refresh may rewrite
+       * its light); under the square's monitor, which a refresh while units record holds: a false answer means the refresh
+       * is complete and visible, and no other refresh can follow before the next LightingJNI.update.
+       */
+      public boolean pzoptStaleSync() { // pzopt
+         synchronized (this) { // pzopt
+            return this.pzoptStale(); // pzopt
+         } // pzopt
+      } // pzopt
+
       /** pzopt: losLightPrefetch, the lazy refresh would read the native now (the fboRenderChunk path, not read this pass). */
       public boolean pzoptStale() { // pzopt
          return this.playerIndex != -1 && PerformanceSettings.fboRenderChunk && this.square != null && this.square.chunk != null // pzopt

@@ -41,7 +41,7 @@ ROWS = [
      (None, "2 tab settings"), (None, "1 button"), "new"),
 ]
 FOOTER = [
-    "Main menu > PZ OPTIMIZATION MOD COMPATIBILITY CHECK (under PZ OPTIMIZATION UPDATE, the renamed update item), "
+    "Main menu > PZ OPTIMIZATION > MOD COMPATIBILITY CHECK, "
     "also Options > Optimizations > Mod compatibility. A choice applies after Restart game; your own value for a "
     "setting on the tab still wins.",
     "Runs compat-prof-* on the desktop, 2026-10-02: github.com/xD3I/PZ_Optimization (harness/compat/make-java-fixture.sh).",

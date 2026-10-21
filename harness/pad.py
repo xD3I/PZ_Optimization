@@ -3,7 +3,8 @@
 
   harness/pad.py serve <fifo>   # creates the pad, runs the commands written to the fifo until "quit"
 
-Commands, one per line: a b x y start back lb rb l3 r3 up down left right (a press: down, 0.12 s, up; the game
+Commands, one per line: a b x y start back lb rb l3 r3 up down left right, lt rt (the triggers), lsup lsdown lsleft
+lsright rsup rsdown rsleft rsright (the sticks held at their end) (a press: down, 0.12 s, up; the game
 samples the pad once per frame), "hold <button> <s>", "chord <button> <button> [s]" (both down together, held s,
 default 0.12, both up together), "sleep <s>", "mark <name>", "done", "quit". Every press, hold, mark and
 "done" is printed with its epoch ms ("press down t=<ms> up=<ms>") so harness/padlat.py can line the presses up with
@@ -19,6 +20,10 @@ from evdev import AbsInfo, UInput, ecodes as e
 BUTTONS = {"a": e.BTN_A, "b": e.BTN_B, "x": e.BTN_X, "y": e.BTN_Y, "start": e.BTN_START, "back": e.BTN_SELECT,
            "lb": e.BTN_TL, "rb": e.BTN_TR, "l3": e.BTN_THUMBL, "r3": e.BTN_THUMBR}
 HATS = {"up": (e.ABS_HAT0Y, -1), "down": (e.ABS_HAT0Y, 1), "left": (e.ABS_HAT0X, -1), "right": (e.ABS_HAT0X, 1)}
+# the triggers and the sticks (2026-10-18): a press holds the axis at its end for the hold time, then back to rest
+AXES = {"lt": (e.ABS_Z, 255), "rt": (e.ABS_RZ, 255),
+        "lsup": (e.ABS_Y, -32767), "lsdown": (e.ABS_Y, 32767), "lsleft": (e.ABS_X, -32767), "lsright": (e.ABS_X, 32767),
+        "rsup": (e.ABS_RY, -32767), "rsdown": (e.ABS_RY, 32767), "rsleft": (e.ABS_RX, -32767), "rsright": (e.ABS_RX, 32767)}
 
 
 def make_pad():
@@ -48,8 +53,8 @@ def press(ui, name, hold=0.12):
         ui.write(e.EV_KEY, BUTTONS[name], 0)
         ui.syn()
         return t0, now_ms()
-    elif name in HATS:
-        axis, value = HATS[name]
+    elif name in HATS or name in AXES:
+        axis, value = HATS[name] if name in HATS else AXES[name]
         ui.write(e.EV_ABS, axis, value)
         ui.syn()
         t0 = now_ms()

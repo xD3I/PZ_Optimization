@@ -20,23 +20,77 @@ public final class MovingObjectUpdateSchedulerUpdateBucket {
    private final UpdateSchedulerSimulationLevel simulationLevel;
    private final int frameMod;
    private final List<IsoMovingObject>[] buckets;
+   private final int[] pzoptInPlace; // pzopt: entityUpdateStream, per sub-bucket the players and vehicles (the entities updated at their place)
+   private final List<IsoMovingObject>[] pzoptInPlaceList; // pzopt: entityUpdateStreamHoist, those entities in bucket order
 
    public MovingObjectUpdateSchedulerUpdateBucket(UpdateSchedulerSimulationLevel simulationLevel) {
       this.simulationLevel = simulationLevel;
       this.frameMod = simulationLevel.getFrameMod();
       this.buckets = PZArrayUtil.newInstance(List.class, this.frameMod, ArrayList::new);
+      this.pzoptInPlace = new int[this.frameMod]; // pzopt: entityUpdateStream
+      this.pzoptInPlaceList = PZArrayUtil.newInstance(List.class, this.frameMod, ArrayList::new); // pzopt: entityUpdateStreamHoist
    }
+
+   /**
+    * pzopt: entityUpdateStreamHoist, the scheduler's update before the buckets' collection: this frame's players and vehicles
+    * of this bucket update first, in bucket order, with the four calls and the bucket's multiplier the loop below gives them;
+    * the loop then skips them. The zombies' collection after them sees them updated whatever their place in the list.
+    */
+   public void pzoptHoist(int frameCounter) { // pzopt
+      List<IsoMovingObject> list = this.pzoptInPlaceList[frameCounter % this.frameMod]; // pzopt
+      if (list.isEmpty()) { // pzopt
+         return; // pzopt
+      } // pzopt
+      GameTime.getInstance().perObjectMultiplier = this.frameMod; // pzopt
+      for (int i = 0; i < list.size(); i++) { // pzopt
+         IsoMovingObject o = list.get(i); // pzopt
+         if (pzopt.UpdateBatch.batchable(o) || !pzopt.UpdateBatch.playerFirst(o)) { // pzopt: what the loop would not update in place stays there
+            continue; // pzopt
+         } // pzopt
+         o.setCurrentSimulationLevel(this.simulationLevel); // pzopt
+         o.preupdate(); // pzopt
+         o.frameStep(); // pzopt
+         o.update(); // pzopt
+         pzopt.UpdateBatch.markHoisted(o); // pzopt
+      } // pzopt
+      GameTime.getInstance().perObjectMultiplier = 1.0F; // pzopt
+   } // pzopt
+
+   /** pzopt: entityUpdateStream, the players and vehicles in the sub-bucket this frame updates. */
+   public int pzoptInPlaceCount(int frameCounter) { // pzopt
+      return this.pzoptInPlace[frameCounter % this.frameMod]; // pzopt
+   } // pzopt
 
    public void clear() {
       for (List<IsoMovingObject> bucket : this.buckets) {
          bucket.clear();
       }
+      java.util.Arrays.fill(this.pzoptInPlace, 0); // pzopt: entityUpdateStream
+      for (List<IsoMovingObject> list : this.pzoptInPlaceList) { // pzopt: entityUpdateStreamHoist
+         list.clear(); // pzopt
+      } // pzopt
    }
 
    public void add(IsoMovingObject o) {
       int index = o.getID() % this.frameMod;
       this.buckets[index].add(o);
+      if (o instanceof zombie.characters.IsoPlayer || o instanceof zombie.vehicles.BaseVehicle) { // pzopt: entityUpdateStream
+         this.pzoptInPlace[index]++; // pzopt: entityUpdateStream
+         this.pzoptInPlaceList[index].add(o); // pzopt: entityUpdateStreamHoist
+      } // pzopt: entityUpdateStream
    }
+
+   /**
+    * pzopt: schedulerFillParallel (f9-los): add() with its two reads of the object made beforehand by the classification task
+    * on a frame worker (index = getID() % frameMod, inPlace = a player or a vehicle), so the game thread's fill touches no object.
+    */
+   public void pzoptAddAt(IsoMovingObject o, int index, boolean inPlace) { // pzopt
+      this.buckets[index].add(o); // pzopt
+      if (inPlace) { // pzopt: entityUpdateStream
+         this.pzoptInPlace[index]++; // pzopt
+         this.pzoptInPlaceList[index].add(o); // pzopt: entityUpdateStreamHoist
+      } // pzopt
+   } // pzopt
 
    public void update(int frameCounter) {
       GameTime.getInstance().perObjectMultiplier = this.frameMod;
@@ -79,16 +133,21 @@ public final class MovingObjectUpdateSchedulerUpdateBucket {
             continue;
          }
 
-         if (pzoptBatch && pzopt.UpdateBatch.combinedFrame()) { // pzopt: entityUpdatePipeline -- inline entities defer to the phase that runs under the flight (spec 3.4); stock's order is kept by the queue
+         if (pzoptBatch && pzopt.UpdateBatch.combinedFrame() && !pzopt.UpdateBatch.playerFirst(isoMovingObject)) { // pzopt: entityUpdatePipeline -- inline entities defer to the phase that runs under the flight (spec 3.4); stock's order is kept by the queue. entityUpdatePlayerFirst: a player runs here, before the flight, since its update writes the zombies it sees
             pzopt.UpdateBatch.queueInline(isoMovingObject, this.simulationLevel.ordinal()); // pzopt: entityUpdatePipeline
             continue; // pzopt: entityUpdatePipeline
          } // pzopt: entityUpdatePipeline
 
+         if (pzopt.UpdateBatch.wasHoisted(isoMovingObject)) { // pzopt: entityUpdateStreamHoist, updated before the collection
+            continue; // pzopt
+         } // pzopt
+         pzopt.UpdateBatch.inPlaceStarting(); // pzopt: entityUpdateStream, counts an in-place update under an open stream (a miscount)
          isoMovingObject.setCurrentSimulationLevel(this.simulationLevel);
          isoMovingObject.preupdate();
          isoMovingObject.frameStep();
          isoMovingObject.update();
          pzopt.UpdateBatch.stampInline(isoMovingObject); // pzopt: entityUpdatePipeline -- while the previous bucket's batch is airborne, freeze this inline entity's post-update position so its workers read a stable value (what they saw when inline entities all ran before the dispatch)
+         pzopt.UpdateBatch.inPlaceDone(); // pzopt: entityUpdateStream, the last in-place entity of the frame opens the stream
       }
 
       // pzopt: entityUpdateParallel. Same four calls per entity, in the same order, on the workers; an entity
@@ -106,6 +165,9 @@ public final class MovingObjectUpdateSchedulerUpdateBucket {
 
       for (int i = 0; i < fullSimulation.size(); ++i) {
          IsoMovingObject isoMovingObject = fullSimulation.get(i);
+         if (pzopt.PostupdateBatch.cleanAt(isoMovingObject) > 0) { // pzopt: postupdateClean (f8-zomb2), its postupdate ran in its movement task
+            continue; // pzopt
+         } // pzopt
          IsoZombie zombie = Type.tryCastTo(isoMovingObject, IsoZombie.class);
          if (zombie != null && VirtualZombieManager.instance.isReused(zombie)) {
             DebugLog.log(

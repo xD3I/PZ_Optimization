@@ -1009,6 +1009,80 @@ public final class DeadBodyAtlas {
       }
    }
 
+   /**
+    * pzopt: atlasBatch (pzopt.AtlasBatch). What BodyTextureDepthDrawer.render would draw, computed the same way at the same
+    * point of the command stream: 0 = not such a drawer, or one the batch leaves to the stock render (an occluded-outline
+    * draw, the shader not created yet); 1 = the stock render draws nothing (entry or texture not ready, shader not
+    * compiled); 2 = a quad: q = x1, y1, w, h, u0, v0, u1, v1, r, g, b, a, depthNear, depthFar; tex = the entry's texture and
+    * its atlas's depth texture.
+    */
+   public static int pzoptAtlasQuad(Object drawer, float[] q, Texture[] tex) { // pzopt
+      if (!(drawer instanceof DeadBodyAtlas.BodyTextureDepthDrawer d) || d.pzoptOutline != 0 || DeadBodyAtlas.deadBodyAtlasShader == null) { // pzopt
+         return 0; // pzopt
+      } // pzopt
+      if (!(d.bodyTexture.entry.ready && d.bodyTexture.entry.tex.isReady()) || !DeadBodyAtlas.deadBodyAtlasShader.getShaderProgram().isCompiled()) { // pzopt
+         return 1; // pzopt
+      } // pzopt
+      DeadBodyAtlas.AtlasEntry entry = d.bodyTexture.entry; // pzopt: the lines of render() below, verbatim
+      float x1 = d.x - entry.w / 2.0F - entry.offsetX; // pzopt
+      float y1 = d.y - entry.h / 2.0F - entry.offsetY; // pzopt
+      int w = entry.w; // pzopt
+      int h = entry.h; // pzopt
+      float playerX = (Float)Core.getInstance().floatParamMap.get(0); // pzopt
+      float playerY = (Float)Core.getInstance().floatParamMap.get(1); // pzopt
+      int playerIndex = SpriteRenderer.instance.getRenderingPlayerIndex(); // pzopt
+      PlayerCamera camera = SpriteRenderer.instance.getRenderingPlayerCamera(playerIndex); // pzopt
+      float jx = camera.fixJigglyModelsSquareX; // pzopt
+      float jy = camera.fixJigglyModelsSquareY; // pzopt
+      float offsetX = entry.offsetX; // pzopt
+      float offsetY = entry.offsetY; // pzopt
+      float wx = -(offsetX + 2.0F * offsetY) / (64.0F * Core.tileScale); // pzopt
+      float wy = -(offsetX - 2.0F * offsetY) / (-64.0F * Core.tileScale); // pzopt
+      float depthNear = IsoDepthHelper.getSquareDepthData( // pzopt
+            PZMath.fastfloor(playerX), PZMath.fastfloor(playerY), d.ox + jx + wx + 2.2F, d.oy + jy + wy + 2.2F, d.oz + 1.0F // pzopt
+         ) // pzopt
+         .depthStart; // pzopt
+      float depthFar = IsoDepthHelper.getSquareDepthData( // pzopt
+            PZMath.fastfloor(playerX), PZMath.fastfloor(playerY), d.ox + jx + wx - 2.2F, d.oy + jy + wy - 2.2F, d.oz // pzopt
+         ) // pzopt
+         .depthStart; // pzopt
+      depthNear += 0.0014F; // pzopt
+      depthFar += 0.0014F; // pzopt
+      Texture t = entry.tex; // pzopt
+      q[0] = x1; // pzopt
+      q[1] = y1; // pzopt
+      q[2] = w; // pzopt
+      q[3] = h; // pzopt
+      q[4] = t.getXStart(); // pzopt
+      q[5] = t.getYStart(); // pzopt
+      q[6] = t.getXEnd(); // pzopt
+      q[7] = t.getYEnd(); // pzopt
+      q[8] = d.r; // pzopt
+      q[9] = d.g; // pzopt
+      q[10] = d.b; // pzopt
+      q[11] = d.a; // pzopt
+      q[12] = depthNear; // pzopt
+      q[13] = depthFar; // pzopt
+      tex[0] = t; // pzopt
+      tex[1] = entry.atlas.depth; // pzopt
+      return 2; // pzopt
+   } // pzopt
+
+   /** pzopt: atlasBatch, whether a generic drawer is an atlas quad's (zombie or corpse). */
+   public static boolean pzoptIsAtlasDrawer(Object drawer) { // pzopt
+      return drawer instanceof DeadBodyAtlas.BodyTextureDepthDrawer; // pzopt
+   } // pzopt
+
+   /** pzopt: atlasBatch, the stock render of a queued drawer (the dev check's replay). */
+   public static void pzoptAtlasRender(Object drawer) { // pzopt
+      ((DeadBodyAtlas.BodyTextureDepthDrawer)drawer).render(); // pzopt
+   } // pzopt
+
+   /** pzopt: atlasBatch, the program the drawer draws with. */
+   public static zombie.core.opengl.ShaderProgram pzoptAtlasProgram() { // pzopt
+      return DeadBodyAtlas.deadBodyAtlasShader.getShaderProgram(); // pzopt
+   } // pzopt
+
    private static final class BodyTextureDepthDrawer extends GenericDrawer {
       int pzoptOutline; // pzopt: occluded outlines, this queued draw's eligibility (OccludedOutline.eligible), not the shared atlas entry's
       DeadBodyAtlas.BodyTexture bodyTexture;

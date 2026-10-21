@@ -87,7 +87,7 @@ public class UpdateBatchTest {
       UpdateSchedulerSimulationLevel level = UpdateSchedulerSimulationLevel.FULL;
 
       // ── off by default: the key ships off, like every other parallel phase's first release ──
-      Check.check(!Config.ENTITY_UPDATE_PARALLEL, "entityUpdateParallel defaults to off");
+      Check.check(Config.ENTITY_UPDATE_PARALLEL, "entityUpdateParallel defaults to on (zombie pass 2026-10-13: the brawl behaviour check)");
 
       // ── every entity gets vanilla's four calls, in vanilla's order, exactly once ──
       int n = 5000;

@@ -696,7 +696,7 @@ public final class ZombiePopulationManager {
       } // pzopt
    }; // pzopt
    private int pzoptSpHead, pzoptSpTail; // pzopt: queue [head, tail)
-   public static long pzoptSpawnQueued, pzoptSpawnMax; // pzopt
+   public static long pzoptSpawnQueued, pzoptSpawnMax, pzoptSpawnAged; // pzopt
 
    private void pzoptQueueSpawn(float x, float y, float z, IsoDirections dir, int desc, ZombieStateFlags state, int tx, int ty, int pid) { // pzopt
       if (this.pzoptSpTail == this.pzoptSpX.length) { // pzopt: compact, then grow
@@ -753,7 +753,7 @@ public final class ZombiePopulationManager {
       } // pzopt
       if (pzopt.Config.INSTRUMENT && System.nanoTime() - this.pzoptSpawnLogNs > 10_000_000_000L) { // pzopt
          this.pzoptSpawnLogNs = System.nanoTime(); // pzopt
-         pzopt.Log.info("zombie spawn spread: queued " + pzoptSpawnQueued + " max queue " + pzoptSpawnMax + " now " + (this.pzoptSpTail - this.pzoptSpHead)); // pzopt
+         pzopt.Log.info("zombie spawn spread: queued " + pzoptSpawnQueued + " max queue " + pzoptSpawnMax + " now " + (this.pzoptSpTail - this.pzoptSpHead) + " aged " + pzoptSpawnAged); // pzopt
       } // pzopt
       long t0 = System.nanoTime(); // pzopt
       long budget = pzopt.Config.ZOMBIE_SPAWN_BUDGET_US * 1000L; // pzopt
@@ -761,12 +761,37 @@ public final class ZombiePopulationManager {
       // ~2,000 zombies in half a second instead of one 60 ms frame or a horde trickling in over many seconds)
       long backlogNs = (long)((this.pzoptSpTail - this.pzoptSpHead) * this.pzoptSpawnCostNs / Math.max(1, pzopt.Config.ZOMBIE_SPAWN_DRAIN_FRAMES)); // pzopt
       budget = Math.max(budget, Math.min(backlogNs, pzopt.Config.ZOMBIE_SPAWN_MAX_US * 1000L)); // pzopt: never more than zombieSpawnMaxUs a frame
+      int pzoptMin = pzopt.Config.ZOMBIE_SPAWN_MIN; // pzopt
+      if (pzopt.Config.ZOMBIE_SPAWN_SLACK_BUDGET_US > 0 && pzopt.Pacing.capIntervalNs() > 0L) { // pzopt: zombieSpawnSlackBudgetUs (f9-burst), at a cap the
+         // pzopt: frame's budget is what the last step left of its interval (less this margin), up to zombieSpawnMaxUs: the queue drains in light
+         // pzopt: frames and waits through heavy ones (the max-age rule still applies)
+         budget = Math.max(0L, Math.min(pzopt.Config.ZOMBIE_SPAWN_MAX_US * 1000L, pzopt.Pacing.capIntervalNs() - pzopt.Pacing.lastWorkNs() - pzopt.Config.ZOMBIE_SPAWN_SLACK_BUDGET_US * 1000L)); // pzopt
+         if (budget == 0L) { // pzopt
+            pzoptMin = 0; // pzopt
+         } // pzopt
+      } // pzopt
+      if (pzopt.Pacing.heavyStep()) { // pzopt: burstGovernor (f8-resid), a heavy step creates fewer
+         budget = Math.min(budget, pzopt.Config.ZOMBIE_SPAWN_BURST_US * 1000L); // pzopt
+         pzoptMin = pzopt.Config.ZOMBIE_SPAWN_HEAVY_MIN; // pzopt: 1 as before; zombieSpawnHeavyMin (f9-burst) 0 lets a heavy step create none
+      } // pzopt
       int made = 0; // pzopt
       long pzoptOld = System.nanoTime() - pzopt.Config.ZOMBIE_SPAWN_MAX_AGE_MS * 1_000_000L; // pzopt: an entry older than this goes now, whatever the budget
+      // pzopt: zombieSpawnAgedCapUs (f9-burst), the aged entries of one frame stop after this much time (a heavy step: after
+      // zombieSpawnBurstUs) unless they waited three times zombieSpawnMaxAgeMs: what the route's first chunk rows queued
+      // aged together and was all created in the first frames of the horde's first sight
+      long pzoptAgedCap = pzopt.Config.ZOMBIE_SPAWN_AGED_CAP_US > 0 ? (pzopt.Pacing.heavyStep() ? Math.min(pzopt.Config.ZOMBIE_SPAWN_AGED_CAP_US, pzopt.Config.ZOMBIE_SPAWN_BURST_US) : pzopt.Config.ZOMBIE_SPAWN_AGED_CAP_US) * 1000L : Long.MAX_VALUE; // pzopt
+      long pzoptVeryOld = pzoptOld - 2L * pzopt.Config.ZOMBIE_SPAWN_MAX_AGE_MS * 1_000_000L; // pzopt
       while (this.pzoptSpHead < this.pzoptSpTail
-            && (made < pzopt.Config.ZOMBIE_SPAWN_MIN || System.nanoTime() - t0 < budget || this.pzoptSpNs[this.pzoptSpHead] < pzoptOld)) { // pzopt
+            && (made < pzoptMin || System.nanoTime() - t0 < budget
+               || this.pzoptSpNs[this.pzoptSpHead] < pzoptOld && (System.nanoTime() - t0 < pzoptAgedCap || this.pzoptSpNs[this.pzoptSpHead] < pzoptVeryOld))) { // pzopt
+         if (System.nanoTime() - t0 >= budget && made >= pzoptMin) { // pzopt: f9-burst census, created only because it was aged
+            pzoptSpawnAged++; // pzopt
+         } // pzopt
          this.pzoptSpawnOne(); // pzopt
          made++; // pzopt
+      } // pzopt
+      if (pzopt.Pacing.heavyStep() && this.pzoptSpHead < this.pzoptSpTail) { // pzopt: burstGovernor census
+         pzopt.Pacing.spawnsHeld++; // pzopt
       } // pzopt
       if (made > 0) { // pzopt: the creation cost, a running mean
          double each = (double)(System.nanoTime() - t0) / made; // pzopt

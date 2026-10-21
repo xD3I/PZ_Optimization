@@ -205,7 +205,7 @@ public final class GameTime {
     }
 
     public float getRealworldSecondsSinceLastUpdate() {
-        return 0.016666668f * this.fpsMultiplier;
+        return 0.016666668f * pzopt.ZombieLate.fps(this.fpsMultiplier); // pzopt: zombieLateApply (f8-zomb3), the frame's fpsMultiplier on a frame worker while the apply is held
     }
 
     public float getMultipliedSecondsSinceLastUpdate() {
@@ -904,7 +904,7 @@ public final class GameTime {
             multiplier = (float)ServerOptions.instance.fastForwardMultiplier.getValue() / this.getDeltaMinutesPerDay();
         }
         multiplier *= this.multiplier;
-        multiplier *= this.fpsMultiplier;
+        multiplier *= pzopt.ZombieLate.fps(this.fpsMultiplier); // pzopt: zombieLateApply (f8-zomb3), a frame worker reads the frame's value while the apply is held
         multiplier *= this.multiplierBias;
         multiplier *= pzopt.UpdateBatch.pom(this); // pzopt: entityUpdateParallel -- a batch task reads its bucket's dispatch-time multiplier through pom() (the game thread may have moved on to the next bucket's global write); the live field everywhere else
         multiplier *= GameTime.getSlomoMultiplier();
@@ -942,7 +942,7 @@ public final class GameTime {
         if (!GameServer.server && !GameClient.client && IsoPlayer.getInstance() != null && IsoPlayer.allPlayersAsleep()) {
             return 200.0f * (30.0f / (float)PerformanceSettings.getLockFPS());
         }
-        return this.multiplier * this.fpsMultiplier * pzopt.UpdateBatch.pom(this); // pzopt: entityUpdateParallel -- a batch task reads its bucket's dispatch-time multiplier through pom() (the game thread may have moved on to the next bucket's global write); the live field everywhere else
+        return this.multiplier * pzopt.ZombieLate.fps(this.fpsMultiplier) * pzopt.UpdateBatch.pom(this); // pzopt: zombieLateApply (f8-zomb3), the frame's fpsMultiplier on a frame worker while the apply is held // pzopt: entityUpdateParallel -- a batch task reads its bucket's dispatch-time multiplier through pom() (the game thread may have moved on to the next bucket's global write); the live field everywhere else
     }
 
     public float getInvMultiplier() {

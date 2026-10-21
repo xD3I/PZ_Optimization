@@ -1291,7 +1291,7 @@ public final class Sway {
       a.depthId = rc.depth.getID();
       a.index = rc.index;
       GL13.glActiveTexture(GL13.GL_TEXTURE0 + AUX_UNIT);
-      a.tex = GL11.glGenTextures();
+      a.tex = GlNames.bakeTexture(); // bakeNoSync: a pooled name (a glGen in the bake waited for the driver thread)
       GL11.glBindTexture(GL11.GL_TEXTURE_2D, a.tex);
       GL11.glTexImage2D(GL11.GL_TEXTURE_2D, 0, GL30.GL_RG8, w, h, 0, GL30.GL_RG, GL11.GL_UNSIGNED_BYTE, (java.nio.ByteBuffer)null);
       GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MIN_FILTER, GL11.GL_NEAREST);
@@ -1308,7 +1308,7 @@ public final class Sway {
       a.mh = Math.max(1, (h + MASK_TILE - 1) / MASK_TILE);
       a.mask = new byte[a.mw * a.mh];
       GL13.glActiveTexture(GL13.GL_TEXTURE0 + AUX_UNIT);
-      a.maskTex = GL11.glGenTextures();
+      a.maskTex = GlNames.bakeTexture(); // bakeNoSync
       GL11.glBindTexture(GL11.GL_TEXTURE_2D, a.maskTex);
       GL11.glTexImage2D(GL11.GL_TEXTURE_2D, 0, GL30.GL_R8, a.mw, a.mh, 0, GL11.GL_RED, GL11.GL_UNSIGNED_BYTE, (java.nio.ByteBuffer)null);
       GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MIN_FILTER, GL11.GL_NEAREST);

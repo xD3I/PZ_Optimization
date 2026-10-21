@@ -175,6 +175,10 @@ public final class Mouse {
          y = Core.getInstance().getScreenHeight() - state.getY() - 1;
          wheelDelta = state.getDWheel();
          state.resetDWheel();
+         if (pzopt.Showcase.uiWheel != 0) { // pzopt: harness UI rig, a scripted wheel step
+            wheelDelta = pzopt.Showcase.uiWheel; // pzopt: harness UI rig
+            pzopt.Showcase.uiWheel = 0; // pzopt: harness UI rig
+         } // pzopt: harness UI rig
          boolean bActivity = lastX != x || lastY != y || wheelDelta != 0;
          if (buttonDownStates == null) {
             buttonDownStates = new boolean[state.getButtonCount()];
@@ -200,6 +204,10 @@ public final class Mouse {
             buttonDownStates[0] = pzopt.Showcase.fireDown; // pzopt: harness showcase fire (left)
             buttonDownStates[1] = true; // pzopt: harness showcase aim (right)
          }
+
+         if (pzopt.Showcase.uiButtonOverride && buttonDownStates.length > 0) { // pzopt: harness UI rig, the left button pressed / released by the script
+            buttonDownStates[0] = pzopt.Showcase.uiButtonDown; // pzopt: harness UI rig
+         } // pzopt: harness UI rig
 
          if (buttonDownStates[1]) {
             timeRightPressed = timeRightPressed + GameTime.getInstance().getRealworldSecondsSinceLastUpdate();

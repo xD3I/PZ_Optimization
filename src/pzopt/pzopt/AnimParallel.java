@@ -64,7 +64,39 @@ public final class AnimParallel {
    private static boolean gameNoInterpolate; // the game thread running a worker task (it joins the batch)
    private static AnimCapture gameCapture;
 
-   public static long frames, armed, serialEvents, serialOther, serialRagdoll, notArmed, statesUnsafe, impureTouches, failures;
+   public static long frames, armed, serialEvents, serialOther, serialRagdoll, notArmed, statesUnsafe, impureTouches, failures, fused;
+
+   /** postupdateFuse: the interpolation switch the stream's animator tasks read (set when the stream opens). */
+   static void setBaseInterpolate(boolean b) {
+      baseInterpolate = b;
+   }
+
+   // postupdateFuse: the anim sets statesSafe found safe as a whole, readable from a worker
+   private static final java.util.concurrent.ConcurrentHashMap<AnimationSet, Boolean> SET_SAFE_SHARED = new java.util.concurrent.ConcurrentHashMap<>();
+
+   /**
+    * postupdateFuse, a frame worker: apply()'s eligibility test for a zombie with no target, from what a worker may read: a
+    * zombie whose anim set has not been found safe as a whole on the game thread yet is not fused (the apply loop decides).
+    */
+   static boolean eligibleOnWorker(IsoZombie z) {
+      zombie.core.skinnedmodel.animation.AnimationPlayer p = z.getAnimationPlayer();
+      if (!enabled() || p == null || !p.pzoptBatchable() || z.isAnimationRecorderActive() || z.getCurrentSquare() == null || !z.pzoptDeltasSeeded()) {
+         return false;
+      }
+      if (z.isBeingGrappled() || z.isGrappling() || z.getReanimatedPlayer() != null || z.getTarget() != null) {
+         return false;
+      }
+      AdvancedAnimator a = z.getAdvancedAnimator();
+      if (a == null) {
+         return false;
+      }
+      AnimationSet set = a.animSet;
+      if (set != null && SET_SAFE_SHARED.get(set) != Boolean.TRUE) {
+         return false;
+      }
+      AnimCapture c = z.pzoptCaptureIfAny();
+      return c == null || frames + 1 >= c.impureHoldUntil; // apply() counts this frame after the loop
+   }
 
    public static boolean enabled() {
       return ENABLED && !failed && Overrides.enabled();
@@ -199,6 +231,7 @@ public final class AnimParallel {
       }
 
       // 1. the state changes, in order, and who may go to the workers
+      long zt = ZombTiming.begin(); // zombie redesign timers (f8-zomb2)
       int gen = ActionEval.generation();
       for (int i = 0; i < count; i++) {
          IsoZombie z = queue[i];
@@ -206,6 +239,12 @@ public final class AnimParallel {
             zombie.characters.action.ActionContext ctx = z.getActionContext();
             if (ctx.pzoptEvalDone != gen) {
                waitEval(ctx, gen);
+            }
+            AnimCapture fc = z.pzoptCaptureIfAny(); // postupdateFuse (f8-zomb2): its stream task ran the context update and the animator
+            if (fc != null && fc.fusedGen == gen && fc.armed) {
+               armed++;
+               fused++;
+               continue;
             }
          }
          ActionEval.useMultiplier(z); // the zombie's simulation-level multiplier for its state change and its time step
@@ -219,6 +258,7 @@ public final class AnimParallel {
          }
       }
 
+      ZombTiming.end(ZombTiming.EVAL_APPLY1, zt);
       // 2. the animators and models on the workers
       baseInterpolate = PerformanceSettings.interpolateAnims;
       boolean pipelined = PIPELINE && workCount > 0;
@@ -248,12 +288,13 @@ public final class AnimParallel {
       }
 
       // 3. the events and the rest, in order
+      zt = ZombTiming.begin(); // zombie redesign timers (f8-zomb2)
       for (int i = 0; i < count; i++) {
          IsoZombie z = queue[i];
          ActionEval.useMultiplier(z); // the event handlers (ThumpState counts strikes over it) and a serial finish run under it
          AnimCapture c = z.pzoptCaptureIfAny();
          if (c != null && c.armed) {
-            if (pipelined && !c.done) {
+            if ((pipelined || c.fusedGen == gen) && !c.done) { // postupdateFuse: a fused zombie's stream task may still be running
                waitDone(c);
             }
             if (c.serial) {
@@ -282,6 +323,7 @@ public final class AnimParallel {
          spanNanos += System.nanoTime() - batchStart;
          FrameBatch.join(); // every task has finished (each was waited for above); returns the batch's bookkeeping
       }
+      ZombTiming.end(ZombTiming.EVAL_APPLY3, zt);
       java.util.Arrays.fill(work, 0, workCount, null);
       workCount = 0;
    }
@@ -296,6 +338,10 @@ public final class AnimParallel {
 
    public static long evalWaits, evalWaitNanos;
 
+   /** Bounded waits (zombie redesign, f8-zomb2): a task that never comes costs one slow frame, logged, instead of a hung game. */
+   private static final long WAIT_LIMIT_NANOS = 200_000_000L;
+   public static long waitTimeouts;
+
    private static void waitEval(zombie.characters.action.ActionContext ctx, int gen) {
       long t0 = System.nanoTime();
       evalWaits++;
@@ -308,6 +354,13 @@ public final class AnimParallel {
             Thread.onSpinWait();
          } else {
             ShortWait.pause(5_000L);
+            if (System.nanoTime() - t0 > WAIT_LIMIT_NANOS) {
+               // no task will evaluate it (a lost publish): the stream keys go off for the session and it is evaluated here
+               waitTimeouts++;
+               ActionEval.streamGaveUp("the transition evaluation of " + ctx.getOwner() + " never came (generation " + gen + ", done " + ctx.pzoptEvalDone + ")");
+               ctx.pzoptEvaluate();
+               break;
+            }
          }
       }
       evalWaitNanos += System.nanoTime() - t0;
@@ -325,6 +378,16 @@ public final class AnimParallel {
             Thread.onSpinWait();
          } else {
             ShortWait.pause(5_000L);
+            if (System.nanoTime() - t0 > WAIT_LIMIT_NANOS) {
+               // the animator task never came (zombie redesign, f8-zomb2): finished serially without it, the batching off
+               waitTimeouts++;
+               failed = true;
+               ActionEval.streamGaveUp("an animator task never finished");
+               c.serial = true;
+               c.failure = new IllegalStateException("animatorParallel: animator task lost");
+               c.done = true;
+               break;
+            }
          }
       }
       pipelineWaitNanos += System.nanoTime() - t0;
@@ -433,6 +496,9 @@ public final class AnimParallel {
          }
          whole = ok;
          setSafe.put(set, whole);
+         if (ok) {
+            SET_SAFE_SHARED.put(set, Boolean.TRUE); // postupdateFuse: readable from the workers
+         }
          Log.info("animatorParallel: anim set " + set.name + (ok ? " is safe for the workers as a whole" : " has side-effecting states; checked per state"));
       }
       if (whole) {
@@ -548,7 +614,7 @@ public final class AnimParallel {
    /** One line for the periodic FBORenderCell log. */
    public static String describe() {
       return "animator parallel: frames=" + frames + " armed=" + armed + " notArmed=" + notArmed + " statesUnsafe=" + statesUnsafe + " vehicleTarget=" + vehicleTarget + " impureHeld=" + impureHeld
-            + " evalWaits=" + evalWaits + " evalWait ms=" + (evalWaitNanos / 1_000_000L) + " pipelineWaits=" + pipelineWaits + " pipelineWait ms=" + (pipelineWaitNanos / 1_000_000L) + " firstWorkerStart ms=" + (firstStartNanos / 1_000_000L) + " span ms=" + (spanNanos / 1_000_000L) + " workerTasks=" + workerTasks.get() + " task ms=" + (taskNanos.get() / 1_000_000L) + " serialEvents=" + serialEvents + " serialOther=" + serialOther + " serialRagdoll=" + serialRagdoll + " impure=" + impureTouches + " failures=" + failures
+            + " evalWaits=" + evalWaits + " evalWait ms=" + (evalWaitNanos / 1_000_000L) + " pipelineWaits=" + pipelineWaits + " pipelineWait ms=" + (pipelineWaitNanos / 1_000_000L) + " firstWorkerStart ms=" + (firstStartNanos / 1_000_000L) + " span ms=" + (spanNanos / 1_000_000L) + " workerTasks=" + workerTasks.get() + " task ms=" + (taskNanos.get() / 1_000_000L) + " fused=" + fused + " waitTimeouts=" + waitTimeouts + " serialEvents=" + serialEvents + " serialOther=" + serialOther + " serialRagdoll=" + serialRagdoll + " impure=" + impureTouches + " failures=" + failures
             + (failed ? " FAILED" : "");
    }
 }

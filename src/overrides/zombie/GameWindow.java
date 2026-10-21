@@ -681,11 +681,11 @@ public final class GameWindow {
                   newTime = System.nanoTime(); // pzopt
                   currentTime = newTime; // pzopt: the wait is not frame time
                } // pzopt
-               pzopt.Pacing.stepStart(newTime, desiredDt); // pzopt: the game time this frame shows (VRR pacing, pzopt-pacing.out)
+               pzopt.Pacing.stepStart(newTime, desiredDt, newTime - (accumulator - desiredDt)); // pzopt: the game time this frame shows (VRR pacing, pzopt-pacing.out) and the cap slot it serves (frameQueue)
                frameStep();
                pzopt.FrameCap.onFrame(newTime); // pzopt: per-phase frame counter for the console (menu vs game)
                pzopt.FrameCap.stepDone(newTime); // pzopt: the step's own length, without the limiter wait (zoom bake plan)
-               accumulator %= desiredDt;
+               accumulator = pzopt.Pacing.limiterRemainder(accumulator, desiredDt); // pzopt: limiterCatchUp (stock: accumulator %= desiredDt)
                if (pzoptShift < 0L) { // pzopt: frames ran late for their slots: bring the next step forward
                   accumulator -= pzoptShift; // pzopt
                } // pzopt
@@ -930,6 +930,7 @@ public final class GameWindow {
          AbstractPerformanceProfileProbe ex = GameWindow.s_performance.frameStep.profile();
 
          try {
+            pzopt.ZombieLate.frameStart(); // pzopt: zombieDrawLate (f8-zomb3), last frame's late-drawn bone batch lands before the simulation
             s_fpsTracking.frameStep();
             pzopt.FrameClock.afterFpsTracking(); // pzopt: frameClockSmooth, the frame's simulation step on the display's grid
             AbstractPerformanceProfileProbe profiler = GameWindow.s_performance.logic.profile();

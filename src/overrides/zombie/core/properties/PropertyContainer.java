@@ -75,6 +75,54 @@ public final class PropertyContainer extends TShortShortHashMap {
       this.spriteFlags2 = this.spriteFlags2 | other.spriteFlags2;
    }
 
+   /** pzopt: handoffRecalcFast stale check, the flags and the (key, value) entries sorted, into out from off; the count, -1 if too many. */
+   public int pzoptKey(long[] out, int off) { // pzopt
+      if (off + 2 + this.size() > out.length) { // pzopt
+         return -1; // pzopt
+      } // pzopt
+      out[off] = this.spriteFlags1; // pzopt
+      out[off + 1] = this.spriteFlags2; // pzopt
+      int n = off + 2; // pzopt
+      byte[] states = this._states; // pzopt
+      short[] keys = this._set; // pzopt
+      short[] vals = this._values; // pzopt
+      for (int i = 0; i < states.length; i++) { // pzopt
+         if (states[i] == 1) { // pzopt: FULL
+            out[n++] = (long)keys[i] << 16 | vals[i] & 0xFFFFL; // pzopt
+         } // pzopt
+      } // pzopt
+      java.util.Arrays.sort(out, off + 2, n); // pzopt
+      return n - off; // pzopt
+   } // pzopt
+
+   /** pzopt: devHandoffRecalcCheck, a copy of every field (restored by pzoptSetFrom). */
+   public PropertyContainer pzoptCopy() { // pzopt
+      PropertyContainer c = new PropertyContainer(); // pzopt
+      c.pzoptSetFrom(this); // pzopt
+      return c; // pzopt
+   } // pzopt
+
+   /** pzopt: devHandoffRecalcCheck, this container becomes an exact copy of other. */
+   public void pzoptSetFrom(PropertyContainer other) { // pzopt
+      this.clear(); // pzopt
+      byte[] states = other._states; // pzopt
+      for (int i = 0; i < states.length; i++) { // pzopt
+         if (states[i] == 1) { // pzopt
+            this.put(other._set[i], other._values[i]); // pzopt
+         } // pzopt
+      } // pzopt
+      this.spriteFlags1 = other.spriteFlags1; // pzopt
+      this.spriteFlags2 = other.spriteFlags2; // pzopt
+      this.keyArray = other.keyArray == null ? null : other.keyArray.clone(); // pzopt
+      this.surface = other.surface; // pzopt
+      this.stackReplaceTileOffset = other.stackReplaceTileOffset; // pzopt
+      this.itemHeight = other.itemHeight; // pzopt
+      this.slopedSurfaceDirection = other.slopedSurfaceDirection; // pzopt
+      this.slopedSurfaceHeightMin = other.slopedSurfaceHeightMin; // pzopt
+      this.slopedSurfaceHeightMax = other.slopedSurfaceHeightMax; // pzopt
+      this.surfaceFlags = other.surfaceFlags; // pzopt
+   } // pzopt
+
    public void Clear() {
       this.spriteFlags1 = 0L;
       this.spriteFlags2 = 0L;
@@ -159,6 +207,10 @@ public final class PropertyContainer extends TShortShortHashMap {
    }
 
    public String get(IsoPropertyType type) {
+      if (pzopt.Config.PROP_ID_CACHE) { // pzopt: propIdCache
+         int pzoptP = pzopt.PropIds.id(type); // pzopt: = get(name)
+         return !this.containsKey((short)pzoptP) ? null : TilePropertyAliasMap.instance.getPropertyValueString(pzoptP, this.get((short)pzoptP)); // pzopt
+      } // pzopt
       return this.get(type.getName());
    }
 
@@ -176,6 +228,9 @@ public final class PropertyContainer extends TShortShortHashMap {
    }
 
    public boolean has(IsoPropertyType isoPropertyType) {
+      if (pzopt.Config.PROP_ID_CACHE) { // pzopt: propIdCache, the id kept per type for the alias map's generation (pzopt.PropIds)
+         return this.containsKey((short)pzopt.PropIds.id(isoPropertyType)); // pzopt: = has(name): containsKey((short)getIDFromPropertyName(name))
+      } // pzopt
       return this.has(isoPropertyType.getName());
    }
 

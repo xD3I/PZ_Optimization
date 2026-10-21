@@ -39,6 +39,10 @@ public final class MovingObjectUpdateScheduler {
       long pzoptT = pzopt.GtAb.begin(); // pzopt: devGtAlternate section timer
       try { // pzopt
          this.pzoptStartFrame(); // pzopt
+         if (this.pzoptSeparateBatch) { // pzopt: separateAsync (zombie redesign, f8-zomb2)
+            pzopt.SeparateBatch.dispatchAsync(); // pzopt: separateAsync -- the computes start on the workers now and are joined at the top of update()
+         } // pzopt: separateAsync
+         this.pzoptStartFrameEnd = pzopt.ZombTiming.begin(); // pzopt: zombie redesign timers, the cell's pre-phases (startFrame end -> update start)
       } finally { // pzopt
          pzopt.GtAb.end(pzopt.GtAb.S_START_FRAME, pzoptT); // pzopt
       } // pzopt
@@ -116,6 +120,22 @@ public final class MovingObjectUpdateScheduler {
             pzopt.SeparateBatch.add(zombieForSeparate); // pzopt
          } // pzopt
       } // pzopt
+   } // pzopt
+
+   /** pzopt: schedulerFillParallel (f9-los), game thread, in the set's order: pzoptAdd with the object reads the classification task made. */
+   public void pzoptAddTail(IsoMovingObject isoMovingObject, UpdateSchedulerSimulationLevel sim, int index, boolean inPlace, boolean zombie, boolean due) { // pzopt
+      this.simulationLevels[sim.getUpdateOrderIndex()].pzoptAddAt(isoMovingObject, index, inPlace); // pzopt: the bucket add with the worker's reads
+      if (pzopt.Config.INSTRUMENT && zombie) { // pzopt: instrument, zombies per simulation level
+         this.pzoptLevelCount[sim.ordinal()]++; // pzopt
+      } // pzopt
+      if (pzoptSeparateBatch && zombie && due) { // pzopt: separateParallel, as in startFrame
+         pzopt.SeparateBatch.add((IsoZombie)isoMovingObject); // pzopt
+      } // pzopt
+   } // pzopt
+
+   /** pzopt: devSchedFillCheck (f9-los), the bucket of one simulation level. */
+   public MovingObjectUpdateSchedulerUpdateBucket pzoptLevelBucket(int order) { // pzopt
+      return this.simulationLevels[order]; // pzopt
    } // pzopt
 
    private UpdateSchedulerSimulationLevel getUpdateSchedulerSimulationLevelForObject(IsoMovingObject isoMovingObject, float averageFps) {
@@ -227,19 +247,43 @@ public final class MovingObjectUpdateScheduler {
       } // pzopt
    } // pzopt
 
+   private long pzoptStartFrameEnd; // pzopt: zombie redesign timers
+
    private void pzoptUpdate() { // pzopt: the stock body of update
+      pzopt.ZombTiming.end(pzopt.ZombTiming.X0, this.pzoptStartFrameEnd); // pzopt: zombie redesign timers, the runway of separateAsync
+      this.pzoptStartFrameEnd = 0L; // pzopt
       pzopt.FrameTick.next(); // pzopt: the frame stamp of the simulation memos (separateFast, allPlayersAsleep)
+      pzopt.AnimalLosSkip.updateStart(); // pzopt: animalLosSkip (f8-zomb3), this frame's zombie positions (built at the first animal) before the collection
       boolean pzoptCombined = pzopt.UpdateBatch.latchFrameFromConfig(); // pzopt: entityUpdatePipeline -- the frame's shape, latched ONCE (a devPipelineAlternate flip then lands on a frame boundary instead of mixing one frame's buckets)
       if (this.pzoptSeparateBatch) {
          pzopt.SeparateBatch.run(); // pzopt: separateParallel, this frame's separations computed on the workers
       }
 
+      if (pzoptCombined) { // pzopt: entityUpdateStream, the frame's in-place entities (players, vehicles) and its entity total
+         int pzoptInPlace = 0; // pzopt
+         int pzoptTotal = 0; // pzopt
+         for (MovingObjectUpdateSchedulerUpdateBucket simulation : this.simulationLevels) { // pzopt
+            pzoptInPlace += simulation.pzoptInPlaceCount((int)this.frameCounter); // pzopt
+            pzoptTotal += simulation.getBucket((int)this.frameCounter).size(); // pzopt
+         } // pzopt
+         if (pzopt.UpdateBatch.hoistFrame()) { // pzopt: entityUpdateStreamHoist, the players and vehicles first, then the stream opens at once
+            long pzoptHt = pzopt.ZombTiming.begin(); // pzopt: zombie redesign timers
+            for (MovingObjectUpdateSchedulerUpdateBucket simulation : this.simulationLevels) { // pzopt
+               simulation.pzoptHoist((int)this.frameCounter); // pzopt
+            } // pzopt
+            pzopt.ZombTiming.end(pzopt.ZombTiming.HOIST, pzoptHt); // pzopt
+            pzoptInPlace = 0; // pzopt
+         } // pzopt
+         pzopt.UpdateBatch.beginStreamFrame(pzoptInPlace, pzoptTotal); // pzopt
+      } // pzopt: entityUpdateStream
       pzopt.ZombieStats.begin(); // pzopt: zombieStatsFold, the zombies' distance statistics accumulated through the loop
       try { // pzopt
       try { // pzopt: entityUpdatePipeline -- see the finally: nothing may leave this method with a flight airborne or with queued entities unrun
+         long pzoptCt = pzopt.ZombTiming.begin(); // pzopt: zombie redesign timers, the buckets' collection loop
          for (MovingObjectUpdateSchedulerUpdateBucket simulation : this.simulationLevels) {
             simulation.update((int)this.frameCounter);
          }
+         pzopt.ZombTiming.end(pzopt.ZombTiming.COLLECT, pzoptCt); // pzopt
       } finally { // pzopt: entityUpdatePipeline
          try { // pzopt: entityUpdatePipeline
             if (pzoptCombined) { // pzopt: entityUpdatePipeline (combined dispatch, spec 2026-09-27)
@@ -251,6 +295,7 @@ public final class MovingObjectUpdateScheduler {
          } // pzopt: entityUpdatePipeline
       } // pzopt: entityUpdatePipeline
       } finally { // pzopt
+         pzopt.AnimalLosSkip.frameEnd(); // pzopt: animalLosSkip (f8-zomb3)
          pzopt.ZombieStats.end(); // pzopt: zombieStatsFold, written back after the batch landed, the achievement check once per statistic
       } // pzopt
    }
@@ -289,11 +334,16 @@ public final class MovingObjectUpdateScheduler {
             try {
                pzopt.ActionEval.flush();
             } finally {
-               pzopt.AnimBatch.flush();
+               if (!pzopt.ZombieLate.holdsBoneFlush()) { // pzopt: zombieLateApply (f8-zomb3), the bones start after the held apply
+                  pzopt.AnimBatch.flush();
+               } // pzopt
             }
          }
          pzopt.GtAb.end(pzopt.GtAb.S_PU_FLUSH, pzoptPu); // pzopt: Louisville 120 plan B census
       }
+      if (pzoptBatch) { // pzopt: devCleanSkipCheck (f8-cleanfix)
+         pzopt.PostupdateBatch.skipCheck(); // pzopt: the zombies the bucket loop never reached, against their state before it
+      } // pzopt
 
       if (pzopt.SimChecksum.ENABLED) {
          pzopt.SimChecksum.frameDone(); // pzopt: devSimChecksum, the per-frame hash of every zombie's state

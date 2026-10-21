@@ -6,7 +6,7 @@
 #   IsoChunkMap.updateInternal   an edited method with a switch    -> chunkHandoffSlack off
 #   WorldStreamer.isBusy         not an edited method              -> nothing
 # plus a second jar with no patch (a library: "patches no class PZ Optimization ships"). Rig of the main menu's
-# "PZ OPTIMIZATION MOD COMPATIBILITY CHECK" dialog: `--mode verify --mod pzopt-compat-javafixture --flag compat_check=1`.
+# PZ OPTIMIZATION > MOD COMPATIBILITY CHECK dialog: `--mode verify --mod pzopt-compat-javafixture --flag compat_check=1`.
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/../../scripts/pz-env.sh"
 MOD="$ZOMBOID/mods/pzopt-compat-javafixture"

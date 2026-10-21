@@ -454,7 +454,9 @@ public class IsoAnimal extends IsoPlayer implements IAnimalVisual {
                   this.updateEmitter();
                   this.tryThump(null);
                   long pzoptLosT = pzopt.GtAb.begin(); // pzopt: devGtAlternate section timer
-                  this.updateLOS();
+                  if (!pzopt.AnimalLosSkip.skip(this)) { // pzopt: animalLosSkip (f8-zomb3), an idle animal's walk that would change nothing is skipped
+                     this.updateLOS();
+                  } // pzopt
                   pzopt.GtAb.end(pzopt.GtAb.S_ANIMAL_LOS, pzoptLosT); // pzopt
                   if (this.vehicle4testCollision != null) {
                      this.setVehicleCollision(this.testCollideWithVehicles(this.vehicle4testCollision, null));
@@ -3632,6 +3634,11 @@ public class IsoAnimal extends IsoPlayer implements IAnimalVisual {
          this.pzoptUpdateLosSnapshot(pzoptBehavior, pzoptNoFlee, locX, locY); // pzopt
          return; // pzopt
       } // pzopt
+      pzopt.CellObjectSet pzoptSet = pzoptFold ? pzopt.CellObjectSet.of(this.getCell().getObjectList()) : null; // pzopt: animalLosWalk (tail pass)
+      if (pzoptSet != null && pzopt.AnimalLosWalk.enabled()) { // pzopt: the same fold, exact, over the set's cached order
+         this.pzoptUpdateLosWalk(pzoptBehavior, pzoptNoFlee, locX, locY, pzoptSet); // pzopt
+         return; // pzopt
+      } // pzopt
 
       for (IsoMovingObject movingObject : this.getCell().getObjectList()) {
          if (pzoptFold && movingObject instanceof IsoZombie pzoptZombie) { // pzopt: animalLosFast, the stock filters for a zombie
@@ -3750,6 +3757,89 @@ public class IsoAnimal extends IsoPlayer implements IAnimalVisual {
       } // pzopt
       if (ticks > 0) { // pzopt
          this.pzoptSpottedTicks(behavior, ticks); // pzopt
+      } // pzopt
+   } // pzopt
+
+   /**
+    * pzopt: animalLosWalk (tail pass 2026-10-13). updateLOS's fold walk above, exact, over {@link pzopt.AnimalLosWalk}'s array
+    * of the cell set's entries in its iteration order (rebuilt when the set changed): every test reads the live values stock
+    * reads; a zombie whose fold tick cannot change the idle animal (spottedChr null, lastAlerted 0) is passed after reading its
+    * x / y only; ticks of a non-idle animal are applied one by one where the fold applies them. A change of the set inside a
+    * spotted() call throws as stock's iterator does.
+    */
+   private void pzoptUpdateLosWalk(zombie.characters.animals.behavior.BaseAnimalBehavior behavior, boolean noFlee, float locX, float locY, pzopt.CellObjectSet set) { // pzopt
+      pzopt.AnimalLosWalk.ensure(set); // pzopt
+      boolean check = pzopt.Config.DEV_ANIMAL_LOS_CHECK; // pzopt: devAnimalLosCheck, the stock events listed first
+      IsoMovingObject chr0 = this.spottedChr; // pzopt
+      float la0 = behavior.lastAlerted; // pzopt
+      if (check) { // pzopt
+         pzopt.AnimalLosWalk.checkBegin(this, set, noFlee, locX, locY); // pzopt
+      } // pzopt
+      final int n = pzopt.AnimalLosWalk.n; // pzopt
+      final byte[] kind = pzopt.AnimalLosWalk.kind; // pzopt
+      final IsoMovingObject[] objs = pzopt.AnimalLosWalk.obj; // pzopt
+      final int version = set.version; // pzopt
+      final int size = set.size(); // pzopt
+      boolean selfAdded = false; // pzopt
+      int far = 0; // pzopt
+      for (int i = 0; i < n; i++) { // pzopt
+         byte k = kind[i]; // pzopt
+         IsoMovingObject movingObject = objs[i]; // pzopt
+         if (k == pzopt.AnimalLosWalk.ZOMBIE) { // pzopt
+            IsoZombie zombie = (IsoZombie)movingObject; // pzopt
+            if (pzopt.AnimalLosWalk.idle(this, behavior)) { // pzopt: a tick would change nothing; only a call within 10 squares can
+               if (noFlee) { // pzopt
+                  continue; // pzopt
+               } // pzopt
+               float dx = zombie.getX() - locX; // pzopt
+               float dy = zombie.getY() - locY; // pzopt
+               if (dx > 10.01F || dx < -10.01F || dy > 10.01F || dy < -10.01F) { // pzopt: stock's distance is above 10 here
+                  far++; // pzopt
+                  continue; // pzopt
+               } // pzopt
+            } // pzopt
+            if (zombie.isReanimatedForGrappleOnly() || PZMath.abs(zombie.getZ() - this.getZ()) > 1.0F || zombie.getCurrentSquare() == null) { // pzopt: the stock filters
+               continue; // pzopt
+            } // pzopt
+            float dist = noFlee ? 0.0F : IsoUtils.DistanceTo(zombie.getX(), zombie.getY(), locX, locY); // pzopt: the distance stock passes
+            if (noFlee || dist > 10.0F) { // pzopt: the fold's tick
+               pzopt.AnimalLosWalk.tick(this, behavior); // pzopt
+               continue; // pzopt
+            } // pzopt
+            pzopt.AnimalLosWalk.callBefore(this, behavior, zombie, dist); // pzopt
+            this.getBehavior().spotted(zombie, false, dist); // pzopt
+            pzopt.AnimalLosWalk.callAfter(this, behavior); // pzopt
+            pzopt.AnimalLosWalk.calls++; // pzopt
+         } else if (k == pzopt.AnimalLosWalk.PLAYER) { // pzopt: a non-animal player, the stock body with live reads
+            if (PZMath.abs(movingObject.getZ() - this.getZ()) > 1.0F) { // pzopt
+               continue; // pzopt
+            } // pzopt
+            float dist = IsoUtils.DistanceTo(movingObject.getX(), movingObject.getY(), locX, locY); // pzopt
+            if (movingObject.getCurrentSquare() == null) { // pzopt
+               continue; // pzopt
+            } // pzopt
+            IsoPlayer player = (IsoPlayer)movingObject; // pzopt
+            if (player.isInvisible() || player.isGhostMode()) { // pzopt
+               continue; // pzopt
+            } // pzopt
+            pzopt.AnimalLosWalk.callBefore(this, behavior, player, dist); // pzopt
+            this.getBehavior().spotted(player, false, dist); // pzopt
+            pzopt.AnimalLosWalk.callAfter(this, behavior); // pzopt
+            pzopt.AnimalLosWalk.calls++; // pzopt
+         } else { // pzopt
+            if (movingObject == this) { // pzopt
+               this.spottedList.add(this); // pzopt
+               selfAdded = true; // pzopt
+            } // pzopt
+            continue; // pzopt
+         } // pzopt
+         if (i + 1 < n && (set.version != version || set.size() != size)) { // pzopt: the set changed inside the call: stock's next() throws
+            throw new java.util.ConcurrentModificationException(); // pzopt
+         } // pzopt
+      } // pzopt
+      pzopt.AnimalLosWalk.skippedFar += far; // pzopt
+      if (check) { // pzopt
+         pzopt.AnimalLosWalk.checkEnd(this, behavior, chr0, la0, selfAdded); // pzopt
       } // pzopt
    } // pzopt
 

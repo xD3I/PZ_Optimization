@@ -5764,6 +5764,241 @@ public class IsoPlayer extends IsoLivingCharacter implements IAnimalVisual, IHum
    }
 
    private pzopt.NativeLos pzoptNativeLos; // pzopt: playerLosNative experiment, the packed arrays
+   private boolean pzoptLosWasFast; // pzopt: f9-los, the last pass took the playerLosFast path (an alternation's stock frames leave the set behind)
+
+   /**
+    * pzopt: playerLosParallel (f9-los). The stock loop of updateLOS over the cell's objects, with each object's reads
+    * (distance, square, could-see / can-see) computed on the frame workers by pzopt.PlayerLosBatch while this thread still
+    * walks the set; the body below is the stock loop body in the set's order, taking those answers. An object the workers
+    * left to this thread (SERIAL) is read the stock way here, at its place; a zombie nobody could see already has its stock
+    * target alpha 0 (DONE). Returns vclose. bServer / bClient are false (PlayerLosBatch.enabled).
+    */
+   private int pzoptUpdateLosParallel(int playerIndex, float locX, float locY, float locZ, boolean pzoptFast) {
+      boolean bServer = false;
+      boolean bClient = false;
+      boolean check = pzopt.Config.DEV_PLAYER_LOS_CHECK;
+      int n = pzopt.PlayerLosBatch.start(this.getCell().getObjectList(), playerIndex, locX, locY, this.isSeeEveryone());
+      int vclose = 0;
+      try {
+         for (int i = 0; i < n; i++) {
+            if (i % 64 == 0) {
+               pzopt.PlayerLosBatch.await(i);
+            }
+
+            IsoMovingObject movingObject = pzopt.PlayerLosBatch.objs[i];
+            int f = pzopt.PlayerLosBatch.flags[i];
+            if ((f & (pzopt.PlayerLosBatch.SKIP | pzopt.PlayerLosBatch.DONE)) != 0) {
+               if (check) {
+                  this.pzoptLosCheckSkipped(movingObject, f, playerIndex, i);
+               }
+               if ((f & pzopt.PlayerLosBatch.EARLY) != 0) {
+                  pzopt.PlayerLosBatch.countEarly();
+               }
+               continue;
+            }
+
+            boolean serial = (f & pzopt.PlayerLosBatch.SERIAL) != 0;
+            if (serial) {
+               pzopt.PlayerLosBatch.countSerial();
+            }
+            if (!(movingObject instanceof IsoPhysicsObject) && !(movingObject instanceof BaseVehicle)) {
+               if (movingObject == this) {
+                  if (pzoptFast) {
+                     this.pzoptSpotted.add(movingObject);
+                  } else {
+                     this.spottedList.add(movingObject);
+                  }
+               } else {
+                  float movingObjectZ = movingObject.getZ();
+                  float distanceToMovingObject;
+                  IsoGridSquare chrCurrentSquare;
+                  if (serial) {
+                     distanceToMovingObject = IsoUtils.DistanceTo(movingObject.getX(), movingObject.getY(), locX, locY);
+                     chrCurrentSquare = movingObject.getCurrentSquare();
+                  } else {
+                     distanceToMovingObject = pzopt.PlayerLosBatch.dist[i];
+                     chrCurrentSquare = pzopt.PlayerLosBatch.squares[i];
+                     if (check) {
+                        pzopt.PlayerLosBatch.check(Float.floatToRawIntBits(distanceToMovingObject) == Float.floatToRawIntBits(IsoUtils.DistanceTo(movingObject.getX(), movingObject.getY(), locX, locY)), movingObject, "distance");
+                        pzopt.PlayerLosBatch.check(chrCurrentSquare == movingObject.getCurrentSquare(), movingObject, "square");
+                     }
+                  }
+
+                  if (chrCurrentSquare != null) {
+                     if (this.isSeeEveryone()) {
+                        movingObject.setAlphaAndTarget(playerIndex, 1.0F);
+                     }
+
+                     IsoGameCharacter movingCharacter = (IsoGameCharacter)Type.tryCastTo(movingObject, IsoGameCharacter.class);
+                     IsoAnimal movingAnimal = (IsoAnimal)Type.tryCastTo(movingCharacter, IsoAnimal.class);
+                     IsoPlayer movingPlayer = movingAnimal == null ? (IsoPlayer)Type.tryCastTo(movingCharacter, IsoPlayer.class) : null;
+                     IsoZombie movingZombie = (IsoZombie)Type.tryCastTo(movingCharacter, IsoZombie.class);
+                     if (movingZombie != null && movingZombie.isReanimatedForGrappleOnly()) {
+                        IsoMovingObject grappledBy = (IsoMovingObject)Type.tryCastTo(movingZombie.getGrappledBy(), IsoMovingObject.class);
+                        movingObject.setAlphaAndTarget(grappledBy == null ? 1.0F : pzopt.PlayerLosBatch.grapplerAlpha(grappledBy, i, n));
+                     } else if (GameClient.client
+                        && movingCharacter != null
+                        && movingCharacter.isInvisible()
+                        && !this.getRole().hasCapability(Capability.SeesInvisiblePlayers)) {
+                        movingCharacter.setAlphaAndTarget(playerIndex, 0.0F);
+                     } else {
+                        boolean couldSee;
+                        boolean canSee;
+                        if (serial) {
+                           couldSee = chrCurrentSquare.isCouldSee(playerIndex);
+                           if (!couldSee && movingZombie != null && movingZombie.couldSeeHeadSquare(this)) {
+                              couldSee = true;
+                           }
+
+                           canSee = couldSee;
+                           if (movingPlayer == null || ServerOptions.getInstance().hidePlayersBehindYou.getValue()) {
+                              canSee = chrCurrentSquare.isCanSee(playerIndex);
+                              if (!canSee && movingZombie != null && movingZombie.canSeeHeadSquare(this)) {
+                                 canSee = true;
+                              }
+                           }
+                        } else {
+                           couldSee = (f & pzopt.PlayerLosBatch.COULD) != 0;
+                           canSee = (f & pzopt.PlayerLosBatch.CAN) != 0;
+                           if (check) {
+                              boolean stockCould = chrCurrentSquare.isCouldSee(playerIndex);
+                              if (!stockCould && movingZombie != null && movingZombie.couldSeeHeadSquare(this)) {
+                                 stockCould = true;
+                              }
+
+                              boolean stockCan = stockCould;
+                              if (movingPlayer == null || ServerOptions.getInstance().hidePlayersBehindYou.getValue()) {
+                                 stockCan = chrCurrentSquare.isCanSee(playerIndex);
+                                 if (!stockCan && movingZombie != null && movingZombie.canSeeHeadSquare(this)) {
+                                    stockCan = true;
+                                 }
+                              }
+
+                              pzopt.PlayerLosBatch.check(stockCould == couldSee && stockCan == canSee, i, movingObject, "could " + couldSee + "/" + stockCould + " can " + canSee + "/" + stockCan);
+                           }
+                        }
+
+                        if (this.isAsleep() || !canSee && (!(distanceToMovingObject < this.getDetectionRange()) || !couldSee)) {
+                           boolean isAttachedAnimal = movingAnimal != null && this.getAttachedAnimals().contains(movingAnimal);
+                           movingObject.setTargetAlpha(playerIndex, isAttachedAnimal ? 1.0F : 0.0F);
+                           if (couldSee) {
+                              this.TestZombieSpotPlayer(movingObject);
+                           }
+                        } else {
+                           this.TestZombieSpotPlayer(movingObject);
+                           if (movingCharacter == null) {
+                              continue;
+                           }
+
+                           boolean isVisibleToPlayer = movingCharacter.isVisibleToPlayer[playerIndex];
+                           if (isVisibleToPlayer) {
+                              if (movingCharacter instanceof IsoSurvivor) {
+                                 this.numSurvivorsInVicinity++;
+                              }
+
+                              if (movingZombie != null) {
+                                 this.lastSeenZombieTime = 0.0;
+                                 if (movingObjectZ >= locZ - 1.0F
+                                    && distanceToMovingObject < 7.0F
+                                    && !movingZombie.ghost
+                                    && !movingZombie.isFakeDead()
+                                    && chrCurrentSquare.getRoom() == this.getCurrentSquare().getRoom()) {
+                                    this.ticksSinceSeenZombie = 0;
+                                    this.stats.numVisibleZombies++;
+                                 }
+
+                                 if (distanceToMovingObject < 3.0F) {
+                                    vclose++;
+                                 }
+
+                                 if (!movingZombie.isSceneCulled()) {
+                                    this.stats.musicZombiesVisible++;
+                                    if (movingZombie.target == this) {
+                                       if (!movingZombie.isCurrentState(WalkTowardState.instance())
+                                          && !movingZombie.isCurrentState(LungeState.instance())
+                                          && !movingZombie.isCurrentState(PathFindState.instance())) {
+                                          if (this.DistToProper(movingZombie) >= 10.0F) {
+                                             this.stats.musicZombiesTargetingDistantNotMoving++;
+                                          } else {
+                                             this.stats.musicZombiesTargetingNearbyNotMoving++;
+                                          }
+                                       } else if (this.DistToProper(movingZombie) >= 10.0F) {
+                                          this.stats.musicZombiesTargetingDistantMoving++;
+                                       } else {
+                                          this.stats.musicZombiesTargetingNearbyMoving++;
+                                       }
+                                    }
+                                 }
+                              }
+
+                              if (pzoptFast) {
+                                 this.pzoptSpotted.add(movingCharacter);
+                              } else {
+                                 this.spottedList.add(movingCharacter);
+                              }
+
+                              if (movingPlayer == null && !this.remote) {
+                                 movingCharacter.setTargetAlpha(playerIndex, 1.0F);
+                              }
+
+                              if (!bClient && !bServer && movingPlayer != null) {
+                                 movingPlayer.setTargetAlpha(playerIndex, 1.0F);
+                              }
+
+                              float maxdist = 4.0F;
+                              if (this.stats.numVisibleZombies > 4) {
+                                 maxdist = 7.0F;
+                              }
+
+                              if (distanceToMovingObject < maxdist
+                                 && movingCharacter instanceof IsoZombie
+                                 && PZMath.fastfloor(movingObjectZ) == PZMath.fastfloor(locZ)
+                                 && !this.isGhostMode()
+                                 && !bClient) {
+                                 GameTime.instance.setMultiplier(1.0F);
+                                 if (!bServer) {
+                                    UIManager.getSpeedControls().SetCurrentGameSpeed(1);
+                                 }
+                              }
+
+                              if (distanceToMovingObject < maxdist
+                                 && movingCharacter instanceof IsoZombie
+                                 && PZMath.fastfloor(movingObjectZ) == PZMath.fastfloor(locZ)
+                                 && !(pzoptFast ? this.pzoptLos.contains(movingCharacter) : this.lastSpotted.contains(movingCharacter))) {
+                                 this.stats.numVisibleZombies += 2;
+                              }
+                           }
+                        }
+
+                        if (distanceToMovingObject < 2.0F && movingObject.getTargetAlpha(playerIndex) == 1.0F && !this.remote) {
+                           movingObject.setAlpha(playerIndex, 1.0F);
+                        }
+                     }
+                  }
+               }
+            }
+         }
+      } finally {
+         pzopt.PlayerLosBatch.finish(n);
+      }
+
+      return vclose;
+   }
+
+   /** pzopt: devPlayerLosCheck (f9-los), an object the parallel pass left out of the loop body: stock would do nothing more with it. */
+   private void pzoptLosCheckSkipped(IsoMovingObject movingObject, int f, int playerIndex, int index) {
+      if ((f & pzopt.PlayerLosBatch.SKIP) != 0) {
+         pzopt.PlayerLosBatch.check(movingObject instanceof IsoPhysicsObject || movingObject instanceof BaseVehicle, movingObject, "skip");
+      } else if ((f & pzopt.PlayerLosBatch.EARLY) == 0) {
+         pzopt.PlayerLosBatch.check(movingObject.getCurrentSquare() == null, movingObject, "no square");
+      } else {
+         IsoZombie zombie = (IsoZombie)movingObject;
+         IsoGridSquare sq = movingObject.getCurrentSquare();
+         boolean stockCould = sq.isCouldSee(playerIndex) || zombie.couldSeeHeadSquare(this);
+         boolean stockCan = sq.isCanSee(playerIndex) || zombie.canSeeHeadSquare(this);
+         pzopt.PlayerLosBatch.check(!stockCould && !stockCan && !this.isSeeEveryone() && !zombie.isReanimatedForGrappleOnly(), index, movingObject, "early alpha could " + stockCould + " can " + stockCan);
+      }
+   }
 
    /**
     * pzopt: playerLosNative experiment. The stock loop split in three: Java packs every object that passes the cheap
@@ -5992,8 +6227,11 @@ public class IsoPlayer extends IsoLivingCharacter implements IAnimalVisual, IHum
          // once more per close zombie); it only empties on a frame that spots no zombie, so in a horde it holds every zombie
          // ever seen and the search is spotted x remembered compares a frame (12 % of the game thread on the Louisville
          // preset). pzopt.PlayerLos mirrors it in an identity set; sync() picks up any outside change first.
-         boolean pzoptFast = pzopt.Overrides.enabled() && pzopt.Config.PLAYER_LOS_FAST;
+         boolean pzoptFast = pzopt.Overrides.enabled() && pzopt.Config.PLAYER_LOS_FAST && pzopt.ZombAb.on(pzopt.ZombAb.LOS_FAST); // pzopt: f9-los, in-run alternation of playerLosFast
          if (pzoptFast) {
+            if (!this.pzoptLosWasFast) { // pzopt: f9-los, a frame of the stock path changed the stack without the set
+               this.pzoptLos.invalidate(); // pzopt
+            } // pzopt
             this.pzoptLos.sync(this.lastSpotted);
             this.pzoptSpotted.clear(); // pzopt: spottedList is a synchronized Vector; collect the frame's objects here and push them in one addAll
          }
@@ -6010,8 +6248,11 @@ public class IsoPlayer extends IsoLivingCharacter implements IAnimalVisual, IHum
          int close = 0;
          int vclose = 0;
 
+         this.pzoptLosWasFast = pzoptFast; // pzopt: f9-los
          if (pzoptFast && pzopt.Config.PLAYER_LOS_NATIVE && pzopt.NativeLos.available()) {
             vclose = this.pzoptUpdateLosNative(playerIndex, locX, locY, locZ, bServer, bClient); // pzopt: playerLosNative experiment
+         } else if (pzopt.PlayerLosBatch.enabled()) { // pzopt: playerLosParallel (f9-los), the per-object reads on the frame workers
+            vclose = this.pzoptUpdateLosParallel(playerIndex, locX, locY, locZ, pzoptFast); // pzopt
          } else
          for (IsoMovingObject movingObject : this.getCell().getObjectList()) {
             if (!(movingObject instanceof IsoPhysicsObject) && !(movingObject instanceof BaseVehicle)) {

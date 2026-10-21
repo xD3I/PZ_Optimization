@@ -1059,7 +1059,7 @@ public final class AnimationTrack extends PooledObject {
    }
 
    private static class L_updateDeferredValues {
-      static final ThreadLocal<AnimationTrack.L_updateDeferredValues> LOCAL = ThreadLocal.withInitial(AnimationTrack.L_updateDeferredValues::new); // pzopt: animatorParallel, was static scratch
+      static final pzopt.Tl<AnimationTrack.L_updateDeferredValues> LOCAL = new pzopt.Tl<>(AnimationTrack.L_updateDeferredValues::new); // pzopt: animatorParallel, was static scratch
       final Keyframe keyFrame = new Keyframe(new Vector3f(), new Quaternion(), new Vector3f(1.0F, 1.0F, 1.0F));
       final Keyframe prevKeyFrame = new Keyframe(new Vector3f(), new Quaternion(), new Vector3f(1.0F, 1.0F, 1.0F));
       final Vector2 crDiff = new Vector2();

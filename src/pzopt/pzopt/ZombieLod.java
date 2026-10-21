@@ -1,5 +1,7 @@
 package pzopt;
 
+import zombie.characters.IsoZombie;
+
 import zombie.network.GameClient;
 import zombie.network.GameServer;
 
@@ -56,8 +58,141 @@ public final class ZombieLod {
       return Config.ZOMBIE_LOD_DYNAMIC && Overrides.enabled() && !GameServer.server && !GameClient.client;
    }
 
+   // ---- the boundary (2026-10-13): hysteresis and a crossfade between the 3D model and the flat sprite ----
+   private static long frameNs;
+
+   /** this frame's cull-pass time (the crossfades' clock) */
+   public static long frameNs() {
+      return frameNs;
+   }
+
+   /**
+    * zombieLodSpriteLight: the factor on the square's light this zombie's flat sprite is drawn in (0 = stock: black). With
+    * zombieLodDynamic every flat sprite; without it only a sprite drawn under a crossfading model ({@link FirstSight#newSprite}):
+    * the stock far sprites stay black.
+    */
+   public static float spriteLight(IsoZombie z) {
+      if (Config.ZOMBIE_LOD_SPRITE_LIGHT <= 0) {
+         return 0.0F;
+      }
+      return active() || FirstSight.active() && FirstSight.newSprite(z) ? Config.ZOMBIE_LOD_SPRITE_LIGHT / 100.0F : 0.0F;
+   }
+
+   /** zombieFirstSightSprite without zombieLodDynamic (round 11): once a frame before the cull loop, the crossfades' clock. */
+   public static void clock() {
+      frameNs = System.nanoTime();
+   }
+
+   /** zombieFirstSightSprite without zombieLodDynamic: a zombie in the cull loop's 3D places; a first-sight crossfade advances. */
+   public static void sightFade(IsoZombie z) {
+      if (z.pzoptLodFade != 0) {
+         factors(z);
+      }
+   }
+
+   /** zombieFirstSightSprite without zombieLodDynamic: a zombie drawn without its model this frame drops any crossfade. */
+   public static void endFade(IsoZombie z) {
+      if (z.pzoptLodFade != 0 || z.pzoptLodSpriteAlpha != 0.0F) {
+         clear(z);
+      }
+   }
+
+   /** zombieLodHysteresis: whether this zombie is drawn in 3D right now (it keeps its model a few places past the cap). */
+   public static boolean drawnIn3d(IsoZombie z) {
+      return !z.isSceneCulled() && z.hasActiveModel();
+   }
+
+   private static float fadeT(IsoZombie z) {
+      long dur = Config.ZOMBIE_LOD_FADE_MS * 1_000_000L;
+      return dur <= 0L ? 1.0F : Math.max(0.0F, Math.min(1.0F, (float)(frameNs - z.pzoptLodFadeStartNs) / (float)dur));
+   }
+
+   private static void factors(IsoZombie z) {
+      float t = fadeT(z);
+      if (z.pzoptLodFade == 2) {
+         if (t >= 1.0F) {
+            clear(z);
+            return;
+         }
+         z.pzoptLodModelAlpha = t;
+         z.pzoptLodSpriteAlpha = 1.0F - t;
+      } else if (z.pzoptLodFade == 1) {
+         z.pzoptLodModelAlpha = 1.0F - t;
+         z.pzoptLodSpriteAlpha = t;
+      } else {
+         clear(z);
+      }
+   }
+
+   private static void clear(IsoZombie z) {
+      z.pzoptLodFade = 0;
+      z.pzoptLodModelAlpha = 1.0F;
+      z.pzoptLodSpriteAlpha = 0.0F;
+   }
+
+   /** Cull loop: this zombie gets (or keeps) a 3D slot. One that was a sprite, or fading out, fades its model in. */
+   public static void won(IsoZombie z) {
+      if (z.isSceneCulled() && z.pzoptLodFade != 1 && LOD_SEEN.contains(z)) {
+         promotions++; // a sprite last pass gets its model
+      }
+      if (Config.ZOMBIE_LOD_FADE_MS <= 0) {
+         LOD_SEEN.remove(z);
+         clear(z);
+         return;
+      }
+      if (z.pzoptLodFade == 1) {
+         float t = fadeT(z); // reverse from where the fade-out is
+         z.pzoptLodFade = 2;
+         z.pzoptLodFadeStartNs = frameNs - (long)((1.0F - t) * Config.ZOMBIE_LOD_FADE_MS * 1_000_000L);
+      } else if (z.pzoptLodFade == 0 && z.isSceneCulled() && LOD_SEEN.contains(z)) {
+         z.pzoptLodFade = 2; // drawn as a sprite last frame
+         z.pzoptLodFadeStartNs = frameNs;
+         LOD_SEEN.remove(z);
+      }
+      factors(z);
+   }
+
+   /** Cull loop: this zombie lost its slot; true while its model fades out over the sprite (it stays drawn in 3D). */
+   public static boolean keepFading(IsoZombie z) {
+      if (Config.ZOMBIE_LOD_FADE_MS <= 0) {
+         return false;
+      }
+      if (z.pzoptLodFade != 1) {
+         if (z.isSceneCulled() || !z.hasActiveModel()) {
+            return false;
+         }
+         demotions++;
+         z.pzoptLodFade = 1;
+         z.pzoptLodFadeStartNs = frameNs;
+      }
+      if (fadeT(z) >= 1.0F) {
+         return false;
+      }
+      factors(z);
+      return true;
+   }
+
+   private static long promotions;
+   private static long demotions;
+
+   /** Cull loop: a sprite (no fade, or the fade-out is over). */
+   public static void lost(IsoZombie z) {
+      if (Config.ZOMBIE_LOD_FADE_MS <= 0 && !z.isSceneCulled() && z.hasActiveModel()) {
+         demotions++; // (counted here when there is no fade)
+      }
+      clear(z);
+      LOD_SEEN.add(z);
+   }
+
+   /** Zombies drawn as sprites in the previous cull pass (a model appearing for one of them fades in; a new one just appears). */
+   private static final java.util.Set<IsoZombie> LOD_SEEN = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
+
    /** Once per frame, before the cull loop. */
    public static void update() {
+      frameNs = System.nanoTime();
+      if (LOD_SEEN.size() > 8192) {
+         LOD_SEEN.clear();
+      }
       long step = FrameCap.lastStepNs;
       if (step > 0L && windowCount < window.length) {
          window[windowCount++] = step;
@@ -123,6 +258,9 @@ public final class ZombieLod {
 
    /** Zombies drawn as 3D models at the current level (at most the stock 510). */
    public static int max3d() {
+      if (Config.ZOMBIE_LOD_FIXED_3D > 0) {
+         return Math.min(STOCK_3D, Config.ZOMBIE_LOD_FIXED_3D); // zombieLodFixed3d: a fixed count instead of the controller
+      }
       return scale(level, Config.ZOMBIE_LOD_MIN_3D, STOCK_3D);
    }
 
@@ -141,7 +279,7 @@ public final class ZombieLod {
    }
 
    public static String describe() {
-      return String.format(java.util.Locale.ROOT, "zombie lod: level %.2f, 3d %d, blended %d, median step %.2f ms, target %s",
+      return String.format(java.util.Locale.ROOT, "zombie lod: model<->sprite switches so far %d up / %d down; level %.2f, 3d %d, blended %d, median step %.2f ms, target %s", promotions, demotions,
          level, max3d(), blended(zombie.core.PerformanceSettings.numberZombiesBlended), lastP50Ns / 1.0e6,
          lastTargetFps > 0 ? lastTargetFps + " fps (" + String.format(java.util.Locale.ROOT, "%.2f", 1000.0 / lastTargetFps) + " ms)" : "none (stock detail)");
    }

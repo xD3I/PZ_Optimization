@@ -1,0 +1,11 @@
+# run.sh --inputlag script for --flag stock_drive=1 on an uninstalled game (no pzopt.Harness to press click-to-start):
+# starts when the Lua continues the save, clicks the loading screen every 1.5 s for a minute (a click in the car does
+# nothing), then leaves the drive alone; the Lua quits by itself after the drive, "done" is the fallback quit.
+activate
+sleep 6
+repeat 40
+mouse left 0.05
+sleep 1.5
+end
+sleep 70
+done

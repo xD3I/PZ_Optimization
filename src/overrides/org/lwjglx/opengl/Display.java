@@ -202,6 +202,21 @@ public class Display {
       if (Display.Window.handle == 0L && pzopt.CoreGl.retryWithoutCore()) { // pzopt: macGlCore, no core context: the stock legacy one
          Display.Window.handle = GLFW.glfwCreateWindow(gameWindowMode.getWidth(), gameWindowMode.getHeight(), windowTitle, pzoptMonitor, 0L); // pzopt
       } // pzopt
+      if (Display.Window.handle != 0L && pzopt.Hdr.devFailWindow()) { // pzopt: devHdrWindowFail, the failure below on any machine
+         GLFW.glfwDestroyWindow(Display.Window.handle); // pzopt
+         Display.Window.handle = 0L; // pzopt
+      } // pzopt
+      if (Display.Window.handle == 0L && pzopt.Hdr.windowFailed()) { // pzopt: the HDR (Wayland, FP16) window failed: the game's own X11 platform, SDR
+         GLFW.glfwTerminate(); // pzopt
+         GLFW.glfwInitHint(GLFW.GLFW_PLATFORM, GLFW.GLFW_PLATFORM_X11); // pzopt
+         if (!GLFW.glfwInit()) { // pzopt
+            throw new IllegalStateException("Unable to initialize GLFW"); // pzopt
+         } // pzopt
+         Keyboard.create(); // pzopt: init() made it for X11; create(PixelFormat) makes it only on Wayland
+         monitor = GLFW.glfwGetPrimaryMonitor(); // pzopt: the old handle died with glfwTerminate
+         create(); // pzopt: hints and window again; Hdr asks for no FP16 hints on X11
+         return; // pzopt
+      } // pzopt
       if (Display.Window.handle != 0L) {
          // pzopt: keep gameWindowMode equal to the size the window really got. Fullscreen: GLFW may have picked
          // another video mode. Windowed: Windows clamps a new decorated window to the screen's max track size, so a
@@ -354,9 +369,12 @@ public class Display {
 
    public static void update(boolean processMessages) {
       try {
+         pzopt.SwapProbe.mark(pzopt.SwapProbe.CALL); // pzopt: devSwapProbe, where Display.update's time goes
          pzopt.VsyncLock.beforeSwap(); // pzopt: vsyncLock, the swap interval the cap asks for
          pzopt.LowLatency.beforeSwap(); // pzopt: reflexSleep, how long the swap blocks (vsync)
+         pzopt.SwapProbe.mark(pzopt.SwapProbe.SWAP_BEGIN); // pzopt: devSwapProbe
          swapBuffers();
+         pzopt.SwapProbe.mark(pzopt.SwapProbe.SWAP_END); // pzopt: devSwapProbe
          pzopt.InputLag.swapped(); // pzopt: harness input-lag probe (--flag inputlag=1), the frame's swap returned
          pzopt.DriveJitter.swapped(); // pzopt: devDriveJitter, the swap of the frame acquired last
          pzopt.LowLatency.afterSwap(); // pzopt: gpuMaxFrames, fence the frame and wait for the GPU queue to drain
@@ -366,8 +384,10 @@ public class Display {
       }
 
       if (processMessages) {
+         pzopt.SwapProbe.mark(pzopt.SwapProbe.POLL_BEGIN); // pzopt: devSwapProbe
          processMessages();
       }
+      pzopt.SwapProbe.mark(pzopt.SwapProbe.RET); // pzopt: devSwapProbe
    }
 
    private static void updateMouseCursor() {
@@ -404,9 +424,12 @@ public class Display {
 
    public static void processMessages() {
       GLFW.glfwPollEvents();
+      pzopt.SwapProbe.mark(pzopt.SwapProbe.POLL_END); // pzopt: devSwapProbe
       Keyboard.poll();
       Mouse.poll();
+      pzopt.SwapProbe.mark(pzopt.SwapProbe.INPUT_END); // pzopt: devSwapProbe
       updateMouseCursor();
+      pzopt.SwapProbe.mark(pzopt.SwapProbe.CURSOR_END); // pzopt: devSwapProbe
       pzopt.InputLag.afterEvents(); // pzopt: harness input-lag probe, what glfwPollEvents delivered
       if (latestResized) {
          latestResized = false;
@@ -422,7 +445,9 @@ public class Display {
          displayResized = false;
       }
 
+      pzopt.SwapProbe.mark(pzopt.SwapProbe.FOCUS_BEGIN); // pzopt: devSwapProbe
       setDisplayFocused(GLFW.glfwGetWindowAttrib(Display.Window.handle, 131073) == 1);
+      pzopt.SwapProbe.mark(pzopt.SwapProbe.FOCUS_END); // pzopt: devSwapProbe
    }
 
    public static void swapBuffers() throws LWJGLException {

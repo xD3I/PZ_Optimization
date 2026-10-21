@@ -301,7 +301,7 @@ steamcmd `item.vdf` route is gone (2026-09-24).
 
 - Nothing on the Workshop can write to the game folder; the install stays one command (the helper
   window, or `irm .../install.ps1 | iex` / `curl .../install.sh | bash`, which find the Workshop copy
-  in the game's library themselves). The uninstall is in the game (Options > Optimizations).
+  in the game's library themselves). The uninstall is in the game (main menu > PZ OPTIMIZATION > Uninstall PZ Optimization...).
 - The three Lua files under `pzopt-classes/media/lua/` are not loaded from the item (they are
   not under `42/media/`); they reach the game with the class files, as on the GitHub path.
 - A game update makes the runtime guard turn the classes off until a build for the new
@@ -313,3 +313,18 @@ a Rosewood back yard with two sliding glass doors and a glass table placed on th
 doors to the table and back (desktop runs `gpc2-stock-cap` / `gpc2-enh-cap`, enhanced = every Visuals card but remembered
 places, HDR and upscaling off; in-game 30 fps 1:1 devCapture crops round the player), the patio halved, then 1:1 at the table
 and the doors; `harness/props-reflect-changes.py` = the still under it (what reflects, stock vs now, the cost per frame).
+`89` the "New! A built-in benchmark, one menu for everything" card (2026-10-18, the AVIF template, one animation and no
+still under it, the maintainer's choice; it replaces the Louisville New! section on the page, whose `87` / `88` stay in the
+README under a plain heading): `harness/benchmark-menu-card.py` = the 630 square, strip "Benchmark and Menu", real in-game
+screenshots only, six segments with a short cross-fade, each captioned on a dark band under the picture: the main menu's
+PZ OPTIMIZATION item, an Optimizations category (sidebar, breadcrumbs, detail, controller hint bar), Benchmark > Setup (the
+five runs), a horde shooting pass on the desktop (the HUD line at 1:1, then the horde; `bench-horde-ready-20261018-154604`),
+Benchmark > Report of the desktop's A/B run `20261018-035343` (stock and optimized fps per scene, score 1,636 vs 576, the
+charts) and Benchmark > Compare (its section column only: its scores belong to two other runs). The menu screens come from
+the desktop's 1280x720 large-font tour of the release build (`benchmark-run.sh ui:read --screen 1280x720 --font 3`, run
+`bench-card-720-20261018-223032`), shown as 698x720 windows panned left to right at 0.79x.
+`90` the "New! Voxel lighting" card (2026-10-19, under `89`, both New! sections stay; the AVIF template, one animation):
+`harness/voxel-card.py` = the 630 square, strip "Voxel Lighting", stock left of the divider, one sweep: the night lot by the
+bench save at 01:00, grid power and light switches on, clear, zoom 1, the camera panning east (desktop devCapture runs
+`vxcard-lot2-stock` with `enabled=false` / `vxcard-lot2-enh` with `pixelLight=true voxelLight=true`, empty options file, half
+size, 30 fps), the stock frame matched to the enhanced one within 0.35 s of route time; caption under it with the menu path.

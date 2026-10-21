@@ -26,13 +26,27 @@ public final class SlackWork {
 
       /** Run the next job (it learns its own cost). */
       void runNext();
+
+      /** Frames after which the next job runs whatever its cost (f8-handoff: the chunk hand-off may set its own). */
+      default int maxWaitFrames() {
+         return Config.SLACK_MAX_WAIT_FRAMES;
+      }
+
+      /** An overdue job runs in the next slack, light frame or not (f8-handoff: the chunk hand-off may ask for it). */
+      default boolean forceAnyFrame() {
+         return false;
+      }
    }
 
    private static final java.util.ArrayList<Producer> PRODUCERS = new java.util.ArrayList<>();
    private static int frame;
+   private static boolean gcRegistered;
    public static long jobs, forced, slackNs, usedNs, overruns, overruns1ms, overrunNs, failures;
    private static final java.util.HashMap<String, Integer> FORCED = new java.util.HashMap<>();
    private static long lastLogNs;
+   private static long lastStepNs = Long.MIN_VALUE;
+   /** The deadline of the current step's slack run (game thread). */
+   static long currentDeadlineNs;
 
    public static void register(Producer p) {
       if (!PRODUCERS.contains(p)) {
@@ -50,9 +64,23 @@ public final class SlackWork {
       return frame;
    }
 
-   /** Game thread, at the start of the limiter wait: run what fits before {@code deadlineNs}. */
+   /**
+    * Game thread, at the start of the limiter wait: run what fits before {@code deadlineNs}. The stock limiter loop calls
+    * the wait on every pass (park, then spin), so only the first call of a game step counts a frame and runs jobs: a later
+    * pass of the same step has less time left than the first had.
+    */
    public static void run(long deadlineNs) {
+      long step = Pacing.stepStartNs();
+      if (step == lastStepNs) {
+         return;
+      }
+      lastStepNs = step;
       frame++;
+      currentDeadlineNs = deadlineNs; // gcSlackFit: the producers' view of this step's deadline
+      if (Config.GC_SLACK && !gcRegistered) {
+         gcRegistered = true;
+         register(GcSlack.PRODUCER); // gcSlack: the young collection as a slack job
+      }
       if (!active() || PRODUCERS.isEmpty()) {
          return;
       }
@@ -72,9 +100,10 @@ public final class SlackWork {
                continue;
             }
             int age = p.nextAgeFrames();
+            int maxWait = p.maxWaitFrames(); // f8-handoff: per producer (the global slackMaxWaitFrames unless it sets its own)
             // overdue: into a light frame (half the interval still free) at once, into any frame only at four times the wait
-            if (!ranForced && age >= Config.SLACK_MAX_WAIT_FRAMES
-                  && (deadlineNs - now >= Pacing.capIntervalNs() / 2 || age >= 4 * Config.SLACK_MAX_WAIT_FRAMES)) {
+            if (!ranForced && age >= maxWait
+                  && (p.forceAnyFrame() || deadlineNs - now >= Pacing.capIntervalNs() / 2 || age >= 4 * maxWait)) {
                best = p;
                force = true;
                break;

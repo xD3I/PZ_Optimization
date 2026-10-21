@@ -6,7 +6,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        Check the README first. It explains each optimization, every Config flag and the install steps. Add the platform label (`linux`, `windows`, `handheld`) after opening if the question is platform-specific.
+        Check the README and its pages first (docs/guide/): each optimization, every setting and the install steps. Add the platform label (`linux`, `windows`, `handheld`) after opening if the question is platform-specific.
   - type: dropdown
     id: platform
     attributes:

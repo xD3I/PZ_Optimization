@@ -171,7 +171,7 @@ function Reset-Aot {
   if (Test-Path -LiteralPath $Json) {
     $j = Get-Content -LiteralPath $Json -Raw | ConvertFrom-Json
     $jar = 'pzopt/aot/pzopt.jar'
-    $aot = @($j.vmArgs | Where-Object { $_ -like '-XX:AOTCache*' -or $_ -like '-Xlog:aot=info:file=pzopt/aot/*' })
+    $aot = @($j.vmArgs | Where-Object { $_ -like '-XX:AOTCache*' -or $_ -like '-Xlog:aot=info:file=pzopt/aot/*' -or $_ -eq '-XX:-AOTInvokeDynamicLinking' })  # aotNoIndy: its -XX:+UnlockDiagnosticVMOptions stays (harmless alone)
     if ((@($j.classpath) -contains $jar) -or $aot.Count -gt 0) {
       $j.classpath = @('.') + @($j.classpath | Where-Object { $_ -ne '.' -and $_ -ne $jar })
       $j.vmArgs = @($j.vmArgs | Where-Object { $aot -notcontains $_ })
@@ -186,7 +186,7 @@ function Reset-Aot {
   if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp -Force }
 }
 # Undo pzopt.GcChoice's launcher switch (marker -Dpzopt.gc=g1[,pause]): G1 back to ZGC, the pause target it added removed;
-# its JIT flags and its heap size too.
+# its tuned G1 flags (-Dpzopt.gctune=), its JIT flags and its heap size too.
 function Reset-Gc {
   if (-not (Test-Path -LiteralPath $Json)) { return }
   $j = Get-Content -LiteralPath $Json -Raw | ConvertFrom-Json
@@ -200,13 +200,13 @@ function Reset-Gc {
     $script:gcChanged = $true
     return ,$a
   }
-  # jitSteady (marker -Dpzopt.jit=steady): the JIT trap-limit flags it added
+  # jitSteady (marker -Dpzopt.jit=steady): the JIT trap-limit flags and -XX:-UseTypeSpeculation it added
   $jm = '-Dpzopt.jit=steady'
   $fixJit = {
     param($a)
     $a = @($a)
     if (-not ($a -contains $jm)) { return ,$a }
-    $a = @($a | Where-Object { $_ -ne $jm -and $_ -notlike '-XX:PerMethodTrapLimit=*' -and $_ -notlike '-XX:PerBytecodeTrapLimit=*' })
+    $a = @($a | Where-Object { $_ -ne $jm -and $_ -notlike '-XX:PerMethodTrapLimit=*' -and $_ -notlike '-XX:PerBytecodeTrapLimit=*' -and $_ -ne '-XX:-UseTypeSpeculation' })
     $script:gcChanged = $true
     return ,$a
   }
@@ -230,14 +230,31 @@ function Reset-Gc {
     $script:gcChanged = $true
     return ,@($a)
   }
+  # gcG1Tuned (marker -Dpzopt.gctune=g1[,ignore][,unlock]): the tuned G1 flags it added, and the unlock / ignore flags the
+  # marker says were ours (GcChoice.tuneToStock)
+  $tm = '-Dpzopt.gctune='
+  $tuneFlags = @('-XX:G1NewSizePercent=2', '-XX:G1MaxNewSizePercent=4', '-XX:MaxTenuringThreshold=0', '-XX:ReservedCodeCacheSize=512m', '-XX:SweeperThreshold=50', '-XX:-G1UseAdaptiveIHOP', '-XX:InitiatingHeapOccupancyPercent=70', '-XX:G1MixedGCCountTarget=24', '-XX:G1MixedGCLiveThresholdPercent=50', '-XX:G1HeapWastePercent=10')
+  $fixTune = {
+    param($a)
+    $a = [System.Collections.ArrayList]@($a)
+    $mk = @($a | Where-Object { $_ -like "$tm*" })
+    if ($mk.Count -eq 0) { return ,@($a) }
+    $added = @($mk[-1].Substring($tm.Length) -split ',')
+    foreach ($x in $mk) { $a.Remove($x) }
+    foreach ($f in $tuneFlags) { $a.Remove($f) }
+    if ($added -contains 'unlock') { $a.Remove('-XX:+UnlockExperimentalVMOptions') }
+    if ($added -contains 'ignore') { $a.Remove('-XX:+IgnoreUnrecognizedVMOptions') }
+    $script:gcChanged = $true
+    return ,@($a)
+  }
   $script:gcChanged = $false
-  if ($j.vmArgs) { $j.vmArgs = & $fixHeap (& $fixJit (& $fix $j.vmArgs)) }
+  if ($j.vmArgs) { $j.vmArgs = & $fixHeap (& $fixJit (& $fix (& $fixTune $j.vmArgs))) }
   foreach ($p in $j.PSObject.Properties) {
-    if ($p.Value -is [psobject] -and $p.Value.PSObject.Properties['vmArgs']) { $p.Value.vmArgs = & $fixHeap (& $fixJit (& $fix $p.Value.vmArgs)) }
+    if ($p.Value -is [psobject] -and $p.Value.PSObject.Properties['vmArgs']) { $p.Value.vmArgs = & $fixHeap (& $fixJit (& $fix (& $fixTune $p.Value.vmArgs))) }
     # the Windows JSON's per-version sections ("windows": {"10.0.17134": {"vmArgs": [...]}}) hold the collector (GcChoice.forEachVmArgsDeep)
     if ($p.Value -is [psobject]) {
       foreach ($q in $p.Value.PSObject.Properties) {
-        if ($q.Value -is [psobject] -and $q.Value.PSObject.Properties['vmArgs']) { $q.Value.vmArgs = & $fix $q.Value.vmArgs }
+        if ($q.Value -is [psobject] -and $q.Value.PSObject.Properties['vmArgs']) { $q.Value.vmArgs = & $fix (& $fixTune $q.Value.vmArgs) }
       }
     }
   }

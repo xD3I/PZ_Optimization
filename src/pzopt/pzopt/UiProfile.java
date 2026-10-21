@@ -251,6 +251,28 @@ public final class UiProfile {
       }
    }
 
+   /** devUiTruth: a schedule (s = uiRetained, k = stock) showed something else than the truth for frames / us; logged when it ends. */
+   static void truthEpisode(String which, String name, String cause, long frames, long us) {
+      if (enabled()) {
+         line("X " + epochUs() + " " + which + " " + name.replace(' ', '_') + " " + cause + " " + frames + " " + us);
+      }
+   }
+
+   /** devUiTruth's per-second counters: element-frames stale (uiRetained, stock), frames with any stale element (same). */
+   static void truthStats(int frames, int[] stale, int near) {
+      if (enabled()) {
+         line("Y " + System.currentTimeMillis() + " frames=" + frames + " stale_el_s=" + stale[0] + " stale_el_k=" + stale[1]
+            + " stale_fr_s=" + stale[2] + " stale_fr_k=" + stale[3] + " move_near=" + near);
+      }
+   }
+
+   /** uiVerify's per-second counters (pzopt.UiDeps). */
+   static void depsStats(String s) {
+      if (enabled()) {
+         line("V " + System.currentTimeMillis() + " " + s);
+      }
+   }
+
    /** uiRetained's per-second counters. */
    static void retainedStats(int uiFrames, int inputFrames, int fresh, int replay, int checked, int stale, int recs, int uiEvents) {
       if (enabled()) {

@@ -55,6 +55,9 @@ public final class ZombieGroupManager {
             this.tickCount = 0.0f;
         }
         int groupSize = SandboxOptions.instance.zombieConfig.rallyGroupSize.getValue();
+        if (pzopt.Config.INSTRUMENT || pzopt.Config.DEV_ZOMBIE_GROUP_CENSUS) { // pzopt: f9-burst census (one run in 17 spent ~16 % of its game thread in ZombieGroup.update)
+            pzopt.ZombieGroupCensus.sample(this.groups, this.freeGroups.size()); // pzopt
+        } // pzopt
         synchronized (this.groups) { // pzopt: entityUpdateParallel — the game thread's sweep compacts the same list the workers read; uncontended outside a batch window
         for (int i = 0; i < this.groups.size(); ++i) {
             ZombieGroup group = this.groups.get(i);
@@ -64,6 +67,9 @@ public final class ZombieGroupManager {
             this.groups.remove(i--);
         }
         } // pzopt: entityUpdateParallel
+        if (pzopt.Config.INSTRUMENT || pzopt.Config.DEV_ZOMBIE_GROUP_CENSUS) { // pzopt: f9-burst census, the sweep's time
+            pzopt.ZombieGroupCensus.swept(); // pzopt
+        } // pzopt
     }
 
     public void Reset() {

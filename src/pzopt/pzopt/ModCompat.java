@@ -137,6 +137,19 @@ public final class ModCompat {
       return out;
    }
 
+   /** Whether the launch may carry Java mods (any -javaagent or mod jar, or the scan was off / failed): pzopt.RenderLast. */
+   public static boolean javaModsPossible() {
+      if (mode.equals("off") || !problems.isEmpty()) {
+         return true;
+      }
+      for (List<File> l : scanned.values()) {
+         if (!l.isEmpty()) {
+            return true;
+         }
+      }
+      return false;
+   }
+
    /** Overrides.onClassLoaded once the game's log exists: the report into console.txt. */
    static void logOnce() {
       if (logged) {

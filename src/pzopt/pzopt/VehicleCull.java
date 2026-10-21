@@ -69,7 +69,7 @@ public final class VehicleCull {
    }
 
    private static final Near GAME = new Near();
-   private static final ThreadLocal<Near> OTHER = ThreadLocal.withInitial(Near::new);
+   private static final Tl<Near> OTHER = new Tl<>(Near::new);
    private static final java.util.concurrent.atomic.AtomicInteger nearBuilds = new java.util.concurrent.atomic.AtomicInteger();
 
    /**

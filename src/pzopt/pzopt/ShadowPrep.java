@@ -30,7 +30,7 @@ public final class ShadowPrep {
       final Vector2 vector2b = new Vector2();
    }
 
-   private static final ThreadLocal<Scratch> SCRATCH = ThreadLocal.withInitial(Scratch::new);
+   private static final Tl<Scratch> SCRATCH = new Tl<>(Scratch::new);
 
    /** Counters for the log line: pairs computed on the workers, served to renderShadow, and renderShadow calls that computed. */
    public static long computed, served, fallback;

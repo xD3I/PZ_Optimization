@@ -1,27 +1,20 @@
--- pzopt: the "PZ Optimization" tab in the options screen, right after Display (one tab since 2026-10-04; before, three:
---  Optimizations, Enhancements, Profiler).
---  Every pzopt.Config key is a control here: booleans are tick boxes, integers are combos whose first
---  entry is the build's default on this machine. The values live in Java: the overridden
---  PerformanceSettings forwards to pzopt.Config (what is in force since boot) and pzopt.UserOptions
---  (Zomboid/pzopt/options.ini, what the next launch will read). The Performance settings (SECTIONS) apply on the
---  next launch, so a change away from the boot value raises the stock "restart required" dialog; the
---  Tools (PROFILER_SECTIONS) and most Visuals (ENHANCEMENT_SECTIONS, entry.live) apply at once when saved
---  (pzopt.Config.reloadLive, then pzopt.Overlay.reconfigure / pzopt.Enhancements.apply).
---  A key set in the install dir's pzopt.properties or as -Dpzopt.<key> (harness runs) wins over the
---  file; its control shows that value, is disabled, and the tooltip says what pins it.
---  Each group has a master switch on the home page (keys `enabled`, `enhancementsEnabled`, `profilerEnabled`): off,
---  the group's settings are ignored and kept. `enabled` off = every override takes its stock path, the same as a build
---  mismatch. The presets (Recommended / Stock game / Low-end) and the Reset buttons only change the controls;
---  Apply / Accept saves them like any other option.
---  How the page is organised (home, categories, subcategories, Simple / Advanced / Everything, Fix a problem) comes
---  from pzopt_optimizations_layout.lua; the layout engine is near the end of this file (buildPage, relayout).
---  Right of the settings sits the preview panel (PzoptPreview, fixed while the list scrolls): for the
---  setting under the mouse it plays two clips side by side, the stock game and the optimized build on the
---  same route (animated GIFs under media/ui/pzopt/compare/, made by harness/menu-gifs.py, decoded by
---  pzopt.GifTextures), shows the setting's description and its value now / at the next launch, and draws
---  one bar per resource (game thread, render thread, other cores, GPU, VRAM, RAM, disk, load time, chunk
---  arrival) from the EFFECTS table below: left = less work / sooner, right = more. Which clip a setting
---  shows is its section's `clip`, overridden per key in KEY_CLIP.
+-- pzopt: every pzopt setting the player can change, as data, and what the main menu's PZ OPTIMIZATION screen does with
+-- them (pzopt_mainscreen_menu.lua is the screen; since 2026-10-18 it is their only home: the game's Options screen has no
+-- PZ Optimization tab any more, only this file's lazy build of that screen, install() at the end).
+--  SECTIONS (Performance, next launch), ENHANCEMENT_SECTIONS (Visuals, live except NEXT_LAUNCH_ONLY) and PROFILER_SECTIONS
+--  (Tools, live): one entry per pzopt.Config key with its label, description (tip), choices / notes, its clip. The values
+--  live in Java: the overridden PerformanceSettings forwards to pzopt.Config (what is in force since boot) and
+--  pzopt.UserOptions (Zomboid/pzopt/options.ini, what the next launch reads; a live key applies when it is saved:
+--  pzopt.Config.reloadLive, then pzopt.Overlay.reconfigure / pzopt.Enhancements.apply). A key set in the install dir's
+--  pzopt.properties or as -Dpzopt.<key> (harness runs) wins over the file and cannot be changed from the screen.
+--  Masters: each group has one (`enabled`, `enhancementsEnabled`, `profilerEnabled`) and each category one (CATS, the
+--  layout's `master`): off, Java reads the settings they gate at the stock game's value; the choices stay saved.
+--  The impact chart (AXES / EFFECTS, PzoptPreview:drawBars), the before / after clips (CLIP_*, KEY_CLIP, PzoptPreview:
+--  drawClip, GIFs under media/ui/pzopt/compare/ decoded by pzopt.GifTextures), the search (BM25 over labels, keys,
+--  descriptions, resources and the Java classes), the presets (PROFILES), export / import, reset, uninstall and the DLSS
+--  files are reached through PzoptSettings (the API near the end).
+--  How the settings are organised (groups, categories, subcategories, Simple / Advanced / Everything, Fix a problem):
+--  pzopt_optimizations_layout.lua.
 -- Installed by scripts/pzopt.sh into <game dir>/media/lua/client/pzopt/ (loose game-dir Lua is
 -- loaded like any other, no mod to enable).
 
@@ -38,10 +31,50 @@ local MASTER = { key = "enabled", label = "Optimizations enabled (master switch)
 -- (Config's GATED list) while the choices below stay saved for when it is on again. Both apply at once; the features
 -- that pick their shaders or window at start-up (NEXT_LAUNCH_ONLY) follow on the next launch.
 local ENHANCEMENTS_MASTER = { key = "enhancementsEnabled", label = "Enhancements enabled (master switch)", live = true,
-  restartKeys = { "hdr", "hdrAuto", "pixelLight", "reflections", "carGlass", "mirrors" },
+  restartKeys = { "hdr", "hdrAuto", "pixelLight", "voxelLight", "reflections", "carGlass", "mirrors" },
   tip = "Off = the picture is the stock game's: upscaling, sprite filtering, HDR output, ambient occlusion, sun shadows, reflections, car glass, the darkness floor, remembered places, colour grading, per-pixel lighting, god rays and foliage sway are all off, whatever the settings below say (they are kept for when you switch it on again). On = the settings below apply. HDR output, per-pixel lighting, reflections and car glass switch on the next launch." }
 local PROFILER_MASTER = { key = "profilerEnabled", label = "Profiler enabled (master switch)", live = true,
   tip = "Off = no performance overlay, no measuring and no frame log: the overlay's samplers never start and the toggle key only says the profiler is off, whatever the settings below say (they are kept for when you switch it on again). On = the settings below apply." }
+
+-- The category master switches (2026-10-16): one per category of pzopt_optimizations_layout.lua (its `master` key), at the
+-- top of the category's page. Off, Java reads the category's settings at the stock game's value (Config's GATED list)
+-- while the choices stay saved, like the group switches. Visuals ones apply at once except the start-up features
+-- (restart keys, named in `later`); Performance ones on the next launch. The Tools group's one category uses its group's.
+-- One table (CATS.*) rather than top-level locals: a -debug game's Lua compiler fails a chunk past 200 locals (issue #58,
+-- scripts/LuaDebugCompile.java).
+local CATS = {}
+CATS.restart = {
+    catImageEnabled = { keys = { "hdr", "hdrAuto" }, later = "HDR output switches" },
+    catLightEnabled = { keys = { "pixelLight", "voxelLight" }, later = "per-pixel and voxel lighting switch" },
+    catReflEnabled = { keys = { "reflections", "carGlass", "mirrors" }, later = "reflections, car glass and mirrors switch" },
+}
+
+-- the category switch that gates a start-up key, or nil
+function CATS.masterOfKey(key)
+    for master, r in pairs(CATS.restart) do
+        for _, k in ipairs(r.keys) do
+            if k == key then return master end
+        end
+    end
+    return nil
+end
+
+-- the switch as a settings entry: label, live, its start-up keys, its description
+function CATS.entry(cat, live)
+    local entry = { key = cat.master, label = cat.title .. " enabled (category switch)", live = live }
+    if live then
+        local r = CATS.restart[cat.master]
+        entry.restartKeys = r and r.keys
+        entry.tip = "Off = everything in " .. cat.title .. " is off, as in the stock game, whatever the settings below say "
+            .. "(they are kept for when you switch it on again). On = the settings below apply, as long as the Enhancements "
+            .. "master switch is on too. Applies at once" .. (r and ("; " .. r.later .. " on the next launch.") or ".")
+    else
+        entry.tip = "Off = every optimization in " .. cat.title .. " takes the stock game's code path from the next launch, "
+            .. "whatever the settings below say (they are kept for when you switch it on again). On = the settings below apply. "
+            .. "Worker thread counts other categories share, crash guards, mod compatibility and updates stay as set."
+    end
+    return entry
+end
 
 -- Colour names pzopt.Overlay.color knows (a RRGGBB hex typed into options.ini also works).
 local FPS_COLOURS = { "blue", "green", "yellow", "red", "white", "cyan", "lime", "orange", "magenta", "purple" }
@@ -123,8 +156,12 @@ local SECTIONS = {
               tip = "The most chunk-level bakes a frame (the highest the adaptive budget goes); object changes to a texture next to you and up to four new chunk levels always come on top." },
             { key = "bakeBudgetAdaptive", label = "One budget: follow the frame time",
               tip = "The bake budget halves after a frame that used more than 90 % of the frame-rate cap's time and grows by one after frames under 60 %, between 2 and the budget above." },
+            { key = "bakeBudgetGpu", label = "One budget: count the GPU's time too",
+              tip = "The adaptive budget above judged a frame by the time the game and render threads took. With this it also counts how long the GPU kept drawing after the frame was handed over (the frame queue's GPU timestamps), so a frame whose GPU ran long, such as a horde coming into view, also halves the next frames' bakes. Only changes when chunk pictures bake, never what they show. On by default since 2026-10-15." },
             { key = "occlusionGrantedOnly", label = "One budget: occlusion only for the levels baked",
               tip = "The pass that finds which chunk levels are hidden behind buildings looks only at the levels baked this frame, not every one still waiting." },
+            { key = "bakeNoSync", label = "Bake passes never wait for the graphics driver",
+              tip = "The ambient-occlusion and foliage-sway passes that run inside a chunk bake keep their own record of the GL state and take object names from a ready pool, instead of asking the driver (each question made the render thread wait for the driver to finish every bake queued before it). Louisville horde with every Enhancement on: single baked levels of 10-35 ms on the render thread gone, worst frame's bake time 25 -> 9 ms. Same picture." },
             { key = "bakeMipLevels", label = "Mipmap levels built after a bake",
               choices = { "0", "2", "3", "4" }, note = { ["0"] = "stock: all 11" },
               tip = "The smaller copies of a chunk texture made after each bake; the widest zoom uses only the first ones. 3 cuts a bake's GPU time by a fifth, same picture." },
@@ -174,7 +211,7 @@ local SECTIONS = {
               choices = { "0", "4", "8", "16", "32" }, note = { ["0"] = "no cap" },
               tip = "How many chunk textures with a strong light change re-bake in the same frame; the rest keep the lighting-only re-bake hold. A torch or headlight beam touches a few per frame; turning moves the out-of-sight fade over every exterior tile (downtown Louisville: 10.8 fps with no cap)." },
             { key = "lightingStrongFrameMs", label = "Strong light changes: ease on slow frames",
-              choices = { "0", "12", "20", "33" }, note = { ["0"] = "fixed budget" },
+              choices = { "0", "9", "12", "20", "33" }, note = { ["0"] = "fixed budget", ["9"] = "default" },
               tip = "A game-thread frame longer than this many milliseconds halves the number of strong-light chunk re-bakes allowed next frame (it grows back on fast frames). Stops the slow-frame -> more re-bakes -> slower-frame loop of a big downtown horde." },
             { key = "lightingGlobalDeltaPct", label = "Global light move that keeps the spread (%)",
               choices = { "1", "2", "5", "10", "100" }, note = { ["100"] = "never" },
@@ -248,7 +285,7 @@ local SECTIONS = {
             { key = "animBonesParallel", label = "Zombie animation bone math on other cores",
               tip = "After the object update loop the zombies' animation blending (bone, twist, model and skin matrices, 9 % of the game thread in a horde) runs on worker threads and is joined before rendering; off, it runs inline like stock." },
             { key = "frameThreads", label = "Worker threads for the zombie batches",
-              choices = { "2", "4", "8", "15" }, tip = "Threads of the per-frame zombie batches (bone math, transition evaluation, lighting reads; the game thread joins in); more than cores - 1 is clamped." },
+              choices = { "2", "4", "8", "11", "15" }, tip = "Threads of the per-frame zombie batches (bone math, transition evaluation, lighting reads; the game thread joins in); more than cores - 1 is clamped. Default 8, or on a CPU with fast and efficient cores and more than nine cores one per core besides the game thread's, at most 11 (a Ryzen AI 9 HX 370 handheld: 11 ran a horde frame about 5 % faster than 8)." },
             { key = "actionEvalParallel", label = "Zombie decision rules evaluated on other cores",
               tip = "Each zombie's action-state transition rules (dozens of variable tests per zombie per frame, 7-10 % of the game thread in a horde) are evaluated on worker threads after the object loop; the state changes, the animator and the model update then run on the game thread in the stock order. Rules that call Lua or a zombie mid-grapple stay on the game thread." },
             { key = "animatorParallel", label = "Zombie animators on other cores",
@@ -269,6 +306,8 @@ local SECTIONS = {
               tip = "Every reuse of a pooled engine object bumps shared statistics counters; the worker threads now count in private tallies and add them once per batch. Same totals, no fight over one memory line." },
             { key = "ecsLookupFast", label = "Cheap state-machine lookups",
               tip = "Every state-machine, action-context and animation-variable access of a character went through a class walk, a map probe and a reflective cast; the answer is memoised and zombies keep their component in a field (5 % of the game thread in a horde). Same results." },
+            { key = "lookupMemo", label = "Remember clothing and animation name lookups",
+              tip = "Dressing a new zombie looks up dozens of clothing and animation names in tables that ignore upper and lower case, so each lookup compared strings letter by letter all the way down the table. The exact names already asked are remembered, so the same name again is one hash probe. Same answers: 3.1 million lookups compared on the Louisville horde, none different. Hordes appearing cost less game-thread time." },
             { key = "actionConditionFast", label = "Typed decision-rule variables",
               tip = "A rule comparing a true/false or integer animation variable reads it directly; stock printed the value to text and parsed it back for every rule of every zombie every frame. Same outcomes." },
             { key = "skinTransformsPrecompute", label = "Bone worker: skin matrices of zombies",
@@ -285,16 +324,50 @@ local SECTIONS = {
               tip = "The per-frame sort that decides which zombies get a full update computes each zombie's relevance score once and sorts primitive keys; stock recomputed both scores in every comparison of the sort. Same order." },
             { key = "vehicleCull", label = "Skip far vehicles in the zombie line-of-sight test",
               tip = "A zombie checking whether a car blocks its view of you tests only the cars near you whose bounding circle reaches the line (one list per frame); stock ran the exact box test on every loaded car (6 % of the game thread downtown)." },
+            { key = "separateMemo", label = "Zombie crowding: each answer once per frame",
+              tip = "When zombies push each other apart, every zombie asks of each neighbour whether it counts as solid (its state, sitting, ragdoll) and whether a wall stands between their squares. While that pass runs nothing in the world changes, so each neighbour's answer is now worked out once per frame and each worker thread remembers the wall answers it already found. Same answers, about a third of the pass." },
+            { key = "nearVehicleGrid", label = "Find nearby cars from one map per frame",
+              tip = "Every zombie asks each update whether a car is within four squares; stock looked up the 16 chunks around it and their car lists one by one. One table of which chunks hold a car, built once per frame, answers \"none\" for most of them; when a car may be near, the stock search runs. Same answers (2 % of the game thread in a horde)." },
             { key = "playerLosFast", label = "Remember spotted zombies in a set",
               tip = "The list of everything you have spotted since the last quiet moment is searched once per spotted object per frame; stock walked it end to end each time, so in a horde the cost grew with the square of the zombies in view (12 % of the game thread in Louisville). The search is one hash probe now, and the sneak modifier zombies ask for is computed once per frame." },
+            { key = "playerLosParallel", label = "Player sight: each zombie's checks on other cores",
+              tip = "Every frame the game checks every zombie, animal and car against your sight: how far it is, whether its square is in view, whether it is climbing through a window. Those reads are made on the worker threads, and the game thread then applies the results one by one in the usual order (fade, spot roll, counters). A zombie nobody can see is finished on the worker. Same result, checked object by object. On by default since 2026-10-15." },
             { key = "zombieSpotFast", label = "Skip the spot roll for zombies that cannot see you",
               tip = "A zombie facing away from you or with you beyond its vision radius already has a zero chance to notice you; it skips the remaining modifiers, the car test and the dice roll (same outcome), instead of computing them all first." },
             { key = "charDrawPrep", label = "Zombie draw data built on other cores",
               tip = "The draw data of every zombie model on screen (its lights, one render record and matrix palette per body and clothing model, the depth and light setup) is built on worker threads before the game thread queues the draws in the stock order; stock built it one zombie at a time on the game thread (13 % of it in a Louisville horde). Same pixels." },
+            { key = "hordeBatch", label = "Draw the 3D zombies in batches",
+              choices = { "off", "exact", "defer" },
+              note = { ["off"] = "stock: every zombie its own little scene", ["exact"] = "same pixels", ["defer"] = "fastest; zombies drawn after the other moving objects" },
+              tip = "The game draws every 3D zombie on its own: a full GL state save and restore, a shader switch, ~25 settings and a 60-matrix skeleton upload for each of its ~4 models. Batched, the render thread works out the same values, puts them in buffers the GPU reads, and draws a run of zombies with one shader and one draw call per model. In a 450-zombie horde the zombies' GPU time drops from ~6.5 ms to ~1.2 ms a frame. 'exact' keeps the stock drawing order (same pixels, checked pixel by pixel); 'defer' draws all of a frame's 3D zombies at the end of the moving objects, as if the game had listed them last (a semi-transparent edge where a zombie overlaps a flat sprite can blend the other way round). Needs OpenGL 4.3; elsewhere the stock path stays." },
+            { key = "hordeBatchUpload", label = "Zombie batches: how the data reaches the GPU",
+              choices = { "mapped", "subdata" },
+              tip = "mapped: buffers the GPU reads straight from (OpenGL 4.4), written once. subdata: a copy per batch through the driver." },
+            { key = "hordeBatchVao", label = "Zombie batches: one vertex setup per mesh layout",
+              choices = { "mesh", "format" }, note = { mesh = "one per mesh, made at its first draw", format = "one per layout (default)" },
+              tip = "Batched zombies drew each body and clothing mesh through its own vertex setup, made the first time that mesh was drawn; making one made the render thread wait about 1 ms for the graphics driver, about 250 times on the Louisville route, mostly in the frames a horde comes into view. 'format' keeps one setup per vertex layout (two on that route) and points it at each mesh's buffers per draw. Same pixels (checked pixel by pixel). Needs OpenGL 4.3, like the batches." },
+            { key = "atlasBatch", label = "Batch the far zombies' sprites",
+              tip = "Zombies too far for a 3D model are small pre-rendered sprites, about 1,100 a frame in a Louisville horde, each drawn with its own state change and draw call. They are now queued and drawn in runs, in the stock order and with each sprite's own state, from a vertex buffer the GPU reads directly. Same pixels (checked pixel by pixel). Needs OpenGL 4.4; elsewhere the stock draws stay." },
+            { key = "hordeBatchOrder", label = "Zombie batches: models and sprites in two groups",
+              choices = { "stock", "window" }, note = { stock = "a batch ends at the next sprite", window = "two groups where nothing overlaps (default)" },
+              tip = "In a horde the 3D zombies and the far zombies' sprites alternate in the drawing order, and every switch ended a batch: ~245 batches a frame. With 'window', the models and sprites between two other objects are drawn as two groups; one may move ahead of the other only where their screen rectangles do not overlap, so every pixel is drawn exactly as before (checked pixel by pixel). About 50 batches a frame; the horde's GPU time in the densest seconds of the Louisville route went from ~7 to ~4 ms a frame. Works with the sprite batching above." },
+            { key = "hordeBatchUnits", label = "Zombie batches: textures bound 16 at a time",
+              choices = { "0", "16" }, note = { ["0"] = "one texture bind before every draw", ["16"] = "default" },
+              tip = "Each batched zombie model bound its texture before its draw. Now a batch binds up to 16 of its textures at once and each draw picks its own, so the render thread binds about a sixteenth as often and the GPU stalls less between draws. Same pixels (checked pixel by pixel). Needs OpenGL 4.3, like the batches." },
+            { key = "renderPrewarm", label = "Prepare the horde's drawing while the world loads",
+              tip = "The first zombie drawn in 3D made the render thread set up the zombie batches' shaders and buffers, the far zombies' sprite buffer and the first clothing pictures (a new framebuffer and about 11 textures): on the Louisville route the frame the horde came into view took 27 ms and the first clothing picture 12-17 ms. These are now made once at the first frame of the world, about 0.2 s during loading. The same objects, made earlier: nothing drawn changes." },
+            { key = "bodyAtlasPrewarm", label = "Prepare the far zombies' body sprites while you play",
+              tip = "Far zombies are drawn as flat sprites made from 128 generic body pictures, which the game drew in the frames a horde first came into view. They are now drawn two a frame from a second after the world appears, so the horde's first sight finds them ready. Same pictures, made earlier." },
+            { key = "renderPrewarmOutlines", label = "Prepare the outline passes while the world loads",
+              tip = "The first outlined character or object (a highlighted zombie, an item under the mouse) made the render thread set up the outline passes: three screen-sized framebuffers and their shaders, a 10-11 ms frame on the Louisville route. With the prepare option above they are made at the first frame of the world instead. Same pixels; the three framebuffers take their video memory from the start." },
+            { key = "hordePaletteMismatch", label = "Zombie batches: palette compare in one step",
+              tip = "Zombies whose bone palettes are identical share one upload; the compare read the two palettes eight bytes at a time through a call that walked the stack each time until the JIT compiled it (about 0.6 ms of render thread a frame when a horde first comes into view). Now one memory compare of both ranges. Same answer (checked over 228,114 compares)." },
             { key = "charDrawThreads", label = "Zombie draw data threads",
               choices = { "4", "8", "12", "14" }, tip = "Threads of the zombie draw-data pool; the data has to be ready before the zombies are queued, so on a 16-core machine 14 keep the game thread from waiting. More than cores - 2 is clamped." },
             { key = "zombieAtlasFast", label = "Flat draw call for far zombies",
               tip = "A zombie too far for a 3D model is drawn as a small pre-rendered sprite; its draw goes through a flat copy of the game's render chain (the same tests, the same sprite call) instead of five nested virtual calls per zombie. ~1,100 such zombies per frame in a Louisville horde. Same pixels." },
+            { key = "renderLastFast", label = "Skip the empty per-character inventory walk",
+              tip = "After drawing, every character looked through its whole inventory each frame for items that draw something then; none of the game's items do. ~2,500 zombie inventories a frame on the Louisville horde, 0.05 ms of the frame. Off when Java mods are loaded. Same picture." },
             { key = "actionSnapshotFilter", label = "Read only the animation variables that need it",
               tip = "Before a zombie's transitions are evaluated on a worker, the game thread reads the variables whose engine callback has a side effect. It used to resolve every variable of every transition to find out which those are; the answer only depends on the variable's name, so it is now decided once per state. Same values." },
             { key = "emitterParamSkip", label = "Skip sound parameters for silent characters",
@@ -303,6 +376,10 @@ local SECTIONS = {
               tip = "The pass that pushes overlapping zombies apart skips the half of the engine's version that only ever applies to the player, and the grid answer 'is my square walled off from that neighbour' is computed once per square per frame instead of once per zombie. Same positions." },
             { key = "separateParallel", label = "Push-apart for zombies: on other cores",
               tip = "That push-apart is computed for the whole horde on worker threads before the update loop; the game thread applies each zombie's result at the same point in its update as before, so the collide events and window climbs keep their order. The neighbours' positions are read at the top of the frame instead of as the loop advances." },
+            { key = "ragdollGate", label = "Skip the ragdoll question when nothing is a ragdoll",
+              tip = "The engine asks 'is this character a ragdoll?' about 60,000 times a frame in a big horde (every zombie's push-apart asks it of each neighbour), and each answer looked up the character's body model first. While no character is ragdolling the answer is no without looking at anyone; a character with no ragdoll in its animation player says no from that player. Same answers." },
+            { key = "bodyModelCache", label = "Remember each character's body model",
+              tip = "Every request for a character's animation player first worked out its body model (male, female, skeleton) from its descriptor and compared it with the player's. The answer is kept on the character and dropped exactly when one of its inputs changes (descriptor, gender, skeleton, the body models, the player itself). Same players." },
             { key = "sleepCheckMemo", label = "Check 'everyone asleep' once per frame",
               tip = "The game asks whether all players are asleep on the way into every character update, and a zombie asks several times per update; the answer cannot change inside a frame, so it is computed once." },
             { key = "stateParamMemo", label = "Faster AI scratch lookups",
@@ -335,15 +412,61 @@ local SECTIONS = {
               choices = { "0", "60", "90", "120", "144", "165", "240" },
               note = { ["0"] = "stock detail while uncapped" },
               tip = "With the frame rate uncapped there is no cap to follow; this is the frame rate the detail aims for instead." },
+            { key = "zombieLodFixed3d", label = "Zombie detail: a fixed number of 3D zombies",
+              choices = { "0", "64", "128", "192", "256" },
+              note = { ["0"] = "follow the frame cap (the setting above)" },
+              tip = "Instead of following the frame cap, always draw this many of the nearest zombies as 3D models and the rest as flat sprites." },
+            { key = "zombieLodHysteresis", label = "Zombie detail: places a 3D zombie keeps its model",
+              choices = { "0", "8", "16", "32" },
+              note = { ["0"] = "stock: the nearest win every frame" },
+              tip = "A zombie already drawn in 3D keeps its model while it ranks up to this many places past the 3D count; a zombie that is a flat sprite needs a place inside the count. The edge of the 3D group then does not flip between model and sprite while zombies walk or the view turns (it can hold this many more models)." },
+            { key = "zombieLodSpriteLight", label = "Zombie detail: flat zombies in the light",
+              choices = { "0", "40", "60", "80" },
+              note = { ["0"] = "stock: black silhouettes" },
+              tip = "The game draws its flat zombie sprites as black silhouettes. With this they take this share of their square's light, closer to the lit 3D zombies beside them. Without \"Zombie detail follows the frame cap\" (or a fixed number) only new zombies waiting for their 3D model are lit (\"new zombies start as sprites\"); the far sprites stay as the game draws them." },
+            { key = "zombieLodFadeMs", label = "Zombie detail: crossfade (ms)",
+              choices = { "0", "150", "300", "500" },
+              note = { ["0"] = "stock: an instant switch" },
+              tip = "A zombie switching between its 3D model and the flat sprite fades from one to the other over this long instead of popping. During the fade both are drawn." },
+            { key = "zombieFirstSightSprite", label = "Zombie detail: new zombies start as sprites",
+              tip = "When a horde comes into view, a few hundred zombies take their 3D model within a second and each first makes its clothing picture on the render thread, up to about 90 in one frame (10 ms). With this on, those pictures are spread over the next frames, nearest zombies first, within the budget below; a zombie still waiting is not drawn yet (as the game does while a picture is not ready) and waits at most a quarter of a second (more pictures a frame when needed). A zombie that was already drawn with its clothes (hit, hat falling off, killed, dragged) never waits. With \"Zombie detail follows the frame cap\" on, a waiting zombie is that option's flat sprite instead and its model fades in over it. On by default since 2026-10-15 (it only changes what you see for a moment: a new zombie in a horde appears a few frames later)." },
+            { key = "zombieCompositeBudgetUs", label = "Zombie detail: clothing pictures per frame (us)",
+              choices = { "250", "500", "1000", "2000" }, note = { ["1000"] = "default" },
+              tip = "The render-thread time a frame may spend on new zombies' first clothing pictures when new zombies start as sprites (at least one picture a frame)." },
+            { key = "zombieCompositeMaxPerFrame", label = "Zombie detail: clothing pictures per frame (count)",
+              choices = { "0", "1", "2", "3", "5", "8" }, note = { ["0"] = "only the time budget above", ["3"] = "default" },
+              tip = "When new zombies start as sprites, at most this many first clothing pictures a frame. Each one also costs about 0.2 ms of GPU time, which the render-thread budget above does not see." },
         },
     },
     {
         title = "Entity updates on the worker threads", clip = "horde",
         entries = {
-            { key = "entityUpdateParallel", label = "Entity updates on other cores (experimental)",
-              tip = "The update loop itself - the only part of the frame that grows with the whole moving-object population - runs the eligible entities on the worker threads instead of one after another on the game thread, with the stock four-step sequence per entity kept exactly. Players, animals, vehicles and physics objects stay on the game thread; Lua events fired from a worker are replayed on the game thread in the stock order; an entity that fails on a worker turns the batching off for the rest of the session. EXPERIMENTAL: it moves the simulation itself, so it is off by default." },
-            { key = "entityUpdatePipeline", label = "Entity updates: overlap with the next batch",
-              tip = "With entity updates on other cores, the workers finish one batch while the game thread already collects the next, instead of standing still between batches. The frame-timing multiplier each entity reads is captured per batch, so timings stay exactly right. Only active while the setting above is on." },
+            { key = "entityUpdateParallel", label = "Zombie updates on other cores",
+              tip = "The update loop itself - the only part of the frame that grows with the whole moving-object population - runs the calm zombies on the worker threads instead of one after another on the game thread, with the stock four-step sequence per zombie kept. Players, animals, vehicles and busy zombies stay on the game thread; Lua events fired from a worker are replayed on the game thread in the stock order; a zombie that fails on a worker turns the batching off for the rest of the session. The batched zombies see each other where they stood at the start of the batch (like the separation pass), and their random rolls come in a different order. In a 2,700-zombie horde: 67 -> 95 fps; the horde behaves the same in the brawl check (2026-10-13). On by default." },
+            { key = "entityUpdatePipeline", label = "Entity updates: overlap with the game thread",
+              tip = "With zombie updates on other cores, the workers run the frame's zombies while the game thread updates the animals, vehicles and busy zombies, instead of the game thread waiting for the batch. The frame-timing multiplier each zombie reads is captured per bucket, so timings stay right. Only active while the setting above is on." },
+            { key = "entityUpdatePlayerFirst", label = "Entity updates: players and cars before the batch",
+              tip = "With the overlap above, your character and the vehicles update before the zombie batch starts instead of beside it. Your line of sight tells the zombies it sees that they saw you, and a moving car marks the zombies it touches; doing that while those zombies were updating on the workers lost part of it (in the brawl check the horde closed in noticeably slower), and the car's polygons are brought up to date before the workers read them. No measurable cost; on by default." },
+            { key = "entityUpdateMoreStates", label = "Entity updates: sitting zombies too",
+              tip = "With zombie updates on other cores, zombies sitting against a wall or resting in their default state also update on the worker threads; their state does nothing of its own in single player, so their update is the same one the idle zombies already run there. In downtown Louisville that is about 300 zombies a frame." },
+            { key = "postupdateParallel", label = "Zombie movement on other cores",
+              tip = "After the updates, each calm zombie's move for the frame (its push, the walls and fences it slides along, the stairs, the square it lands on) is computed on the worker threads; the game thread only moves it to its new square, in the stock order. A zombie near a car, against a fence or touching a special object moves on the game thread as before. Checked against the stock movement: 0 differences in 692,000 moves." },
+            { key = "postupdateNoopSkip", label = "Zombie movement: skip square moves that change nothing",
+              tip = "A zombie that ends its move on the square it was already listed on no longer re-checks that square's list in the movement loop. Same lists." },
+            { key = "postupdateEligibleOnWorker", label = "Zombie movement: eligibility checked on other cores",
+              tip = "Which zombies may compute their move on the worker threads is decided in each zombie's own task instead of in a pass over every zombie on the game thread. Same zombies." },
+            { key = "postupdateVehicleOnWorker", label = "Zombie movement near cars on other cores",
+              tip = "A zombie whose move comes within reach of a car resolves the car on its worker thread (the game's own collision, under its lock) instead of moving entirely on the game thread. Same moves." },
+            { key = "postupdateFuse", label = "Zombie animation decisions under the movement loop",
+              tip = "A zombie with no target starts its animation-state decision on the worker threads while the game thread is still moving the others; when nothing changes it also runs its animation there. The game thread then finishes every zombie in the stock order. Same states and animations." },
+            { key = "postupdateClean", label = "Zombie movement loop skips finished zombies",
+              tip = "A calm zombie with no target whose whole movement step needs nothing of the game thread finishes it on its worker, and the game thread's loop passes over it without reading it. Same results." },
+            { key = "separateEdgeCache", label = "Zombie crowding: wall answers shared between cores",
+              tip = "When zombies push each other apart, whether a wall stands between two squares is worked out once per frame and kept on the square for every worker thread; before, each worker asked again. Same answers." },
+            { key = "luaSilentSkip", label = "No per-zombie Lua event when nothing listens",
+              tip = "Each zombie update raised a Lua event that the worker threads recorded and the game thread replayed; while no Lua function listens to it (none in the base game) it is not recorded. A mod that listens gets it as before." },
+            { key = "randPerWorker", label = "Zombie dice rolls: one random stream per core",
+              tip = "The zombie work on the worker threads drew every random number (spotting, lunges, groans) from the game's one generator behind a lock, so the cores queued at it. Each worker thread now draws from its own generator of the same kind: the same odds for every roll, but not the same sequence of numbers as the stock game." },
             { key = "emitterDefer", label = "Entity updates: sound ticks after the batch",
               tip = "With entity updates on other cores, a zombie's per-frame sound work (FMOD parameters, position, tick) queues instead of running on the worker, and the game thread runs the queue right after the batch in the stock order - same frame, before anything renders. The workers stop queuing on the sound locks, so the batch finishes sooner." },
             { key = "entityUpdateSafeStates", label = "Entity updates: calm zombies only",
@@ -369,6 +492,8 @@ local SECTIONS = {
               tip = "With per-pixel lighting, whether a torch reaches a square is first decided for the whole 8x8 chunk; only a chunk a torch can reach tests its squares. Same result." },
             { key = "schedulerClassifyParallel", label = "Update schedule computed on other cores",
               tip = "Every frame the game decides how often each zombie, animal and car is updated (distance, visibility, what it is doing); the worker threads compute it and the game thread files the results in the same order. Same schedule." },
+            { key = "schedulerFillParallel", label = "Update schedule: the whole sort on other cores",
+              tip = "With the update schedule computed on other cores, the rest of that step moves too: the worker threads also make the per-object checks the game thread still made, read each zombie's current behaviour from a remembered reference instead of a table lookup, and the game thread files the results in the usual order from what the workers read, without going back to each zombie. Same schedule, checked list by list. On by default since 2026-10-15." },
             { key = "zombieStatsFold", label = "Zombie travel statistics once per frame",
               tip = "Every zombie added its walked distance to the statistics and re-checked the achievements, 2,000 times a frame in a horde. The same additions are summed in the same order and written once per frame. Same totals." },
             { key = "visPolyAsync", label = "Vision cone shape: computed on its own thread",
@@ -379,6 +504,40 @@ local SECTIONS = {
               tip = "Objects drawn every frame (windows, doors, wind-blown plants, items) are put in drawing order level by level, every frame. That order only changes when the level changes, so it is kept and reused until then. Same order, checked against the recomputed one over a whole drive." },
             { key = "losLightPrefetch", label = "Player sight: light read ahead on other cores",
               tip = "The squares the player's sight check reads have their light refreshed on the worker threads first. Measured slower than reading them one by one (off)." },
+            { key = "zombieSpawnSpread", label = "Zombie creation queue: new zombies spread over frames",
+              tip = "When a chunk next to a horde loads, the game turns dozens of zombies real in one frame, each one dressed and given its animations: a frame of several milliseconds. With this on they are created from a queue within a small time a frame (the frame's spare time under a frame cap), so they appear a few frames later; a zombie within 25 squares of you is still created at once, the first 3 seconds of a load create everything at once as the game does, and none waits longer than the longest wait below, so the horde is never thinned. Changes only when zombies appear, not which or where. On by default since 2026-10-15." },
+            { key = "zombieModelAddBudgetUs", label = "Horde first sight: 3D models given per frame (us)",
+              choices = { "0", "250", "500", "1000" }, note = { ["0"] = "stock: every zombie at once", ["500"] = "default" },
+              tip = "A zombie that gets its 3D model builds the model and every piece of its clothing in that frame; when a crowd comes into view or the view turns, many do it at once (a 4 ms frame). With a budget, the zombies past it stay their flat sprite a frame longer (lit, with \"new zombies start as sprites\") and get their model in the next frames, nearest first. On by default since 2026-10-15 (500)." },
+            { key = "burstGovernor", label = "Horde first sight: lighter work in heavy frames",
+              tip = "When a horde first comes into view, dozens of frames in a row run late. A frame that started late for its slot or followed a frame that used nearly all of its time now creates fewer queued zombies and gives fewer zombies their 3D model; that work moves to the lighter frames right after. Changes only when zombies appear, not which or where. Acts at a frame cap, on the zombie creation queue and on the 3D model budget (both on by default since 2026-10-15)." },
+            { key = "burstLateUs", label = "Horde first sight: a frame this late is heavy (us)",
+              choices = { "500", "1000", "2000", "4000" }, note = { ["1000"] = "default" },
+              tip = "A frame that starts more than this many microseconds after its slot under the frame cap counts as heavy." },
+            { key = "burstWorkPct", label = "Horde first sight: a frame after this much work is heavy (%)",
+              choices = { "80", "90", "95", "100" }, note = { ["95"] = "default" },
+              tip = "A frame whose previous frame worked for more than this share of the cap's frame time counts as heavy." },
+            { key = "zombieSpawnBurstUs", label = "Horde first sight: zombie creation in a heavy frame (us)",
+              choices = { "0", "150", "300", "600" }, note = { ["150"] = "default" },
+              tip = "The time a heavy frame may spend creating queued zombies." },
+            { key = "zombieModelAddBurstUs", label = "Horde first sight: 3D models given in a heavy frame (us)",
+              choices = { "0", "150", "300", "500" }, note = { ["150"] = "default" },
+              tip = "The time a heavy frame may spend giving zombies their 3D model." },
+            { key = "zombieModelAddHeavyEvery", label = "Horde first sight: 3D models only every Nth heavy frame",
+              choices = { "0", "2", "4", "8" }, note = { ["0"] = "every heavy frame", ["4"] = "default" },
+              tip = "In a run of heavy frames only every Nth one gives zombies their 3D model; in the others they stay flat sprites a frame longer." },
+            { key = "zombieSpawnSlackBudgetUs", label = "Zombie creation queue: use the frame's spare time (us kept free)",
+              choices = { "0", "1000", "1500", "2500" }, note = { ["0"] = "a fixed time a frame", ["1500"] = "default" },
+              tip = "At a frame cap, queued zombies are created in the time the last frame left unused before the cap, less this margin, instead of a fixed time a frame. Only with the zombie creation queue on." },
+            { key = "zombieSpawnHeavyMin", label = "Zombie creation queue: zombies a heavy frame creates at least",
+              choices = { "0", "1", "2" }, note = { ["0"] = "default: none unless they waited too long", ["1"] = "the earlier rule" },
+              tip = "A heavy frame creates at least this many queued zombies. Only with the zombie creation queue on." },
+            { key = "zombieSpawnMaxAgeMs", label = "Zombie creation queue: longest wait (ms)",
+              choices = { "1000", "2000", "3000", "5000" }, note = { ["3000"] = "default" },
+              tip = "A queued zombie waits at most this long, so a slow machine's small per-frame time never thins the horde. Only with the zombie creation queue on." },
+            { key = "zombieSpawnAgedCapUs", label = "Zombie creation queue: time a frame for zombies that waited too long (us)",
+              choices = { "0", "300", "600", "1500" }, note = { ["0"] = "all at once", ["600"] = "default" },
+              tip = "The queued zombies past the longest wait are created within this much time a frame instead of all in one frame (all at once after three times the longest wait). Only with the zombie creation queue on." },
         },
     },
     {
@@ -435,6 +594,14 @@ local SECTIONS = {
               tip = "The game redrew every open window's Lua 60 times a second into the UI picture, although almost all of them drew exactly the same as the frame before, and showed a click or key only at the next of those redraws. With this on each window's drawing is kept and reused while nothing can have changed it (no click, key, wheel or mouse over it, no change to its data, the inventory not marked for refresh); anything you do is drawn in the same frame. Measured at 240 fps: the UI's share of the frame 4 -> 0.9 % with the HUD, 9.8 -> 1.4 % with the inventory open, 16.6 -> 2.2 % with the crafting window, 40 -> 4 % with the map." },
             { key = "uiRetainedChildren", label = "UI: reuse unchanged buttons and panels inside windows",
               tip = "The same for the buttons, lists and panels inside a window that is redrawn (the map's symbol buttons, the inventory's container buttons): only the part under the mouse or with new data is drawn again. Map 6.4 -> 4.1 % of the frame." },
+            { key = "uiVerify", label = "UI: changes shown the frame they happen",
+              tip = "A window kept from an earlier frame is now checked every frame against exactly what its drawing read the last time (the Lua fields it used, the item names, stats and conditions it asked the game for, the mouse position) and drawn again in the frame any of them changes, instead of after a timer of up to a second. Measured at 240 fps with the ground-truth rig (every window drawn every frame for comparison): items renamed or worn in an open inventory late on 43 % of frames before, 0.4 % now; skill XP arriving 61 % -> 0.7 %; mouse over inventory rows and a 200-item stack 25-29 % -> 0 %." },
+            { key = "uiAnimate", label = "UI: movement drawn every frame",
+              tip = "A window whose picture is changing (smooth scrolling, an item being dragged, a fade) is drawn on every frame while it moves instead of 60 times a second. Wheel scrolling through a 200-item stack showed an out-of-date list on 58 % of frames before, 0 % now. Uses only the time the frame has left before the frame cap (see the next setting); never draws less often than before." },
+            { key = "uiSlack", label = "UI: extra redraws only in the frame's spare time",
+              tip = "The redraws for mouse movement and animation are done only when they fit in the time the frame has left before the frame cap (measured each frame), so the frame rate does not drop for them; a window that has waited the stock 1/60 s is drawn anyway (never later than before). Uncapped, a fifth of the frame." },
+            { key = "uiMoveReplay", label = "UI: dragged windows moved, not redrawn",
+              tip = "While you drag a window that draws the same thing wherever it is, its kept picture is moved to the new place every frame (what a desktop compositor does with a window) instead of running its Lua again; it is still redrawn 60 times a second, so a change during the drag shows at the old rate at the latest." },
             { key = "uiTickStagger", label = "UI: window updates spread over frames",
               tip = "Every window's Lua update ran in the same frame ten times a second (~0.5 ms with the inventory, ~1.3 ms with the crafting window open). Each window now keeps its own tenth of a second, spread over the frames: the same updates, no periodic spike." },
             { key = "uiLuaFast", label = "UI: inventory window shortcuts",
@@ -460,10 +627,10 @@ local SECTIONS = {
         entries = {
             { key = "modProfile", label = "Mods: max performance or max compatibility",
               choices = { "performance", "compatibility" }, note = { ["performance"] = "max performance" },
-              tip = "Sets the two settings below at once (also from the main menu's PZ OPTIMIZATION MOD COMPATIBILITY CHECK). Performance (default): Java mods are checked and listed but switch nothing off, and windows mods draw in are reused like the game's own. Compatibility: the settings a Java mod patches are switched off so the mod meets the code its author tested, and windows mods draw in are redrawn at the game's own rate. A value you pick for either setting below still wins. Applies on the next launch." },
+              tip = "Sets the two settings below at once (also from the main menu: PZ OPTIMIZATION > MOD COMPATIBILITY CHECK). Performance (default): Java mods are checked and listed but switch nothing off, and windows mods draw in are reused like the game's own. Compatibility: the settings a Java mod patches are switched off so the mod meets the code its author tested, and windows mods draw in are redrawn at the game's own rate. A value you pick for either setting below still wins. Applies on the next launch." },
             { key = "modCompat", label = "Java mods: switch off what they patch",
               choices = { "auto", "report", "off" }, note = { ["auto"] = "max compatibility", ["report"] = "max performance" },
-              tip = "PZ Optimization ships whole game classes; a Java mod (a ZombieBuddy mod, or a -javaagent such as PZMulticore) patches methods of the same classes. At launch the mods' jars are read: where one patches a method we changed, the settings that live in that method are switched off, so the mod meets the code its author tested. Mods tested together with ours keep everything. Your own choice on this tab still wins. Report = only list them (Zomboid/pzopt/mod-compat.txt, the console and the main menu's mod compatibility check); off = no check. The default follows Mods: max performance (report) or max compatibility (auto). Applies on the next launch." },
+              tip = "PZ Optimization ships whole game classes; a Java mod (a ZombieBuddy mod, or a -javaagent such as PZMulticore) patches methods of the same classes. At launch the mods' jars are read: where one patches a method we changed, the settings that live in that method are switched off, so the mod meets the code its author tested. Mods tested together with ours keep everything. Your own choice on this tab still wins. Report = only list them (Zomboid/pzopt/mod-compat.txt, the console and the main menu's PZ OPTIMIZATION > MOD COMPATIBILITY CHECK); off = no check. The default follows Mods: max performance (report) or max compatibility (auto). Applies on the next launch." },
             { key = "uiRetainedMods", label = "UI: reuse windows that mods draw in",
               tip = "Windows and buttons that carry a mod's drawing (a mod's own window, or a game window whose drawing a mod replaced or extended). On = reused like the game's own windows (faster, but a mod's display can lag by up to a second, because a mod may draw from state the reuse cannot see); off = redrawn at the game's own rate. The default follows Mods: on for max performance, off for max compatibility. Applies on the next launch." },
             { key = "luaWorkerGate", label = "Lua from helper threads runs on the game thread",
@@ -507,6 +674,31 @@ local SECTIONS = {
               choices = { "auto", "gpu", "cpu", "gpufinish", "off" },
               note = { auto = "gpu wherever the graphics driver has timestamps (default); off with the macOS Metal present", gpu = "hold each frame to a steady time after its game moment, measured at GPU completion", cpu = "the same, measured when the CPU finished the frame (less even: the GPU may still be drawing)", gpufinish = "wait for the GPU, then hold (evenest, but ~9 ms more delay)", off = "stock: each frame goes out the moment it is drawn" },
               tip = "The game samples its time at an even rate, but each frame takes a different time to update and draw, so on a variable refresh display the gaps between frames on screen wander around the game-time steps: judder. Measured at a 100 fps cap on a 165 Hz G-SYNC display, frames landed on average 3.1 ms off their game-time step (54 % of them more than 2 ms off); held to a steady delay after their game moment, 0.95 ms (13 %), for about 5 ms more input delay. On a fixed-refresh display it evens out when frames leave the game: driving through Rosewood at 240 Hz, frames off their slot 28 -> 11 %, frame-to-frame jitter 1.3 -> 0.4 ms, for ~1.7 ms more delay on average (~2.6 ms typical, less than one 240 Hz frame)." },
+            { key = "frameQueue", label = "Frame queue: every frame on the cap's beat (adds input delay)",
+              tip = "With a frame cap, every frame is held back until a fixed time after the moment of game time it shows, long enough that almost every frame is ready by then (the 99th percentile of the last 2 seconds, GPU time included). A frame whose update or drawing takes longer than usual then still reaches the screen on the beat instead of late, and the frames around it absorb it. The price is input delay: what you do reaches the screen about 3-7 ms later at a 120 fps cap (driving at 120 km/h: 10.9 -> 14.2 ms on average from the frame's start to the screen), more in a big horde. Driving at 120 km/h with a 120 fps cap, frames within 9 ms rose from 92 % to 97.5 %, and to 99.5 % with the GPU's time counted (below). Only while you play a world with a frame cap: never uncapped, in the menus, the pause menu or the loading screen, with vsync on a fixed-refresh display (vsync already sets the beat), on macOS, or with the just-in-time input sleep. Replaces \"Even frame delivery\" while it acts. Off = present pacing as before." },
+            { key = "frameQueueGpu", label = "Frame queue: count the GPU's drawing time",
+              tip = "The frame queue's holding time also covers how long the GPU still draws after the game has handed a frame over (measured with GPU timestamps a few frames later). Without it a frame whose GPU work runs long is swapped on the beat but shown late. Louisville horde at a 120 cap: frames within 9 ms 96.6 -> 98.7 %, for 3-5 ms more input delay." },
+            { key = "frameQueueMinPct", label = "Frame queue: shortest holding time (% of a frame)",
+              choices = { "60", "100", "160", "200", "260" }, note = { ["60"] = "follow the recent frame times (the earlier default)", ["260"] = "default: fixed, as long as the longest" },
+              tip = "The frame queue holds each frame for a time between this and the longest holding time below, in percent of the cap's frame time, following the slowest recent frames. At 260 with the longest at 260 (the default since 2026-10-15) the holding time is fixed at 2.6 frames, 21.7 ms at a 120 fps cap: it never has to grow after a slow frame, which is when the frames after one came late. Louisville horde at a 120 cap: about 0.4 points more frames within 9 ms than the adaptive holding time, for about 2.5 ms more input delay on average. Lower = less input delay, more late frames. Applies at frame caps from the setting \"fixed holding time from (fps)\" up; below it the shortest holding time for low caps is used." },
+            { key = "frameQueueMaxPct", label = "Frame queue: longest holding time (% of a frame)",
+              choices = { "160", "200", "260", "300" }, note = { ["260"] = "default" },
+              tip = "The longest the frame queue holds a frame, in percent of the cap's frame time. Above about 2.5 frames the game thread starts to wait for a free frame slot." },
+            { key = "frameQueueFixedMinFps", label = "Frame queue: fixed holding time from (fps)",
+              choices = { "0", "60", "100", "144" }, note = { ["0"] = "at every frame cap", ["100"] = "default" },
+              tip = "The shortest holding time above (2.6 frames by default, a fixed holding time) applies only at frame caps of this many fps or more. 2.6 frames are 21.7 ms at a 120 fps cap but 43 ms at 60 and 87 ms at 30, a delay you feel; below this cap the queue follows the slowest recent frames instead, from the shortest holding time for low caps below (10 ms at 60 fps, 20 ms at 30), and starts there again after a load, a menu or a cap change, settling within a few seconds (the low-cap entries below)." },
+            { key = "frameQueueLowCapMinPct", label = "Frame queue: shortest holding time at low caps (% of a frame)",
+              choices = { "0", "60", "100", "160", "260" }, note = { ["60"] = "default: follow the recent frame times" },
+              tip = "Below the cap set in \"fixed holding time from (fps)\", the frame queue holds each frame for at least this share of the cap's frame time and otherwise as long as the slowest recent frames need, up to the longest holding time. Lower = less input delay, more late frames." },
+            { key = "frameQueueLowCapCalmMs", label = "Frame queue at low caps: start from the shortest holding time (ms of steady frames)",
+              choices = { "0", "500", "1000", "2000" }, note = { ["0"] = "learn from the first frame (round 11: the loading bursts set it to the longest)", ["1000"] = "default" },
+              tip = "Below the cap set in \"fixed holding time from (fps)\": after a world loads, a menu or the pause menu closes or the cap changes, the frame queue starts at its shortest holding time and learns from the frames only once they have been ready within one frame of their beat for this long (at most 10 s). Without it the slow frames of a world's first seconds set the holding time to its longest, 43 ms at a 60 fps cap and 87 ms at 30, and it took 20 s and over a minute to come down: that much more input delay." },
+            { key = "frameQueueLowCapDecayPct", label = "Frame queue at low caps: how fast the holding time falls (% of a frame per second)",
+              choices = { "0", "12", "25", "50" }, note = { ["0"] = "1 ms a second, as at high caps", ["25"] = "default" },
+              tip = "Below the cap set in \"fixed holding time from (fps)\", after a burst of slow frames the holding time comes down by at most this share of the cap's frame time a second: 25 % is 4.2 ms a second at 60 fps and 8.3 ms at 30 (the fixed 1 ms a second of high caps took over a minute at 30). Lower = steadier after a burst, more input delay." },
+            { key = "frameQueueLowCapMarginPct", label = "Frame queue at low caps: safety margin (% of a frame)",
+              choices = { "0", "10", "20", "30" }, note = { ["20"] = "default" },
+              tip = "Below the cap set in \"fixed holding time from (fps)\", the holding time is the slowest recent frames' time plus this share of the cap's frame time (20 %: 3.3 ms at 60 fps, 6.7 ms at 30). With the holding time coming down within seconds, the margin is what keeps a frame that is a little slower than the recent ones on the beat: replayed on a Louisville horde route, 20 % had no more late frames than the old slow-falling holding time, which stayed at 50-87 ms at a 30 fps cap. Lower = less input delay, more late frames." },
             { key = "borderlessFullscreen", label = "Borderless window counts as fullscreen (compositor VRR)",
               choices = { "auto", "true", "false" },
               note = { auto = "Linux", ["true"] = "every platform", ["false"] = "stock window" },
@@ -530,12 +722,16 @@ local SECTIONS = {
               choices = { "auto", "efficient", "performance", "off" },
               note = { auto = "background work on the efficient cores, the game and render threads there too while they keep the frame cap", efficient = "every thread on the efficient cores", performance = "game and render threads on the fast cores, the rest on the efficient ones", off = "stock: the operating system decides" },
               tip = "CPUs such as the Ryzen AI 300 series (Zen 5 + Zen 5c), Intel's P + E core chips and Apple silicon have fast cores that cost several times the power of their efficient ones for the same work: one busy thread drew 9.2 W on a Zen 5 core and 2.2 W on a Zen 5c core of an Ayaneo Flip. Linux put the game's lighting, compiler, audio and loader threads on the fast cores as often as not. Auto keeps all of that on the efficient cores and moves the game and render threads to the fast cores only while they would otherwise miss the frame cap. Linux sets the cores directly; macOS gets the matching quality-of-service classes. Applies on the next launch." },
+            { key = "workerQosMac", label = "Priority of the game's helper threads (Mac)",
+              choices = { "user-initiated", "utility", "user-interactive" },
+              note = { ["user-initiated"] = "work the player waits for: keeps its cores when other programs are busy", utility = "background work: the efficient cores first, gives way to other programs", ["user-interactive"] = "the game and render threads' own class" },
+              tip = "The helper threads that update and draw the zombies with the game thread every frame. macOS ran them at the background 'utility' class: with a virtual machine, a build or Spotlight busy beside the game they lost their cores, and the game thread waited for them every frame (Louisville horde on a MacBook Pro M1 Pro with four busy cores beside the game: 35 fps). At user-initiated they keep up (55 fps, the same as with nothing else running). No effect on Windows or Linux. Applies on the next launch." },
             { key = "gpuPstate", label = "AMD GPU clock level while playing (Linux)",
               choices = { "auto", "off", "standard", "min_sclk" },
               note = { auto = "the lowest fixed clock whose frame time fits the cap, automatic clocks otherwise", off = "stock: the driver's automatic clocks", standard = "a fixed ~1 GHz", min_sclk = "the lowest shader clock (~640 MHz)" },
               tip = "At a frame cap the Radeon driver runs the GPU at its top clock (2.7-2.9 GHz on a Radeon 890M, the highest voltage) for a few milliseconds and then idles it. Most of the game's GPU work waits on memory, not on the clock: at a fixed 640 MHz the 890M still held 120 fps on the bench walk. Auto measures the GPU time of every frame and holds the lowest clock level that keeps the cap, stepping up the moment it does not. The level applies to the whole GPU while the game runs and is released when it exits (a crash included). Applies on the next launch." },
             { key = "jitSteady", label = "Java compiler: no speculative recompiles",
-              tip = "Java's optimizing compiler leaves out the branches a method never took while it was being profiled; when the game later takes one (a new street, a different zombie state) the compiled code is thrown away and compiled again. A 100 s walk through the world did that ~2,000 times and kept a compiler thread busy the whole walk (16,600 compilations). With this on the compiler keeps every branch: the compiler's CPU time halves, the game runs as fast. Written into the game's launcher file for the next launch; the uninstallers take it out again." },
+              tip = "Java's optimizing compiler leaves out the branches a method never took while it was being profiled; when the game later takes one (a new street, a different zombie state) the compiled code is thrown away and compiled again. A 100 s walk through the world did that ~2,000 times and kept a compiler thread busy the whole walk (16,600 compilations). With this on the compiler keeps every branch: the compiler's CPU time halves, the game runs as fast. Since 2026-10-15 it also stops the compiler from betting on the types a method was seen with (-XX:-UseTypeSpeculation): about 45 such bets failed on the Louisville route, one of them in the player's sight check at the horde's first sight. Written into the game's launcher file for the next launch; the uninstallers take it out again." },
             { key = "lightingSyncPark", label = "Lighting thread sleeps between updates",
               tip = "The lighting thread updates 15 times a second (the Lighting FPS setting) and waited for its next update with LWJGL's timer, which sleeps in 1 ms steps and then spins the last millisecond. This sleeps straight to the next update. Applies on the next launch." },
         },
@@ -558,8 +754,16 @@ local SECTIONS = {
               note = { g1 = "G1 (default)", auto = "G1 on 4 cores or fewer, the game's own above", stock = "the game's own: ZGC" },
               tip = "The game ships with ZGC, which collects alongside the game on its own threads. In a horde its 3 GB heap ran 95 % full and ZGC fell behind: the game thread had to wait for it and the horde ran 66 fps against 72-90 with G1; uncapped on the spinning route ZGC was 3 % slower too. G1 pauses the game for a few milliseconds a few times a minute instead. Applies on the next launch." },
             { key = "gcPauseMs", label = "G1 pause target",
-              choices = { "0", "25", "50", "100" }, note = { ["0"] = "G1's own (200 ms)" },
-              tip = "The longest pause G1 aims for. Its pauses in the game are already 10-20 ms against its own 200 ms target; a 25 ms target made no measurable difference to the frame times. Applies on the next launch." },
+              choices = { "0", "5", "10", "25", "50", "100" }, note = { ["0"] = "auto: 5 ms with the tuned settings below, else G1's own 200 ms" },
+              tip = "The longest pause G1 aims for. Auto (0, the default) is 5 ms together with \"G1 tuned for steady frames\" and G1's own 200 ms target without it. With 200 ms the pauses in a horde were 50-75 ms long; with 5 ms and the tuned settings they are typically 3-5 ms. Applies on the next launch." },
+            { key = "gcG1Tuned", label = "G1 tuned for steady frames",
+              tip = "With G1 (the default collector), the next launch also gets the settings measured on the Louisville horde: a small young generation collected often in short pauses, objects that survive moved straight to the old generation instead of being copied back and forth, the old generation cleaned up in many small steps, and a larger space for compiled code so it no longer starts extra collection cycles. Pauses went from 7-12 ms to typically 3-5 ms at the same heap size. Written into the game's launcher file only on the Java version it was tested with, and left out when you set any of these G1 options yourself; the uninstallers take them out again. Applies on the next launch." },
+            { key = "gcSlack", label = "Garbage collection in the frame cap's spare time",
+              tip = "With a frame cap, the collection of short-lived objects (a pause of a few milliseconds) that would land in the middle of a frame is started a few frames early, at the end of a frame that has time to spare before the cap, so it no longer makes a frame late. It fills the rest of the young generation with throwaway memory to start the collection at that moment; the game itself is untouched. On the Louisville horde at 120 fps a scheduled collection cost the frames 1-3 ms instead of 10-14. Needs G1 (the default); without a cap nothing changes." },
+            { key = "gcSlackQueue", label = "Spare-time garbage collection under the frame queue",
+              choices = { "slack", "off", "swap", "hold" },
+              note = { slack = "default: in the spare time, only while the held frame's swap is far enough away", off = "the spare-time rule as without the queue", swap = "from its own thread right after a held swap", hold = "from its own thread inside a long hold" },
+              tip = "Where the collection above runs while the frame queue holds frames. In the game thread's spare time it could overlap the end of a hold and make that frame late (8 of 28 collections in a Louisville run); slack waits for a frame whose swap leaves room for the collection: 35 of 35 collections without a late frame." },
         },
     },
     {
@@ -594,7 +798,7 @@ local SECTIONS = {
         title = "Updates", clip = "load",
         entries = {
             { key = "updateCheck", label = "Offer new releases in the main menu",
-              tip = "Once per boot the main menu asks the GitHub releases (one request to api.github.com) whether a newer build for this game revision exists. The \"PZ OPTIMIZATION UPDATE\" item between Credits and Exit is greyed out while the build is current and enabled when a newer one exists: it downloads the zip, replaces the installed files and asks to quit so the next launch loads them. Nothing is downloaded without that click. Applies on the next launch." },
+              tip = "Once per boot the main menu asks the GitHub releases (one request to api.github.com) whether a newer build for this game revision exists. The main menu's PZ OPTIMIZATION item then says \"Update available\" under it, and so does its screen's UPDATE entry: its dialog downloads the zip, replaces the installed files and asks to restart so the next launch loads them. Nothing is downloaded without that click. Applies on the next launch." },
             { key = "updatePrefetch", label = "Get an offered update ready in the background",
               tip = "When the check finds a newer build, the files that differ from the installed ones are fetched right away (a release apart is usually a few files, tens of KB, read out of the release zip with range requests; the whole zip is never downloaded without the click), so Update now only writes them: a few milliseconds instead of downloading and unpacking 59 MB. Needs the first setting. Applies on the next launch." },
             { key = "updateFromWorkshop", label = "Update from the Steam Workshop copy",
@@ -631,6 +835,23 @@ local SECTIONS = {
             { key = "chunkHandoffDivisor", label = "Chunk hand-off budget (queue divisor)",
               choices = { "0", "4", "8", "16" }, note = { ["0"] = "stock: up to 4 chunks a frame" },
               tip = "At most 1 + queued/divisor freshly loaded chunks are handed to the game thread per frame, so a chunk row arriving at once is spread over a few frames instead of one long one." },
+            { key = "handoffRecalcFast", label = "Chunk joining: border recalc without repeats",
+              tip = "When a loaded chunk joins the world, its border squares are recalculated against the neighbours (collision, pathfinding, sight). The game recomputed each square's tile properties about fifteen times and its walkable-neighbour links dozens of times in that pass; now once each, with the same result. About half the cost of that pass." },
+            { key = "propIdCache", label = "Tile property lookups by id",
+              tip = "Questions like 'does this tile carry a fuel amount' looked the property up by name in a table every time; the answer's id is now kept per property type. Same answers, less work for chunk joining and drawing." },
+            { key = "slackWork", label = "Deferred work in the frame cap's spare time",
+              tip = "With a frame cap, the time left in a frame before the limiter waits is used for queued game-thread jobs: freshly loaded chunks joining the world, far loot rolls and far zombie spawns run one at a time while each one's learned cost still fits, instead of all at once in the frame they arrive. Without a cap nothing changes." },
+            { key = "chunkHandoffCost", label = "Chunk joining: cost estimate",
+              choices = { "chunk", "square" }, note = { ["chunk"] = "default", ["square"] = "until 2026-10-15" },
+              tip = "How the spare-time scheduler guesses whether the next chunk's joining fits the time left in a frame. chunk: the running mean of whole joinings. square: a learned cost per square that one heavy chunk made pessimistic for a long time, so chunks waited and then joined several at once in one frame." },
+            { key = "chunkHandoffSlackMaxWait", label = "Chunk joining: longest wait for spare time (frames)",
+              choices = { "0", "6", "30" }, note = { ["0"] = "600 frames, until 2026-10-15", ["6"] = "default" },
+              tip = "A loaded chunk that does not fit a frame's spare time joins after this many frames anyway, in a light frame, so a queue never builds behind one heavy chunk. A world load or a teleport keeps the stock count." },
+            { key = "chunkHandoffForceAnyFrame", label = "Chunk joining: an overdue chunk joins in the next spare time",
+              tip = "A chunk past its longest wait joins in the next frame's spare time, light frame or not (still one such chunk a frame)." },
+            { key = "chunkHandoffFrameBudgetUs", label = "Chunk joining: time a frame may spend on a backlog (us)",
+              choices = { "0", "1000", "1500", "3000" }, note = { ["0"] = "stock: the whole count", ["1500"] = "default" },
+              tip = "When chunks queue up while you move, a frame joins them only until this much time is used (at least one); the rest join in the next frames' spare time. Each such frame took over 4 ms before. A world load or a teleport keeps the stock count." },
             { key = "hotsaveStaged", label = "Staged hot save",
               tip = "The periodic hot save serialises the meta grid and other systems one part per streamer update instead of all in one frame." },
             { key = "hotsaveIntervalSec", label = "Seconds between hot saves",
@@ -705,6 +926,8 @@ local SECTIONS = {
               tip = "The tile texture packs and depth maps start decoding before the boot Lua load instead of after it, so the world load does not wait for them." },
             { key = "aotCache", label = "Warm-start cache (Java AOT)",
               tip = "The game records a Java AOT cache on one launch and starts from it afterwards: warm code for the menu and every world load. Changes the launcher config (backed up once); off puts it back." },
+            { key = "aotNoIndy", label = "Warm-start cache: save it without lambda linking (makes it work)",
+              tip = "With the game's Java (Zulu 25.0.1) the warm-start cache was never written: Java crashed while saving it at the end of the recording launch (an hs_err file in the game folder after every second quit), so the next launch found no cache and recorded again, forever. Saved without Java's pre-linked lambda calls (-XX:-AOTInvokeDynamicLinking) the cache is written and keeps the loaded classes and all method profiles. Needs the warm-start cache on. Written into the game's launcher file for the next launch; the uninstallers take it out again." },
         },
     },
     {
@@ -1084,7 +1307,7 @@ local ENHANCEMENT_SECTIONS = {
         },
     },
     {
-        title = "God rays (light shafts through windows, doorways, trees and fog)", clip = "hdr",
+        title = "God rays (light shafts through windows, doorways, trees and fog)", clip = "godrays",
         entries = {
             { key = "godRays", label = "God rays",
               tip = "Sunlight (and moonlight) falls through windows and open doorways into rooms as shafts of light in the dust, with sunlit patches on the floor, tables and walls where it lands, cut exactly by the window frames; outdoors, in fog, rain and morning mist, the shadows of buildings and trees stretch through the haze; torches, headlights and lamps glow in the dust and fog around them. Walls, roofs, upper floors, curtains and barricades block the light; tree crowns let it through their gaps. Nothing is drawn where no light comes in: a clear day costs only the rooms with sunlit windows on screen (one draw), the haze pass runs only in fog, rain or mist. Windows, Linux and macOS (on a Mac with \"macOS: OpenGL 4.1\" on, the default)." },
@@ -1111,6 +1334,26 @@ local ENHANCEMENT_SECTIONS = {
             { key = "godRaysLocalPct", label = "God rays: torch and lamp glow (%)",
               choices = { "50", "100", "200" }, note = { ["100"] = "default" },
               tip = "How strong the glow around torches, headlights and lamps is." },
+            { key = "godRaysDoorLeaf", label = "God rays: open doors block the light",
+              tip = "An open door stands in its doorway's light: the shaft and its sunlit patch on the floor lose the part the door shades, and a glass door lets its share through." },
+            { key = "godRaysDoorSwingMs", label = "God rays: door swing (ms)",
+              choices = { "0", "200", "350", "600" }, note = { ["350"] = "default", ["0"] = "at once" },
+              tip = "When a door opens the light sweeps in through the widening gap over this long, and it is cut off the same way as the door shuts (0: the light comes and goes the moment the door does)." },
+            { key = "godRaysCharShadows", label = "God rays: people's shadows in the shafts",
+              tip = "The player, other people and zombies standing in a shaft of light cast their shadow into the lit dust and onto the sunlit patch on the floor." },
+            { key = "godRaysDoorDustPct", label = "God rays: dust stirred by doors (%)",
+              choices = { "0", "50", "100", "200" }, note = { ["100"] = "default", ["0"] = "off" },
+              tip = "A door opening stirs up the dust in its shaft: thicker swirls drift in with the draft and settle over a few seconds." },
+            { key = "godRaysSpill", label = "God rays: lamplight spilling out at night",
+              tip = "At night a lit room's light spills out through its open doors and windows into the fog and the rain, shaped by the opening." },
+            { key = "godRaysSpillPct", label = "God rays: spill brightness (%)",
+              choices = { "50", "100", "150", "200" }, note = { ["100"] = "default" },
+              tip = "How bright the light spilling out of lit rooms is." },
+            { key = "godRaysBouncePct", label = "God rays: light bounced off the sunlit floor (%)",
+              choices = { "0", "50", "100", "200" }, note = { ["0"] = "off" },
+              tip = "The sunlit patch a shaft lays on the floor bounces a little of its light onto the walls and furniture around it. Subtle next to the game's own room light, so off by default." },
+            { key = "godRaysRoofExact", label = "God rays: sun under porch roofs",
+              tip = "Off (the default): a window or doorway under a porch roof or a floor above lets no light in. On: the sun comes in under the roof's edge as its height allows, so a low morning or evening sun reaches in under a porch and a high midday one does not. Applies on the next launch." },
         },
     },
     {
@@ -1173,6 +1416,15 @@ local ENHANCEMENT_SECTIONS = {
             { key = "pplSpecPct", label = "Per-pixel lighting: wet glint strength (%)",
               choices = { "30", "60", "100" }, note = { ["60"] = "default" },
               tip = "How bright the glints on wet ground are." },
+            { key = "voxelLight", label = "Voxel lighting (needs per-pixel lighting)",
+              tip = "Street lamps, house lamps and room lights are traced through the world's walls, windows, doorways, fences, floors and tree crowns: they cast real shadows (a fence, a stair, a building's corner), light reaches a room through its windows, walls facing a lamp catch more of it, and the sky lights rooms from their windows and doorways instead of a flat indoor darkening. Each chunk picture keeps its own light layer, worked out again only when a light or the buildings change, so a still scene costs nothing extra. Needs a graphics card with OpenGL 4.3 (not macOS). Applies on the next launch." },
+            { key = "voxelLightTorchShadows", label = "Voxel lighting: torch shadows",
+              tip = "A torch you carry casts shadows of walls, fences, floors and crowns too (traced again only when the torch moves)." },
+            { key = "voxelLightSkyMethod", label = "Voxel lighting: daylight indoors",
+              choices = { "flood", "cascades", "cones" }, note = { ["flood"] = "default" },
+              tip = "How the sky's light reaches into rooms. Flood: spread from the open sky through windows and doorways (cheapest). Cascades: rays towards the sky from every square, shared between neighbours (the sky through a window comes from where it faces; ~1 ms when buildings change). Cones: the same with every ray traced (~2 ms when buildings change)." },
+            { key = "voxelLightBounce", label = "Voxel lighting: bounced light",
+              tip = "Lit floors and walls light their surroundings a little: a lamp pool fills the area round it, a lit window spills warm light outside." },
             { key = "pplShadows", label = "Per-pixel lighting: torch shadows (experimental)",
               tip = "Fence posts, furniture and walls cast shadows into your torch's beam (computed from the picture's depth at half resolution, one frame late). Experimental." },
             { key = "pplTorchFeetGlow", label = "Per-pixel lighting: torch glow at your feet",
@@ -1211,10 +1463,12 @@ local ENHANCEMENT_SECTIONS = {
 
 -- The Enhancements tab's keys apply as soon as Apply is pressed (Java: Config's live reload, pzopt.Enhancements), except
 -- the two HDR output switches: on Linux they pick the window the game is started with.
-local NEXT_LAUNCH_ONLY = { hdr = true, hdrAuto = true, carOccupant = true, carOccupantOcclusion = true, carOccupantLightPct = true,
+local NEXT_LAUNCH_ONLY = { hdr = true, hdrAuto = true, godRaysRoofExact = true, carOccupant = true, carOccupantOcclusion = true, carOccupantLightPct = true,
     -- per-pixel lighting: read once at start-up (the chunk composite shader is patched when the game loads it)
     pixelLight = true, pplAnalytic = true, pplPointLights = true, pplNormals = true, pplWrapPct = true, pplSmooth = true,
     pplWetSpecular = true, pplSpecPct = true, pplShadows = true, torchSourceSelfShadow = true,
+    -- voxel lighting: its shader code is compiled into the per-pixel lighting programs at start-up
+    voxelLight = true, voxelLightTorchShadows = true, voxelLightSkyMethod = true, voxelLightBounce = true,
     -- reflections: the water, puddle and chunk composite shaders are patched when the game loads them (only then);
     -- strength and puddles apply at once
     reflections = true,
@@ -1356,21 +1610,6 @@ local function perf()
     return getPerformance()
 end
 
--- The tab label and section title of a key (nil when the tab has no row for it), for the main menu's mod compatibility
--- check (pzopt_mainscreen_compat.lua).
-function PzoptOptionLabel(key)
-    for _, list in ipairs({ SECTIONS, ENHANCEMENT_SECTIONS, PROFILER_SECTIONS }) do
-        for _, section in ipairs(list) do
-            for _, entry in ipairs(section.entries or {}) do
-                if entry.key == key and type(entry.label) == "string" then
-                    return entry.label, section.title
-                end
-            end
-        end
-    end
-    return nil
-end
-
 -- The value the next launch will read: pinned > saved > default.
 -- "" or why mod compatibility switched the key off at this launch (pzopt.ModCompat: a Java mod patches its method)
 local function compatReason(key)
@@ -1398,69 +1637,8 @@ local function nextValue(entry)
     return p:getPzoptOptionDefault(entry.key)
 end
 
-local function store(entry, value)
-    if value == perf():getPzoptOptionDefault(entry.key) then
-        perf():setPzoptOption(entry.key, "")
-    else
-        perf():setPzoptOption(entry.key, value)
-    end
-end
-
 local function noteFor(entry)
     return entry.live and LIVE_NOTE or RESTART_NOTE
-end
-
--- After a save: a live key is already in force (UserOptions.set re-read it), any other asks for a restart.
-local function afterStore(option, entry, value)
-    if not entry.live then
-        option:restartRequired(perf():getPzoptOption(entry.key), value)
-    end
-end
-
--- A tab master switch's start-up features (entry.restartKeys: they pick the window or patch shaders when the game
--- starts) as the next launch will read them, so switching the master asks for a restart only when one of them moves.
-local function startupSignature(master)
-    local p = perf()
-    local off = nextValue(master) == "false"
-    local t = {}
-    for _, key in ipairs(master.restartKeys) do
-        local v = nextValue({ key = key })
-        if off and p:getPzoptOptionPinnedBy(key) == "" then v = "false" end
-        table.insert(t, key .. "=" .. v)
-    end
-    return table.concat(t, ",")
-end
-
-local function tooltipFor(entry, pinnedBy)
-    local t = entry.tip .. " " .. noteFor(entry) .. " Key: " .. entry.key .. "."
-    if pinnedBy ~= "" then
-        t = t .. " Pinned by " .. pinnedBy .. " for this install; the menu cannot change it."
-    end
-    local reason = compatReason(entry.key)
-    if reason ~= "" then
-        t = t .. " Off at this launch for mod compatibility: " .. reason .. ". Choosing a value here overrides that."
-    end
-    return t
-end
-
--- What a row's control says (its option's pzoptCurrent). A row whose controls are not built yet (they are built when a
--- page first shows them) has never been touched: what its toUI would show, in the same strings, for tick boxes and
--- combos (the one colour and the one curve row are built with the tab).
-local function rowCurrent(row)
-    if row.option then return row.option:pzoptCurrent() end
-    local entry, p = row.entry, perf()
-    if entry.choices then
-        local saved = p:getPzoptOptionSaved(entry.key)
-        local v = p:getPzoptOptionPinnedBy(entry.key) ~= "" and p:getPzoptOption(entry.key) or saved
-        if v ~= "" then
-            if v == saved then return v end
-            for _, c in ipairs(entry.choices) do
-                if c == v then return v end
-            end
-        end
-        return p:getPzoptOptionDefault(entry.key) .. " (default)"
-    end
-    return nextValue(entry) == "true" and "true" or "false"
 end
 
 -- The Java classes that read a key: PzoptOptionClasses from pzopt_optimizations_classes.lua, generated by
@@ -1518,6 +1696,12 @@ local CLIP_TITLES = {
     darkness = "Rosewood house at 01:00, the player turning in place: darkness floor 20 %, remembered places and colour grading together",
     memory = "Rosewood house at 13:00, the player turning in place: what is out of sight is drawn grey, dimmer and cooler",
     grade = "Rosewood house in the rain at 14:00, the player turning in place: colour grading (cooler, greyer, softer in rain)",
+    -- voxel lighting (2026-10-19, the game's own frames: stock vs every default + per-pixel and voxel lighting)
+    voxel = "A parking lot at 01:00, street lamps and room lights on, the camera panning east: stock vs voxel lighting (lamps and room lights traced through walls, windows and fences)",
+    -- god rays through doors (2026-10-18, runs grmenu-*: the game's own frames at 1:1, the door toggled every 2 s)
+    godrays = "The Riverside fire station at 15:00, zoom 1: the sun comes in through the garage doors as they open and close",
+    godraysdoor = "A shop door at 17:00, zoom 1, the player just inside: the door settings off vs on (the light follows the door's swing, the open door blocks its share, the player's shadow in the shaft, dust stirred up)",
+    godraysspill = "A Rosewood house at 23:00 in dark fog, its lamps on, zoom 1: the rooms' lamplight spills out of the windows and the opening door into the fog",
 }
 -- Clips whose stock side is a shared GIF (one stock run for several group clips): <STOCK_FILE[clip]>-stock.gif.
 local STOCK_FILE = { zombies = "lou", player = "lou", upscale = "native", dlss = "native", fsrzoom = "nativezoom", dlsszoom = "nativezoom" }
@@ -1538,6 +1722,10 @@ local CLIP_SIDES = {
     darkness = { "STOCK DARKNESS", "FLOOR + REMEMBERED + GRADING" },
     memory = { "REMEMBERED PLACES OFF", "REMEMBERED PLACES ON" },
     grade = { "COLOUR GRADING OFF", "COLOUR GRADING ON" },
+    voxel = { "STOCK GAME", "VOXEL LIGHTING ON" },
+    godrays = { "GOD RAYS OFF", "GOD RAYS ON" },
+    godraysdoor = { "DOOR SETTINGS OFF", "DOOR SETTINGS ON" },
+    godraysspill = { "SPILL OFF", "SPILL ON" },
 }
 -- The line under the clips: what is the same in both, and what the burned-in number is (clips without one say so).
 local CLIP_NOTES = {
@@ -1549,6 +1737,10 @@ local CLIP_NOTES = {
     darkness = ". Same save, spot and hour, frames lined up; no counter.",
     memory = ". Same save, spot and hour, frames lined up; no counter.",
     grade = ". Same save, spot and hour, frames lined up; no counter.",
+    voxel = ". Same save, route and hour, frames lined up; no counter.",
+    godrays = ". Same save, spot and hour, frames lined up; no counter.",
+    godraysdoor = ". Same save, spot and hour, frames lined up; no counter.",
+    godraysspill = ". Same save, spot and hour, frames lined up; no counter.",
 }
 local function clipSides(clip)
     if CLIP_SIDES[clip] then return CLIP_SIDES[clip] end
@@ -1565,23 +1757,26 @@ local KEY_CLIP = {
     fogPass = "fog", fogScalePct = "fog", fogMaskFrames = "fog",
     fsrSharpnessPct = "fsrzoom", dlssWaterCurrent = "dlss", dlssWaterHistoryPct = "dlss", dlssPreset = "dlss", dlssOutputPct = "dlss", dlssOutputFilter = "dlsszoom", dlssSharpen = "dlsszoom",
     hdrSunPct = "hdrday", hdrGlintPct = "hdrday",
-    pixelLight = "torch", pplAnalytic = "torch", pplNormals = "torch", pplWrapPct = "torch", pplShadows = "torch", pplTorchFeetGlow = "torch", torchSource = "torch", torchSourceAim = "torch", torchSourceSelfShadow = "torch", pplSmooth = "torch", pplPointLights = "torch", pplWetSpecular = "storm", pplSpecPct = "storm",
+    godRaysDoorLeaf = "godraysdoor", godRaysDoorSwingMs = "godraysdoor", godRaysCharShadows = "godraysdoor", godRaysDoorDustPct = "godraysdoor",
+    godRaysSpill = "godraysspill", godRaysSpillPct = "godraysspill",
+    pixelLight = "torch", voxelLight = "voxel", voxelLightTorchShadows = "voxel", voxelLightSkyMethod = "voxel", voxelLightBounce = "voxel", pplAnalytic = "torch", pplNormals = "torch", pplWrapPct = "torch", pplShadows = "torch", pplTorchFeetGlow = "torch", torchSource = "torch", torchSourceAim = "torch", torchSourceSelfShadow = "torch", pplSmooth = "torch", pplPointLights = "torch", pplWetSpecular = "storm", pplSpecPct = "storm",
     lightingStrongDelta = "torch", lightingStrongBudget = "horde", lightingStrongFrameMs = "horde", lightingFlush = "torch", lightingBudget = "torch",
     audioLimiter = "horde", audioLimiterCeilingDb = "horde", audioLimiterStereoFold = "horde", soundTickHz = "horde", emitterIdleSkip = "horde", worldSoundCleanupFast = "horde", hearingHoist = "horde",
     lightSwitchCheckFrames = "horde", soundZoneCache = "horde", worldSoundFast = "horde", gridStackInterval = "horde",
-    playerLosFast = "player", zombieSpotFast = "player", charDrawPrep = "horde", zombieAtlasFast = "horde", charDrawThreads = "horde",
-    actionSnapshotFilter = "zgt", emitterParamSkip = "zgt", separateFast = "zgt", separateParallel = "zgt", sleepCheckMemo = "zgt",
-    renderPrepParallel = "horde", pplPackParallel = "torch", pplTorchNearChunk = "torch", schedulerClassifyParallel = "zgt", zombieStatsFold = "zgt", losLightPrefetch = "player", entityUpdateSafeStates = "horde", ragdollCorpseGuard = "horde", ragdollQuitSweep = "horde", visPolyAsync = "player", aoContextParallel = "horde", translucentOrderCache = "drive",
+    playerLosFast = "player", zombieSpotFast = "player", charDrawPrep = "horde", hordeBatch = "horde", hordeBatchUpload = "horde", hordeBatchVao = "horde", atlasBatch = "horde", hordeBatchOrder = "horde", hordeBatchUnits = "horde", renderPrewarm = "horde", renderPrewarmOutlines = "horde", hordePaletteMismatch = "horde", zombieAtlasFast = "horde", renderLastFast = "horde", charDrawThreads = "horde",
+    actionSnapshotFilter = "zgt", emitterParamSkip = "zgt", separateFast = "zgt", ragdollGate = "zgt", bodyModelCache = "zgt", entityUpdateParallel = "zgt", entityUpdatePipeline = "zgt", entityUpdatePlayerFirst = "zgt", entityUpdateMoreStates = "zgt", postupdateParallel = "zgt", separateParallel = "zgt", sleepCheckMemo = "zgt",
+    renderPrepParallel = "horde", pplPackParallel = "torch", pplTorchNearChunk = "torch", schedulerClassifyParallel = "zgt", schedulerFillParallel = "zgt", playerLosParallel = "player", zombieStatsFold = "zgt", losLightPrefetch = "player", entityUpdateSafeStates = "horde", ragdollCorpseGuard = "horde", ragdollQuitSweep = "horde", visPolyAsync = "player", aoContextParallel = "horde", translucentOrderCache = "drive",
     stateParamMemo = "zgt", actionGroupCache = "zgt", profilerThreadMemo = "zgt", zombieSimLodTiles = "zgt", zombieSimLodSteps = "zgt",
     zombieCheckSpread = "zgt", chunkGridWidth = "grid", chunkGridFollowView = "grid",
-    zombieLodDynamic = "horde", zombieLodMin3d = "horde", zombieLodMinBlend = "horde", zombieLodUncappedFps = "horde",
-    animBonesParallel = "zombies", vehicleCull = "zombies", frameThreads = "zombies", actionEvalParallel = "zombies", ecsLookupFast = "zombies",
+    zombieLodDynamic = "horde", zombieLodMin3d = "horde", zombieLodMinBlend = "horde", zombieLodUncappedFps = "horde", zombieLodHysteresis = "horde", zombieLodFadeMs = "horde", zombieLodFixed3d = "horde", zombieLodSpriteLight = "horde", zombieFirstSightSprite = "horde", zombieCompositeBudgetUs = "horde",
+    animBonesParallel = "zombies", vehicleCull = "zombies", nearVehicleGrid = "zombies", separateMemo = "zombies", frameThreads = "zombies", actionEvalParallel = "zombies", ecsLookupFast = "zombies",
     actionConditionFast = "zombies", skinTransformsPrecompute = "zombies", skinPalettePrecompute = "zombies", shadowPrep = "zombies",
     boneIndexCache = "zombies", lightingReadParallel = "zombies", zombieCullSortFast = "zombies",
-    animatorParallel = "zombies", headOnWorker = "zombies", lazyPose = "zombies", animatorPipeline = "zombies", animBatchAsync = "zombies", guardedCallbacks = "zombies",
+    animatorParallel = "zombies", headOnWorker = "zombies", postupdateNoopSkip = "zombies", postupdateEligibleOnWorker = "zombies", postupdateVehicleOnWorker = "zombies", postupdateFuse = "zombies", postupdateClean = "zombies", separateEdgeCache = "zombies", luaSilentSkip = "zombies", lazyPose = "zombies", animatorPipeline = "zombies", animBatchAsync = "zombies", guardedCallbacks = "zombies",
+    randPerWorker = "zombies",
     modelLockPerInstance = "zombies", poolStatsBatched = "zombies",
     bakeBudget = "drive", rebakeBudget = "drive", rebakeMaxFrames = "drive", treeBakeMaxChunksPerSec = "drive", driveTreeCutaway = "drive", edgeTestFast = "horde", treeRebakeLazy = "drive", treeRebakeLingerMs = "drive", treeCutawayReach = "drive", treeCutawayReachPx = "drive",
-    bakeScheduler = "drive", bakeFrameBudget = "drive", bakeBudgetAdaptive = "drive", occlusionGrantedOnly = "drive", bakeMipLevels = "drive",
+    bakeScheduler = "drive", bakeFrameBudget = "drive", bakeBudgetAdaptive = "drive", occlusionGrantedOnly = "drive", bakeMipLevels = "drive", bakeNoSync = "drive",
     renderChunkTopUp = "drive", fliesToggleFix = "drive",
     translucentLightsPerFrame = "spin", glassTilesPerFrame = "spin", floorDecalsPerFrame = "spin", curtainDepthNudgePct = "spin", treeBakePass = "spin", windSpriteSway = "drive", treeBakeDirect = "spin", roofHideDebounceFrames = "spin",
     overlaySampling = "overlay", overlay = "overlay", overlayLog = "overlay", overlayCorner = "overlay", overlayFont = "overlay", overlayTexture = "overlay", overlayRefreshMs = "overlay", overlayGraphHz = "ovgraph",
@@ -1619,6 +1814,7 @@ local AXIS_TITLE = "load on that part with this setting  (stock game = mid)"
 -- bars describe moving it away from stock in the direction the tab offers.
 local EFFECTS = {
     corePlacement = { cores = -1 },
+    workerQosMac = { cpu = -2, cores = 1 },
     gpuPstate = { gpu = -1 },
     jitSteady = { cores = -2 },
     gcHeap = { cpu = -1, ram = 1 },
@@ -1627,6 +1823,9 @@ local EFFECTS = {
     gcPreTouch = { ram = 1 },
     gcMode = { cpu = -1 },
     gcPauseMs = {},
+    gcG1Tuned = { cpu = -1 },
+    gcSlack = { cpu = -1 },
+    gcSlackQueue = {},
     lightingSyncPark = { cores = -1 },
     visBlurReduce = { gpu = -1 },
     enabled = { cpu = -3, render = -3, gpu = -1, cores = 2, ram = 1, disk = 1, load = -3, chunks = -2 },
@@ -1662,6 +1861,7 @@ local EFFECTS = {
     bakeBudgetAdaptive = { cpu = -1, gpu = -1 },
     occlusionGrantedOnly = { cpu = -1 },
     bakeMipLevels = { gpu = -1 },
+    bakeNoSync = { render = -2 },
     renderChunkTopUp = { render = -1, vram = 1 },
     fliesToggleFix = { cpu = -1, gpu = -1 },
     rebakeBudget = { cpu = -1 },
@@ -1683,11 +1883,16 @@ local EFFECTS = {
     pplPackParallel = { cpu = -1, cores = 1 },
     pplTorchNearChunk = { cpu = -1 },
     schedulerClassifyParallel = { cpu = -1 },
+    schedulerFillParallel = { cpu = -1, cores = 1 },
+    playerLosParallel = { cpu = -1, cores = 1 },
     zombieStatsFold = { cpu = -1 },
     visPolyAsync = { cpu = -1, cores = 1 },
     aoContextParallel = { cpu = -1, cores = 1 },
     translucentOrderCache = { cpu = -1 },
     entityUpdatePipeline = { cores = 1 },
+    entityUpdatePlayerFirst = { cpu = 1 },
+    entityUpdateMoreStates = { cpu = -1 },
+    postupdateParallel = { cpu = -1, cores = 1 },
     emitterDefer = {},
     physicsDefer = {},
     animalLosFast = { cpu = -1 },
@@ -1697,6 +1902,9 @@ local EFFECTS = {
     actionEvalParallel = { cpu = -2, cores = 1 },
     animatorParallel = { cpu = -2, cores = 1 },
     headOnWorker = { cpu = -1, cores = 1 },
+    postupdateNoopSkip = { cpu = -1 }, postupdateEligibleOnWorker = { cpu = -1, cores = 1 }, postupdateVehicleOnWorker = { cpu = -1, cores = 1 },
+    postupdateFuse = { cpu = -2, cores = 1 }, postupdateClean = { cpu = -2, cores = 1 }, separateEdgeCache = { cpu = -1 }, luaSilentSkip = { cpu = -1 },
+    randPerWorker = { cores = -1 },
     lazyPose = { cpu = -1 },
     animatorPipeline = { cpu = -1, cores = 1 },
     animBatchAsync = { cpu = -1, cores = 1 },
@@ -1712,10 +1920,22 @@ local EFFECTS = {
     lightingReadParallel = { cpu = -2, cores = 1 },
     zombieCullSortFast = { cpu = -1 },
     vehicleCull = { cpu = -1 },
+    nearVehicleGrid = { cpu = -1 },
+    separateMemo = { cpu = -1 },
     playerLosFast = { cpu = -2 },
     zombieSpotFast = { cpu = -1 },
     charDrawPrep = { cpu = -2, cores = 1 },
+    hordeBatch = { render = -2, gpu = -3 },
+    hordeBatchUpload = {},
+    hordeBatchVao = { render = -1 },
+    atlasBatch = { render = -1, gpu = -1 },
+    hordeBatchOrder = { render = -1, gpu = -2 },
+    hordeBatchUnits = { render = -1, gpu = -1 },
+    renderPrewarm = { render = -1, load = 1 },
+    renderPrewarmOutlines = { render = -1, vram = 1 },
+    hordePaletteMismatch = { render = -1 },
     zombieAtlasFast = { cpu = -1 },
+    renderLastFast = { cpu = -1 },
     actionSnapshotFilter = { cpu = -2 },
     emitterParamSkip = { cpu = -1 },
     emitterIdleSkip = { cpu = -1 },
@@ -1726,6 +1946,8 @@ local EFFECTS = {
     audioLimiterCeilingDb = {},
     audioLimiterStereoFold = {},
     separateFast = { cpu = -1 },
+    ragdollGate = { cpu = -1 },
+    bodyModelCache = { cpu = -1 },
     separateParallel = { cpu = -2, cores = 1 },
     sleepCheckMemo = { cpu = -1 },
     stateParamMemo = { cpu = -1, ram = -1 },
@@ -1736,6 +1958,12 @@ local EFFECTS = {
     zombieCheckSpread = { cpu = -1 },
     zombieLodDynamic = { cpu = -2, gpu = -2 },
     zombieLodMin3d = {},
+    zombieLodHysteresis = {},
+    zombieLodFixed3d = { cpu = -2, gpu = -2 },
+    zombieLodSpriteLight = {},
+    zombieLodFadeMs = { gpu = 1 },
+    zombieFirstSightSprite = { render = -1 },
+    zombieCompositeBudgetUs = {},
     zombieLodMinBlend = {},
     zombieLodUncappedFps = {},
     charDrawThreads = { cores = 1 },
@@ -1799,6 +2027,9 @@ local EFFECTS = {
     bloodGlintPct = {},
     godRays = { gpu = 1, vram = 1 },
     godRaysLocal = { gpu = 1 },
+    godRaysCharShadows = { gpu = 1 },
+    godRaysSpill = { gpu = 1 },
+    godRaysBouncePct = { gpu = 1 },
     foliageSway = { gpu = 1, vram = 1 },
     relief = { gpu = 1, vram = 2 },
     reliefTorchShadowSteps = { gpu = 2 },
@@ -1808,6 +2039,8 @@ local EFFECTS = {
     spriteFilter = { gpu = 1 },
     spriteFilterMin = { gpu = 1 },
     pixelLight = { cpu = -1, gpu = 1, vram = 1 },
+    voxelLight = { gpu = 0, vram = 1 },
+    voxelLightSkyMethod = { gpu = 1 },
     pplPointLights = { gpu = 1 },
     pplShadows = { gpu = 2 },
     pplTorchFeetGlow = {},
@@ -1818,6 +2051,8 @@ local EFFECTS = {
     vrr = { gpu = -1, cpu = -1 },
     vrrCap = { gpu = -1, cpu = -1 },
     presentPacing = { render = 1 },
+    frameQueue = { render = 1 },
+    frameQueueGpu = { render = 1 },
     vehicleSmooth = {},
     driveLookSmooth = {},
     cameraScreenPixels = {},
@@ -1864,6 +2099,10 @@ local EFFECTS = {
     -- sprite buffers
     uiRetained = { cpu = -2 },
     uiRetainedChildren = { cpu = -1 },
+    uiVerify = { cpu = 1 },
+    uiAnimate = { cpu = 1 },
+    uiSlack = { cpu = -1 },
+    uiMoveReplay = { cpu = -1 },
     uiTickStagger = {},
     uiLuaFast = { cpu = -1 },
     modProfile = { cpu = -1 },
@@ -1908,6 +2147,13 @@ local EFFECTS = {
     loadWorkers = { cores = 2, load = -1 },
     wake = { chunks = -2 },
     chunkHandoffDivisor = { cpu = -1, chunks = 1 },
+    slackWork = { cpu = -1, chunks = 1 },
+    handoffRecalcFast = { cpu = -1, chunks = -1 },
+    propIdCache = { cpu = -1 },
+    chunkHandoffCost = { cpu = -1, chunks = -1 },
+    chunkHandoffSlackMaxWait = { cpu = -1, chunks = -1 },
+    chunkHandoffForceAnyFrame = { chunks = -1 },
+    chunkHandoffFrameBudgetUs = { cpu = -1, chunks = 1 },
     chunkGridWidth = { cpu = -2, gpu = -1, ram = -1, vram = -1, load = -1 }, -- the bars describe the smaller grids
     chunkGridFollowView = { chunks = -1 }, -- the upstairs screen corners are filled; same chunk count
     hotsaveStaged = { cpu = -1 },
@@ -1948,6 +2194,7 @@ local EFFECTS = {
 
 -- SDR values of the media style (docs/media-style.md): stock amber, optimized green, a third series blue
 local C_STOCK = { r = 0.79, g = 0.35, b = 0.17 }
+local C_STOCK_TEXT = { r = 1, g = 0.62, b = 0.40 } -- the amber as text on the dark panels (the bar's own amber read poorly)
 local C_OPT = { r = 0.27, g = 0.87, b = 0.49 }
 local C_BLUE = { r = 0.23, g = 0.56, b = 0.88 }
 local C_TEXT = { r = 0.94, g = 0.94, b = 0.96 }
@@ -2012,108 +2259,6 @@ function PzoptPreview:new(x, y, w, h, panel, rows)
     return o
 end
 
-function PzoptPreview:addRow(row)
-    for _, line in ipairs(row.option.pzoptJoyLines or { { row.option.control } }) do
-        for _, el in ipairs(line) do self.byControl[el] = row end
-    end
-end
-
-function PzoptPreview:columnWidth()
-    return math.min(self.width - 2 * self.pad, 2 * CLIP_W * 3 + self.pad)
-end
-
--- The description slot is as tall as the longest description wrapped at the column's width. Wrapping all ~400 took
--- 18 ms of the tab's first build (2026-10-10), so the tab's idle builder measures one per call; layoutSlots (the
--- first draw) finishes the count if the builder has not.
-function PzoptPreview:measureStep()
-    local cw = self:columnWidth()
-    local m = self.measure
-    if not m or m.cw ~= cw then
-        m = { cw = cw, next = 1, lines = 1 }
-        self.measure = m
-    end
-    local row = self.rows[m.next]
-    if not row then return true end
-    m.next = m.next + 1
-    local n = 0
-    for _ in string.gmatch(getTextManager():WrapText(self.fontS, row.entry.tip, cw), "[^\n]+") do n = n + 1 end
-    if n > m.lines then m.lines = n end
-    return false
-end
-
--- Every part of the panel has a fixed place, so nothing moves when the mouse crosses to another row: the
--- panel is the whole free area of the page, the text column is centred in it (capped so lines stay readable),
--- the description slot is as tall as the longest description wrapped at that width, the clips take the height
--- that is left (up to 3x their 512 px source), the bars and the legend sit under the description.
-function PzoptPreview:layoutSlots()
-    local pad, gap = self.pad, self.pad
-    local cw = self:columnWidth()
-    self.colX = math.floor((self.width - cw) / 2)
-    self.colW = cw
-    while not self:measureStep() do end
-    local lines = self.measure.lines
-    self.descLines = lines
-    self.clips = clipsOn()
-    self.clipsGen = CLIPS.gen
-    local fixed = pad + self.hM + 2 + self.hS + 2 + self.hS + 8 -- title, values, Java classes
-        + lines * self.hS + 8                              -- description
-        + self.hM + 4 + #AXES * (self.hS + 6)              -- bars
-        + 6 + self.hS + 2 + self.hS                        -- x axis ticks and title
-        + 4 + 2 * self.hS + pad                            -- legend
-    local iw, ih = 0, 0
-    if self.clips then
-        fixed = fixed + self.hS + 2 + 4 + self.hS + 8      -- clip captions, clip title line
-        ih = math.max(60, self.height - fixed)
-        iw = math.floor((cw - gap) / 2)
-        if math.floor(iw * CLIP_H / CLIP_W) < ih then
-            ih = math.floor(iw * CLIP_H / CLIP_W)
-        else
-            iw = math.floor(ih * CLIP_W / CLIP_H)
-        end
-    end
-    self.clipW, self.clipH = iw, ih
-    -- height the clips did not need (a wide page) makes the bar rows taller, up to twice the font height
-    local spare = math.max(0, self.height - fixed - ih)
-    self.barRowH = math.min(2 * self.hS + 8, self.hS + 6 + math.floor(spare / #AXES))
-    self.slotW, self.slotH = self.width, self.height
-end
-
--- the wheel over the preview scrolls the options list, like anywhere else on the page
-function PzoptPreview:onMouseWheel(del)
-    return false
-end
-
-function PzoptPreview:select(row)
-    self.row = row
-end
-
--- The row under the mouse: the list's mouse position is in its content space (scroll included), like row.y.
--- With a controller (the page holds the joypad focus) the row of the focused line instead, wherever the mouse
--- is; a section heading or the search row keeps the last setting shown.
-function PzoptPreview:pick()
-    local panel = self.panel
-    if panel.joyfocus then
-        local line = panel.joypadButtonsY and panel.joypadButtonsY[panel.joypadIndexY or 0]
-        for _, el in ipairs(line or {}) do
-            local row = self.byControl[el]
-            if row then
-                self:select(row)
-                return
-            end
-        end
-        return
-    end
-    if not panel:isMouseOver() or self:isMouseOver() then return end
-    local mx, my = panel:getMouseX(), panel:getMouseY()
-    if mx >= self.x or mx < (self.minX or 0) then return end
-    for _, row in ipairs(self.rows) do
-        if not row.hidden and my >= row.y and my < row.y + row.h then
-            self:select(row)
-            return
-        end
-    end
-end
-
 function PzoptPreview:text(str, x, y, col, font, alpha)
     self:drawText(str, x, y, col.r, col.g, col.b, alpha or 1, font or self.fontS)
 end
@@ -2160,16 +2305,19 @@ function PzoptPreview:drawBars(x, y, w, fx)
     for _, axis in ipairs(AXES) do
         local v = fx[axis.id] or 0
         if v > 3 then v = 3 elseif v < -3 then v = -3 end
+        -- only the resources the setting moves (2026-10-18, the maintainer): a mid / stock row is left out, the others keep
+        -- their order
+        if v ~= 0 then
         self:drawTextRight(axis.label, x + labW, y + textY, C_GREY.r, C_GREY.g, C_GREY.b, 1, self.fontS)
         self:drawRect(barX, y + 3, barW, rowH - 6, 1, 0.11, 0.11, 0.13)
-        local word, wcol = LEVELS[0], C_DIM
+        local word, wcol = LEVELS[0], C_GREY
         if v ~= 0 then
             local len = math.floor(half * math.abs(v) / 3)
             local col = v < 0 and C_OPT or (axis.moreIsWork and C_BLUE or C_STOCK)
             local bx = v < 0 and (mid - len) or (mid + 1)
             self:drawRect(bx, y + 3, len, rowH - 6, 1, col.r, col.g, col.b)
             word = LEVELS[v]
-            wcol = col
+            wcol = col == C_STOCK and C_STOCK_TEXT or col
         end
         -- faint ticks through the track at every level, the zero line stronger
         for _, t in ipairs(AXIS_TICKS) do
@@ -2179,77 +2327,32 @@ function PzoptPreview:drawBars(x, y, w, fx)
         self:drawRect(mid, y + 1, 1, rowH - 2, 1, 0.55, 0.55, 0.60)
         self:text(word, barX + barW + 8, y + textY, wcol, self.fontS)
         y = y + rowH
+        end
     end
-    -- the x axis: a rule, a tick and a word per level, the title under them
+    -- the x axis: a rule, a tick and a word per level, the title under them. On a narrow chart (the main menu's detail pane
+    -- at 1280 x 720) the words would run into each other: the ends and mid first, then the others where they fit
     self:drawRect(barX, y, barW, 1, 1, 0.55, 0.55, 0.60)
-    for _, t in ipairs(AXIS_TICKS) do
+    local placed = {}
+    for _, t in ipairs({ -3, 3, 0, -2, 1, 2 }) do
         local tx = mid + math.floor(half * t / 3)
         self:drawRect(tx, y, 1, 5, 1, 0.55, 0.55, 0.60)
         local label = LEVELS[t]
         local lw = getTextManager():MeasureStringX(self.fontS, label)
         local lx = tx - math.floor(lw / 2)
         if lx < barX then lx = barX elseif lx + lw > barX + barW then lx = barX + barW - lw end
-        local col = t < 0 and C_OPT or (t > 0 and C_STOCK or C_GREY)
-        self:text(label, lx, y + 6, col, self.fontS)
+        local free = true
+        for _, r in ipairs(placed) do
+            if lx < r[2] + 6 and lx + lw + 6 > r[1] then free = false end
+        end
+        if free then
+            table.insert(placed, { lx, lx + lw })
+            local col = t < 0 and C_OPT or (t > 0 and C_STOCK_TEXT or C_GREY)
+            self:text(label, lx, y + 6, col, self.fontS)
+        end
     end
     y = y + 6 + self.hS + 2
-    self:drawTextCentre(AXIS_TITLE, mid, y, C_DIM.r, C_DIM.g, C_DIM.b, 1, self.fontS)
+    self:drawTextCentre(AXIS_TITLE, mid, y, C_GREY.r, C_GREY.g, C_GREY.b, 1, self.fontS)
     return y + self.hS
-end
-
-function PzoptPreview:prerender()
-    ISPanel.prerender(self)
-    -- window resized, or the clips switched on / off
-    if self.width ~= self.slotW or self.height ~= self.slotH or self.clipsGen ~= CLIPS.gen then self:layoutSlots() end
-    self:pick()
-    local row = self.row
-    local pad = self.pad
-    local x, y, w = self.colX, pad, self.colW
-    if not row then
-        self:text("Point at a setting to see what it does.", x, y, C_GREY, self.fontM)
-        return
-    end
-    local entry = row.entry
-    local p = perf()
-    -- title and values: one line each, cut with "..." rather than wrapped
-    self:text(getTextManager():WrapText(self.fontM, entry.label, w, 1, "..."), x, y, C_TEXT, self.fontM)
-    y = y + self.hM + 2
-    local pinnedBy = p:getPzoptOptionPinnedBy(entry.key)
-    local values = entry.live
-        and ("Key " .. entry.key .. "   now: " .. p:getPzoptOption(entry.key) .. "   after Apply: " .. rowCurrent(row))
-        or ("Key " .. entry.key .. "   since this boot: " .. p:getPzoptOption(entry.key) .. "   next launch: " .. rowCurrent(row))
-    if pinnedBy ~= "" then values = values .. "   (pinned by " .. pinnedBy .. ")" end
-    local reason = compatReason(entry.key)
-    if reason ~= "" then values = values .. "   (off for mod compatibility: " .. reason .. ")" end
-    self:text(getTextManager():WrapText(self.fontS, values, w, 1, "..."), x, y, C_GREY)
-    y = y + self.hS + 2
-    local classes = optionClasses(entry.key)
-    local java = #classes > 0 and ("Java: " .. table.concat(classes, ", ")) or "Java: read by pzopt.Config only"
-    java = (optionDate(entry.key) and ("Released " .. optionDate(entry.key)) or "New in this version") .. "   " .. java
-    self:text(getTextManager():WrapText(self.fontS, java, w, 1, "..."), x, y, C_DIM)
-    y = y + self.hS + 8
-    -- the two clips, centred in the column (with the header's "Before / after clips" ticked)
-    if self.clips then
-        local iw, ih, gap = self.clipW, self.clipH, pad
-        local cx = x + math.floor((w - (2 * iw + gap)) / 2)
-        local now = getTimestampMs()
-        local sides = clipSides(row.clip)
-        self:drawClip(cx, y, iw, ih, sides[1], clipPath(row.clip, "stock"), now, C_STOCK)
-        y = self:drawClip(cx + iw + gap, y, iw, ih, sides[2], clipPath(row.clip, "opt"), now, C_OPT) + 4
-        local same = sides == CLIP_SIDES.overlay and ". Same save, route and machine, a crop of the top-left corner at the Large overlay font."
-            or CLIP_NOTES[row.clip] or ". Same save, route and machine; the number is that run's live frame rate."
-        self:text(getTextManager():WrapText(self.fontS, (CLIP_TITLES[row.clip] or row.clip) .. same, w, 1, "..."), x, y, C_DIM)
-        y = y + self.hS + 8
-    end
-    -- what it does, in a slot tall enough for the longest description
-    self:drawWrapped(entry.tip, x, y, w, C_TEXT)
-    y = y + self.descLines * self.hS + 8
-    -- the bars
-    self:text("Effect on your hardware", x, y, C_TEXT, self.fontM)
-    y = y + self.hM + 4
-    y = self:drawBars(x, y, w, EFFECTS[entry.key] or {})
-    self:drawWrapped("Against the stock game, from the measurements in docs/archive/2026-09-24/results.md: green = less load (or a shorter "
-        .. "load, chunks sooner), amber = more, blue = idle cores put to work. " .. noteFor(entry), x, y + 4, w, C_DIM)
 end
 
 -- ---------------------------------------------------------------------------------------------------
@@ -2471,82 +2574,6 @@ local function search(index, query)
     return hits, n
 end
 
-local function comboLabels(entry, default, saved)
-    local labels = { "Default (" .. default .. ((entry.note and entry.note[default]) and (", " .. entry.note[default]) or "") .. ")" }
-    local values = {}
-    local seen = {}
-    for _, v in ipairs(entry.choices) do
-        local text = v
-        if entry.note and entry.note[v] then
-            text = v .. " (" .. entry.note[v] .. ")"
-        end
-        table.insert(labels, text)
-        table.insert(values, v)
-        seen[v] = true
-    end
-    -- a value typed into options.ini by hand that is not in the list stays selectable
-    if saved ~= "" and not seen[saved] then
-        table.insert(labels, saved)
-        table.insert(values, saved)
-    end
-    return labels, values
-end
-
-local function addBoolOption(self, entry, splitpoint, y, BUTTON_HGT)
-    local p = perf()
-    local pinnedBy = p:getPzoptOptionPinnedBy(entry.key)
-    local box = self:addYesNo(splitpoint, y, BUTTON_HGT, BUTTON_HGT, entry.label)
-    box.tooltip = tooltipFor(entry, pinnedBy)
-    if pinnedBy ~= "" then
-        box.enable = false
-    end
-    local option = GameOption:new("pzopt." .. entry.key, box)
-    function option.toUI(self)
-        self.pzoptShown = nextValue(entry)
-        self.control:setSelected(1, self.pzoptShown == "true")
-    end
-    function option.apply(self)
-        if pinnedBy ~= "" then return end
-        local value = tostring(self.control:isSelected(1))
-        if compatDecides(entry.key) then
-            if value == self.pzoptShown then return end -- untouched: mod compatibility keeps deciding
-            perf():setPzoptOption(entry.key, value) -- the player's choice beats mod compatibility, the default too
-            afterStore(self, entry, value)
-            return
-        end
-        local before = entry.restartKeys and startupSignature(entry)
-        store(entry, value)
-        afterStore(self, entry, value)
-        if before then
-            self:restartRequired(before, startupSignature(entry))
-        end
-    end
-    -- the "Enable all" button puts the control back to the build's default (mod compatibility's value where it decides)
-    function option.pzoptReset(self)
-        if pinnedBy ~= "" then return end
-        if compatDecides(entry.key) then
-            self.control:setSelected(1, self.pzoptShown == "true")
-            return
-        end
-        self.control:setSelected(1, perf():getPzoptOptionDefault(entry.key) == "true")
-    end
-    -- a profile button sets an explicit value (nil = the build's default)
-    function option.pzoptSet(self, value)
-        if pinnedBy ~= "" then return end
-        if value == nil then return self:pzoptReset() end
-        self.control:setSelected(1, value == "true")
-    end
-    -- what the control says right now (the preview panel's "next launch" value)
-    function option.pzoptCurrent(self)
-        return tostring(self.control:isSelected(1))
-    end
-    option.pzoptKey = entry.key
-    option.pzoptBool = true
-    self.gameOptions:add(option)
-    return option
-end
-
--- Colour controls store RGB hex; opacity remains a separate setting.
 local function colourHex(value)
     return string.upper((value or ""):match("^%s*#?(%x%x%x%x%x%x)%s*$") or "FFC740")
 end
@@ -2559,171 +2586,6 @@ local function colourRGB(value)
         b = tonumber(hex:sub(5, 6), 16) / 255,
         a = 1,
     }
-end
-
-local function addColourOption(self, entry, splitpoint, y)
-    local p = perf()
-    local pinnedBy = p:getPzoptOptionPinnedBy(entry.key)
-    local option
-    local function setValue(value)
-        local button = option.control
-        button.pzoptValue = value == "" and "" or colourHex(value)
-        button.backgroundColor = colourRGB(value ~= "" and value or p:getPzoptOptionDefault(entry.key))
-        button.backgroundColorMouseOver = button.backgroundColor
-    end
-    local function openPicker(screen, button)
-        if pinnedBy ~= "" then
-            return
-        end
-        require("ISUI/ISSliderPanel")
-        require("ISUI/ISColorPickerHSB")
-        if screen.pzoptColourPicker then
-            screen.pzoptColourPicker:removeSelf()
-        end
-        local rgb = button.backgroundColor
-        local picker = ISColorPickerHSB:new(0, 0, ColorInfo.new(rgb.r, rgb.g, rgb.b, 1))
-        picker:initialise()
-        picker.resetFocusTo = button.parent
-        picker:setPickedFunc(function(_, colour)
-            local function channel(value)
-                return math.floor(math.max(0, math.min(1, value)) * 255 + 0.5)
-            end
-            setValue(string.format("%02X%02X%02X", channel(colour.r), channel(colour.g), channel(colour.b)))
-            option:invokeOnChangeEvent()
-            if picker.parent then
-                picker:removeSelf()
-            end
-        end)
-        local removeSelf = picker.removeSelf
-        picker.removeSelf = function(o)
-            screen.pzoptColourPicker = nil
-            removeSelf(o)
-        end
-        -- The popup belongs to the options screen, not the scrolling settings panel.
-        local prerender = picker.prerender
-        picker.prerender = function(o)
-            if not button:getIsVisible() or not button.parent:getIsVisible() then
-                o:removeSelf()
-                return
-            end
-            prerender(o)
-        end
-        screen:addChild(picker)
-        local x = button:getAbsoluteX() - screen:getAbsoluteX()
-        local top = button:getAbsoluteY() - screen:getAbsoluteY()
-        local py = top + button:getHeight() + 1
-        if py + picker:getHeight() > screen:getHeight() then
-            py = top - picker:getHeight() - 1
-        end
-        picker:setX(math.max(0, math.min(x, screen:getWidth() - picker:getWidth())))
-        picker:setY(math.max(0, py))
-        picker:setCapture(true)
-        picker:setVisible(true)
-        picker:bringToTop()
-        screen.pzoptColourPicker = picker
-        local joypad = JoypadState.getMainMenuJoypad()
-        if joypad then
-            joypad.focus = picker
-        end
-    end
-    local button = self:addColorButton(splitpoint, y, entry.label, colourRGB(""), openPicker)
-    button.tooltip = tooltipFor(entry, pinnedBy)
-    button:setEnable(pinnedBy == "")
-    option = GameOption:new("pzopt." .. entry.key, button)
-    function option.toUI()
-        setValue(pinnedBy ~= "" and p:getPzoptOption(entry.key) or p:getPzoptOptionSaved(entry.key))
-    end
-    function option.apply(o)
-        if pinnedBy ~= "" then
-            return
-        end
-        local value = o.control.pzoptValue
-        p:setPzoptOption(entry.key, value)
-        afterStore(o, entry, value ~= "" and value or p:getPzoptOptionDefault(entry.key))
-    end
-    function option.pzoptReset()
-        if pinnedBy == "" then
-            setValue("")
-        end
-    end
-    function option.pzoptSet(_, value)
-        if pinnedBy == "" then
-            setValue(value or "")
-        end
-    end
-    function option.pzoptCurrent(o)
-        return o.control.pzoptValue ~= "" and ("#" .. o.control.pzoptValue)
-            or ("#" .. colourHex(p:getPzoptOptionDefault(entry.key)) .. " (default)")
-    end
-    option.pzoptKey = entry.key
-    self.gameOptions:add(option)
-    return option
-end
-
-local function addIntOption(self, entry, splitpoint, y, comboWidth)
-    local p = perf()
-    local pinnedBy = p:getPzoptOptionPinnedBy(entry.key)
-    local labels, values = comboLabels(entry, p:getPzoptOptionDefault(entry.key), p:getPzoptOptionSaved(entry.key))
-    local combo = self:addCombo(splitpoint, y, comboWidth, 20, entry.label, labels, 1)
-    combo:setToolTipMap({ defaultTooltip = tooltipFor(entry, pinnedBy) })
-    if pinnedBy ~= "" then
-        combo.disabled = true
-    end
-    local function indexOf(value)
-        for i, v in ipairs(values) do
-            if v == value then return i + 1 end
-        end
-        return nil
-    end
-    local option = GameOption:new("pzopt." .. entry.key, combo)
-    function option.toUI(self)
-        local pp = perf()
-        local box = self.control
-        if pinnedBy ~= "" then
-            box.selected = indexOf(pp:getPzoptOption(entry.key)) or 1
-        else
-            local saved = pp:getPzoptOptionSaved(entry.key)
-            box.selected = (saved ~= "" and indexOf(saved)) or 1
-        end
-    end
-    function option.apply(self)
-        if pinnedBy ~= "" then return end
-        local box = self.control
-        local value = box.selected > 1 and values[box.selected - 1] or ""
-        perf():setPzoptOption(entry.key, value)
-        local effective = value ~= "" and value or perf():getPzoptOptionDefault(entry.key)
-        afterStore(self, entry, effective)
-    end
-    function option.pzoptReset(self)
-        if pinnedBy ~= "" then return end
-        self.control.selected = 1 -- "Default (...)"
-    end
-    function option.pzoptSet(self, value)
-        if pinnedBy ~= "" then return end
-        local index = value ~= nil and indexOf(value) or nil
-        if index == nil then
-            -- a profile value outside the combo's list becomes selectable, like a hand-typed one
-            if value ~= nil and value ~= perf():getPzoptOptionDefault(entry.key) then
-                table.insert(labels, value)
-                table.insert(values, value)
-                self.control:addOption(value)
-                index = #values + 1
-            else
-                index = 1
-            end
-        end
-        self.control.selected = index
-    end
-    function option.pzoptCurrent(self)
-        local box = self.control
-        if box.selected > 1 and values[box.selected - 1] then
-            return values[box.selected - 1]
-        end
-        return perf():getPzoptOptionDefault(entry.key) .. " (default)"
-    end
-    option.pzoptKey = entry.key
-    self.gameOptions:add(option)
-    return option
 end
 
 -- The zoom curve (`bezier` entries, key zoomEase; 2026-09-22): the preset combo, then one slider per control-point
@@ -2785,167 +2647,6 @@ function PzoptBezierPlot:render()
     self:drawRect(px(v[1]) - 2, py(v[2]) - 2, 5, 5, 1, C_TEXT.r, C_TEXT.g, C_TEXT.b)
     self:drawRect(px(v[3]) - 2, py(v[4]) - 2, 5, 5, 1, C_TEXT.r, C_TEXT.g, C_TEXT.b)
     self:drawRectBorder(0, 0, w, h, 1, 0.31, 0.31, 0.35)
-end
-
-local function addBezierOption(self, entry, splitpoint, y, comboWidth, BUTTON_HGT)
-    local p = perf()
-    local pinnedBy = p:getPzoptOptionPinnedBy(entry.key)
-    local default = p:getPzoptOptionDefault(entry.key)
-    local labels, values = comboLabels(entry, default, "")
-    table.insert(labels, "custom (the sliders below)")
-    local customIndex = #labels
-    local combo = self:addCombo(splitpoint, y, comboWidth, 20, entry.label, labels, 1)
-    combo:setToolTipMap({ defaultTooltip = tooltipFor(entry, pinnedBy) })
-    if pinnedBy ~= "" then
-        combo.disabled = true
-    end
-    local spacing = MainOptions.style.borderSpacing
-    local top = y + self.addY
-    local valueW = getTextManager():MeasureStringX(UIFont.Small, "0.00") + 8
-    local labelW = 0
-    local sliders = {}
-    for i, name in ipairs(BEZIER_AXES) do
-        local rowY = y + self.addY
-        local label = ISLabel:new(splitpoint, rowY, BUTTON_HGT, name, C_GREY.r, C_GREY.g, C_GREY.b, 1, UIFont.Small)
-        label:initialise()
-        self.mainPanel:addChild(label)
-        labelW = math.max(labelW, getTextManager():MeasureStringX(UIFont.Small, name))
-        local value = ISLabel:new(splitpoint + 20, rowY, BUTTON_HGT, "", 1, 1, 1, 1, UIFont.Small, true)
-        value:initialise()
-        self.mainPanel:addChild(value)
-        local slider = ISSliderPanel:new(splitpoint + 20 + valueW, rowY, comboWidth - valueW, BUTTON_HGT)
-        slider:initialise()
-        slider:setValues(0, 1, 0.01, 0.1)
-        slider.doToolTip = false -- its own tooltip is the radio's "increase step size"
-        slider.valueLabel = value
-        self.mainPanel:addChild(slider)
-        self.mainPanel:insertNewLineOfButtons(slider)
-        self.addY = self.addY + BUTTON_HGT + spacing
-        sliders[i] = slider
-    end
-    local size = y + self.addY - spacing - top
-    local plot = PzoptBezierPlot:new(math.max(16, splitpoint - labelW - 12 - size), top, size, size)
-    plot:initialise()
-    plot.sliders = sliders
-    self.mainPanel:addChild(plot)
-
-    local function current()
-        local v = {}
-        for i = 1, 4 do v[i] = sliders[i]:getCurrentValue() end
-        return v
-    end
-    -- the sliders to a value; setCurrentValue ignores a disabled slider, so a pinned value is written directly
-    local function setSliders(spec)
-        local v = parseBezier(spec) or parseBezier(default)
-        for i = 1, 4 do
-            local s = sliders[i]
-            s.currentValue = math.max(0, math.min(1, v[i]))
-            s.valueLabel:setName(string.format("%.2f", s.currentValue))
-            s.disabled = pinnedBy ~= ""
-        end
-    end
-    -- the combo entry the sliders match: the default, a preset, or "custom"
-    local function syncCombo()
-        local v = current()
-        if combo.selected == 1 and sameBezier(v, parseBezier(default)) then return end
-        for i, value in ipairs(values) do
-            if sameBezier(v, parseBezier(value)) then
-                combo.selected = i + 1
-                return
-            end
-        end
-        combo.selected = customIndex
-    end
-
-    local option = GameOption:new("pzopt." .. entry.key, combo)
-    for _, slider in ipairs(sliders) do
-        slider.target = option
-        slider.onValueChange = function(opt, value, s)
-            s.valueLabel:setName(string.format("%.2f", value))
-            syncCombo()
-            opt:invokeOnChangeEvent()
-        end
-    end
-    function option.onChange(self, box)
-        if box.selected == 1 then
-            setSliders(default)
-        elseif values[box.selected - 1] then
-            setSliders(values[box.selected - 1])
-        end
-    end
-    function option.toUI(self)
-        local pp = perf()
-        local saved = pp:getPzoptOptionSaved(entry.key)
-        if pinnedBy ~= "" then
-            setSliders(pp:getPzoptOption(entry.key))
-            syncCombo()
-        elseif saved == "" then
-            self.control.selected = 1
-            setSliders(default)
-        else
-            setSliders(saved)
-            self.control.selected = 0
-            syncCombo()
-        end
-    end
-    function option.apply(self)
-        if pinnedBy ~= "" then return end
-        local value = ""
-        if self.control.selected ~= 1 then
-            local v = current()
-            value = sameBezier(v, parseBezier(default)) and "" or formatBezier(v)
-        end
-        perf():setPzoptOption(entry.key, value)
-        local effective = value ~= "" and value or default
-        afterStore(self, entry, effective)
-    end
-    function option.pzoptReset(self)
-        if pinnedBy ~= "" then return end
-        self.control.selected = 1
-        setSliders(default)
-    end
-    function option.pzoptSet(self, value)
-        if pinnedBy ~= "" then return end
-        if value == nil then return self:pzoptReset() end
-        setSliders(value)
-        self.control.selected = 0
-        syncCombo()
-    end
-    function option.pzoptCurrent(self)
-        if self.control.selected == 1 then
-            return default .. " (default)"
-        end
-        return formatBezier(current())
-    end
-    option.pzoptKey = entry.key
-    option.pzoptJoyLines = { { combo }, { sliders[1] }, { sliders[2] }, { sliders[3] }, { sliders[4] } }
-    self.gameOptions:add(option)
-    return option
-end
-
--- "Enable all": master on, every other control back to the build's default. "Disable all (stock)":
--- master off, the other controls untouched (they are ignored while the master is off). Neither writes
--- anything: the controls are marked changed and Apply / Accept saves them through the options above.
--- The controls of every row: the bulk actions below set them all (rows are built when a page first shows them, the
--- rest by the tab's idle builder; this finishes it).
-local function allRows(self)
-    local S = self.pzoptSearch
-    if S and S.finishRows then S.finishRows() end
-end
-
-local function setAll(self, enable)
-    allRows(self)
-    local master = self.pzoptMaster
-    if master and master.control.enable then
-        master.control:setSelected(1, enable)
-        master:invokeOnChangeEvent()
-    end
-    if enable then
-        for _, option in ipairs(self.pzoptOptions) do
-            option:pzoptReset()
-            option:invokeOnChangeEvent()
-        end
-    end
 end
 
 -- Profiles: one button sets a named group of controls (the rest go back to the build's default),
@@ -3025,74 +2726,6 @@ local PROFILES = {
     },
 }
 
--- Builds a lazily built settings page now (set below, after buildSettingsPage).
-local ensurePageBuilt
--- The three pages (set below, after the buttons they name).
-local PAGES
-
-local function applyProfile(self, profile)
-    allRows(self)
-    local master = self.pzoptMaster
-    if master and master.control.enable then
-        master.control:setSelected(1, true)
-        master:invokeOnChangeEvent()
-    end
-    for _, option in ipairs(self.pzoptOptions) do
-        option:pzoptSet(profile.values[option.pzoptKey])
-        option:invokeOnChangeEvent()
-    end
-    -- the upscaler keys live on the Enhancements tab: build it if it was never shown, then set them the same way
-    -- (a profile that picks an upscaler also turns that tab's master switch on)
-    ensurePageBuilt(self, ENHANCEMENTS_TAB)
-    local enhancements = self.pzoptEnhancementMaster
-    if (profile.values.upscaler or profile.enhancements) and enhancements and enhancements.control.enable then
-        enhancements.control:setSelected(1, true)
-        enhancements:invokeOnChangeEvent()
-    end
-    for _, option in ipairs(self.pzoptEnhancementOptions or {}) do
-        if option.pzoptProfile then
-            option:pzoptSet(profile.values[option.pzoptKey])
-            option:invokeOnChangeEvent()
-        elseif profile.enhancements then
-            -- a profile with a Visuals set: its keys as listed, every other Visuals control back to the default
-            option:pzoptSet(profile.enhancements[option.pzoptKey])
-            option:invokeOnChangeEvent()
-        end
-    end
-    for name, label in pairs(profile.stockLabels or {}) do
-        local option = self.gameOptions:get(name)
-        local box = option and option.control
-        local found = false
-        for i, text in ipairs(box and box.options or {}) do
-            local t = type(text) == "table" and (text.text or text[1]) or text
-            if tostring(t) == label then
-                box.selected = i
-                option:invokeOnChangeEvent()
-                found = true
-                break
-            end
-        end
-        if not found then
-            print("[pzopt] options tab: profile could not pick " .. label .. " in stock option " .. name)
-        end
-    end
-    for name, index in pairs(profile.stock or {}) do
-        local option = self.gameOptions:get(name)
-        local box = option and option.control
-        if box and type(index) == "boolean" and box.setSelected then
-            box:setSelected(1, index)
-            option:invokeOnChangeEvent()
-        elseif name == "texcompress" and not option then
-            -- the game hides the tick box where the GPU cannot compress textures: nothing to set
-        elseif box and box.options and box.options[index] then
-            box.selected = index
-            option:invokeOnChangeEvent()
-        else
-            print("[pzopt] options tab: profile could not set stock option " .. name)
-        end
-    end
-end
-
 -- "Uninstall PZ Optimization": pzopt.Uninstall puts the launcher settings back now and starts a helper that deletes the
 -- installed files once the game has quit (the classes cannot go while it runs), then the game quits the stock way.
 -- Main menu only: in a world the quit would skip the save.
@@ -3107,120 +2740,6 @@ local UNINSTALL_CONFIRM = "Uninstall PZ Optimization?\n\n"
     .. "launcher settings it changed are put back: the next launch\n"
     .. "is the stock game. Your settings in Zomboid/pzopt/ stay.\n\n"
     .. "Afterwards you can unsubscribe from the Workshop item."
-
-local function showUninstallResult(text)
-    local modal = ISModalDialog:new(getCore():getScreenWidth() / 2 - 200, getCore():getScreenHeight() / 2 - 60, 400, 120,
-        text, false, nil, nil)
-    modal:initialise()
-    modal:setCapture(true)
-    modal:setAlwaysOnTop(true)
-    modal:addToUIManager()
-end
-
-local function onUninstallConfirm(target, button)
-    if button.internal ~= "YES" then return end
-    local ok, started = pcall(function() return perf():pzoptUninstall() end)
-    if ok and started then
-        MainScreen.instance:quitToDesktop()
-        return
-    end
-    local msg = ""
-    pcall(function() msg = perf():getPzoptUninstallMessage() end)
-    showUninstallResult("Nothing was removed:\n" .. tostring(msg):gsub(": ", ":\n"))
-end
-
--- The home page's uninstall button (made by buildPage): the confirmation dialog, disabled in a world or when
--- pzopt.Uninstall says it cannot run.
-local function setupUninstallButton(self, b)
-    b.onclick = function()
-        if MainScreen.instance and MainScreen.instance.inGame then return end
-        local w, h = 420, 200
-        local modal = ISModalDialog:new(getCore():getScreenWidth() / 2 - w / 2, getCore():getScreenHeight() / 2 - h / 2, w, h,
-            UNINSTALL_CONFIRM, true, self, onUninstallConfirm)
-        modal:initialise()
-        modal:setCapture(true)
-        modal:setAlwaysOnTop(true)
-        modal:addToUIManager()
-        self.pzoptUninstallModal = modal
-        local joypadData = JoypadState.getMainMenuJoypad()
-        if joypadData then
-            modal.prevFocus = joypadData.focus
-            joypadData.focus = modal
-            updateJoypadFocus(joypadData)
-        end
-    end
-    self.pzoptUninstallButton = b
-    local why = ""
-    pcall(function() why = perf():getPzoptUninstallUnavailable() end)
-    if MainScreen.instance and MainScreen.instance.inGame then
-        why = "go back to the main menu first (quitting from a world would skip the save)"
-    end
-    if why ~= "" then
-        b:setEnable(false)
-        b.tooltip = UNINSTALL_TIP .. " Not available now: " .. why .. "."
-    else
-        b.tooltip = UNINSTALL_TIP
-    end
-end
-
--- devUninstallDrive (dev rig, Config key; harness/uninstall-e2e.sh): once the main menu is up, the real controls in
--- order: Options, the Optimizations tab, Uninstall PZ Optimization..., Yes. Each step is logged ("[pzopt-e2e] ...") and
--- held for a few seconds so the script can take a screenshot; Yes starts pzopt.Uninstall and quits the game.
-local uninstallDrive = { step = 0, at = 0 }
-local function uninstallDriveTick()
-    local d = uninstallDrive
-    if d.step < 0 then return end
-    if d.step == 0 then
-        local ok, v = pcall(function() return getPerformance():getPzoptOption("devUninstallDrive") end)
-        if not ok or v ~= "true" then d.step = -1; return end
-        d.step, d.at = 1, getTimestampMs() + 4000
-        return
-    end
-    if getTimestampMs() < d.at then return end
-    local ms = MainScreen.instance
-    if not ms or ms.inGame then return end
-    local mo = ms.mainOptions
-    if d.step == 1 then
-        if not ms.optionsOption then return end
-        MainScreen.onMenuItemMouseDownMainMenu(ms.optionsOption, 0, 0)
-        d.step, d.at = 2, getTimestampMs() + 1500
-    elseif d.step == 2 then
-        if not mo or not mo.tabs then return end
-        mo.tabs:activateView(TAB)
-        PzoptOptionsNavigate(mo, "home")
-        d.step, d.at = 3, getTimestampMs() + 1500
-    elseif d.step == 3 then
-        local b = mo and mo.pzoptUninstallButton
-        if not b then
-            print("[pzopt-e2e] uninstall drive: no Uninstall button on the " .. TAB .. " tab")
-            d.step = -1
-            return
-        end
-        print("[pzopt-e2e] tab shown: button \"" .. tostring(b.title) .. "\" enabled=" .. tostring(b.enable) .. " visible="
-            .. tostring(b:isReallyVisible()) .. " tooltip=" .. tostring(b.tooltip))
-        getCore():TakeFullScreenshot("pzopt-e2e-A-tab.png")
-        d.step, d.at = 4, getTimestampMs() + 3000
-    elseif d.step == 4 then
-        mo.pzoptUninstallButton.onclick()
-        d.step, d.at = 5, getTimestampMs() + 1500
-    elseif d.step == 5 then
-        local m = mo.pzoptUninstallModal
-        if not m then
-            print("[pzopt-e2e] uninstall drive: the button opened no dialog")
-            d.step = -1
-            return
-        end
-        print("[pzopt-e2e] dialog shown: " .. string.gsub(tostring(m.text), "\n", " | "))
-        getCore():TakeFullScreenshot("pzopt-e2e-A-dialog.png")
-        d.step, d.at = 6, getTimestampMs() + 3000
-    elseif d.step == 6 then
-        local m = mo.pzoptUninstallModal
-        d.step = -1
-        print("[pzopt-e2e] pressing Yes at " .. getTimestampMs())
-        m:onClick(m.yes)
-    end
-end
-Events.OnFETick.Add(function() pcall(uninstallDriveTick) end)
 
 -- Export / import (2026-10-01), on each of the three tabs, covering all three: the settings as `key=value` lines, only
 -- those that differ from the build's default (an absent key is the default, as in options.ini), under one comment line
@@ -3239,49 +2758,221 @@ local IMPORT_TIP = "Sets the controls of the Optimizations, Enhancements and Pro
     .. "settings). Settings the text does not list go back to the build's defaults. Nothing is saved until you press Apply "
     .. "or Accept."
 
--- The open dialog is kept in self.pzoptTransferModal (the harness's options_io rig closes it).
-local function showMessage(self, text)
-    local w = 480
-    local shown = getTextManager():WrapText(UIFont.Small, text, w - 40)
-    local modal = ISModalDialog:new(getCore():getScreenWidth() / 2 - w / 2, getCore():getScreenHeight() / 2 - 80, w, 160,
-        shown, false, nil, nil)
-    modal:initialise()
-    modal:setCapture(true)
-    modal:setAlwaysOnTop(true)
-    modal:addToUIManager()
-    self.pzoptTransferModal = modal
-    local joypadData = JoypadState.getMainMenuJoypad()
-    if joypadData then
-        modal.prevFocus = joypadData.focus
-        joypadData.focus = modal
-        updateJoypadFocus(joypadData)
+-- "Install DLSS files": the natives DLSS needs that a release does not carry (pzopt.UpscalerDeps, Linux x86-64 with
+-- an RTX card). The button's title follows the Java side's state.
+local DEPS_TITLES = {
+    missing = "Install DLSS files", error = "Retry the DLSS files download", checking = "Checking the DLSS files...",
+    idle = "Checking the DLSS files...", downloading = "Downloading the DLSS files 100 %", installing = "Installing the DLSS files...",
+    done = "DLSS files installed: restart the game", installed = "DLSS files installed", unsupported = "DLSS files: not available here",
+}
+local DEPS_TIP = "Downloads the two native files NVIDIA DLSS needs into the game's natives folder (the pzopt shim and NVIDIA's "
+    .. "DLSS library; releases do not carry them) and checks each one's checksum. Linux or Windows with an NVIDIA RTX card; "
+    .. "FSR 1.0 needs no files. Then pick \"Upscaler\": dlss and restart the game."
+
+-- ---------------------------------------------------------------------------------------------------
+-- PzoptSettings (2026-10-18): what the main menu's PZ OPTIMIZATION screen reaches here. No UI: a value goes through
+-- PerformanceSettings and is saved at once (pzopt.UserOptions; a live key is in force at once), so the presets, reset and
+-- import change the settings themselves, not controls waiting for an Apply.
+PzoptSettings = {}
+local API = PzoptSettings
+API.MASTERS = { MASTER, ENHANCEMENTS_MASTER, PROFILER_MASTER } -- by page: 1 Optimizations, 2 Enhancements, 3 Profiler
+API.MASTER_CLIPS = { enabled = "drive", enhancementsEnabled = "upscale", profilerEnabled = "overlay" }
+API.GROUP_NAMES = { "Optimizations", ENHANCEMENTS_TAB, PROFILER_TAB }
+API.CATS = CATS
+API.AXES = AXES
+API.CLIP_W, API.CLIP_H = CLIP_W, CLIP_H
+API.RESTART_NOTE, API.LIVE_NOTE = RESTART_NOTE, LIVE_NOTE
+API.EXPORT_TITLE, API.EXPORT_TIP, API.IMPORT_TITLE = EXPORT_TITLE, EXPORT_TIP, IMPORT_TITLE
+API.UNINSTALL_TITLE, API.UNINSTALL_TIP, API.UNINSTALL_CONFIRM = UNINSTALL_TITLE, UNINSTALL_TIP, UNINSTALL_CONFIRM
+API.DEPS_TIP = DEPS_TIP
+API.classes = optionClasses
+API.date = optionDate
+API.clipsOn = clipsOn
+API.setClipsOn = setClipsOn
+function API.clipsGen() return CLIPS.gen end
+function API.effects(key) return EFFECTS[key] or {} end
+-- how many of the chart's rows a setting moves (the chart draws only those; none = no chart)
+function API.effectRows(key)
+    local fx, n = EFFECTS[key] or {}, 0
+    for _, axis in ipairs(AXES) do
+        if (fx[axis.id] or 0) ~= 0 then n = n + 1 end
     end
+    return n
+end
+function API.compatReason(key) return compatReason(key) end
+
+-- the clip a setting shows: its key's own, else its section's, else the highway drive
+function API.clipOf(key, section)
+    return API.MASTER_CLIPS[key] or KEY_CLIP[key] or (section and section.clip) or "drive"
 end
 
--- A page's controls, its master switch first; every page is built first (the import sets them all).
-local function pageOptions(self, page)
-    ensurePageBuilt(self, page.tab)
-    allRows(self)
+-- the two GIFs of a clip, their captions and the line under them
+function API.clipInfo(clip)
+    local sides = clipSides(clip)
+    local same = sides == CLIP_SIDES.overlay and ". Same save, route and machine, a crop of the top-left corner at the Large overlay font."
+        or CLIP_NOTES[clip] or ". Same save, route and machine; the number is that run's live frame rate."
+    return { stock = clipPath(clip, "stock"), opt = clipPath(clip, "opt"), sides = sides, title = (CLIP_TITLES[clip] or clip) .. same }
+end
+
+-- Simple (1) / Advanced (2) / Everything (3): the layout's `simple` list, its expert keys and patterns, the rest Advanced
+local TIER
+function API.tier(key)
+    if not TIER then
+        local L = PzoptSettingsLayout or {}
+        TIER = { simple = {}, expert = {}, patterns = L.expertPatterns or {} }
+        for _, k in ipairs(L.simple or {}) do TIER.simple[k] = true end
+        for _, k in ipairs(L.expertKeys or {}) do TIER.expert[k] = true end
+    end
+    if TIER.simple[key] then return 1 end
+    if TIER.expert[key] then return 3 end
+    for _, pattern in ipairs(TIER.patterns) do
+        if string.find(key, pattern) then return 3 end
+    end
+    return 2
+end
+
+-- the colour row (occludedOutlineColour) and the zoom curve (zoomEase)
+API.colourHex, API.colourRGB = colourHex, colourRGB
+API.bezier = { axes = BEZIER_AXES, parse = parseBezier, same = sameBezier, format = formatBezier }
+
+-- Search: rows are { entry, section = { title }, cat = { title }, sub = { title } }; the index fills one row per step (the
+-- screen's idle frames), search() finishes it first
+function API.searchIndex(rows) return indexNew(rows) end
+function API.searchStep(index) return indexStep(index) end
+function API.search(index, query) return search(indexReady(index), query) end
+
+-- ---- writing settings
+
+local function sectionsOf(page)
+    return ({ SECTIONS, ENHANCEMENT_SECTIONS, PROFILER_SECTIONS })[page] or {}
+end
+
+-- every key a page lists, its sections in order
+function API.pageKeys(page)
     local t = {}
-    if self[page.masterField] then table.insert(t, self[page.masterField]) end
-    for _, option in ipairs(self[page.options] or {}) do table.insert(t, option) end
+    for _, sec in ipairs(sectionsOf(page)) do
+        for _, e in ipairs(sec.entries or {}) do
+            if e.key then table.insert(t, e.key) end
+        end
+    end
     return t
 end
 
--- What the export writes for a control: nil = the build's default (left out).
-local function exportValue(option)
-    local p = perf()
-    local key = option.pzoptKey
-    if p:getPzoptOptionPinnedBy(key) ~= "" then
-        local saved = p:getPzoptOptionSaved(key)
-        return saved ~= "" and saved or nil
+-- the category switches of a page (the layout's `master` fields this build knows)
+function API.catMasters(page)
+    local t = {}
+    for _, g in ipairs((PzoptSettingsLayout or {}).groups or {}) do
+        if g.page == page then
+            for _, c in ipairs(g.cats or {}) do
+                if c.master and perf():isPzoptOptionKnown(c.master) then table.insert(t, c.master) end
+            end
+        end
     end
-    local v = option:pzoptCurrent()
-    if string.sub(v, -10) == " (default)" or v == p:getPzoptOptionDefault(key) then return nil end
-    -- mod compatibility's value for this launch is not a setting of the player's (left out unless they changed it)
-    if option.pzoptShown ~= nil and v == option.pzoptShown and compatDecides(key) then return nil end
-    return v
+    return t
 end
+
+-- Saves one value ("" / nil = the build's default; a choice equal to the default is kept as a choice while mod
+-- compatibility decides the key, else the mod's value would come back). Pinned keys are left. True when it changed.
+function API.set(key, value)
+    local p = perf()
+    if not p:isPzoptOptionKnown(key) or p:getPzoptOptionPinnedBy(key) ~= "" then return false end
+    value = value or ""
+    if value ~= "" and value == p:getPzoptOptionDefault(key) and not compatDecides(key) then value = "" end
+    local before = p:getPzoptOptionSaved(key)
+    if before == value then return false end
+    p:setPzoptOption(key, value)
+    return true
+end
+
+-- Back to the build's defaults (mod compatibility's value where it decides); returns how many changed.
+function API.resetKeys(keys)
+    local n = 0
+    for _, k in ipairs(keys) do
+        if API.set(k, "") then n = n + 1 end
+    end
+    return n
+end
+
+-- The stock Display options a preset sets (PROFILES' `stock` / `stockLabels`, the combo indices of MainOptions.lua),
+-- applied directly and saved to options.ini.
+local STOCK_SET = {
+    lightingFPS = function(i) local t = { 5, 10, 15, 20, 25, 30, 45, 60 } if t[i] then getPerformance():setLightingFPS(t[i]) return "lighting " .. t[i] .. "/s" end end,
+    UIRenderFPS = function(i) local t = { 120, 60, 30, 25, 20, 15, 10 } if t[i] then getCore():setOptionUIRenderFPS(t[i]) return "UI " .. t[i] .. " fps" end end,
+    texcompress = function(on)
+        if not getCore():allowOptionTextureCompression() then return nil end
+        getCore():setOptionTextureCompression(on)
+        return "texture compression " .. (on and "on" or "off") .. " (next launch)"
+    end,
+    vsync = function(on) getCore():setOptionVSync(on) return "vsync " .. (on and "on" or "off") end,
+    framerate = function(label) local fps = tonumber(label) if fps then getPerformance():setGameFramerate(fps) return "frame limit " .. fps end end,
+}
+
+local function applyStock(profile)
+    local done = {}
+    for name, v in pairs(profile.stock or {}) do
+        local f = STOCK_SET[name]
+        local ok, what = pcall(function() return f and f(v) end)
+        if ok and what then table.insert(done, what)
+        elseif not ok then print("[pzopt] settings: preset could not set stock option " .. name .. ": " .. tostring(what)) end
+    end
+    for name, label in pairs(profile.stockLabels or {}) do
+        local f = STOCK_SET[name]
+        local ok, what = pcall(function() return f and f(label) end)
+        if ok and what then table.insert(done, what) end
+    end
+    if #done > 0 then pcall(function() getCore():saveOptions() end) end
+    table.sort(done)
+    return done
+end
+
+-- The presets of the home page: Recommended, Stock game, then PROFILES. apply() saves and returns a summary line.
+local RECOMMENDED_TIP = "Turns the Optimizations master switch and every category switch of it on and puts every Optimizations "
+    .. "setting back to the build's default on this machine. Enhancements and Profiler are not changed. " .. RESTART_NOTE
+local STOCK_TIP = "Turns the Optimizations master switch off: the game runs its original code everywhere, as if the overrides were not "
+    .. "installed. The settings are kept for when you turn it on again; the Profiler and the performance overlay are not affected. "
+    .. RESTART_NOTE
+function API.presets()
+    local list = {
+        { title = "Recommended (every optimization on)", tip = RECOMMENDED_TIP, apply = function()
+            local n = (API.set("enabled", "") and 1 or 0) + API.resetKeys(API.catMasters(1)) + API.resetKeys(API.pageKeys(1))
+            return n .. (n == 1 and " setting" or " settings") .. " changed: every optimization at the build's default."
+        end },
+        { title = "Stock game (every optimization off)", tip = STOCK_TIP, apply = function()
+            local changed = API.set("enabled", "false")
+            return changed and "Optimizations switched off: the next launch is the stock game's code." or "Optimizations were already off."
+        end },
+    }
+    for _, profile in ipairs(PROFILES) do
+        local pr = profile
+        table.insert(list, { title = pr.button, tip = pr.tip .. " " .. RESTART_NOTE, apply = function()
+            local n = (API.set("enabled", "") and 1 or 0) + API.resetKeys(API.catMasters(1))
+            for _, k in ipairs(API.pageKeys(1)) do
+                if API.set(k, pr.values[k]) then n = n + 1 end
+            end
+            -- the Enhancements: a preset that picks an upscaler or brings a Visuals set turns that master on; the upscaling
+            -- section follows the preset's values, a Visuals set decides every other Enhancements setting too
+            if pr.values.upscaler or pr.enhancements then
+                if API.set("enhancementsEnabled", "") then n = n + 1 end
+                n = n + API.resetKeys(API.catMasters(2))
+            end
+            for _, sec in ipairs(ENHANCEMENT_SECTIONS) do
+                for _, e in ipairs(sec.entries or {}) do
+                    if sec.profiles then
+                        if API.set(e.key, pr.values[e.key]) then n = n + 1 end
+                    elseif pr.enhancements then
+                        if API.set(e.key, pr.enhancements[e.key]) then n = n + 1 end
+                    end
+                end
+            end
+            local stock = applyStock(pr)
+            return n .. (n == 1 and " setting" or " settings") .. " changed"
+                .. (#stock > 0 and ("; Display options: " .. table.concat(stock, ", ")) or "") .. "."
+        end })
+    end
+    return list
+end
+
+-- ---- export / import
 
 -- `key=value` per line or between ';', spaces trimmed; '#' / '!' comments and [headings] skipped; a -Dpzopt. or pzopt.
 -- prefix is dropped (a pzopt.properties line pastes too). The last value of a key wins. Returns values, keys in order.
@@ -3302,37 +2993,15 @@ local function parseSettings(text)
     end
     return values, keys
 end
+API.parseSettings = parseSettings
 
-local function knownCount(text)
+function API.knownCount(text)
     local _, keys = parseSettings(text)
     local n = 0
     for _, k in ipairs(keys) do
         if perf():isPzoptOptionKnown(k) then n = n + 1 end
     end
     return n
-end
-
-local function exportSettings(self)
-    local lines, count = {}, 0
-    for _, page in ipairs(PAGES) do
-        local rows = {}
-        for _, option in ipairs(pageOptions(self, page)) do
-            local v = exportValue(option)
-            if v then table.insert(rows, option.pzoptKey .. "=" .. v) end
-        end
-        table.sort(rows)
-        table.insert(lines, "# " .. page.tab .. (#rows == 0 and ": all at the defaults" or ""))
-        for _, row in ipairs(rows) do table.insert(lines, row) end
-        count = count + #rows
-    end
-    local p = perf()
-    local text = p:getPzoptSettingsExportText(table.concat(lines, "\n") .. "\n")
-    Clipboard.setClipboard(text)
-    local path = p:pzoptSettingsExportWrite(text)
-    local what = count == 0 and "Every setting is at the build's default: the text says so."
-        or (count .. (count == 1 and " setting differs" or " settings differ") .. " from the build's defaults.")
-    showMessage(self, "Settings copied to the clipboard. " .. what .. "\n\n"
-        .. (path ~= "" and ("Also saved to " .. path .. ".") or "The file Zomboid/pzopt/settings-export.ini could not be written (see console.txt)."))
 end
 
 -- Up to `max` names, then "and N more".
@@ -3344,1890 +3013,195 @@ local function listSome(names, max)
     return s
 end
 
-local function importSettings(self, text)
+-- the keys of a group page in the export's order: its master, its category switches, its settings
+local function exportKeys(page)
+    local t = { API.MASTERS[page].key }
+    for _, k in ipairs(API.catMasters(page)) do table.insert(t, k) end
+    for _, k in ipairs(API.pageKeys(page)) do table.insert(t, k) end
+    return t
+end
+
+-- what the export writes for a key: the player's saved choice, nil when it is the build's default
+local function exportValue(key)
+    local p = perf()
+    local saved = p:getPzoptOptionSaved(key)
+    if saved == "" or saved == p:getPzoptOptionDefault(key) then return nil end
+    return saved
+end
+
+-- Export settings: the saved choices that differ from the build's defaults, a heading per group, to the clipboard and
+-- Zomboid/pzopt/settings-export.ini. Returns the message to show.
+function API.exportSettings()
+    local lines, count, seen = {}, 0, {}
+    for page = 1, 3 do
+        local rows = {}
+        for _, key in ipairs(exportKeys(page)) do
+            if not seen[key] then
+                seen[key] = true
+                local v = exportValue(key)
+                if v then table.insert(rows, key .. "=" .. v) end
+            end
+        end
+        table.sort(rows)
+        table.insert(lines, "# " .. API.GROUP_NAMES[page] .. (#rows == 0 and ": all at the defaults" or ""))
+        for _, row in ipairs(rows) do table.insert(lines, row) end
+        count = count + #rows
+    end
+    local p = perf()
+    local text = p:getPzoptSettingsExportText(table.concat(lines, "\n") .. "\n")
+    Clipboard.setClipboard(text)
+    local path = p:pzoptSettingsExportWrite(text)
+    local what = count == 0 and "Every setting is at the build's default: the text says so."
+        or (count .. (count == 1 and " setting differs" or " settings differ") .. " from the build's defaults.")
+    return "Settings copied to the clipboard. " .. what .. " "
+        .. (path ~= "" and ("Also saved to " .. path .. ".") or "The file Zomboid/pzopt/settings-export.ini could not be written (see console.txt).")
+end
+
+-- settings text: a known key, or an export of nothing but defaults (its "# Optimizations" heading and no key lines)
+local function isSettingsText(text)
+    return API.knownCount(text) > 0 or string.find(text or "", "# Optimizations", 1, true) ~= nil
+end
+
+-- the text an import starts from: the clipboard when it holds settings, else the last export's file
+function API.importSource()
+    local text = Clipboard.getClipboard() or ""
+    if not isSettingsText(text) then
+        text = perf():getPzoptSettingsExportFile()
+        if not isSettingsText(text) then text = "" end
+    end
+    return text
+end
+
+-- Import settings: the listed settings to their value, every other one back to the build's default, pinned ones left.
+-- Saved at once. Returns the message to show.
+function API.importSettings(text)
+    if not isSettingsText(text) then
+        return "No settings found in the text: nothing was changed. Paste the text Export settings copied (key=value lines, "
+            .. "e.g. treesInChunkTexture=false).", false
+    end
     local values, keys = parseSettings(text)
     local p = perf()
-    local onTabs, set, reset, pinned, invalid = {}, 0, 0, {}, {}
-    for _, page in ipairs(PAGES) do
-        for _, option in ipairs(pageOptions(self, page)) do
-            local key = option.pzoptKey
-            onTabs[key] = true
-            local v = values[key]
-            if p:getPzoptOptionPinnedBy(key) ~= "" then
-                if v then table.insert(pinned, key) end
-            else
-                if v and option.pzoptBool and v ~= "true" and v ~= "false" then
-                    table.insert(invalid, key .. "=" .. v)
-                    v = nil
-                end
-                local before = exportValue(option)
-                option:pzoptSet(v)
-                option:invokeOnChangeEvent()
-                if v then
-                    set = set + 1
-                elseif before then
-                    reset = reset + 1
+    local listed, set, reset, pinned, invalid, seen = {}, 0, 0, {}, {}, {}
+    for page = 1, 3 do
+        for _, key in ipairs(exportKeys(page)) do
+            if not seen[key] then
+                seen[key] = true
+                listed[key] = true
+                local v = values[key]
+                if p:getPzoptOptionPinnedBy(key) ~= "" then
+                    if v then table.insert(pinned, key) end
+                else
+                    local def = p:getPzoptOptionDefault(key)
+                    if v and (def == "true" or def == "false") and v ~= "true" and v ~= "false" then
+                        table.insert(invalid, key .. "=" .. v)
+                        v = nil
+                    end
+                    local before = exportValue(key)
+                    if API.set(key, v or "") or v then
+                        if v then set = set + 1 elseif before then reset = reset + 1 end
+                    end
                 end
             end
         end
     end
     local ignored = {}
     for _, k in ipairs(keys) do
-        if not onTabs[k] then table.insert(ignored, k) end
+        if not listed[k] then table.insert(ignored, k) end
     end
     local msg = set .. (set == 1 and " setting" or " settings") .. " imported"
-        .. (reset > 0 and (", " .. reset .. " more back to the build's default") or "") .. ". Press Apply or Accept to save them."
-    if #pinned > 0 then
-        msg = msg .. "\n\nPinned by pzopt.properties or -D here, left as they are: " .. listSome(pinned, 6) .. "."
-    end
-    if #invalid > 0 then
-        msg = msg .. "\n\nNot a true / false value, set to the default: " .. listSome(invalid, 6) .. "."
-    end
-    if #ignored > 0 then
-        msg = msg .. "\n\nNot settings of this version, ignored: " .. listSome(ignored, 6) .. "."
-    end
-    showMessage(self, msg)
+        .. (reset > 0 and (", " .. reset .. " more back to the build's default") or "") .. ". Saved; the Optimizations apply on the next launch."
+    if #pinned > 0 then msg = msg .. " Pinned by pzopt.properties or -D here, left as they are: " .. listSome(pinned, 6) .. "." end
+    if #invalid > 0 then msg = msg .. " Not a true / false value, set to the default: " .. listSome(invalid, 6) .. "." end
+    if #ignored > 0 then msg = msg .. " Not settings of this version, ignored: " .. listSome(ignored, 6) .. "." end
+    return msg, true
 end
 
-local function onImportOk(self, button)
-    if button.internal ~= "OK" then return end
-    local text = button.parent.entry:getText()
-    if knownCount(text) == 0 then
-        showMessage(self, "No settings found in the text: nothing was changed. Paste the text Export settings copied "
-            .. "(key=value lines, e.g. treesInChunkTexture=false).")
-        return
+-- ---- uninstall, the DLSS files
+
+-- why the uninstall cannot run now ("" = it can): in a world the quit would skip the save
+function API.uninstallUnavailable()
+    if MainScreen.instance and MainScreen.instance.inGame then
+        return "go back to the main menu first (quitting from a world would skip the save)"
     end
-    importSettings(self, text)
+    local why = ""
+    pcall(function() why = perf():getPzoptUninstallUnavailable() end)
+    return why
 end
 
-local function openImportDialog(self)
-    local text = Clipboard.getClipboard() or ""
-    if knownCount(text) == 0 then
-        text = perf():getPzoptSettingsExportFile()
-        if knownCount(text) == 0 then text = "" end
-    end
-    -- ISTextBox puts the box at half the starting height, below the title bar
-    local w, h = math.min(720, getCore():getScreenWidth() - 40), 2 * (MainOptions.style.buttonHeight + 20)
-    local modal = ISTextBox:new(getCore():getScreenWidth() / 2 - w / 2, getCore():getScreenHeight() / 2 - 200, w, h,
-        "Paste exported settings (settings not listed go back to the defaults):", text, self, onImportOk)
-    modal:setMultipleLine(true)
-    modal:setNumberOfLines(12)
-    modal:setMaxLines(100000)
-    modal:initialise()
-    modal:setCapture(true)
-    modal:setAlwaysOnTop(true)
-    modal:addToUIManager()
-    self.pzoptTransferModal = modal
-    local joypadData = JoypadState.getMainMenuJoypad()
-    if joypadData then
-        modal.prevFocus = joypadData.focus
-        joypadData.focus = modal
-        updateJoypadFocus(joypadData)
-    end
+-- starts pzopt.Uninstall (the caller quits the game when it started); false + why when it did not
+function API.uninstall()
+    local ok, started = pcall(function() return perf():pzoptUninstall() end)
+    if ok and started then return true, "" end
+    local msg = ""
+    pcall(function() msg = perf():getPzoptUninstallMessage() end)
+    return false, "Nothing was removed: " .. tostring(msg)
 end
 
--- "Install DLSS files": the natives DLSS needs that a release does not carry (pzopt.UpscalerDeps, Linux x86-64 with
--- an RTX card). The button's title follows the Java side's state.
-local DEPS_TITLES = {
-    missing = "Install DLSS files", error = "Retry the DLSS files download", checking = "Checking the DLSS files...",
-    idle = "Checking the DLSS files...", downloading = "Downloading the DLSS files 100 %", installing = "Installing the DLSS files...",
-    done = "DLSS files installed: restart the game", installed = "DLSS files installed", unsupported = "DLSS files: not available here",
-}
-local DEPS_TIP = "Downloads the two native files NVIDIA DLSS needs into the game's natives folder (the pzopt shim and NVIDIA's "
-    .. "DLSS library; releases do not carry them) and checks each one's checksum. Linux or Windows with an NVIDIA RTX card; "
-    .. "FSR 1.0 needs no files. Then pick \"Upscaler\": dlss and restart the game."
-
-local function setupUpscalerDepsButton(self, b)
-    b.onclick = function()
-        local s = perf():getPzoptUpscalerDepsState()
-        if s == "missing" or s == "error" then perf():pzoptUpscalerDepsInstall() end
-    end
-    b:setEnable(false)
-    pcall(function() perf():pzoptUpscalerDepsCheck() end)
-    local stockUpdate = b.update
-    b.update = function(o)
-        stockUpdate(o)
-        local ok, s = pcall(function() return perf():getPzoptUpscalerDepsState() end)
-        if not ok then return end
-        local title = DEPS_TITLES[s] or DEPS_TITLES.checking
-        if s == "downloading" then
-            title = "Downloading the DLSS files " .. tostring(perf():getPzoptUpscalerDepsProgress()) .. " %"
-        end
-        if o.title ~= title then
-            o:setTitle(title)
-            o:setWidthToTitle()
-        end
-        local enable = s == "missing" or s == "error"
-        if o.enable ~= enable then o:setEnable(enable) end
-        local msg = perf():getPzoptUpscalerDepsMessage()
-        o.tooltip = msg ~= "" and (DEPS_TIP .. " Now: " .. msg .. ".") or DEPS_TIP
-    end
+-- the DLSS files' state: its button title, whether pressing it installs, the tip with the Java side's message
+function API.deps()
+    local ok, s = pcall(function() return perf():getPzoptUpscalerDepsState() end)
+    if not ok then return { title = DEPS_TITLES.unsupported, enabled = false, tip = DEPS_TIP } end
+    local title = DEPS_TITLES[s] or DEPS_TITLES.checking
+    if s == "downloading" then title = "Downloading the DLSS files " .. tostring(perf():getPzoptUpscalerDepsProgress()) .. " %" end
+    local msg = ""
+    pcall(function() msg = perf():getPzoptUpscalerDepsMessage() end)
+    return { state = s, title = title, enabled = s == "missing" or s == "error", tip = msg ~= "" and (DEPS_TIP .. " Now: " .. msg .. ".") or DEPS_TIP }
+end
+function API.depsCheck() pcall(function() perf():pzoptUpscalerDepsCheck() end) end
+function API.depsInstall()
+    local s = API.deps().state
+    if s == "missing" or s == "error" then pcall(function() perf():pzoptUpscalerDepsInstall() end) end
 end
 
--- A group's settings back to the build's defaults, its master switch on (the Visuals and Tools "Reset" buttons, a
--- category's "Reset ... to defaults"). Only the controls change; Apply / Accept saves them.
-local function resetOptions(options, master)
-    if master then
-        master:pzoptReset()
-        master:invokeOnChangeEvent()
-    end
-    for _, option in ipairs(options) do
-        option:pzoptReset()
-        option:invokeOnChangeEvent()
-    end
-end
-
--- The three groups of settings, as the tabs they were until 2026-10-04: their sections, master switch, the MainOptions
--- fields holding their controls (the profile buttons, export / import and the harness read them) and the note on what
--- Apply does. `tab` names them in the exported text.
-PAGES = {
-    { tab = "Optimizations", sections = SECTIONS, master = MASTER, masterField = "pzoptMaster", masterClip = "drive",
-      options = "pzoptOptions",
-      footer = "Performance settings take effect on the next launch. File: Zomboid/pzopt/options.ini" },
-    { tab = ENHANCEMENTS_TAB, sections = ENHANCEMENT_SECTIONS, master = ENHANCEMENTS_MASTER, masterField = "pzoptEnhancementMaster",
-      masterClip = "upscale", options = "pzoptEnhancementOptions",
-      footer = "Visuals apply as soon as you press Apply; HDR output, per-pixel lighting, reflections, car glass, mirrors and relief on the next launch. File: Zomboid/pzopt/options.ini" },
-    { tab = PROFILER_TAB, sections = PROFILER_SECTIONS, master = PROFILER_MASTER, masterField = "pzoptProfilerMaster",
-      masterClip = "overlay", options = "pzoptProfilerOptions",
-      footer = "Tools apply as soon as you press Apply, no restart needed. File: Zomboid/pzopt/options.ini" },
-}
-
--- ---------------------------------------------------------------------------------------------------
--- The tab (2026-10-04): one "PZ Optimization" tab instead of Optimizations / Enhancements / Profiler.
---  Home: presets, the three groups (Performance, Visuals, Tools) with their master switches and one tile per category,
---  "Fix a problem", export / import / uninstall. A category: the sidebar (fixed, every category), its subcategory tabs
---  (Overview first; the Visuals categories show each subcategory as a card), its settings. "Fix a problem": what players
---  report, why, and the settings that help. Typing in the search box lists the best matches of every category.
---  Simple / Advanced / Everything filters what a category shows (tiers in pzopt_optimizations_layout.lua).
---  Every setting is built once as a row: its control, its label to the right, and under the label a line with its
---  tags and the first sentence of its description. relayout places the items of the page shown (rows, tiles, headings,
---  buttons), hides the rest and rebuilds the controller rows in display order; the preview panel stays on the right.
-
-local GAP = 24
--- the page shown, kept for the session
-local NAV = { kind = "home", cat = nil, sub = 0, level = "simple", problem = 1, back = "home" }
-local VIEWS = { { id = "simple", title = "Simple" }, { id = "advanced", title = "Advanced" }, { id = "everything", title = "Everything" } }
-local LEVEL = { simple = 1, advanced = 2, everything = 3 }
-local VIEW_TIPS = {
-    simple = "The settings worth knowing about: the features and the main switches.",
-    advanced = "Also the settings that change how something is done; the defaults are what was measured best.",
-    everything = "Also the tuning numbers (budgets, thread counts, intervals). Change them to experiment.",
-}
-local C_HELP = { r = 0.85, g = 0.55, b = 0.95 }
-local C_AMBER = { r = 0.98, g = 0.72, b = 0.30 }
-local C_EXPERT = { r = 0.95, g = 0.45, b = 0.40 }
-local C_ADV = { r = 0.45, g = 0.68, b = 0.98 }
-
-local function rgb(t) return { r = t[1], g = t[2], b = t[3] } end
-local function fontH(font) return getTextManager():getFontHeight(font) end
-local function textW(font, s) return getTextManager():MeasureStringX(font, s) end
-
-local function clipText(font, s, w)
-    if textW(font, s) <= w then return s end
-    while #s > 1 and textW(font, s .. "...") > w do s = string.sub(s, 1, #s - 1) end
-    return s .. "..."
-end
-
--- greedy word wrap measured with MeasureStringX (the game's WrapText sometimes left a line wider than `w`, so a wrapped
--- setting name still came out cut with "..." at 1920 x 1080)
-local function wrapLines(font, s, w)
-    local out, line = {}, ""
-    for word in string.gmatch(s or "", "%S+") do
-        local t = line == "" and word or (line .. " " .. word)
-        if line ~= "" and textW(font, t) > w then
-            table.insert(out, line)
-            line = word
-        else
-            line = t
-        end
-    end
-    if line ~= "" then table.insert(out, line) end
-    return out
-end
-
-local function firstSentence(s)
-    s = s or ""
-    local i = string.find(s, "%. ")
-    if i then return string.sub(s, 1, i) end
-    return s
-end
-
--- the part of a section title in brackets: "Ambient occlusion (soft shading ...)" -> "soft shading ..."
-local function bracketed(title)
-    return title and string.match(title, "%((.-)%)%s*$")
-end
-
-local TIER
-local function tierOf(key)
-    if not TIER then
-        local L = PzoptSettingsLayout or {}
-        TIER = { simple = {}, expert = {}, patterns = L.expertPatterns or {} }
-        for _, k in ipairs(L.simple or {}) do TIER.simple[k] = true end
-        for _, k in ipairs(L.expertKeys or {}) do TIER.expert[k] = true end
-    end
-    if TIER.simple[key] then return 1 end
-    if TIER.expert[key] then return 3 end
-    for _, pattern in ipairs(TIER.patterns) do
-        if string.find(key, pattern) then return 3 end
-    end
-    return 2
-end
-
--- the control says something other than the build's default
-local function rowChanged(row)
-    local ok, v = pcall(rowCurrent, row)
-    if not ok or not v then return false end
-    if string.sub(v, -10) == " (default)" then return false end
-    return v ~= perf():getPzoptOptionDefault(row.entry.key)
-end
-
-local function groupOff(group)
-    local m = group.master
-    return m ~= nil and m.option:pzoptCurrent() == "false"
-end
-
--- A category's status for its tile, recomputed twice a second: "Recommended" / "N changed", on Visuals "N on" / "Off".
-local function catStatus(cat)
-    local now = getTimestampMs()
-    if cat.statusAt and now - cat.statusAt < 500 then return cat.status, cat.statusC end
-    local changed, on = 0, 0
-    for _, row in ipairs(cat.rows) do
-        if rowChanged(row) then
-            changed = changed + 1
-            if not row.entry.choices and not row.entry.colour and not row.entry.bezier and rowCurrent(row) == "true" then on = on + 1 end
-        end
-    end
-    local status, c
-    if groupOff(cat.group) then
-        status, c = "Switched off", C_DIM
-    elseif cat.group.cards then
-        if on > 0 then status, c = on .. " on", C_AMBER
-        elseif changed > 0 then status, c = changed .. " changed", C_AMBER
-        else status, c = "Off", C_DIM end
-    elseif changed > 0 then
-        status, c = changed .. " changed", C_AMBER
-    else
-        status, c = "Recommended", C_OPT
-    end
-    cat.status, cat.statusC, cat.statusAt = status, c, now
-    return status, c
-end
-
-local function drawPill(o, x, y, text, c, filled)
-    local w, h = textW(UIFont.Small, text) + 12, fontH(UIFont.Small) + 2
-    o:drawRect(x, y, w, h, filled and 0.9 or 0.18, c.r, c.g, c.b)
-    o:drawRectBorder(x, y, w, h, 0.55, c.r, c.g, c.b)
-    if filled then
-        o:drawText(text, x + 6, y + 1, 0.05, 0.05, 0.05, 1, UIFont.Small)
-    else
-        o:drawText(text, x + 6, y + 1, c.r, c.g, c.b, 1, UIFont.Small)
-    end
-    return w
-end
-
--- three squares filled to `n` (0..3), after a label; returns the x after them
-local function drawDots(o, x, y, label, n, c)
-    o:drawText(label, x, y, C_GREY.r, C_GREY.g, C_GREY.b, 1, UIFont.Small)
-    local dx = x + textW(UIFont.Small, label) + 6
-    local s = fontH(UIFont.Small) - 6
-    for i = 1, 3 do
-        if i <= n then
-            o:drawRect(dx + (i - 1) * (s + 3), y + 3, s, s, 0.9, c.r, c.g, c.b)
-        else
-            o:drawRect(dx + (i - 1) * (s + 3), y + 3, s, s, 0.12, 1, 1, 1)
-        end
-    end
-    return dx + 3 * (s + 3) + 12
-end
-
--- The line under a setting's label: its tags (Advanced / Expert, changed, next launch, pinned, mod compatibility),
--- the first sentence of its description, and on the search and problem pages where it lives.
-PzoptRowInfo = ISPanel:derive("PzoptRowInfo")
-
-function PzoptRowInfo:new(x, y, w, h, row)
-    local o = ISPanel.new(self, x, y, w, h)
-    o.background = false
-    o.row = row
-    return o
-end
-
-function PzoptRowInfo:onMouseWheel(del) return false end
-function PzoptRowInfo:prerender() end
-
-function PzoptRowInfo:render()
-    local row = self.row
-    local p = perf()
-    local lineH = fontH(UIFont.Small) + 2
-    local y = 0
-    -- the rest of a name that did not fit on its label's line
-    for _, l in ipairs(row.labelMore or {}) do
-        self:drawText(l, 0, y + 1, C_TEXT.r, C_TEXT.g, C_TEXT.b, 1, UIFont.Small)
-        y = y + lineH
-    end
-    local x = 0
-    if row.tier == 2 then x = x + drawPill(self, x, y, "ADVANCED", C_ADV) + 6 end
-    if row.tier == 3 then x = x + drawPill(self, x, y, "EXPERT", C_EXPERT) + 6 end
-    if rowChanged(row) then x = x + drawPill(self, x, y, "CHANGED", C_AMBER) + 6 end
-    if not row.entry.live then x = x + drawPill(self, x, y, "next launch", C_GREY) + 6 end
-    if p:getPzoptOptionPinnedBy(row.entry.key) ~= "" then x = x + drawPill(self, x, y, "pinned", C_GREY) + 6 end
-    if compatReason(row.entry.key) ~= "" then x = x + drawPill(self, x, y, "off for a mod", C_STOCK) + 6 end
-    local right = self.width
-    if (NAV.kind == "search" or NAV.kind == "problems") and row.cat then
-        -- where it lives, cut to leave the tags and a few words of the description their room
-        local where = clipText(UIFont.Small, row.cat.title .. "  >  " .. row.sub.title, math.max(40, right - x - 120))
-        local c = row.cat.group.c
-        local ww = textW(UIFont.Small, where)
-        self:drawText(where, right - ww, y + 1, c.r, c.g, c.b, 1, UIFont.Small)
-        right = right - ww - 16
-    end
-    if right - x > 30 then
-        self:drawText(clipText(UIFont.Small, firstSentence(row.entry.tip), right - x), x, y + 1,
-            C_GREY.r * 0.8, C_GREY.g * 0.8, C_GREY.b * 0.8, 1, UIFont.Small)
-    end
-end
-
--- A panel that only draws (headings, notes): `draw(o)` paints it.
-local function drawPanel(draw)
-    local o = ISPanel:new(0, 0, 10, 10)
-    o:initialise()
-    o.background = false
-    o.prerender = function() end
-    o.render = draw
-    o.onMouseWheel = function() return false end
-    return o
-end
-
--- A button that draws itself (tiles, tabs, headings): `draw(o, hot)`.
-local function drawButton(target, onclick, draw)
-    local b = ISButton:new(0, 0, 10, 10, "", target, onclick)
-    b:initialise()
-    b.prerender = function() end
-    b.render = function(o) draw(o, o:isMouseOver() or o.joypadFocused) end
-    return b
-end
-
--- ---------------------------------------------------------------------------------------------------
--- Placement
-
-local function placeRow(row, y, dx)
-    dx = dx or 0
-    for _, e in ipairs(row.elems) do
-        e.el:setX(e.x0 + dx)
-        e.el:setY(y + e.dy)
-        e.el:setVisible(true)
-    end
-    row.hidden = false
-    row.y = y
-end
-
-local function hideItem(item)
-    for _, e in ipairs(item.elems) do e.el:setVisible(false) end
-    item.hidden = true
-end
-
--- Off-screen elements draw nothing. The UI renders every child of a scrolled panel each frame and lets the stencil drop
--- what is outside (the old Optimizations tab cost ~8 ms a frame on an M1 Pro against ~0.5 ms for the rows on screen,
--- 2026-09-23). An element more than CULL_MARGIN px outside the scrolled band gets no-op prerender / render instead of
--- being hidden: hidden ones would drop out of the controller rows and ensureVisible could no longer scroll to them.
-local CULL_MARGIN = 50
-local NOOP = function() end
-
-local function cullElement(el, off)
-    if off == (el.pzoptCulled == true) then return end
-    if off then
-        el.pzoptCulled = true
-        el.pzoptOwnPrerender, el.pzoptOwnRender = rawget(el, "prerender"), rawget(el, "render")
-        el.prerender, el.render = NOOP, NOOP
-    else
-        el.pzoptCulled = nil
-        el.prerender, el.render = el.pzoptOwnPrerender, el.pzoptOwnRender
-        el.pzoptOwnPrerender, el.pzoptOwnRender = nil, nil
-    end
-end
-
-local function cullRows(S)
-    local panel = S.panel
-    local top = -panel:getYScroll()
-    local bottom = top + panel:getHeight()
-    if S.cullTop == top and S.cullBottom == bottom and S.cullGen == S.layoutGen then return end
-    S.cullTop, S.cullBottom, S.cullGen = top, bottom, S.layoutGen
-    for _, item in ipairs(S.items) do
-        if not item.hidden then
-            for _, e in ipairs(item.elems) do
-                local el = e.el
-                local y = el:getY()
-                cullElement(el, y + el:getHeight() < top - CULL_MARGIN or y > bottom + CULL_MARGIN)
-            end
-        end
-    end
-end
-
-local relayout
-
-local function crumbFor(S)
-    if NAV.kind == "home" then return "Home" end
-    if NAV.kind == "problems" then return "Help  >  Fix a problem" end
-    if NAV.kind == "search" then return "Search" end
-    local cat = S.tree.catById[NAV.cat]
-    if not cat then return "" end
-    local sub = cat.subs[NAV.sub]
-    return cat.group.title .. "  >  " .. cat.title .. "  >  " .. (sub and sub.title or "Overview")
-end
-
--- Shows a page: kind "home" | "cat" (cat id, sub index, 0 = Overview) | "problems". Leaves a search. The controller
--- focus goes to the page's first control, or stays on `keep` (the sidebar entry that opened the page).
-local function navigate(S, kind, cat, sub, keep)
-    NAV.kind = kind
-    if cat then NAV.cat = cat end
-    NAV.sub = sub or 0
-    if S.entry and S.entry:getText() ~= "" then
-        S.entry:setText("")
-        S.typed, S.lastText, S.hits = "", "", nil
-    end
-    S.panel:setYScroll(0)
-    relayout(S)
-    if S.panel.joyfocus then
-        local target = (keep and keep:isReallyVisible()) and keep or S.firstJoy
-        if target then S.panel:setJoypadFocus(target, JoypadState.getMainMenuJoypad()) end
-    end
-end
-
-local function setLevel(S, level)
-    NAV.level = level
-    relayout(S)
-end
-
-local function runSearch(S, text)
-    local hits, n = nil, 0
-    if text and string.match(text, "%w") then
-        hits, n = search(indexReady(S.index), text)
-    end
-    S.hits, S.hitCount, S.query = hits, n, text
-    if hits then
-        if NAV.kind ~= "search" then NAV.back = NAV.kind end
-        NAV.kind = "search"
-    elseif NAV.kind == "search" then
-        NAV.kind = NAV.back or "home"
-    end
-    S.panel:setYScroll(0)
-    relayout(S)
-end
-
--- The sidebar: home, every category under its group, "Fix a problem". Fixed while the page scrolls. Every entry is a
--- button, for the mouse and the controller: Left from the page reaches the entry at that height, Up / Down move along
--- the sidebar, A opens its page with the focus kept on the entry (so A, Down, A... browses the categories), Right goes
--- back into the page (buildPage wraps the page's joypad handlers for that).
-PzoptSidebar = ISPanel:derive("PzoptSidebar")
-
-function PzoptSidebar:new(x, y, w, h, S)
-    local o = ISPanel.new(self, x, y, w, h)
-    o.S = S
-    o.backgroundColor = { r = 0.04, g = 0.04, b = 0.06, a = 1 }
-    o.borderColor = { r = 0.31, g = 0.31, b = 0.35, a = 1 }
-    o.headings = {}
-    o.buttons = {}
-    return o
-end
-
-function PzoptSidebar:onMouseWheel(del) return false end
-function PzoptSidebar:onMouseDown(x, y) return true end
-
--- the entries as buttons (children of the sidebar), the group headings drawn by render
-function PzoptSidebar:build(target)
-    local S = self.S
-    local hS = fontH(UIFont.Small)
-    local rowH = hS + 10
-    local pad = 12
-    local y = pad
-    local function item(label, count, selected, c, action)
-        local b = ISButton:new(4, y, self.width - 8, rowH, "", target, function(_, button) action(button) end)
-        b:initialise()
-        b.pzoptFixed = true -- not part of the scrolled page (ensureVisible leaves the scroll alone)
-        b.pzoptLabel = label
-        b.pzoptFits = textW(UIFont.Small, label) <= (self.width - 8) - 2 * pad - (count and (textW(UIFont.Small, count) + pad) or 0)
-        b.prerender = function() end
-        b.render = function(o)
-            local sel = selected()
-            local hot = o:isMouseOver() or o.joypadFocused
-            if sel then
-                o:drawRect(0, 0, o.width, o.height, 0.18, c.r, c.g, c.b)
-                o:drawRect(0, 0, 4, o.height, 1, c.r, c.g, c.b)
-            end
-            if hot then o:drawRect(0, 0, o.width, o.height, 0.08, 1, 1, 1) end
-            if o.joypadFocused then o:drawRectBorder(0, 0, o.width, o.height, 0.9, c.r, c.g, c.b) end
-            local countW = count and (textW(UIFont.Small, count) + pad) or 0
-            local col = (sel or hot) and C_TEXT or { r = 0.8, g = 0.8, b = 0.82 }
-            o:drawText(clipText(UIFont.Small, label, o.width - 2 * pad - countW), pad + 2, 5, col.r, col.g, col.b, 1, UIFont.Small)
-            if count then o:drawTextRight(count, o.width - pad + 4, 5, C_DIM.r, C_DIM.g, C_DIM.b, 1, UIFont.Small) end
-        end
-        self:addChild(b)
-        table.insert(self.buttons, b)
-        y = y + rowH
-    end
-    item("<  Home", nil, function() return NAV.kind == "home" end, C_TEXT, function() navigate(S, "home") end)
-    y = y + 6
-    for _, g in ipairs(S.tree.groups) do
-        table.insert(self.headings, { y = y, g = g })
-        y = y + hS + 4
-        for _, cat in ipairs(g.cats) do
-            local id = cat.id
-            item(cat.title, tostring(#cat.rows), function() return NAV.kind == "cat" and NAV.cat == id end, g.c,
-                function(b) navigate(S, "cat", id, 0, b) end)
-        end
-        y = y + 8
-    end
-    table.insert(self.headings, { y = y, help = true })
-    y = y + hS + 4
-    item("Fix a problem", nil, function() return NAV.kind == "problems" end, C_HELP, function(b) navigate(S, "problems", nil, nil, b) end)
-end
-
-function PzoptSidebar:render()
-    local pad = 12
-    for _, h in ipairs(self.headings) do
-        if h.help then
-            self:drawText("HELP", pad, h.y, C_HELP.r, C_HELP.g, C_HELP.b, 1, UIFont.Small)
-        else
-            local g = h.g
-            self:drawText(string.upper(g.title), pad, h.y, g.c.r, g.c.g, g.c.b, 1, UIFont.Small)
-            if groupOff(g) then
-                self:drawTextRight("off", self.width - pad, h.y, C_STOCK.r, C_STOCK.g, C_STOCK.b, 1, UIFont.Small)
-            end
-        end
-    end
-end
-
--- ---------------------------------------------------------------------------------------------------
--- The tree: groups -> categories -> subcategories -> rows, from PzoptSettingsLayout and the rows built.
-
-local function buildTree(rows, masterRows)
-    local L = PzoptSettingsLayout
-    local tree = { groups = {}, catById = {}, problems = {} }
-    local claimed = {}
-    local function add(sub, row)
-        claimed[row] = true
-        row.cat, row.sub, row.group = sub.cat, sub, sub.cat.group
-        table.insert(sub.rows, row)
-        table.insert(sub.cat.rows, row)
-    end
-    local byKey = {}
-    for _, row in ipairs(rows) do byKey[row.entry.key] = row end
-    for _, g in ipairs(L.groups) do
-        local group = { id = g.id, title = g.title, page = g.page, c = rgb(g.colour), note = g.note, cards = g.cards,
-                        cats = {}, master = masterRows[g.page], count = 0 }
-        table.insert(tree.groups, group)
-        for _, c in ipairs(g.cats) do
-            local cat = { id = c.id, title = c.title, blurb = c.blurb, group = group, subs = {}, rows = {} }
-            table.insert(group.cats, cat)
-            tree.catById[cat.id] = cat
-            for _, s in ipairs(c.subs) do
-                local sub = { title = s.title, cat = cat, rows = {}, dlss = s.dlssButton }
-                table.insert(cat.subs, sub)
-                if s.sections then
-                    for _, row in ipairs(rows) do
-                        if not claimed[row] and row.page == g.page then
-                            for _, prefix in ipairs(s.sections) do
-                                if string.sub(row.section.title, 1, #prefix) == prefix then
-                                    add(sub, row)
-                                    sub.blurb = sub.blurb or bracketed(row.section.title)
-                                    break
-                                end
-                            end
-                        end
-                    end
-                else
-                    for _, key in ipairs(s.keys or {}) do
-                        local row = byKey[key]
-                        if row and not claimed[row] then add(sub, row) end
+-- A setting key's label and its section's title (nil when no settings page shows it; a master switch has no section),
+-- for the benchmark's run comparison and the main menu's mod compatibility check (pzopt_mainscreen_compat.lua).
+local labelByKey, sectionByKey
+function PzoptOptionLabel(key)
+    if not labelByKey then
+        labelByKey, sectionByKey = {}, {}
+        for _, m in ipairs({ MASTER, ENHANCEMENTS_MASTER, PROFILER_MASTER }) do labelByKey[m.key] = m.label end
+        for _, list in ipairs({ SECTIONS, ENHANCEMENT_SECTIONS, PROFILER_SECTIONS }) do
+            for _, sec in ipairs(list) do
+                for _, e in ipairs(sec.entries or {}) do
+                    if e.key and type(e.label) == "string" and not labelByKey[e.key] then
+                        labelByKey[e.key], sectionByKey[e.key] = e.label, sec.title
                     end
                 end
             end
         end
     end
-    -- a key no subcategory lists: the "More" subcategory of the category its section maps to
-    for _, row in ipairs(rows) do
-        if not claimed[row] then
-            local cat
-            for _, h in ipairs(L.home or {}) do
-                if string.sub(row.section.title, 1, #h[1]) == h[1] then cat = tree.catById[h[2]]; break end
-            end
-            if not cat then
-                for _, g in ipairs(tree.groups) do
-                    if g.page == row.page then cat = g.cats[#g.cats] end
-                end
-            end
-            if not cat.more then
-                cat.more = { title = "More", cat = cat, rows = {} }
-                table.insert(cat.subs, cat.more)
-            end
-            add(cat.more, row)
-        end
-    end
-    for _, g in ipairs(tree.groups) do
-        for _, cat in ipairs(g.cats) do
-            g.count = g.count + #cat.rows
-            local subs = {}
-            for _, s in ipairs(cat.subs) do table.insert(subs, s.title) end
-            cat.subList = table.concat(subs, ", ")
-        end
-    end
-    for _, pr in ipairs(L.problems or {}) do
-        local problem = { title = pr.title, cause = pr.cause, why = pr.why, rows = {} }
-        for _, key in ipairs(pr.keys or {}) do
-            if byKey[key] then table.insert(problem.rows, byKey[key]) end
-        end
-        table.insert(tree.problems, problem)
-    end
-    return tree
+    return labelByKey[key], sectionByKey[key]
 end
 
-local function visibleRows(list, level)
-    local out = {}
-    local limit = LEVEL[level] or 1
-    for _, row in ipairs(list) do
-        if row.tier <= limit then table.insert(out, row) end
-    end
-    return out
-end
-
--- ---------------------------------------------------------------------------------------------------
--- relayout: the page in NAV
-
-local layoutPage = {} -- the page kinds' content (below relayout)
-
-relayout = function(S)
-    local G, panel = S.G, S.panel
-    local hS, hM, hL, BH, SP = G.hS, G.hM, G.hL, G.BH, G.SP
-    local shown, joy = {}, {}
-    local firstContentLine
-    local function line(...)
-        local l = {}
-        for i = 1, select("#", ...) do
-            local el = select(i, ...)
-            if el then table.insert(l, el) end
-        end
-        if #l > 0 then table.insert(joy, l) end
-    end
-    local function rowAt(row, y, dx)
-        if row.entry and not row.option then S.buildRow(row) end -- a setting this session has not shown yet
-        placeRow(row, y, dx)
-        shown[row] = true
-        for _, l in ipairs(row.option and (row.option.pzoptJoyLines or { { row.option.control } }) or row.joy or {}) do
-            table.insert(joy, l)
-        end
-        return y + row.step
-    end
-    local function at(item, x, y, w, h)
-        local el = item.elems[1].el
-        el:setX(x)
-        el:setY(y)
-        if w then el:setWidth(w) end
-        if h then el:setHeight(h) end
-        el:setVisible(true)
-        item.hidden = false
-        shown[item] = true
-        return el
-    end
-    local kind = NAV.kind
-    if kind == "cat" and not S.tree.catById[NAV.cat] then kind = "home"; NAV.kind = "home" end
-    local home = kind == "home"
-    local x0 = home and G.homeX or G.contentX
-    local x1 = home and G.homeR or G.contentR
-    local w = x1 - x0
-    S.crumb = crumbFor(S)
-
-    -- header: Home, the title and where we are; under them the search box, the view switch, the status and the clips
-    -- switch. On a narrow window (1920 x 1080) the clips switch moves to the end of the title line and the status goes
-    -- when they do not fit on the search line.
-    local clipsW = S.clips:getWidth() + 8 + S.clipsLabel:getWidth()
-    local viewsW = S.viewLabel.elems[1].el:getWidth() + 10
-    for _, v in ipairs(S.viewButtons) do viewsW = viewsW + v.elems[1].el:getWidth() + 4 end
-    local status = ""
-    if kind == "search" then
-        status = S.hitCount > 0 and (S.hitCount .. " of " .. #S.searchRows .. " settings match") or "Nothing matches"
-    elseif kind == "home" then
-        status = #S.searchRows .. " settings"
-    end
-    S.status:setName(status)
-    local statusW = status ~= "" and (S.status:getWidth() + 16) or 0
-    local clipsOnTitle = G.searchW + 24 + viewsW + statusW + 24 + clipsW > w
-    local y = G.m
-    local tx = x0
-    local homeEl
-    if not home then
-        homeEl = at(S.homeButton, x0, y + math.floor((hL + 4 - BH) / 2))
-        tx = x0 + homeEl:getWidth() + 16
-    end
-    local titleR = clipsOnTitle and (x1 - clipsW - 24) or x1
-    at(S.title, tx, y, math.max(20, titleR - tx), hL + 4)
-    if clipsOnTitle then
-        local cy = y + math.floor((hL + 4 - BH) / 2)
-        at(S.clipsLabelItem, x1 - S.clipsLabel:getWidth(), cy)
-        at(S.clipsItem, x1 - clipsW, cy)
-        line(homeEl, S.clips)
-    else
-        line(homeEl)
-    end
-    y = y + hL + 4 + SP * 2
-    if not clipsOnTitle then
-        at(S.clipsLabelItem, x1 - S.clipsLabel:getWidth(), y)
-        at(S.clipsItem, x1 - clipsW, y)
-    end
-    at(S.searchItem, x0, y)
-    local vx = x0 + G.searchW + 24
-    at(S.viewLabel, vx, y)
-    vx = vx + S.viewLabel.elems[1].el:getWidth() + 10
-    local views = {}
-    for _, v in ipairs(S.viewButtons) do
-        local el = at(v, vx, y)
-        vx = vx + el:getWidth() + 4
-        table.insert(views, el)
-    end
-    local lineR = clipsOnTitle and x1 or (x1 - clipsW - 24)
-    if statusW > 0 and vx + statusW <= lineR then at(S.statusItem, vx + 16, y) end
-    line(S.entry, views[1], views[2], views[3], (not clipsOnTitle) and S.clips or nil)
-    y = y + BH + SP * 2
-    local rules = 0
-    local function rule(yy)
-        rules = rules + 1
-        at(rules == 1 and S.rule or S.rule2, x0, yy, w, 1)
-    end
-    rule(y)
-    y = y + SP * 2 + 4
-    local contentLine = #joy + 1
-
-    local page = layoutPage[kind]
-    if page then
-        y = page({ S = S, G = G, x0 = x0, x1 = x1, w = w, joy = joy, line = line, rowAt = rowAt, at = at, rule = rule }, y)
-    end
-
-    -- the sidebar and the preview: on every page but home; the preview shows a setting of the page shown
-    S.sidebar:setVisible(not home)
-    S.preview:setVisible(not home)
-    if not home and (not S.preview.row or not shown[S.preview.row]) then
-        for _, row in ipairs(S.keyRows) do
-            if shown[row] and not row.isMaster then
-                S.preview:select(row)
-                break
-            end
-        end
-    end
-    for _, item in ipairs(S.items) do
-        if not shown[item] and not item.hidden then hideItem(item) end
-        if not shown[item] then item.hidden = true end
-    end
-    panel:setScrollHeight(y + 20)
-    local maxScroll = math.max(0, y + 20 - panel:getHeight())
-    if -panel:getYScroll() > maxScroll then panel:setYScroll(-maxScroll) end
-    -- the sidebar's entries after the page's rows (reached with Left; Up / Down stay on their side, see buildPage)
-    if not home then
-        for _, b in ipairs(S.sidebar.buttons) do line(b) end
-    end
-    -- controller navigation: the rows in display order
-    -- (the stock spatial navigation searches allJoypadButtons, which only insertNewLineOfButtons fills: same elements)
-    for i = #panel.joypadButtonsY, 1, -1 do table.remove(panel.joypadButtonsY, i) end
-    panel.allJoypadButtons = {}
-    for _, l in ipairs(joy) do
-        table.insert(panel.joypadButtonsY, l)
-        for _, el in ipairs(l) do table.insert(panel.allJoypadButtons, el) end
-    end
-    panel.joypadButtons = panel.joypadButtonsY[#panel.joypadButtonsY]
-    if (panel.joypadIndexY or 1) > #panel.joypadButtonsY then
-        panel.joypadIndexY = #panel.joypadButtonsY
-        panel.joypadIndex = 1
-    end
-    local first = joy[contentLine] or joy[1]
-    S.firstJoy = first and first[1]
-    S.layoutGen = (S.layoutGen or 0) + 1 -- cullRows looks again
-end
-
--- The content of each page kind below the header, one function each: the game's Lua compiler fails a function that
--- declares more than 200 locals in a -debug game (Core.debug records each local's line in a 200-slot array indexed by
--- every local declared so far), and relayout with all four pages inline declared 201 (issue #58, 2026-10-04;
--- scripts/LuaDebugCompile.java checks it in build.sh). C = the page geometry and relayout's placing helpers; each
--- returns the y under its content.
-function layoutPage.home(C, y)
-    local S, G, x0, x1, w, joy = C.S, C.G, C.x0, C.x1, C.w, C.joy
-    local at, line, rowAt, rule = C.at, C.line, C.rowAt, C.rule
-    local hS, hM, BH, SP = G.hS, G.hM, G.BH, G.SP
-    -- presets (wrapping to a second row on a narrow window)
-    at(S.presetLabel, x0, y)
-    local px0 = x0 + S.presetLabel.elems[1].el:getWidth() + 16
-    local px = px0
-    local pl = {}
-    for _, b in ipairs(S.presetButtons) do
-        local bw = b.elems[1].el:getWidth()
-        if px + bw > x1 and px > px0 then
-            line(unpack(pl))
-            pl = {}
-            px = px0
-            y = y + BH + SP
-        end
-        local el = at(b, px, y)
-        px = px + bw + 8
-        table.insert(pl, el)
-    end
-    line(unpack(pl))
-    y = y + BH + SP * 3
-    local cols = w >= 1800 and 4 or (w >= 1150 and 3 or 2)
-    local tileW = math.floor((w - (cols - 1) * 12) / cols)
-    local tileH = hM + 3 * hS + 34
-    for _, g in ipairs(S.tree.groups) do
-        at(g.heading, x0, y, w, hM + 6)
-        y = y + hM + 6 + SP
-        if g.master then
-            rowAt(g.master, y, x0 - G.contentX)
-            if g.reset then
-                local el = at(g.reset, 0, y)
-                el:setX(x1 - el:getWidth())
-                table.insert(joy[#joy], el)
-            end
-            y = y + g.master.step + SP
-        end
-        local col = 0
-        local tl = {}
-        for _, cat in ipairs(g.cats) do
-            table.insert(tl, at(cat.tile, x0 + col * (tileW + 12), y, tileW, tileH))
-            col = col + 1
-            if col == cols then
-                col = 0
-                y = y + tileH + 12
-                line(unpack(tl))
-                tl = {}
-            end
-        end
-        if col ~= 0 then
-            y = y + tileH + 12
-            line(unpack(tl))
-        end
-        y = y + SP * 3
-    end
-    at(S.helpHeading, x0, y, w, hM + 6)
-    y = y + hM + 6 + SP
-    line(at(S.problemTile, x0, y, tileW, tileH))
-    y = y + tileH + SP * 4
-    rule(y)
-    y = y + SP * 2
-    local bx = x0
-    local bl = {}
-    for _, b in ipairs(S.toolButtons) do
-        local el = at(b, bx, y)
-        bx = bx + el:getWidth() + 8
-        table.insert(bl, el)
-    end
-    line(unpack(bl))
-    y = y + BH + SP
-    local noteH = #wrapLines(UIFont.Small, S.homeNoteText, w) * hS + 4
-    at(S.homeNote, x0, y, w, noteH)
-    y = y + noteH
-    return y
-end
-
-function layoutPage.cat(C, y)
-    local S, x0, x1, w = C.S, C.x0, C.x1, C.w
-    local at, line, rowAt, rule = C.at, C.line, C.rowAt, C.rule
-    local hS, hM, hL, BH, SP = C.G.hS, C.G.hM, C.G.hL, C.G.BH, C.G.SP
-    local cat = S.tree.catById[NAV.cat]
-    local g = cat.group
-    local headH = hL + hS + 10 + (groupOff(g) and (hS + 6) or 0)
-    S.catHead.elems[1].el.cat = cat
-    at(S.catHead, x0, y, w, headH)
-    y = y + headH + SP
-    -- the subcategory tabs (wrapping when they do not fit)
-    local tabX, tl = x0, {}
-    for i, t in ipairs(cat.tabs) do
-        local el = t.elems[1].el
-        if tabX + el:getWidth() > x1 and tabX > x0 then
-            line(unpack(tl))
-            tl = {}
-            tabX = x0
-            y = y + hM + 14
-        end
-        at(t, tabX, y)
-        tabX = tabX + el:getWidth() + 4
-        table.insert(tl, el)
-        if i == 1 then tabX = tabX + 8 end
-    end
-    line(unpack(tl))
-    y = y + hM + 14
-    at(S.tabRule, x0, y - 2, w, 1)
-    y = y + SP * 3
-    if NAV.sub == 0 then
-        for _, sub in ipairs(cat.subs) do
-            local rows = visibleRows(sub.rows, NAV.level)
-            local hidden = #sub.rows - #rows
-            if g.cards then
-                -- a card: title, what it is, cost; its settings inside; "All N settings" opens its tab
-                local cardY = y
-                local headH2 = hM + hS + 22
-                local card = at(sub.card, x0, cardY, w, 10)
-                local ob = at(sub.open, 0, cardY + 10)
-                ob:setX(x1 - 12 - ob:getWidth())
-                line(ob)
-                local ry = cardY + headH2
-                if sub.dlssRow then ry = rowAt(sub.dlssRow, ry, 16) end
-                for _, row in ipairs(rows) do ry = rowAt(row, ry, 16) end
-                card:setHeight(ry - cardY + 8)
-                y = ry + 8 + SP * 3
-            else
-                local hb = at(sub.head, x0, y, w, hM + 8)
-                sub.headHidden = hidden
-                line(hb)
-                y = y + hM + 8 + SP
-                for _, row in ipairs(rows) do y = rowAt(row, y) end
-                y = y + SP * 3
-            end
-        end
-    else
-        local sub = cat.subs[NAV.sub]
-        if sub then
-            if sub.dlssRow then y = rowAt(sub.dlssRow, y) end
-            local rows = visibleRows(sub.rows, NAV.level)
-            for _, row in ipairs(rows) do y = rowAt(row, y) end
-            local hidden = #sub.rows - #rows
-            if hidden > 0 then
-                y = y + SP * 2
-                local next = NAV.level == "simple" and "Advanced" or "Everything"
-                local el = at(S.moreButton, x0, y)
-                el:setTitle("Show " .. hidden .. " more " .. (hidden == 1 and "setting" or "settings") .. " (" .. next .. " view)")
-                el:setWidthToTitle()
-                line(el)
-                y = y + BH + SP
-            end
-        end
-    end
-    y = y + SP * 2
-    rule(y)
-    y = y + SP * 2
-    local rb = at(S.catReset, x0, y)
-    rb:setTitle("Reset " .. cat.title .. " to defaults")
-    rb:setWidthToTitle()
-    line(rb)
-    S.catNote.elems[1].el.text = PAGES[g.page].footer
-    at(S.catNote, x0 + rb:getWidth() + 16, y + math.floor((BH - hS) / 2), x1 - x0 - rb:getWidth() - 16, hS + 2)
-    y = y + BH + SP
-    return y
-end
-
-function layoutPage.problems(C, y)
-    local S, x0, w = C.S, C.x0, C.w
-    local at, line, rowAt = C.at, C.line, C.rowAt
-    local hS, hM, hL, SP = C.G.hS, C.G.hM, C.G.hL, C.G.SP
-    at(S.probHead, x0, y, w, hL + hS + 10)
-    y = y + hL + hS + 10 + SP * 2
-    local cols = w >= 1300 and 3 or 2
-    local tileW = math.floor((w - (cols - 1) * 10) / cols)
-    local tileH = hM + 2 * hS + 26
-    local col, tl = 0, {}
-    for _, pr in ipairs(S.tree.problems) do
-        table.insert(tl, at(pr.tile, x0 + col * (tileW + 10), y, tileW, tileH))
-        col = col + 1
-        if col == cols then
-            col = 0
-            y = y + tileH + 10
-            line(unpack(tl))
-            tl = {}
-        end
-    end
-    if col ~= 0 then
-        y = y + tileH + 10
-        line(unpack(tl))
-    end
-    y = y + SP * 3
-    local pr = S.tree.problems[NAV.problem] or S.tree.problems[1]
-    if pr then
-        local lines = wrapLines(UIFont.Small, pr.why, w - 56)
-        local whyH = hM + 16 + #lines * hS + 12
-        S.probWhy.elems[1].el.problem, S.probWhy.elems[1].el.lines = pr, lines
-        at(S.probWhy, x0, y, w, whyH)
-        y = y + whyH + SP * 2
-        for _, row in ipairs(pr.rows) do y = rowAt(row, y) end
-    end
-    return y
-end
-
-function layoutPage.search(C, y)
-    local S, x0, w = C.S, C.x0, C.w
-    local at, rowAt = C.at, C.rowAt
-    local hS, hM, SP = C.G.hS, C.G.hM, C.G.SP
-    S.searchHead.elems[1].el.text = (S.hitCount or 0) > 0
-        and ((S.hitCount == 1 and "1 setting matches" or (S.hitCount .. " settings match")) .. " \"" .. (S.query or "") .. "\", best first")
-        or ("Nothing matches \"" .. (S.query or "") .. "\"")
-    at(S.searchHead, x0, y, w, hM + 6)
-    y = y + hM + 6 + SP * 2
-    local hits = S.hits or {}
-    -- the categories by their best match, the matches inside by score
-    local cats = {}
-    for _, g in ipairs(S.tree.groups) do
-        for _, cat in ipairs(g.cats) do
-            local list, best = {}, 0
-            for _, row in ipairs(cat.rows) do
-                local s = hits[row]
-                if s then
-                    table.insert(list, row)
-                    if s > best then best = s end
-                end
-            end
-            if #list > 0 then
-                table.sort(list, function(a, b)
-                    if hits[a] ~= hits[b] then return hits[a] > hits[b] end
-                    return a.index < b.index
-                end)
-                table.insert(cats, { cat = cat, rows = list, best = best })
-            end
-        end
-    end
-    table.sort(cats, function(a, b) return a.best > b.best end)
-    for _, c in ipairs(cats) do
-        at(c.cat.resultHead, x0, y, w, hS + 8)
-        y = y + hS + 8 + SP
-        for _, row in ipairs(c.rows) do y = rowAt(row, y) end
-        y = y + SP * 2
-    end
-    return y
-end
-
--- ---------------------------------------------------------------------------------------------------
--- Building the page (once, the first time the tab is shown)
-
--- Parts of buildPage, one function each: the game's Lua compiler fails a function that declares more than 200 locals
--- in a -debug game, and buildPage in one piece declared 216 (issue #58, 2026-10-04; scripts/LuaDebugCompile.java checks
--- it in build.sh). B = the page being built and buildPage's element helpers.
-local pageBuild = {}
-
-function pageBuild.header(B)
-    local self, S, G, single, buttonItem, label = B.self, B.S, B.G, B.single, B.buttonItem, B.label
-    local BH, hS, hM, hL = G.BH, G.hS, G.hM, G.hL
-    S.homeButton = buttonItem("<  Home", "Back to the start page: presets, every category, export / import.",
-        function() navigate(S, "home") end)
-    S.title = single(drawPanel(function(o)
-        o:drawText("PZ OPTIMIZATION", 0, 0, 1, 1, 1, 1, UIFont.Large)
-        local x = textW(UIFont.Large, "PZ OPTIMIZATION") + 24
-        -- where we are; left out when only a stub of it would fit (1920 x 1080: the sidebar and the heading say it too)
-        local crumb = clipText(UIFont.Medium, S.crumb or "", math.max(20, o.width - x))
-        if #crumb >= 12 or crumb == (S.crumb or "") then
-            o:drawText(crumb, x, math.floor((hL - hM) / 2) + 2, C_GREY.r, C_GREY.g, C_GREY.b, 1, UIFont.Medium)
-        end
-    end))
-    -- the search box takes what the view switch leaves on the search line (the text box cannot resize later)
-    local viewsW = textW(UIFont.Small, "View") + 10
-    for _, v in ipairs(VIEWS) do viewsW = viewsW + textW(UIFont.Small, v.title) + 28 + 4 end
-    G.searchW = math.max(140, math.min(560, G.contentR - G.contentX - viewsW - 24))
-    local entry = ISTextEntryBox:new("", 0, 0, G.searchW, BH)
-    entry:initialise()
-    entry:instantiate()
-    entry:setClearButton(true)
-    entry.tooltip = "Type words from a setting's name, description or key, a resource (gpu, vram, game thread, "
-        .. "load time...) or a Java class that reads it (FBORenderCell, IsoChunk, pzopt.FogPass...). Typos and "
-        .. "partial words are fine; the best matches of every category come first."
-    S.typed, S.lastText, S.typedAt = "", "", 0
-    -- polled each frame (the clear button and pasting do not all go through onTextChange) and searched once the
-    -- text has been still for 120 ms, so typing a word runs one search, not one per letter
-    entry.prerender = function(o)
-        ISTextEntryBox.prerender(o)
-        local text, now = o:getText(), getTimestampMs()
-        if text ~= S.typed then
-            S.typed, S.typedAt = text, now
-        elseif text ~= S.lastText and now - S.typedAt >= 120 then
-            S.lastText = text
-            runSearch(S, text)
-        end
-    end
-    -- what to type, while the box is empty and not focused
-    entry.render = function(o)
-        ISTextEntryBox.render(o)
-        if o:getText() == "" and not o:isFocused() then
-            -- inside the box: the long hint, else the short one, cut to fit (it ran under the view switch at 1920 x 1080)
-            local room = o.width - 16
-            local hint = "Search all " .. #S.searchRows .. " settings: name, what it does, gpu, load time..."
-            if textW(UIFont.Small, hint) > room then hint = "Search " .. #S.searchRows .. " settings..." end
-            o:drawText(clipText(UIFont.Small, hint, room), 8, math.floor((o.height - hS) / 2), C_DIM.r, C_DIM.g, C_DIM.b, 1, UIFont.Small)
-        end
-    end
-    S.entry = entry
-    S.searchItem = single(entry)
-    local _, viewLabelItem = label("View", C_GREY)
-    S.viewLabel = viewLabelItem
-    S.viewButtons = {}
-    for _, v in ipairs(VIEWS) do
-        local id = v.id
-        local b = drawButton(self, function() setLevel(S, id) end, function(o, hot)
-            local sel = NAV.level == id
-            if sel then
-                o:drawRect(0, 0, o.width, o.height, 0.85, 1, 1, 1)
-            else
-                o:drawRect(0, 0, o.width, o.height, hot and 0.16 or 0.06, 1, 1, 1)
-            end
-            o:drawRectBorder(0, 0, o.width, o.height, 0.3, 1, 1, 1)
-            local c = sel and 0.05 or (hot and 1 or 0.7)
-            o:drawTextCentre(v.title, o.width / 2, math.floor((o.height - hS) / 2), c, c, c, 1, UIFont.Small)
-        end)
-        b:setWidth(textW(UIFont.Small, v.title) + 28)
-        b:setHeight(BH)
-        b.pzoptLabel = v.title
-        b.tooltip = VIEW_TIPS[id] .. " Search and Fix a problem always show every match."
-        table.insert(S.viewButtons, single(b))
-    end
-    local status = ISLabel:new(0, 0, BH, "", C_GREY.r, C_GREY.g, C_GREY.b, 1, UIFont.Small, true)
-    status:initialise()
-    S.status, S.statusItem = status, single(status)
-    -- "Before / after clips": the preview's GIFs, off by default; saved at once
-    local clipsLabel = ISLabel:new(0, 0, BH, "Before / after clips", 1, 1, 1, 1, UIFont.Small, true)
-    clipsLabel:initialise()
-    S.clipsLabel = clipsLabel
-    S.clipsLabelItem = single(clipsLabel)
-    local clips = ISTickBox:new(0, 0, BH, BH, "", S, function(target, index, selected)
-        setClipsOn(selected == true)
-    end)
-    clips.choicesColor = { r = 1, g = 1, b = 1, a = 1 }
-    clips:initialise()
-    clips:addOption("")
-    clips:setSelected(1, clipsOn())
-    clips.tooltip = "Plays a short clip of the stock game and one with the setting on, side by side, above the "
-        .. "description of the setting under the mouse. Off saves the memory the clips take (up to ~100 MB of video "
-        .. "memory while this screen is open). Applies at once and is remembered."
-    S.clips = clips
-    S.clipsItem = single(clips)
-    S.rule = single(drawPanel(function(o) o:drawRect(0, 0, o.width, 1, 1, 0.35, 0.35, 0.38) end))
-    S.rule2 = single(drawPanel(function(o) o:drawRect(0, 0, o.width, 1, 1, 0.35, 0.35, 0.38) end))
-    S.rule.background, S.rule2.background = true, true -- (drawn under other items: the harness's overlap audit skips them)
-end
-
-function pageBuild.home(B)
-    local self, S, p, single, button, label = B.self, B.S, B.p, B.single, B.button, B.label
-    local hS, hM = B.G.hS, B.G.hM
-    -- home: presets, group headings, tiles, help, tools
-    local _, presetLabelItem = label("Presets", C_GREY)
-    S.presetLabel = presetLabelItem
-    S.presetButtons = {}
-    local function preset(title, tip, fn)
-        local _, item = button(title, tip, fn)
-        table.insert(S.presetButtons, item)
-        return item
-    end
-    local pinnedMaster = p:getPzoptOptionPinnedBy(MASTER.key) ~= ""
-    local recommended = preset("Recommended (every optimization on)",
-        "Turns the Performance master switch on and puts every Performance setting back to the build's default on this machine. "
-        .. "Visuals and Tools are not changed. " .. RESTART_NOTE, function() setAll(self, true) end)
-    local stockGame = preset("Stock game (every optimization off)",
-        "Turns the Performance master switch off: the game runs its original code everywhere, as if the overrides were not "
-        .. "installed. The settings are kept for when you turn it on again; Tools and the performance overlay are not affected. "
-        .. RESTART_NOTE, function() setAll(self, false) end)
-    for _, profile in ipairs(PROFILES) do
-        local pr = profile
-        preset(profile.button, profile.tip .. " " .. RESTART_NOTE, function() applyProfile(self, pr) end)
-    end
-    if pinnedMaster then
-        for _, item in ipairs(S.presetButtons) do
-            local b = item.elems[1].el
-            b:setEnable(false)
-            b.tooltip = "Pinned by " .. p:getPzoptOptionPinnedBy(MASTER.key) .. " for this install."
-        end
-    end
-    S.helpHeading = single(drawPanel(function(o)
-        o:drawText("HELP", 0, 0, C_HELP.r, C_HELP.g, C_HELP.b, 1, UIFont.Medium)
-        local x = textW(UIFont.Medium, "HELP") + 16
-        o:drawText(clipText(UIFont.Small, "Not sure what to change? Start from what you notice.", math.max(20, o.width - x)), x,
-            math.floor((hM - hS) / 2), C_GREY.r, C_GREY.g, C_GREY.b, 1, UIFont.Small)
-    end))
-    S.problemTile = single(drawButton(self, function() navigate(S, "problems") end, function(o, hot)
-        o:drawRect(0, 0, o.width, o.height, 1, 0.115, 0.10, 0.13)
-        o:drawRectBorder(0, 0, o.width, o.height, hot and 0.9 or 0.15, hot and C_HELP.r or 1, hot and C_HELP.g or 1, hot and C_HELP.b or 1)
-        o:drawRect(0, 0, 5, o.height, 1, C_HELP.r, C_HELP.g, C_HELP.b)
-        o:drawText("Fix a problem", 16, 8, 1, 1, 1, 1, UIFont.Medium)
-        local yy = 10 + hM
-        for i, l in ipairs(wrapLines(UIFont.Small, "Stutter while driving, low fps in a horde, slow loading, laggy input... "
-            .. "Pick what you notice: why it happens, and the settings that help.", o.width - 32)) do
-            if i > 2 then break end
-            o:drawText(l, 16, yy, C_GREY.r, C_GREY.g, C_GREY.b, 1, UIFont.Small)
-            yy = yy + hS
-        end
-    end))
-    S.toolButtons = {}
-    local _, exportItem = button(EXPORT_TITLE, EXPORT_TIP, function() exportSettings(self) end)
-    local _, importItem = button(IMPORT_TITLE, IMPORT_TIP, function() openImportDialog(self) end)
-    local uninstall, uninstallItem = button(UNINSTALL_TITLE, nil, nil)
-    setupUninstallButton(self, uninstall)
-    S.toolButtons = { exportItem, importItem, uninstallItem }
-    S.homeNoteText = "Apply or Accept saves your changes to Zomboid/pzopt/options.ini. Performance settings take effect on the next "
-        .. "launch; Visuals and Tools apply at once (a few Visuals on the next launch). Settings pinned by the game folder's "
-        .. "pzopt.properties or -Dpzopt.<key> cannot be changed here."
-    S.homeNote = single(drawPanel(function(o)
-        local yy = 0
-        for _, l in ipairs(wrapLines(UIFont.Small, S.homeNoteText, o.width)) do
-            o:drawText(l, 0, yy, C_DIM.r, C_DIM.g, C_DIM.b, 1, UIFont.Small)
-            yy = yy + hS
-        end
-    end))
-end
-
--- group headings, tiles, Visuals cards and subcategory tabs / headings (before the rows: they draw beneath them)
-function pageBuild.decorations(B)
-    local self, S, single, buttonItem = B.self, B.S, B.single, B.buttonItem
-    local hS, hM, tree = B.G.hS, B.G.hM, S.tree
-    for _, g in ipairs(tree.groups) do
-        local group = g
-        g.heading = single(drawPanel(function(o)
-            o:drawText(string.upper(group.title), 0, 0, group.c.r, group.c.g, group.c.b, 1, UIFont.Medium)
-            local x = textW(UIFont.Medium, string.upper(group.title)) + 16
-            o:drawText(clipText(UIFont.Small, group.count .. " settings.  " .. group.note, math.max(20, o.width - x)), x,
-                math.floor((hM - hS) / 2), C_GREY.r, C_GREY.g, C_GREY.b, 1, UIFont.Small)
-        end))
-        if g.page ~= 1 then
-            local page = PAGES[g.page]
-            g.reset = buttonItem("Reset " .. g.title .. " to defaults", "Puts every " .. g.title .. " setting back to the "
-                .. "build's default, the master switch on. Only the controls change; Apply or Accept saves them.", function()
-                allRows(self)
-                resetOptions(self[page.options] or {}, self[page.masterField])
-            end)
-        end
-        for _, cat in ipairs(g.cats) do
-            local c = cat
-            cat.tile = single(drawButton(self, function() navigate(S, "cat", c.id, 0) end, function(o, hot)
-                local col = c.group.c
-                o:drawRect(0, 0, o.width, o.height, 1, 0.115, 0.115, 0.125)
-                if hot then
-                    o:drawRectBorder(0, 0, o.width, o.height, 0.9, col.r, col.g, col.b)
-                else
-                    o:drawRectBorder(0, 0, o.width, o.height, 0.15, 1, 1, 1)
-                end
-                o:drawRect(0, 0, 5, o.height, 1, col.r, col.g, col.b)
-                o:drawText(c.title, 16, 8, 1, 1, 1, 1, UIFont.Medium)
-                local yy = 10 + hM
-                for i, l in ipairs(wrapLines(UIFont.Small, c.blurb, o.width - 32)) do
-                    if i > 2 then break end
-                    o:drawText(l, 16, yy, C_GREY.r, C_GREY.g, C_GREY.b, 1, UIFont.Small)
-                    yy = yy + hS
-                end
-                local st, sc = catStatus(c)
-                local pw = textW(UIFont.Small, st) + 12
-                local fy = o.height - hS - 10
-                drawPill(o, o.width - 12 - pw, fy - 1, st, sc)
-                o:drawText(clipText(UIFont.Small, #c.rows .. " settings:  " .. c.subList, o.width - 44 - pw), 16, fy,
-                    C_DIM.r, C_DIM.g, C_DIM.b, 1, UIFont.Small)
-            end))
-            -- the subcategory tabs, Overview first
-            cat.tabs = {}
-            local function tabButton(index, title, list)
-                local bw = textW(UIFont.Medium, title) + (list and (textW(UIFont.Small, "000") + 28) or 0) + 24
-                local b = drawButton(self, function() navigate(S, "cat", c.id, index) end, function(o, hot)
-                    local col = c.group.c
-                    local sel = NAV.sub == index
-                    if sel then
-                        o:drawRect(0, 0, o.width, o.height, 0.14, col.r, col.g, col.b)
-                        o:drawRect(0, o.height - 3, o.width, 3, 1, col.r, col.g, col.b)
-                    elseif hot then
-                        o:drawRect(0, 0, o.width, o.height, 0.07, 1, 1, 1)
-                    end
-                    local t = (sel or hot) and 1 or 0.65
-                    o:drawText(title, 12, math.floor((o.height - hM) / 2), t, t, t, 1, UIFont.Medium)
-                    if list then
-                        local n = tostring(#visibleRows(list, NAV.level))
-                        local nx = 12 + textW(UIFont.Medium, title) + 8
-                        local nw = textW(UIFont.Small, n) + 12
-                        o:drawRect(nx, math.floor((o.height - hS - 2) / 2), nw, hS + 2, sel and 0.4 or 0.1, sel and col.r or 1, sel and col.g or 1, sel and col.b or 1)
-                        o:drawTextCentre(n, nx + nw / 2, math.floor((o.height - hS) / 2), t, t, t, 1, UIFont.Small)
-                    end
-                end)
-                b:setWidth(bw)
-                b:setHeight(hM + 12)
-                table.insert(cat.tabs, single(b))
-            end
-            tabButton(0, "Overview", nil)
-            for i, sub in ipairs(cat.subs) do
-                local s, index = sub, i
-                tabButton(i, sub.title, sub.rows)
-                if g.cards then
-                    s.card = single(drawPanel(function(o)
-                        local col = c.group.c
-                        o:drawRect(0, 0, o.width, o.height, 1, 0.10, 0.10, 0.11)
-                        o:drawRectBorder(0, 0, o.width, o.height, 0.18, 1, 1, 1)
-                        o:drawRect(0, 0, 4, o.height, 1, col.r, col.g, col.b)
-                        o:drawText(s.title, 16, 8, 1, 1, 1, 1, UIFont.Medium)
-                        local fx = (s.rows[1] and EFFECTS[s.rows[1].entry.key]) or {}
-                        local dx = 16 + textW(UIFont.Medium, s.title) + 24
-                        dx = drawDots(o, dx, 8 + math.floor((hM - hS) / 2), "GPU", math.max(0, math.min(3, (fx.gpu or 0) + 1)), C_AMBER)
-                        drawDots(o, dx, 8 + math.floor((hM - hS) / 2), "VRAM", math.max(0, math.min(3, fx.vram or 0)), C_AMBER)
-                        local text = s.blurb or (s.rows[1] and firstSentence(s.rows[1].entry.tip)) or ""
-                        o:drawText(clipText(UIFont.Small, text, o.width - 32), 16, 10 + hM, C_GREY.r, C_GREY.g, C_GREY.b, 1, UIFont.Small)
-                    end))
-                    s.card.background = true
-                    s.open = buttonItem("All " .. #s.rows .. " settings  >", "Opens the " .. s.title .. " tab.",
-                        function() navigate(S, "cat", c.id, index) end)
-                else
-                    s.head = single(drawButton(self, function() navigate(S, "cat", c.id, index) end, function(o, hot)
-                        local col = c.group.c
-                        o:drawRect(0, 0, o.width, 1, 1, 0.3, 0.3, 0.33)
-                        o:drawText(s.title, 0, 6, col.r, col.g, col.b, 1, UIFont.Medium)
-                        local hidden = s.headHidden or 0
-                        local more = hidden > 0 and (hidden .. " more in its tab  >") or "Open its tab  >"
-                        local t = hot and 1 or 0.6
-                        o:drawText(more, textW(UIFont.Medium, s.title) + 16, 6 + math.floor((hM - hS) / 2), t, t, t, 1, UIFont.Small)
-                    end))
-                end
-            end
-            cat.resultHead = single(drawPanel(function(o)
-                local col = c.group.c
-                o:drawText(string.upper(c.group.title) .. "  >  " .. c.title, 0, 2, col.r, col.g, col.b, 1, UIFont.Small)
-            end))
-        end
-    end
-    for i, pr in ipairs(tree.problems) do
-        local problem, index = pr, i
-        pr.tile = single(drawButton(self, function() NAV.problem = index; relayout(S) end, function(o, hot)
-            local sel = NAV.problem == index
-            if sel then
-                o:drawRect(0, 0, o.width, o.height, 1, 0.20, 0.14, 0.24)
-            else
-                o:drawRect(0, 0, o.width, o.height, 1, 0.115, 0.115, 0.125)
-            end
-            if sel or hot then
-                o:drawRectBorder(0, 0, o.width, o.height, 0.9, C_HELP.r, C_HELP.g, C_HELP.b)
-            else
-                o:drawRectBorder(0, 0, o.width, o.height, 0.15, 1, 1, 1)
-            end
-            o:drawText(problem.title, 12, 6, 1, 1, 1, 1, UIFont.Medium)
-            o:drawText(clipText(UIFont.Small, problem.cause, o.width - 24), 12, 8 + hM, C_GREY.r, C_GREY.g, C_GREY.b, 1, UIFont.Small)
-            local on = 0
-            for _, row in ipairs(problem.rows) do
-                local v = rowCurrent(row)
-                if v ~= "false" and v ~= "off" and v ~= "0" and v ~= "off (default)" and v ~= "false (default)" then on = on + 1 end
-            end
-            local c = on == #problem.rows and C_OPT or C_AMBER
-            o:drawText(#problem.rows .. " settings, " .. on .. " on", 12, o.height - hS - 8, c.r, c.g, c.b, 1, UIFont.Small)
-        end))
-    end
-end
-
--- The tab's idle builder: S.idle's jobs in order, one step at a time, until 3 ms of this frame are used (a step is one
--- row's controls, one description measured or one row indexed: well under a millisecond each). Logs the totals once done.
-local function idleWork(S)
-    local jobs = S.idle
-    if not jobs or #jobs == 0 then return end
-    local start = getTimestampMs()
-    local deadline = start + 3
-    S.idleFrames = S.idleFrames + 1
-    local now = start
-    repeat
-        local job = jobs[1]
-        local done = job.step()
-        local t = getTimestampMs()
-        S.idleMs[job.name] = (S.idleMs[job.name] or 0) + (t - now)
-        now = t
-        if done then table.remove(jobs, 1) end
-    until #jobs == 0 or now >= deadline
-    if #jobs == 0 then
-        PzoptLogInfo("[pzopt] options tab " .. TAB .. ": background build done over " .. S.idleFrames .. " frames (preview "
-            .. (S.idleMs.preview or 0) .. " ms, rows " .. (S.idleMs.rows or 0) .. " ms, search index " .. (S.idleMs.index or 0) .. " ms)")
-    end
-end
-
--- buildPage's phases for the log line (ms; makeRow's parts summed over the rows built with the tab). One table: the file
--- is near the 200 locals a -debug game compiles.
-local buildPhases = { order = {}, ms = {} }
-function buildPhases.mark(name, since)
-    local now = getTimestampMs()
-    if not buildPhases.ms[name] then table.insert(buildPhases.order, name) end
-    buildPhases.ms[name] = (buildPhases.ms[name] or 0) + (now - since)
-    return now
-end
-function buildPhases.text()
-    local t = {}
-    for _, name in ipairs(buildPhases.order) do table.insert(t, name .. " " .. buildPhases.ms[name]) end
-    return table.concat(t, ", ")
-end
-
-local function buildPage(self)
-    local t0 = getTimestampMs()
-    buildPhases.order, buildPhases.ms = {}, {}
-    local tp = t0
-    local savedPanel, savedAddY = self.mainPanel, self.addY
-    local wasChanged = self.gameOptions.changed
-    local style = MainOptions.style
-    local BH, SP = style.buttonHeight, style.borderSpacing
-    local hS, hM, hL = fontH(UIFont.Small), fontH(UIFont.Medium), fontH(UIFont.Large)
-    local comboWidth = 45 * (getCore():getOptionFontSizeReal() + 1) + 60
-    local panel = self.pzoptPanel
-    self.mainPanel = panel
-    self.addY = 0
-    local p = perf()
-    local W, H = panel:getWidth(), panel:getHeight()
-    local G = { m = 16, sbar = 13, hS = hS, hM = hM, hL = hL, BH = BH, SP = SP }
-    -- the sidebar as wide as its longest category name needs (with its count), within 200..330 px; the preview a
-    -- quarter of the width, at least 300 px (a 1920 x 1080 window is 1344 px wide: 1/4 is 336)
-    local longest = 0
-    for _, g in ipairs(PzoptSettingsLayout.groups) do
-        for _, c in ipairs(g.cats) do longest = math.max(longest, textW(UIFont.Small, c.title)) end
-    end
-    G.sideW = math.max(200, math.min(330, math.max(math.floor(W * 0.14), longest + textW(UIFont.Small, "000") + 48)))
-    G.prevW = math.max(300, math.min(900, math.floor(W * 0.25)))
-    G.prevX = W - G.m - G.sbar - G.prevW
-    G.contentX = G.m + G.sideW + GAP
-    G.contentR = G.prevX - GAP
-    G.homeX, G.homeR = G.m, W - G.m - G.sbar
-    G.ctrlW = math.min(comboWidth, math.floor((G.contentR - G.contentX) * 0.4))
-    G.labelX = G.contentX + G.ctrlW + 12
-    local split = G.contentX - 20 -- the stock helpers put the control at splitpoint + 20
-    local S = { panel = panel, G = G, items = {}, keyRows = {}, searchRows = {}, self = self, hitCount = 0 }
-    self.pzoptSearch = S
-
-    -- every element added while `sink` is set belongs to the item being built (kept on the panel: rows are built later too)
-    local sink
-    panel.addChild = function(o, child)
-        if sink then table.insert(sink, child) end
-        return ISPanelJoypad.addChild(o, child)
-    end
-    local function capture(fn, into)
-        local top = self.addY
-        sink = {}
-        local result = fn()
-        local item = into or {}
-        item.elems, item.step = {}, self.addY - top
-        for _, el in ipairs(sink) do table.insert(item.elems, { el = el, dy = el:getY() - top, x0 = el:getX() }) end
-        sink = nil
-        table.insert(S.items, item)
-        return item, result, top
-    end
-    -- one element, placed by relayout at its own x
-    local function single(el)
-        panel:addChild(el)
-        local item = { elems = { { el = el, dy = 0, x0 = el:getX() } }, step = el:getHeight() }
-        table.insert(S.items, item)
-        return item
-    end
-    local function button(title, tip, onclick, h)
-        local b = ISButton:new(0, 0, 100, h or BH, title, self, onclick)
-        b:initialise()
-        b:setWidthToTitle()
-        b.tooltip = tip
-        return b, single(b)
-    end
-    local function buttonItem(title, tip, onclick)
-        local _, item = button(title, tip, onclick)
-        return item
-    end
-    local function label(text, col, font)
-        col = col or C_TEXT
-        local l = ISLabel:new(0, 0, BH, text, col.r, col.g, col.b, 1, font or UIFont.Small, true)
-        l:initialise()
-        return l, single(l)
-    end
-
-    local B = { self = self, S = S, G = G, p = p, single = single, button = button, buttonItem = buttonItem, label = label }
-    S.idle, S.idleMs, S.idleFrames = {}, {}, 0
-    tp = buildPhases.mark("setup", tp)
-    pageBuild.header(B)
-    tp = buildPhases.mark("header", tp)
-    pageBuild.home(B)
-    tp = buildPhases.mark("home", tp)
-
-    -- category pages: heading, footer
-    S.catHead = single(drawPanel(function(o)
-        local cat = o.cat
-        if not cat then return end
-        local c = cat.group.c
-        o:drawText(cat.title, 0, 0, 1, 1, 1, 1, UIFont.Large)
-        o:drawText(clipText(UIFont.Small, cat.blurb, o.width), 0, hL + 4, C_GREY.r, C_GREY.g, C_GREY.b, 1, UIFont.Small)
-        local count = #cat.rows .. " settings in " .. #cat.subs .. " subcategories"
-        if textW(UIFont.Large, cat.title) + 24 + textW(UIFont.Small, count) <= o.width then
-            o:drawTextRight(count, o.width, math.floor((hL - hS) / 2), c.r, c.g, c.b, 1, UIFont.Small)
-        end
-        if groupOff(cat.group) then
-            o:drawText(clipText(UIFont.Small, "Switched off: the " .. cat.group.title .. " master switch on the home page is off, so these "
-                .. "settings are ignored.", o.width), 0, hL + hS + 8, C_STOCK.r, C_STOCK.g, C_STOCK.b, 1, UIFont.Small)
-        end
-    end))
-    S.tabRule = single(drawPanel(function(o) o:drawRect(0, 0, o.width, 1, 1, 0.3, 0.3, 0.33) end))
-    S.tabRule.background = true
-    S.moreButton = buttonItem("Show more", "Switches the view so this subcategory shows the rest of its settings.", function()
-        setLevel(S, NAV.level == "simple" and "advanced" or "everything")
-    end)
-    S.catReset = buttonItem("Reset to defaults", "Puts every setting of this category back to the build's default on this "
-        .. "machine. Only the controls change; Apply or Accept saves them.", function()
-        local cat = S.tree.catById[NAV.cat]
-        if not cat then return end
-        local list = {}
-        for _, row in ipairs(cat.rows) do table.insert(list, S.buildRow(row).option) end
-        resetOptions(list)
-    end)
-    S.catNote = single(drawPanel(function(o)
-        o:drawText(clipText(UIFont.Small, o.text or "", o.width), 0, 0, C_DIM.r, C_DIM.g, C_DIM.b, 1, UIFont.Small)
-    end))
-
-    -- problems
-    S.probHead = single(drawPanel(function(o)
-        o:drawText("Fix a problem", 0, 0, 1, 1, 1, 1, UIFont.Large)
-        o:drawText(clipText(UIFont.Small, "Pick what you notice: why it happens, and the settings that help, wherever they live.", o.width),
-            0, hL + 4, C_GREY.r, C_GREY.g, C_GREY.b, 1, UIFont.Small)
-    end))
-    S.probWhy = single(drawPanel(function(o)
-        local pr = o.problem
-        if not pr then return end
-        o:drawRect(0, 0, o.width, o.height, 1, 0.115, 0.10, 0.13)
-        o:drawRectBorder(0, 0, o.width, o.height, 0.6, C_HELP.r, C_HELP.g, C_HELP.b)
-        o:drawText(pr.title, 16, 8, 1, 1, 1, 1, UIFont.Medium)
-        local yy = 12 + hM
-        for _, l in ipairs(o.lines or {}) do
-            o:drawText(l, 16, yy, 0.85, 0.85, 0.87, 1, UIFont.Small)
-            yy = yy + hS
-        end
-    end))
-    -- search
-    S.searchHead = single(drawPanel(function(o)
-        o:drawText(clipText(UIFont.Medium, o.text or "", o.width), 0, 0, 1, 1, 1, 1, UIFont.Medium)
-    end))
-
-    -- the settings: master switches first, then every section's entries (in tab order). Every setting is a row record
-    -- from the start (its entry, tier, place in the tree); its controls are built the first time a page shows it
-    -- (relayout's rowAt, through S.buildRow) or by the idle builder in the frames after the tab opened, never all in the
-    -- frame the tab is first shown (2026-10-10: the eager build of ~400 rows' controls was ~45 ms of the first open).
-    local rows = {}
-    local masterRows = {}
-    local function rowInit(row, entry, pageIndex, section, isMaster)
-        row.entry, row.page, row.section, row.isMaster = entry, pageIndex, section, isMaster
-        row.key = entry.key
-        row.tier = isMaster and 1 or tierOf(entry.key)
-        row.clip = isMaster and PAGES[pageIndex].masterClip or (KEY_CLIP[entry.key] or section.clip or "drive")
-        row.controlDy = 0
-        row.elems, row.step, row.h, row.hidden = {}, 0, 0, true
-        table.insert(S.keyRows, row)
-        row.index = #S.keyRows
-        return row
-    end
-    local function makeRow(row)
-        local entry, section = row.entry, row.section
-        local tr = getTimestampMs()
-        local _, option, top = capture(function()
-            if entry.bezier then return addBezierOption(self, entry, split, 0, G.ctrlW, BH) end
-            if entry.colour then return addColourOption(self, entry, split, 0) end
-            if entry.choices then return addIntOption(self, entry, split, 0, G.ctrlW) end
-            return addBoolOption(self, entry, split, 0, BH)
-        end, row)
-        tr = buildPhases.mark("row controls", tr)
-        -- the labels the stock helpers right-align left of the control go to its right, left-aligned; a setting's name
-        -- too long for the column (a 1920 x 1080 window) wraps: its first line stays the label, the rest goes on the
-        -- line(s) under it, above the tags (PzoptRowInfo)
-        local maxLab = 0
-        local more = {}
-        local titled = false
-        for _, e in ipairs(row.elems) do
-            local el = e.el
-            if el.Type == "ISLabel" and el:getX() < G.contentX - 1 then
-                local font = el.font or UIFont.Small
-                local room = G.contentR - G.labelX
-                local name = el.name or ""
-                if not titled and textW(font, name) > room then
-                    local lines = wrapLines(font, name, room)
-                    name = lines[1]
-                    for i = 2, math.min(#lines, 3) do table.insert(more, lines[i]) end
-                    if #lines > 3 then more[2] = clipText(font, more[2] .. " " .. table.concat(lines, " ", 4), room) end
-                end
-                titled = true
-                name = clipText(font, name, room)
-                el.left, el.originalX, el.name = true, G.labelX, name
-                el:setWidth(textW(font, name))
-                el:setX(G.labelX)
-                e.x0 = G.labelX
-                maxLab = math.max(maxLab, el:getWidth())
-            elseif el.Type == "ISTickBox" then
-                el:setX(G.contentX + G.ctrlW - el:getWidth())
-                e.x0 = el:getX()
-            end
-        end
-        for _, e in ipairs(row.elems) do
-            if e.el.Type ~= "ISLabel" and e.el:getX() < G.contentX - 1 then -- the curve plot, smaller when the column is narrow
-                local px = G.labelX + maxLab + 16
-                local size = math.max(40, math.min(e.el:getWidth(), G.contentR - px))
-                e.el:setWidth(size)
-                e.el:setHeight(size)
-                e.el:setX(px)
-                e.x0 = px
-            end
-        end
-        tr = buildPhases.mark("row labels", tr)
-        row.option = option
-        -- the line under the label (after the rest of a wrapped name)
-        row.labelMore = more
-        local infoH = (hS + 2) * (1 + #more)
-        local info = PzoptRowInfo:new(G.labelX, self.addY - SP + 1, G.contentR - G.labelX, infoH, row)
-        info:initialise()
-        panel:addChild(info)
-        table.insert(row.elems, { el = info, dy = info:getY() - top, x0 = G.labelX })
-        self.addY = self.addY + infoH + SP
-        row.step = self.addY - top
-        row.h = row.step
-        option.pzoptProfile = section and section.profiles
-        buildPhases.mark("row info", tr)
-    end
-    -- Builds a row's controls (once), shows the saved value, leaves it hidden for relayout to place. The screen's
-    -- mainPanel / addY, its "changed" flag and the panel's controller rows (the stock helpers append a line each) are
-    -- put back, so a row built in the background changes nothing else.
-    S.buildRow = function(row)
-        if row.option then return row end
-        local savedPanel2, savedAddY2, changed = self.mainPanel, self.addY, self.gameOptions.changed
-        local jy, ja, jb = panel.joypadButtonsY or {}, panel.allJoypadButtons or {}, panel.joypadButtons
-        local nY, nA = #jy, #ja
-        self.mainPanel, self.addY = panel, 0
-        makeRow(row)
-        row.option:toUI()
-        row.option:storeCurrentValue()
-        hideItem(row)
-        for i = #jy, nY + 1, -1 do table.remove(jy, i) end
-        for i = #ja, nA + 1, -1 do table.remove(ja, i) end
-        panel.joypadButtons = jb
-        self.mainPanel, self.addY, self.gameOptions.changed = savedPanel2, savedAddY2, changed
-        if S.preview then S.preview:addRow(row) end
-        S.rowsBuilt = S.rowsBuilt + 1
-        return row
-    end
-    S.rowsBuilt = 0
-    -- the option lists of the three groups (profiles, export / import, resets and the harness read them), in tab order
-    S.syncOptions = function()
-        local lists = { {}, {}, {} }
-        for _, row in ipairs(S.searchRows) do
-            if row.option then table.insert(lists[row.page], row.option) end
-        end
-        for pi, page in ipairs(PAGES) do self[page.options] = lists[pi] end
-    end
-    S.finishRows = function()
-        if S.rowsBuilt < #S.keyRows then
-            for _, row in ipairs(S.keyRows) do S.buildRow(row) end
-        end
-        S.syncOptions()
-    end
-    tp = buildPhases.mark("page parts", tp)
-    for pi, page in ipairs(PAGES) do
-        if page.master and p:isPzoptOptionKnown(page.master.key) then
-            local row = S.buildRow(rowInit({}, page.master, pi, nil, true))
-            masterRows[pi] = row
-            self[page.masterField] = row.option
-        end
-    end
-    for pi, page in ipairs(PAGES) do
-        for _, section in ipairs(page.sections) do
-            for _, entry in ipairs(section.entries) do
-                if p:isPzoptOptionKnown(entry.key) then
-                    table.insert(rows, { entry = entry, page = pi, section = section })
-                else
-                    print("[pzopt] options tab: unknown key " .. entry.key .. ", skipped")
-                end
-            end
-        end
-    end
-    -- the tree needs the rows' keys and sections only; build it on stand-ins, then make the cards (the Visuals cards
-    -- are made before the controls inside them, so the controls draw over them), then the row records
-    tp = buildPhases.mark("masters + keys", tp)
-    local stand = {}
-    for _, r in ipairs(rows) do table.insert(stand, { entry = r.entry, page = r.page, section = r.section, stand = r }) end
-    local tree = buildTree(stand, masterRows)
-    S.tree = tree
-    tp = buildPhases.mark("tree", tp)
-    pageBuild.decorations(B)
-    tp = buildPhases.mark("decorations", tp)
-    -- the row records, in the tree's order (stand-ins swapped for them)
-    local real = {}
-    for _, st in ipairs(stand) do
-        local row = rowInit({}, st.entry, st.page, st.section, false)
-        row.cat, row.sub, row.group = st.cat, st.sub, st.group
-        real[st] = row
-        table.insert(S.searchRows, row)
-    end
-    -- the colour and the curve rows: their values come from their controls (rowCurrent covers the rest)
-    for _, row in ipairs(S.searchRows) do
-        if row.entry.colour or row.entry.bezier then S.buildRow(row) end
-    end
-    tp = buildPhases.mark("rows", tp)
-    for _, g in ipairs(tree.groups) do
-        for _, cat in ipairs(g.cats) do
-            for i, r in ipairs(cat.rows) do cat.rows[i] = real[r] end
-            for _, sub in ipairs(cat.subs) do
-                for i, r in ipairs(sub.rows) do sub.rows[i] = real[r] end
-                -- the Upscaling subcategory starts with the "Install DLSS files" button
-                if sub.dlss then
-                    local b, item = button(DEPS_TITLES.checking, DEPS_TIP, nil)
-                    setupUpscalerDepsButton(self, b)
-                    item.elems[1].x0 = G.contentX
-                    item.step = BH + SP
-                    item.joy = { { b } }
-                    sub.dlssRow = item
-                end
-            end
-        end
-    end
-    for _, pr in ipairs(tree.problems) do
-        for i, r in ipairs(pr.rows) do pr.rows[i] = real[r] end
-    end
-    S.syncOptions()
-    tp = buildPhases.mark("swap + dlss", tp)
-
-    -- search over every setting (the masters are on the home page), indexed by the idle builder
-    S.index = indexNew(S.searchRows)
-
-    -- the fixed parts: the sidebar on the left, the preview on the right (both added last: they draw on top)
-    local sidebar = PzoptSidebar:new(G.m, G.m, G.sideW, H - 2 * G.m, S)
-    sidebar:initialise()
-    sidebar:instantiate()
-    sidebar:setScrollWithParent(false)
-    sidebar:setAnchorTop(true)
-    sidebar:setAnchorBottom(true)
-    panel:addChild(sidebar)
-    S.sidebar = sidebar
-    sidebar:build(self)
-    tp = buildPhases.mark("sidebar", tp)
-    -- The controller between the page and the sidebar: Left / Right cross (the stock spatial search finds the entry or the
-    -- control at that height), Up / Down stay on their side (at the ends of a list the stock fallback steps to the next
-    -- row, which would jump between the two), Right from the sidebar into an empty stretch of the page goes to the page's
-    -- first control. A focused sidebar entry never scrolls the page.
-    panel.ensureVisible = function(o)
-        local child = o:getJoypadFocus()
-        if child and child.pzoptFixed then return end
-        return ISPanelJoypad.ensureVisible(o)
-    end
-    for _, dir in ipairs({ "onJoypadDirUp", "onJoypadDirDown" }) do
-        local stock = ISPanelJoypad[dir]
-        panel[dir] = function(o, joypadData)
-            local before = o:getJoypadFocus()
-            stock(o, joypadData)
-            local after = o:getJoypadFocus()
-            if before and after and before ~= after and (before.pzoptFixed == true) ~= (after.pzoptFixed == true) then
-                o:setJoypadFocus(before, joypadData)
-                o:ensureVisible()
-            end
-        end
-    end
-    local stockRight = ISPanelJoypad.onJoypadDirRight
-    panel.onJoypadDirRight = function(o, joypadData)
-        local before = o:getJoypadFocus()
-        stockRight(o, joypadData)
-        if before and before.pzoptFixed and o:getJoypadFocus() == before and S.firstJoy then
-            o:setJoypadFocus(S.firstJoy, joypadData)
-            o:ensureVisible()
-        end
-    end
-    tp = buildPhases.mark("joypad hooks", tp)
-    local preview = PzoptPreview:new(G.prevX, G.m, G.prevW, H - 2 * G.m, panel, S.keyRows)
-    preview:initialise()
-    preview:instantiate()
-    preview:setScrollWithParent(false)
-    preview:setAnchorTop(true)
-    preview:setAnchorBottom(true)
-    preview.minX = G.contentX
-    panel:addChild(preview)
-    for _, row in ipairs(S.keyRows) do
-        if row.option then preview:addRow(row) end
-    end
-    if S.keyRows[1] then preview:select(S.keyRows[1]) end
-    self.pzoptPreview = preview
-    S.preview = preview
-    tp = buildPhases.mark("preview", tp)
-
-    -- What the first page does not need, a slice a frame while the tab is shown (idleWork): the preview's description
-    -- slot, the rows' controls (a page shows its own at once), the search index (a search finishes it first).
-    S.idle = {
-        { name = "preview", step = function() return preview:measureStep() end },
-        { name = "rows", step = function()
-            local row = S.keyRows[S.idleRow or 1]
-            if not row then
-                S.syncOptions()
-                return true
-            end
-            S.idleRow = (S.idleRow or 1) + 1
-            S.buildRow(row)
-            return false
-        end },
-        { name = "index", step = function() return indexStep(S.index) end },
-    }
-    -- the page's prerender runs before its children draw: the idle slice, then cull for this frame's scroll
-    local pagePrerender = panel.prerender
-    panel.prerender = function(o, ...)
-        idleWork(S)
-        cullRows(S)
-        return pagePrerender(o, ...)
-    end
-    relayout(S)
-    tp = buildPhases.mark("relayout", tp)
-    -- (each row shows its saved value when its controls are built: S.buildRow)
-    self.gameOptions.changed = wasChanged
-    self.mainPanel, self.addY = savedPanel, savedAddY
-    buildPhases.mark("toUI", tp)
-    local tiers = { 0, 0, 0 }
-    for _, row in ipairs(S.searchRows) do tiers[row.tier] = tiers[row.tier] + 1 end
-    PzoptLogInfo("[pzopt] options tab " .. TAB .. ": " .. #S.keyRows .. " settings (simple " .. tiers[1] .. ", advanced "
-        .. tiers[2] .. ", expert " .. tiers[3] .. "), " .. #S.items .. " items, layout "
-        .. G.sideW .. " / " .. (G.contentR - G.contentX) .. " / " .. G.prevW .. " px, built in " .. (getTimestampMs() - t0) .. " ms ("
-        .. buildPhases.text() .. "), " .. S.rowsBuilt .. " rows' controls built, the rest in the background")
-end
-
--- The tab is added with the others (after Display) but built the first time it is shown: the in-game menu builds the
--- whole options screen while the world is entered.
-function MainOptions:pzoptAddOptimizationsPanel()
-    self.pzoptBuilt = false
-    self:addPage(TAB)
-    self.pzoptPanel = self.mainPanel
-end
-
-ensurePageBuilt = function(self, tab)
-    if self.pzoptPanel and not self.pzoptBuilt then
-        self.pzoptBuilt = true
-        local ok, err = pcall(buildPage, self)
-        if not ok then
-            print("[pzopt] options tab " .. TAB .. ": build failed: " .. tostring(err))
-        end
-    end
-end
-
--- For the harness and the e2e rigs: the tab's name, and showing a page ("home", "cat" + category id + subcategory
--- index, "problems") at a view level ("simple", "advanced", "everything").
-PzoptOptionsTab = TAB
-function PzoptOptionsNavigate(mo, kind, cat, sub, level)
-    if not mo then return false end
-    ensurePageBuilt(mo, TAB)
-    local S = mo.pzoptSearch
-    if not S then return false end
-    if level and LEVEL[level] then NAV.level = level end
-    if kind == "problems" and tonumber(cat) then
-        NAV.problem = tonumber(cat)
-        cat = nil
-    end
-    navigate(S, kind or "home", cat, tonumber(sub) or 0)
-    return true
+-- The tab's sections, page by page (1 Performance, 2 Visuals, 3 Tools), for the main menu's PZ Optimization screen
+-- (pzopt_mainscreen_menu.lua: its settings pages list each subcategory's keys with their labels and descriptions).
+function PzoptOptionSections()
+    return { SECTIONS, ENHANCEMENT_SECTIONS, PROFILER_SECTIONS }
 end
 
 local function install()
-    if not MainOptions or MainOptions.pzoptOptimizationsTab then return end
+    if not MainOptions or MainOptions.pzoptOptionsHooks then return end
     local ok, has = pcall(function() return getPerformance():hasPzoptOptions() end)
     if not ok or not has then
-        print("[pzopt] options tab: PerformanceSettings override not loaded or overrides disabled, tab not added")
+        print("[pzopt] options screen: PerformanceSettings override not loaded or overrides disabled, lazy build not installed")
         return
     end
-    MainOptions.pzoptOptimizationsTab = true
-    -- The tabs go right after Display (Optimizations, Enhancements, then Profiler): create() adds the pages in order, so hook
-    -- the Display page.
+    MainOptions.pzoptOptionsHooks = true
+    -- The game's Options screen has no PZ Optimization tab since 2026-10-18 (the settings live in the main menu's PZ
+    -- OPTIMIZATION screen, pzopt_mainscreen_menu.lua); what stays here is its lazy build.
     -- the whole options screen's build time, for the load trace (the in-game menu builds it while the world is entered)
     local stockCreate = MainOptions.create
-    -- The full build: stock create (timed for the load trace), then the Optimizations tab's lazy hook.
+    -- The full build: stock create, timed for the load trace.
     local function fullCreate(self, ...)
         self.pzoptCreatePending = false
         self.pzoptCreated = true
         local t0 = getTimestampMs()
         local r = stockCreate(self, ...)
         PzoptLogInfo("[pzopt] options screen: MainOptions:create took " .. (getTimestampMs() - t0) .. " ms")
-        -- build our tab when it is first shown (pzoptAddOptimizationsPanel added it empty)
-        local tabs = self.tabs
-        if tabs and self.pzoptPanel then
-            local stockOnActivate = tabs.onActivateView
-            tabs.onActivateView = function(target, tabPanel)
-                if target and target.pzoptPanel and tabPanel:getActiveView() == target.pzoptPanel then
-                    ensurePageBuilt(target, TAB)
-                end
-                if stockOnActivate then
-                    return stockOnActivate(target, tabPanel)
-                end
-            end
-        end
         return r
     end
     -- lazyOptionsScreen: the main menu and the in-game menu build the whole options screen while they are built
-    -- (boot, every world entry, exit to menu), ~130 ms of vanilla panels on the flip on top of our tab. The hidden
+    -- (boot, every world entry, exit to menu), ~130 ms of vanilla panels on the flip. The hidden
     -- screen now only does the one part of create() the game needs without it, the key bindings (loadKeys, and the
     -- keysB42.ini rewrite stock does after a key-file version change), and builds the rest the first time it is
     -- used: toUI (called before the screen is shown) or setVisible(true). Only while our wrapper is still the
@@ -5291,16 +3265,7 @@ local function install()
         end
         return stockDoLayout(self, ...)
     end
-    local stockAddDisplayPanel = MainOptions.addDisplayPanel
-    function MainOptions:addDisplayPanel()
-        stockAddDisplayPanel(self)
-        local okPanel, err = pcall(MainOptions.pzoptAddOptimizationsPanel, self)
-        if not okPanel then
-            print("[pzopt] options tab: failed: " .. tostring(err))
-        end
-    end
-    -- Closing the options screen (Back / Accept hide it) frees the preview clips' textures; the next
-    -- visit decodes them again.
+    -- Shown: the deferred build first, then the values it shows.
     local stockSetVisible = MainOptions.setVisible
     function MainOptions:setVisible(bVisible, ...)
         if bVisible then
@@ -5311,10 +3276,6 @@ local function install()
             end
         end
         stockSetVisible(self, bVisible, ...)
-        if not bVisible then
-            if self.pzoptColourPicker then self.pzoptColourPicker:removeSelf() end
-            pcall(function() getPerformance():releasePzoptGifs() end)
-        end
     end
 end
 

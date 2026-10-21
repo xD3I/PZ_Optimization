@@ -38,23 +38,45 @@ public final class SeparateMask {
    }
 
    /** Whether {@code square} is blocked to its {@code i}-th surrounding square, from this frame's cache. */
+   /** A frame worker's own table (separateMemo, 2026-10-13): used only while the separation batch runs, when the grid is read-only. */
+   private static final class Table {
+      final IsoGridSquare[] keys = new IsoGridSquare[SIZE];
+      final int[] values = new int[SIZE];
+      final int[] stamps = new int[SIZE];
+   }
+
+   private static final Tl<Table> TABLES = new Tl<>(Table::new);
+
    public static boolean blocked(IsoGridSquare square, IsoGridSquare other, int i) {
+      if (EDGE_CACHE && ZombAb.on(ZombAb.EDGE_CACHE)) {
+         return blockedShared(square, other, i);
+      }
+      IsoGridSquare[] keysT = KEYS;
+      int[] valuesT = VALUES;
+      int[] stampsT = STAMPS;
       if (Thread.currentThread() != GameWindow.gameThread) {
-         // the table is the game thread's; a mod that updates characters on other threads (PZMulticore) asks directly
-         return blockedNow(square, other);
+         if (!SeparateBatch.memoActive()) {
+            // the table is the game thread's; a mod that updates characters on other threads (PZMulticore) asks directly
+            return blockedNow(square, other);
+         }
+         // separateMemo: inside the separation batch the grid does not change, so a worker keeps its own table for the frame
+         Table t = TABLES.get();
+         keysT = t.keys;
+         valuesT = t.values;
+         stampsT = t.stamps;
       }
       int slot = (System.identityHashCode(square) >>> 4) & MASK;
-      int value = VALUES[slot];
-      if (KEYS[slot] != square || STAMPS[slot] != FrameTick.frame()) {
-         KEYS[slot] = square;
-         STAMPS[slot] = FrameTick.frame();
+      int value = valuesT[slot];
+      if (keysT[slot] != square || stampsT[slot] != FrameTick.frame()) {
+         keysT[slot] = square;
+         stampsT[slot] = FrameTick.frame();
          value = 0;
       }
 
       int bit = 1 << i;
       if ((value & bit << 8) != 0) {
          hits++;
-         VALUES[slot] = value;
+         valuesT[slot] = value;
          return (value & bit) != 0;
       }
 
@@ -65,7 +87,43 @@ public final class SeparateMask {
          value |= bit;
       }
 
-      VALUES[slot] = value;
+      valuesT[slot] = value;
+      return blocked;
+   }
+
+   // separateEdgeCache (zombie redesign pass, 2026-10-13, f8-zomb2): the per-frame answers kept on the square itself, so the
+   // separation batch's workers and the game thread share them (before, a worker outside separateMemo asked the grid every
+   // time: 39 % of the batch). One long per square, written whole (frame, computed bits, blocked bits): a racing worker that
+   // loses its bit only recomputes it. The frame key is the separation's stamp (the next frame while separateAsync runs ahead
+   // of the tick), the same frame-long validity the game thread's table always had.
+   private static final boolean EDGE_CACHE = Config.SEPARATE_EDGE_CACHE;
+   private static final boolean EDGE_CHECK = Config.DEV_SEPARATE_EDGE_CHECK;
+   private static final java.util.concurrent.atomic.AtomicLong edgeChecked = new java.util.concurrent.atomic.AtomicLong();
+   private static final java.util.concurrent.atomic.AtomicLong edgeDiffs = new java.util.concurrent.atomic.AtomicLong();
+
+   private static boolean blockedShared(IsoGridSquare square, IsoGridSquare other, int i) {
+      long key = SeparateBatch.stamp();
+      long v = square.pzoptSepEdges;
+      if (v >>> 16 != key) {
+         v = key << 16;
+      }
+      long bit = 1L << i;
+      if ((v & bit << 8) != 0L) {
+         boolean b = (v & bit) != 0L;
+         if (EDGE_CHECK && (System.identityHashCode(square) + i & 31) == 0) {
+            edgeChecked.incrementAndGet();
+            if (blockedNow(square, other) != b) {
+               edgeDiffs.incrementAndGet();
+            }
+         }
+         return b;
+      }
+      boolean blocked = blockedNow(square, other);
+      v |= bit << 8;
+      if (blocked) {
+         v |= bit;
+      }
+      square.pzoptSepEdges = v;
       return blocked;
    }
 
@@ -73,6 +131,6 @@ public final class SeparateMask {
    public static String describe() {
       long total = hits + misses;
       return "separate mask: asks=" + total + " computed=" + misses + (total > 0 ? " (" + 100L * misses / total + " %)" : "")
-            + " spills=" + collideSpills + " | " + SeparateBatch.describe();
+            + " spills=" + collideSpills + (EDGE_CHECK ? " edgeChecked=" + edgeChecked.get() + " edgeDiffs=" + edgeDiffs.get() : "") + " | " + SeparateBatch.describe();
    }
 }

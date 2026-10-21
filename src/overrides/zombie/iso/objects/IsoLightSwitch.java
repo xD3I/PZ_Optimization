@@ -882,6 +882,21 @@ public class IsoLightSwitch extends IsoObject {
       return this.lights;
    }
 
+   // pzopt: tileRecordLightOrder. shouldShowOnOverlay's answer for a seen square, without asking isSeen (the square's lazy light
+   // refresh): false here means false whatever the square's visibility, so the defer rule need not ask (pzopt.TileRecord).
+   public boolean pzoptOverlayIfSeen() { // pzopt
+      boolean electricityAround = this.hasElectricityAround(); // pzopt
+      boolean hasBatteryPower = this.useBattery && this.hasBattery && this.power > 0.0F; // pzopt
+      boolean bShowOverlay = this.isActivated() && (hasBatteryPower || !this.useBattery && electricityAround); // pzopt
+      if (this.lightRoom) { // pzopt
+         bShowOverlay = !bShowOverlay && electricityAround; // pzopt
+      } // pzopt
+      if (this.streetLight && (GameTime.getInstance().getNight() < 0.5F || !this.hasGridPower())) { // pzopt
+         bShowOverlay = false; // pzopt
+      } // pzopt
+      return bShowOverlay; // pzopt
+   } // pzopt
+
    public boolean shouldShowOnOverlay() {
       int playerIndex = IsoCamera.frameState.playerIndex;
       if (this.getSquare() != null && this.getSquare().isSeen(playerIndex)) {

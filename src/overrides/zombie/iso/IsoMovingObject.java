@@ -1250,7 +1250,7 @@ implements Mover {
                 IsoPlayer objPlyr = Type.tryCastTo(obj, IsoPlayer.class);
                 IsoZombie objZombie = Type.tryCastTo(obj, IsoZombie.class);
                 float twidth = this.width + obj.width;
-                Vector2 diff = tempo;
+                Vector2 diff = pzopt.WorkerScratch.v2(tempo, pzopt.WorkerScratch.MOVING_TEMPO); // pzopt: zombie pass static audit, per thread on a frame worker
                 diff.x = this.getNextX() - obj.getNextX();
                 diff.y = this.getNextY() - obj.getNextY();
                 float len = diff.getLength();
@@ -1834,7 +1834,7 @@ implements Mover {
     }
 
     public IsoGridSquare getFeelerTile(float dist) {
-        Vector2 vec = pzopt.PostupdateBatch.computing() ? pzopt.PostupdateBatch.tempo() : tempo; // pzopt: postupdateParallel — the static scratch is per thread in a movement task
+        Vector2 vec = pzopt.PostupdateBatch.computing() ? pzopt.PostupdateBatch.tempo() : pzopt.WorkerScratch.v2(tempo, pzopt.WorkerScratch.MOVING_TEMPO); // pzopt: postupdateParallel — the static scratch is per thread in a movement task; zombie pass static audit — and on any frame worker (tryThump from a batched update)
         vec.x = this.getNextX() - this.getLastX();
         vec.y = this.getNextY() - this.getLastY();
         vec.setLength(dist);

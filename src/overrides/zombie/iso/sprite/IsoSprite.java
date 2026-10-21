@@ -224,7 +224,8 @@ public final class IsoSprite {
    } // pzopt
 
    private static Tiles pzoptSeamFix2() { // pzopt
-      return pzopt.DrawRecorder.recording && pzopt.DrawRecorder.currentRecorder() != null ? null : seamFix2; // pzopt
+      pzopt.DrawRecorder r; // pzopt
+      return pzopt.DrawRecorder.recording && (r = pzopt.DrawRecorder.currentRecorder()) != null ? (r.bakeUnit ? (Tiles)r.seamFix2 : null) : seamFix2; // pzopt: bakeRecordParallel, a bake unit's recorder keeps its own floor seam tile
    } // pzopt
 
    private static TileSeamModifier pzoptTsm() { // pzopt
@@ -1576,8 +1577,8 @@ public final class IsoSprite {
       float goX = globalOffsetX;
       float goY = globalOffsetY;
       if (FBORenderCell.pzoptCaching()) { // pzopt: tileRecordParallel, a recording thread sees the translucent pass's render mode
-         goX = FBORenderChunkManager.instance.getXOffset();
-         goY = FBORenderChunkManager.instance.getYOffset();
+         goX = pzopt.BakeRecord.xOffset(); // pzopt: bakeRecordParallel, a recording thread draws into its unit's texture
+         goY = pzopt.BakeRecord.yOffset(); // pzopt: bakeRecordParallel, a recording thread draws into its unit's texture
          x = PZMath.coordmodulof(x, 8);
          y = PZMath.coordmodulof(y, 8);
          if (obj != null && obj.getSquare() != obj.getRenderSquare()) {
@@ -1772,14 +1773,14 @@ public final class IsoSprite {
                               } else if (FBORenderCell.pzoptTranslucentOnly()) { // pzopt: tileRecordParallel, a recording thread sees the translucent pass's render mode
                                  renderInfo.renderX = obj.sx - IsoCamera.frameState.offX;
                                  renderInfo.renderY = obj.sy - IsoCamera.frameState.offY;
-                              } else if (FBORenderChunkManager.instance.renderChunk != null && FBORenderChunkManager.instance.renderChunk.highRes) {
+                              } else if (pzopt.BakeRecord.renderChunk() != null && pzopt.BakeRecord.renderChunk().highRes) { // pzopt: bakeRecordParallel, a recording thread draws into its unit's texture
                                  renderInfo.renderX = obj.sx
-                                    + FBORenderChunkManager.instance.getXOffset()
-                                    - FBORenderChunkManager.instance.renderChunk.w / 4.0F;
-                                 renderInfo.renderY = obj.sy + FBORenderChunkManager.instance.getYOffset();
+                                    + pzopt.BakeRecord.xOffset() // pzopt: bakeRecordParallel, a recording thread draws into its unit's texture
+                                    - pzopt.BakeRecord.renderChunk().w / 4.0F; // pzopt: bakeRecordParallel, a recording thread draws into its unit's texture
+                                 renderInfo.renderY = obj.sy + pzopt.BakeRecord.yOffset(); // pzopt: bakeRecordParallel, a recording thread draws into its unit's texture
                               } else {
-                                 renderInfo.renderX = obj.sx + FBORenderChunkManager.instance.getXOffset();
-                                 renderInfo.renderY = obj.sy + FBORenderChunkManager.instance.getYOffset();
+                                 renderInfo.renderX = obj.sx + pzopt.BakeRecord.xOffset(); // pzopt: bakeRecordParallel, a recording thread draws into its unit's texture
+                                 renderInfo.renderY = obj.sy + pzopt.BakeRecord.yOffset(); // pzopt: bakeRecordParallel, a recording thread draws into its unit's texture
                               }
 
                               renderInfo.renderWidth = tex.getWidthOrig() * scaleX;
@@ -1871,10 +1872,10 @@ public final class IsoSprite {
             float goX = globalOffsetX;
             float goY = globalOffsetY;
             if (FBORenderCell.pzoptCaching()) { // pzopt: tileRecordParallel, a recording thread sees the translucent pass's render mode
-               goX = FBORenderChunkManager.instance.getXOffset();
-               goY = FBORenderChunkManager.instance.getYOffset();
-               x -= FBORenderChunkManager.instance.renderChunk.chunk.wx * 8;
-               y -= FBORenderChunkManager.instance.renderChunk.chunk.wy * 8;
+               goX = pzopt.BakeRecord.xOffset(); // pzopt: bakeRecordParallel, a recording thread draws into its unit's texture
+               goY = pzopt.BakeRecord.yOffset(); // pzopt: bakeRecordParallel, a recording thread draws into its unit's texture
+               x -= pzopt.BakeRecord.renderChunk().chunk.wx * 8; // pzopt: bakeRecordParallel, a recording thread draws into its unit's texture
+               y -= pzopt.BakeRecord.renderChunk().chunk.wy * 8; // pzopt: bakeRecordParallel, a recording thread draws into its unit's texture
             }
 
             float sx;

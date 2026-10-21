@@ -1,0 +1,204 @@
+window 25.0 s
+== allocation by thread group (MB/s) (total 96.3 MB/s)
+    33.42 MB/s  World Streamer
+    23.88 MB/s  frame-workers
+    23.74 MB/s  MainThread
+     7.65 MB/s  pzopt-chardraw*
+     4.54 MB/s  main
+     1.98 MB/s  pool-1-thread*
+     0.69 MB/s  pool-2-thread*
+     0.17 MB/s  pzopt-overlay-stacks
+     0.09 MB/s  WorldReuser
+     0.05 MB/s  pzopt-overlay-util
+     0.02 MB/s  pzopt-recalc*
+     0.02 MB/s  PathfindNativeThread
+     0.00 MB/s  pzopt-vispoly
+     0.00 MB/s  IsoRegionWorker
+     0.00 MB/s  MapCollisionDataJNI
+== allocation by class (MB/s) (total 96.3 MB/s)
+    12.81 MB/s  [Ljava.lang.Object;
+     8.98 MB/s  [B
+     4.64 MB/s  [I
+     4.30 MB/s  java.lang.Float
+     3.63 MB/s  org.lwjgl.util.vector.Matrix4f
+     3.35 MB/s  java.lang.String
+     3.06 MB/s  java.lang.Long
+     2.71 MB/s  java.util.ArrayList
+     2.68 MB/s  zombie.core.textures.ColorInfo
+     2.59 MB/s  java.util.concurrent.ConcurrentLinkedQueue$Itr
+     2.39 MB/s  [Lzombie.core.skinnedmodel.advancedanimation.IAnimationVariableSlot;
+     2.30 MB/s  java.util.HashMap$EntryIterator
+     2.23 MB/s  zombie.iso.IsoObject
+     2.20 MB/s  zombie.iso.IsoGridSquare
+     2.16 MB/s  zombie.iso.LightingJNI$JNILighting
+     1.92 MB/s  java.util.HashMap$Node
+     1.92 MB/s  [S
+     1.86 MB/s  jdk.internal.foreign.NativeMemorySegmentImpl
+     1.68 MB/s  java.util.ArrayList$Itr
+     1.61 MB/s  zombie.core.opengl.GLState$CBooleanValue
+     1.41 MB/s  zombie.core.opengl.GLState$C4IntsValue
+     1.16 MB/s  zombie.core.opengl.GLState$CIntValue
+     1.15 MB/s  zombie.core.opengl.GLState$CIntFloatValue
+     1.14 MB/s  java.util.regex.Matcher
+     1.08 MB/s  [F
+     1.00 MB/s  [Ljava.util.HashMap$Node;
+     0.93 MB/s  [J
+     0.73 MB/s  java.util.regex.Pattern
+     0.69 MB/s  java.util.HashMap
+     0.66 MB/s  java.lang.Integer
+== allocation by path (MB/s) (total 96.3 MB/s)
+     3.62 MB/s  [frame-workers] [Ljava.lang.Object;  <  UpdateBatch.captureLuaEvent < LuaEventManager.triggerEvent < IsoZombie.updateInternal < IsoZombie.update < UpdateBatch.flightTask < UpdateBatch.lambda$dispatchCombined$0
+     3.62 MB/s  [frame-workers] [Ljava.lang.Object;  <  LuaEventManager.triggerEvent < IsoZombie.updateInternal < IsoZombie.update < UpdateBatch.flightTask < UpdateBatch.lambda$dispatchCombined$0 < 0x000000007c8a4de0.run
+     2.59 MB/s  [World Streamer] java.util.concurrent.ConcurrentLinkedQueue$Itr  <  ChunkSaveWorker.Update < WorldStreamer.threadLoop < WorldStreamer.lambda$create$0 < 0x000000007c78f7e8.run < Thread.runWith < Thread.run
+     2.49 MB/s  [World Streamer] zombie.core.textures.ColorInfo  <  LightingJNI$JNILighting.<init> < IsoGridSquare.<init> < IsoGridSquare.getNew < IsoCell.PlaceLot < CellLoader.LoadCellBinaryChunk < IsoChunk.LoadBrandNew
+     2.25 MB/s  [pzopt-chardraw*] java.lang.Float  <  ShaderParameter.SetFloat < ShaderPropertyBlock.SetFloat < AnimatedModel$AnimatedModelInstanceRenderData.UpdateCharacter < ModelInstanceRenderData.UpdateCharacter < AnimatedModel$AnimatedModelInstanceRenderData.in
+     2.18 MB/s  [pzopt-chardraw*] java.util.HashMap$EntryIterator  <  ShaderPropertyBlock.CopyParameters < ModelSlotRenderData.UpdateCharacter < ModelSlotRenderData.init < CharDraw.build < CharDraw.buildRange < CharDraw.lambda$start$0
+     2.17 MB/s  [frame-workers] [B  <  TileBatch.start < IsoSprite.startTileDepthShader < IsoSprite.setupTileDepth < IsoSprite.renderCurrentAnim_FBORender < IsoSprite.renderCurrentAnim < IsoSprite.render
+     2.07 MB/s  [World Streamer] zombie.iso.IsoObject  <  IsoObject.getNew < CellLoader.DoTileObjectCreation < IsoCell.PlaceLot < CellLoader.LoadCellBinaryChunk < IsoChunk.LoadBrandNew < IsoChunk.LoadOrCreate
+     2.04 MB/s  [World Streamer] zombie.iso.IsoGridSquare  <  IsoGridSquare.getNew < IsoCell.PlaceLot < CellLoader.LoadCellBinaryChunk < IsoChunk.LoadBrandNew < IsoChunk.LoadOrCreate < IsoChunk.LoadChunk
+     1.97 MB/s  [World Streamer] zombie.iso.LightingJNI$JNILighting  <  IsoGridSquare.<init> < IsoGridSquare.getNew < IsoCell.PlaceLot < CellLoader.LoadCellBinaryChunk < IsoChunk.LoadBrandNew < IsoChunk.LoadOrCreate
+     1.63 MB/s  [frame-workers] java.lang.String  <  TileBatch.start < IsoSprite.startTileDepthShader < IsoSprite.setupTileDepth < IsoSprite.renderCurrentAnim_FBORender < IsoSprite.renderCurrentAnim < IsoSprite.render
+     1.60 MB/s  [World Streamer] [I  <  WorldGenChunk.cleanChunk < WorldGenChunk.generateChunks < IsoChunk.LoadBrandNew < IsoChunk.LoadOrCreate < IsoChunk.LoadChunk < WorldStreamer.DoChunkAlways
+     1.46 MB/s  [MainThread] [Lzombie.core.skinnedmodel.advancedanimation.IAnimationVariableSlot;  <  AnimationVariableSource.setVariable < IAnimationVariableCallbackMap.setVariable < IAnimationVariableRegistry.setVariable < IsoZombie.registerVariableCallbacks < Iso
+     1.18 MB/s  [frame-workers] [Ljava.lang.Object;  <  UpdateBatch.captureLuaEvent < LuaEventManager.triggerEvent < IsoMovingObject.collideWith < IsoZombie.collideWith < IsoZombie.pzoptSeparateApply < IsoZombie.separate
+     1.18 MB/s  [pzopt-chardraw*] org.lwjgl.util.vector.Matrix4f  <  ShaderParameter.<init> < ShaderPropertyBlock.SetMatrix4Array < AnimatedModel$AnimatedModelInstanceRenderData.init < ModelInstanceRenderData.init < ModelSlotRenderData.initRenderData < ModelSlotRend
+     1.18 MB/s  [World Streamer] [I  <  LightingJNI$JNILighting.<init> < IsoGridSquare.<init> < IsoGridSquare.getNew < IsoCell.PlaceLot < CellLoader.LoadCellBinaryChunk < IsoChunk.LoadBrandNew
+     1.15 MB/s  [MainThread] jdk.internal.foreign.NativeMemorySegmentImpl  <  0x000000007c08a800.invoke_V < DirectMethodHandle$Holder.invokeStatic < 0x000000007c08ec00.invoke < 0x000000007c08f000.invoke < 0x000000007c220400.invoke < 0x000000007c0b4000.invoke_MT
+     1.06 MB/s  [MainThread] [B  <  ModelInstanceTextureCreator.init < ModelInstanceTextureCreator.init < IsoGameCharacter.checkUpdateModelTextures < CharDraw.start < FBORenderCell.renderTilesInternal < FBORenderCell.RenderTiles
+     1.04 MB/s  [MainThread] org.lwjgl.util.vector.Matrix4f  <  HelperFunctions$TransformResult_QPS.<init> < BoneTransform.<init> < TwistableBoneTransform.<init> < AnimatorsBoneTransform.<init> < 0x000000007c681390.get < Pool.alloc
+     1.04 MB/s  [MainThread] java.util.ArrayList$Itr  <  FBORenderLevels.calculateInStencilRect < FBORenderCell.checkChunksWithTrees < FBORenderCell.runChecks < FBORenderCell.renderTilesInternal < FBORenderCell.RenderTiles < FBORenderCell.pzoptRenderInternal
+     1.03 MB/s  [frame-workers] java.lang.Long  <  WalkTowardState.execute < StateMachine.stateExecute < StateMachine.update < IsoGameCharacter.updateInternal < IsoGameCharacter.update < IsoZombie.updateInternal
+     0.91 MB/s  [frame-workers] [Ljava.lang.Object;  <  LuaEventManager.triggerEvent < IsoMovingObject.collideWith < IsoZombie.collideWith < IsoZombie.pzoptSeparateApply < IsoZombie.separate < IsoZombie.updateInternal
+     0.91 MB/s  [frame-workers] java.lang.Long  <  ZombieIdleState.execute < StateMachine.stateExecute < StateMachine.update < IsoGameCharacter.updateInternal < IsoGameCharacter.update < IsoZombie.updateInternal
+     0.81 MB/s  [frame-workers] zombie.core.opengl.GLState$CBooleanValue  <  GLState$BaseBoolean.defaultValue < GLState$BaseBoolean.defaultValue < IOpenGLState.pzoptNewValue < DrawRecorder.copyOf < DrawRecorder.knownToEvents < DrawRecorder.endUnit
+     0.80 MB/s  [frame-workers] java.lang.Float  <  DrawRecorder.depthLeft < DrawRecorder.endUnit < TileRecord.record < TileRecord.lambda$startFrame$0 < 0x000000007c87a890.run < FrameBatch$Batch.work
+     0.80 MB/s  [World Streamer] java.util.ArrayList  <  IsoGridSquare.<init> < IsoGridSquare.getNew < IsoCell.PlaceLot < CellLoader.LoadCellBinaryChunk < IsoChunk.LoadBrandNew < IsoChunk.LoadOrCreate
+     0.75 MB/s  [pzopt-chardraw*] java.lang.Float  <  ShaderParameter.SetFloat < ShaderPropertyBlock.SetFloat < ModelSlotRenderData.UpdateCharacter < ModelSlotRenderData.init < CharDraw.build < CharDraw.buildRange
+     0.73 MB/s  [frame-workers] zombie.core.opengl.GLState$CBooleanValue  <  GLState$BaseBoolean.defaultValue < GLState$BaseBoolean.defaultValue < IOpenGLState.pzoptNewValue < DrawRecorder.copyOf < DrawRecorder.set < DrawRecorder.glSet
+     0.70 MB/s  [frame-workers] zombie.core.opengl.GLState$C4IntsValue  <  GLState$Base4Ints.defaultValue < GLState$Base4Ints.defaultValue < IOpenGLState.pzoptNewValue < DrawRecorder.copyOf < DrawRecorder.set < DrawRecorder.glSet
+     0.69 MB/s  [World Streamer] [J  <  IsoGridSquare.<init> < IsoGridSquare.getNew < IsoCell.PlaceLot < CellLoader.LoadCellBinaryChunk < IsoChunk.LoadBrandNew < IsoChunk.LoadOrCreate
+     0.65 MB/s  [World Streamer] zombie.core.properties.PropertyContainer  <  IsoGridSquare.<init> < IsoGridSquare.getNew < IsoCell.PlaceLot < CellLoader.LoadCellBinaryChunk < IsoChunk.LoadBrandNew < IsoChunk.LoadOrCreate
+     0.62 MB/s  [World Streamer] java.util.regex.Pattern  <  WorldGenChunk.cleanChunk < WorldGenChunk.generateChunks < IsoChunk.LoadBrandNew < IsoChunk.LoadOrCreate < IsoChunk.LoadChunk < WorldStreamer.DoChunkAlways
+     0.62 MB/s  [World Streamer] java.util.regex.Matcher  <  WorldGenUtils.canPlace < WorldGenChunk.genMapSquare < WorldGenChunk.genMapChunk < WorldGenChunk.generateChunks < IsoChunk.LoadBrandNew < IsoChunk.LoadOrCreate
+     0.60 MB/s  [frame-workers] zombie.core.opengl.GLState$CIntValue  <  GLState$BaseInt.defaultValue < GLState$BaseInt.defaultValue < IOpenGLState.pzoptNewValue < DrawRecorder.copyOf < DrawRecorder.set < DrawRecorder.glSet
+     0.60 MB/s  [frame-workers] zombie.core.opengl.GLState$C4IntsValue  <  GLState$Base4Ints.defaultValue < GLState$Base4Ints.defaultValue < IOpenGLState.pzoptNewValue < DrawRecorder.copyOf < DrawRecorder.knownToEvents < DrawRecorder.endUnit
+     0.59 MB/s  [frame-workers] java.lang.Long  <  PathFindState.execute < StateMachine.stateExecute < StateMachine.update < IsoGameCharacter.updateInternal < IsoGameCharacter.update < IsoZombie.updateInternal
+     0.59 MB/s  [pzopt-chardraw*] org.lwjgl.util.vector.Matrix4f  <  0x000000007c891730.get < PZArrayUtil.newInstance < PZArrayUtil.newInstance < PZArrayUtil.newInstance < AnimationPlayer$SkinTransformData.setSkinnedTo < AnimationPlayer$SkinTransformData.alloc
+     0.59 MB/s  [frame-workers] zombie.core.opengl.GLState$CIntFloatValue  <  GLState$BaseIntFloat.defaultValue < GLState$BaseIntFloat.defaultValue < IOpenGLState.pzoptNewValue < DrawRecorder.copyOf < DrawRecorder.set < DrawRecorder.glSet
+     0.57 MB/s  [World Streamer] [S  <  TShortShortHashMap.setUp < THash.<init> < THash.<init> < TPrimitiveHash.<init> < TShortShortHash.<init> < TShortShortHashMap.<init>
+     0.55 MB/s  [MainThread] [Lzombie.core.skinnedmodel.advancedanimation.IAnimationVariableSlot;  <  AnimationVariableSource.setVariable < IAnimationVariableCallbackMap.setVariable < IAnimationVariableRegistry.setVariable < IsoGameCharacter.registerVariableCallback
+     0.54 MB/s  [World Streamer] [S  <  TShortShortHash.setUp < TShortShortHashMap.setUp < TPrimitiveHash.<init> < TShortShortHash.<init> < TShortShortHashMap.<init> < PropertyContainer.<init>
+     0.52 MB/s  [frame-workers] zombie.core.opengl.GLState$CIntValue  <  GLState$BaseInt.defaultValue < GLState$BaseInt.defaultValue < IOpenGLState.pzoptNewValue < DrawRecorder.copyOf < DrawRecorder.knownToEvents < DrawRecorder.endUnit
+     0.52 MB/s  [MainThread] zombie.inventory.types.Food  <  Item.InstanceItem < InventoryItemFactory.createItemInternal < InventoryItemFactory.CreateItem < InventoryItemFactory.CreateItem < InventoryItemFactory.CreateItem < InventoryItem.getExtraItemsWeight
+     0.51 MB/s  [World Streamer] [F  <  IsoObject.<init> < IsoObject.getNew < CellLoader.DoTileObjectCreation < IsoCell.PlaceLot < CellLoader.LoadCellBinaryChunk < IsoChunk.LoadBrandNew
+     0.49 MB/s  [frame-workers] zombie.core.opengl.GLState$CIntFloatValue  <  GLState$BaseIntFloat.defaultValue < GLState$BaseIntFloat.defaultValue < IOpenGLState.pzoptNewValue < DrawRecorder.copyOf < DrawRecorder.knownToEvents < DrawRecorder.endUnit
+     0.48 MB/s  [World Streamer] [Ljava.util.HashMap$Node;  <  ECSEntity.setECSComponent < ECSEntity.registerECSComponents < IsoObject.<init> < IsoObject.getNew < CellLoader.DoTileObjectCreation < IsoCell.PlaceLot
+     0.48 MB/s  [World Streamer] java.util.HashMap$Node  <  WorldGenChunk.genMapSquare < WorldGenChunk.genMapChunk < WorldGenChunk.generateChunks < IsoChunk.LoadBrandNew < IsoChunk.LoadOrCreate < IsoChunk.LoadChunk
+     0.46 MB/s  [World Streamer] [I  <  WorldGenUtils.canPlace < WorldGenChunk.genMapSquare < WorldGenChunk.genMapChunk < WorldGenChunk.generateChunks < IsoChunk.LoadBrandNew < IsoChunk.LoadOrCreate
+     0.46 MB/s  [World Streamer] [I  <  WorldGenChunk.isProtected < WorldGenChunk.genMapSquare < WorldGenChunk.genMapChunk < WorldGenChunk.generateChunks < IsoChunk.LoadBrandNew < IsoChunk.LoadOrCreate
+     0.45 MB/s  [MainThread] jdk.internal.foreign.NativeMemorySegmentImpl  <  0x000000007c08a800.invoke_V < DirectMethodHandle$Holder.invokeStatic < 0x000000007c08ec00.invoke < 0x000000007c08f000.invoke < 0x000000007c632800.invoke < 0x000000007c630400.invoke_MT
+     0.43 MB/s  [MainThread] java.util.Stack  <  PerformanceProfileProbe.<init> < PerformanceProfileProbe.<init> < ActionStateContainer.<init> < ActionContext.<init> < StateMachineComponent.<init> < IsoGameCharacter.registerECSComponents
+     0.43 MB/s  [World Streamer] java.util.regex.Matcher  <  WorldGenChunk.cleanChunk < WorldGenChunk.generateChunks < IsoChunk.LoadBrandNew < IsoChunk.LoadOrCreate < IsoChunk.LoadChunk < WorldStreamer.DoChunkAlways
+     0.39 MB/s  [MainThread] [Lzombie.iso.worldgen.blending.BlendDirection;  <  BlendDirection.values < Blending.applyBlending < IsoChunk.update < IsoChunkMap.updateInternal < IsoChunkMap.update < IsoCell.updateInternal
+     0.39 MB/s  [World Streamer] [Ljava.lang.Object;  <  WorldGenChunk.cleanChunk < WorldGenChunk.generateChunks < IsoChunk.LoadBrandNew < IsoChunk.LoadOrCreate < IsoChunk.LoadChunk < WorldStreamer.DoChunkAlways
+     0.39 MB/s  [World Streamer] [Ljava.util.HashMap$Node;  <  WorldGenChunk.genMapSquare < WorldGenChunk.genMapChunk < WorldGenChunk.generateChunks < IsoChunk.LoadBrandNew < IsoChunk.LoadOrCreate < IsoChunk.LoadChunk
+     0.38 MB/s  [MainThread] [Ljava.lang.Object;  <  Translator.reportMissingArgumentsFromPastAbuse < Translator.getText < InventoryItem.<init> < Food.<init> < Item.InstanceItem < InventoryItemFactory.createItemInternal
+     0.37 MB/s  [MainThread] org.lwjgl.util.vector.Matrix4f  <  BoneTransform.<init> < TwistableBoneTransform.<init> < AnimatorsBoneTransform.<init> < 0x000000007c681390.get < Pool.alloc < AnimatorsBoneTransform.alloc
+     0.37 MB/s  [World Streamer] [Lzombie.iso.IsoGridSquare;  <  IsoGridSquare.<init> < IsoGridSquare.getNew < IsoCell.PlaceLot < CellLoader.LoadCellBinaryChunk < IsoChunk.LoadBrandNew < IsoChunk.LoadOrCreate
+     0.36 MB/s  [World Streamer] [S  <  TShortShortHashMap.setUp < TPrimitiveHash.<init> < TShortShortHash.<init> < TShortShortHashMap.<init> < PropertyContainer.<init> < IsoGridSquare.<init>
+     0.35 MB/s  [frame-workers] java.util.IdentityHashMap$ValueIterator  <  PoolStats.flush < FrameBatch.workerLoop < 0x000000007c87acf8.run < Thread.runWith < Thread.run
+== copied by GC (promotion events, MB in window) (total 559.4 MB)
+   106.88 MB  org.lwjgl.util.vector.Matrix4f
+    29.42 MB  zombie.iso.IsoObject
+    26.66 MB  java.util.ArrayList
+    25.18 MB  zombie.core.textures.ColorInfo
+    22.73 MB  [I
+    19.22 MB  [B
+    18.36 MB  java.util.HashMap$Node
+    18.28 MB  [F
+    16.55 MB  [S
+    16.44 MB  [Ljava.lang.Object;
+    16.28 MB  zombie.iso.IsoGridSquare
+    15.50 MB  zombie.iso.LightingJNI$JNILighting
+    13.22 MB  org.lwjgl.util.vector.Vector3f
+    12.39 MB  [Ljava.util.HashMap$Node;
+    12.14 MB  [J
+    10.41 MB  zombie.core.textures.TextureDraw
+     6.52 MB  java.lang.Float
+     6.26 MB  zombie.core.rendering.ShaderParameter
+     6.08 MB  [Lzombie.core.textures.ColorInfo;
+     6.06 MB  org.lwjgl.util.vector.Quaternion
+     5.72 MB  java.util.HashMap
+     5.29 MB  java.lang.String
+     5.02 MB  zombie.core.properties.PropertyContainer
+     4.27 MB  [Lorg.lwjgl.util.vector.Matrix4f;
+     4.16 MB  [Lzombie.iso.IsoGridSquare;
+     4.08 MB  zombie.iso.IsoGridSquare$WaterSplashData
+     3.87 MB  java.util.LinkedHashMap$Entry
+     3.84 MB  [Z
+     3.81 MB  zombie.core.skinnedmodel.animation.Keyframe
+     3.59 MB  zombie.core.skinnedmodel.population.ClothingItemReference
+old-object samples: 2083 in the window of 3735
+== still alive at the dump, allocated in the window: class (samples) (total 2083.0 )
+  1353.00   org.lwjgl.util.vector.Matrix4f
+   144.00   [Lorg.lwjgl.util.vector.Matrix4f;
+   114.00   [Ljava.util.HashMap$Node;
+   107.00   zombie.core.rendering.ShaderParameter
+    61.00   java.util.HashMap$Node
+    57.00   [I
+    32.00   [B
+    24.00   java.lang.Float
+    20.00   [Ljava.lang.Object;
+    17.00   zombie.core.skinnedmodel.animation.Keyframe
+    12.00   java.nio.DirectByteBuffer
+    11.00   zombie.iso.IsoObject
+     9.00   zombie.core.skinnedmodel.model.ModelInstanceRenderData
+     9.00   org.lwjgl.util.vector.Vector3f
+     7.00   zombie.iso.LightingJNI$JNILighting
+     7.00   zombie.iso.IsoGridSquare
+     7.00   [Lzombie.core.skinnedmodel.animation.Keyframe;
+     6.00   zombie.core.skinnedmodel.model.ModelSlotRenderData
+     6.00   org.joml.Matrix4f
+     5.00   jdk.internal.ref.Cleaner
+     5.00   java.nio.DirectFloatBufferU
+     4.00   [Lzombie.iso.IsoMovingObject;
+     4.00   [Lzombie.core.skinnedmodel.advancedanimation.IAnimationVariableSlot;
+     4.00   zombie.core.textures.TextureDraw
+     4.00   [J
+     3.00   zombie.core.textures.ColorInfo
+     3.00   org.lwjgl.util.vector.Quaternion
+     3.00   java.util.concurrent.ConcurrentLinkedQueue$Node
+     3.00   [F
+     3.00   zombie.characterTextures.ItemSmartTexture
+== still alive at the dump, allocated in the window: path (samples) (total 2083.0 )
+  1077.00   org.lwjgl.util.vector.Matrix4f  <  ShaderParameter.<init> < ShaderPropertyBlock.SetMatrix4Array < AnimatedModel$AnimatedModelInstanceRenderData.init < ModelInstanceRenderData.init < ModelSlotRenderData.initRenderData < ModelSlotRenderData.init
+   216.00   org.lwjgl.util.vector.Matrix4f  <  0x000000007c891730.get < PZArrayUtil.newInstance < PZArrayUtil.newInstance < PZArrayUtil.newInstance < AnimationPlayer$SkinTransformData.setSkinnedTo < AnimationPlayer$SkinTransformData.alloc
+    92.00   [Lorg.lwjgl.util.vector.Matrix4f;  <  AnimatedModel$AnimatedModelInstanceRenderData.init < ModelInstanceRenderData.init < ModelSlotRenderData.initRenderData < ModelSlotRenderData.init < CharDraw.build < CharDraw.buildRange
+    56.00   org.lwjgl.util.vector.Matrix4f  <  ShaderPropertyBlock.SetMatrix4 < AnimatedModel$AnimatedModelInstanceRenderData.UpdateCharacter < ModelInstanceRenderData.UpdateCharacter < AnimatedModel$AnimatedModelInstanceRenderData.init < ModelInstanceRenderData
+    49.00   [Ljava.util.HashMap$Node;  <  ShaderPropertyBlock.SetMatrix4Array < AnimatedModel$AnimatedModelInstanceRenderData.init < ModelInstanceRenderData.init < ModelSlotRenderData.initRenderData < ModelSlotRenderData.init < CharDraw.build
+    42.00   zombie.core.rendering.ShaderParameter  <  ShaderPropertyBlock.SetFloat < AnimatedModel$AnimatedModelInstanceRenderData.UpdateCharacter < ModelInstanceRenderData.UpdateCharacter < AnimatedModel$AnimatedModelInstanceRenderData.init < ModelInstanceRende
+    27.00   java.util.HashMap$Node  <  ShaderPropertyBlock.SetFloat < AnimatedModel$AnimatedModelInstanceRenderData.UpdateCharacter < ModelInstanceRenderData.UpdateCharacter < AnimatedModel$AnimatedModelInstanceRenderData.init < ModelInstanceRenderData.init < Mo
+    27.00   [Lorg.lwjgl.util.vector.Matrix4f;  <  AnimatedModel$AnimatedModelInstanceRenderData.init < ModelInstanceRenderData.init < ModelSlotRenderData.initRenderData < ModelSlotRenderData.init < TextureDraw.lambda$drawModel$0 < 0x000000007c891d98.run
+    25.00   [Lorg.lwjgl.util.vector.Matrix4f;  <  PZArrayUtil.newInstance < PZArrayUtil.newInstance < PZArrayUtil.newInstance < PZArrayUtil.newInstance < AnimationPlayer$SkinTransformData.setSkinnedTo < AnimationPlayer$SkinTransformData.alloc
+    25.00   [B  <  GameThreadProfile.fold < GameThreadProfile.loop < 0x000000007c547350.run < Thread.runWith < Thread.run
+    20.00   java.lang.Float  <  ShaderParameter.SetFloat < ShaderPropertyBlock.SetFloat < AnimatedModel$AnimatedModelInstanceRenderData.UpdateCharacter < ModelInstanceRenderData.UpdateCharacter < AnimatedModel$AnimatedModelInstanceRenderData.init < ModelInstance
+    20.00   [I  <  AnimationPlayer$SkinTransformData.checkBoneMap < AnimationPlayer.getSkinTransforms < AnimatedModel$AnimatedModelInstanceRenderData.initMatrixPalette < AnimatedModel$AnimatedModelInstanceRenderData.initModel < ModelInstanceRenderData.initModel 
+    19.00   [Ljava.util.HashMap$Node;  <  ShaderPropertyBlock.SetVector3Array < ModelSlotRenderData.UpdateCharacter < ModelSlotRenderData.init < CharDraw.build < CharDraw.buildRange < CharDraw.lambda$start$0
+    19.00   zombie.core.rendering.ShaderParameter  <  ShaderPropertyBlock.SetVector3Array < ModelSlotRenderData.UpdateCharacter < ModelSlotRenderData.init < TextureDraw.lambda$drawModel$0 < 0x000000007c891d98.run < Executors$RunnableAdapter.call
+    17.00   zombie.core.skinnedmodel.animation.Keyframe  <  ImportedSkeleton.processAnimation < ImportedSkeleton.processAiScene < ImportedSkeleton.process < ProcessedAiScene.processAiScene < ProcessedAiScene.process < FileTask_LoadMesh.loadX
+    16.00   [Ljava.util.HashMap$Node;  <  ShaderPropertyBlock.SetVector3Array < ModelSlotRenderData.UpdateCharacter < ModelSlotRenderData.init < TextureDraw.lambda$drawModel$0 < 0x000000007c891d98.run < Executors$RunnableAdapter.call
+    14.00   zombie.core.rendering.ShaderParameter  <  ShaderPropertyBlock.SetFloat < ModelInstanceRenderData.UpdateCharacter < AnimatedModel$AnimatedModelInstanceRenderData.init < ModelInstanceRenderData.init < ModelSlotRenderData.initRenderData < ModelSlotRende
+    14.00   [Ljava.util.HashMap$Node;  <  ShaderPropertyBlock.SetFloat < AnimatedModel$AnimatedModelInstanceRenderData.UpdateCharacter < ModelInstanceRenderData.UpdateCharacter < AnimatedModel$AnimatedModelInstanceRenderData.init < ModelInstanceRenderData.init <
+    11.00   zombie.core.rendering.ShaderParameter  <  ShaderPropertyBlock.SetVector3 < ModelSlotRenderData.UpdateCharacter < ModelSlotRenderData.init < TextureDraw.lambda$drawModel$0 < 0x000000007c891d98.run < Executors$RunnableAdapter.call
+    10.00   java.util.HashMap$Node  <  ShaderPropertyBlock.SetVector3Array < ModelSlotRenderData.UpdateCharacter < ModelSlotRenderData.init < TextureDraw.lambda$drawModel$0 < 0x000000007c891d98.run < Executors$RunnableAdapter.call
+     9.00   [I  <  ImportedStaticMesh.processAiScene < ImportedStaticMesh.<init> < ProcessedAiScene.processAiScene < ProcessedAiScene.process < FileTask_LoadMesh.loadFBX < FileTask_AbstractLoadModel.call
+     8.00   [Ljava.util.HashMap$Node;  <  ShaderPropertyBlock.SetMatrix4Array < AnimatedModel$AnimatedModelInstanceRenderData.init < ModelInstanceRenderData.init < ModelSlotRenderData.initRenderData < ModelSlotRenderData.init < TextureDraw.lambda$drawModel$0
+     8.00   zombie.iso.IsoObject  <  IsoObject.getNew < CellLoader.DoTileObjectCreation < IsoCell.PlaceLot < CellLoader.LoadCellBinaryChunk < IsoChunk.LoadBrandNew < IsoChunk.LoadOrCreate
+     8.00   [I  <  ImportedSkinnedMesh.processAiScene < ImportedSkinnedMesh.<init> < ProcessedAiScene.processAiScene < ProcessedAiScene.process < FileTask_LoadMesh.loadX < FileTask_AbstractLoadModel.call
+     7.00   [I  <  TIntArrayList.clear < TIntArrayList.clear < IsoChunkLevel.clear < IsoChunk.resetForStore < WorldReuserThread.reuseGridSquares < WorldReuserThread.testReuseChunk
+     7.00   zombie.iso.IsoGridSquare  <  IsoGridSquare.getNew < IsoCell.PlaceLot < CellLoader.LoadCellBinaryChunk < IsoChunk.LoadBrandNew < IsoChunk.LoadOrCreate < IsoChunk.LoadChunk
+     7.00   zombie.core.rendering.ShaderParameter  <  ShaderPropertyBlock.SetVector3 < AnimatedModel$AnimatedModelInstanceRenderData.UpdateCharacter < ModelInstanceRenderData.UpdateCharacter < AnimatedModel$AnimatedModelInstanceRenderData.init < ModelInstanceRen
+     7.00   zombie.core.rendering.ShaderParameter  <  ShaderPropertyBlock.SetVector2 < AnimatedModel$AnimatedModelInstanceRenderData.UpdateCharacter < ModelInstanceRenderData.UpdateCharacter < AnimatedModel$AnimatedModelInstanceRenderData.init < ModelInstanceRen
+     6.00   java.util.HashMap$Node  <  ShaderPropertyBlock.SetVector2 < AnimatedModel$AnimatedModelInstanceRenderData.UpdateCharacter < ModelInstanceRenderData.UpdateCharacter < AnimatedModel$AnimatedModelInstanceRenderData.init < ModelInstanceRenderData.init < 
+     6.00   [Ljava.lang.Object;  <  THashSet.rehash < THash.postInsertHook < THashSet.add < Pool.alloc < AnimationPlayer$SkinTransformData.alloc < AnimationPlayer.getOrCreateSkinTransformData
+codecache 1791935880 CodeHeap 'non-nmethods' unallocated 4 MB

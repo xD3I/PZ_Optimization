@@ -25,7 +25,7 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 /**
- * The main menu's "PZ Optimization update" item (media/lua/client/pzopt/pzopt_mainscreen_update.lua).
+ * The main menu's PZ Optimization update (the UPDATE card of the PZ OPTIMIZATION screen, media/lua/client/pzopt/pzopt_mainscreen_menu.lua; the dialog is pzopt_mainscreen_update.lua).
  *
  * Once per boot a daemon thread lists the GitHub releases of {@link #REPO_SLUG} and picks the newest one that carries
  * {@code pzopt-<revision>-classes.zip} for the running game revision (the assets are per revision: the runtime guard

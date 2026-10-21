@@ -60,6 +60,8 @@ import zombie.vehicles.BaseVehicle;
  *                      flips every frame, like zombies shoving a player standing on a roof edge (carport flicker rig)
  *   shot_burst N       bench/parity with hold: 1 s into the hold write N in-game screenshots on N consecutive frames,
  *                      Screenshots/pzopt-burst-NN.png (with jitter: alternating positions, frame-exact flicker checks)
+ *   end_at   x,y       bench/parity, with hold: the player is put on this square when the legs are done (2026-10-18: the
+ *                      float walk of NW:10,SE:10 ended one square off in some runs, on a porch, and the roof hid by design)
  *   hold     seconds   bench/parity: after the last leg wait this long before quitting (no teleports: the player may walk); the turn
  *                      keeps spinning the facing (a still camera with changing cutaways, for flicker recordings)
  *   shot_at  seconds   bench/parity: this far into the route hold the camera (no teleport, no turn) for 6 s and,
@@ -70,6 +72,9 @@ import zombie.vehicles.BaseVehicle;
  *   find     translucent dev: at route start list the Translucent-flagged objects within 16 tiles (sprite, class, depth
  *                      flags, the floor above); with find_box=x0,y0,x1,y1 every object in that box on levels 0-2, with its
  *                      attached and overlay sprites (gas canopy lights, 2026-09-28)
+ *   find     sundoor   dev (god rays through open doors, pzopt.DoorRig): the exterior door the key light comes in
+ *                      through, the player door_dist (3) squares into its room, the door toggled every door_toggle (3) s;
+ *                      door_cover=any also takes doors under a porch roof, door_at=x,y,z,N|W pins one
  *   upstairs Z         dev: at route start move the player to the nearest loaded indoor square at level Z (issue #12)
  *   upstairs_at S      dev: with upstairs, make that move S seconds into the route instead (a Stats mark "upstairs")
  *   pause_at S         dev: pause the game (speed 0, as the player's pause) S seconds into the route; the route stops too
@@ -179,6 +184,7 @@ public final class Harness {
    private static float shotAt = 0f;
    /** bench: seconds to stay on the route's end square, still spinning, before the run ends (flag hold, 0 = off). */
    private static float holdSecs = 0f;
+   private static int[] endAt; // flag end_at=x,y: teleport there when the route's legs are done, before the hold
    /** bench: hold-time X oscillation across the end square's east edge, in tiles (flag jitter, 0 = off). */
    private static float jitterTiles = 0f;
    private static float jitterEdgeX;
@@ -197,6 +203,7 @@ public final class Harness {
    private static final List<float[]> legs = new ArrayList<>(); // {dx, dy, length}
    private static int leg = 0;
    private static float legDone = 0f;
+   private static float fixedStep; // fixed_step: route steps per route second, one per frame (timedemo); 0 = wall clock
    private static float x, y;
    private static int routeZ; // the level the bench route walks on (upstairs=Z moves it)
    private static float upstairsAt; // upstairs_at: seconds into the route of the level change (0 = at route start)
@@ -346,6 +353,12 @@ public final class Harness {
             }
          }
          holdSecs = Float.parseFloat(HarnessFlags.get("hold", "0"));
+         String endAtFlag = HarnessFlags.get("end_at", "");
+         if (!endAtFlag.isEmpty()) {
+            String[] xy = endAtFlag.split(",");
+            endAt = new int[] {Integer.parseInt(xy[0].trim()), Integer.parseInt(xy[1].trim())};
+         }
+         fixedStep = Float.parseFloat(HarnessFlags.get("fixed_step", "0"));
          jitterTiles = Float.parseFloat(HarnessFlags.get("jitter", "0"));
          shotBurst = Integer.parseInt(HarnessFlags.get("shot_burst", "0"));
          jitterY = "true".equals(HarnessFlags.get("jitter_y", "false"));
@@ -380,11 +393,15 @@ public final class Harness {
          }
          BloodProbe.tick(p, nowNs); // blood_fill= / blood_rate= / blood_probe=: the floor blood decal rig
          BloodProbe.spray(p, dt);
+         if (state == RUN) {
+            Benchmark.onTick(nowNs); // built-in benchmark: utilization, focus and pause checks
+         }
       }
       switch (state) {
          case WAIT_WORLD -> {
             if (p != null && p.getCurrentSquare() != null) {
                 HarnessFlags.markStarted();
+                Benchmark.onWorldReady(); // built-in benchmark: load time, random numbers seeded
                 if (PLAYING) {
                    // play mode: the scene is forced, the player keeps their save's state and the game stays open
                    try {
@@ -643,6 +660,14 @@ public final class Harness {
                      routeZ = spot[2];
                   }
                }
+               if ("sundoor".equals(HarnessFlags.get("find", ""))) {
+                  int[] spot = DoorRig.setup(p); // dev: god rays, a sunlit exterior door toggled open / closed, the player in its room
+                  if (spot != null) {
+                     x = spot[0] + 0.5F;
+                     y = spot[1] + 0.5F;
+                     routeZ = spot[2];
+                  }
+               }
                if ("shore".equals(HarnessFlags.get("find", ""))) {
                   goToShore(p); // dev: HDR water glint scenes, the player on dry land with the water in view
                }
@@ -736,12 +761,14 @@ public final class Harness {
                runStartEpochMs = System.currentTimeMillis();
                sampleThreadCpu();
                Stats.mark("route-start");
+               Benchmark.onRouteStart(); // built-in benchmark: the timed window opens
                state = RUN;
             }
          }
           case RUN -> {
             if (p == null) {
                Log.warn("harness: player vanished mid-route (world reloaded?); aborting run");
+               Benchmark.onRouteEnd("aborted", "the player vanished mid-route");
                state = DONE;
                return;
             }
@@ -831,7 +858,10 @@ public final class Harness {
             if (shotAt > 0f && shotPhase < 2 && !holdForScreenshot(nowNs)) {
                return; // camera held for the screenshot: no teleport, no turn this frame
             }
-             float step = speed * Math.min(dt, 0.1f);
+            // fixed_step=N (built-in benchmark's timedemo, technique 27): the route advances 1/N s of route time per frame,
+            // so every pass shows the same camera path frame for frame whatever the frame rate
+            float routeDt = fixedStep > 0f ? 1f / fixedStep : Math.min(dt, 0.1f);
+             float step = speed * routeDt;
             while (step > 0f && leg < legs.size()) {
                float[] l = legs.get(leg);
                float remain = l[2] - legDone;
@@ -849,20 +879,31 @@ public final class Harness {
             // teleport tools use); it also takes the player out of a vehicle,
             // which plain setX/setY does not survive
             boolean holding = leg >= legs.size() && holdSecs > 0f;
-            if (!holding && !Showcase.active() && !Explore.active() && !TreeWalk.active() && !LightWalk.active() && !RoomLightRig.active() && !CarSiege.active() && !CarGlassRig.active() && ((int)x != p.getXi() || (int)y != p.getYi())) { // showcase=horde moves the player itself
+            if (!holding && !Showcase.active() && !Explore.active() && !TreeWalk.active() && !LightWalk.active() && !RoomLightRig.active() && !CarSiege.active() && !BrawlRig.active() && !MeleeRig.active() && !CarGlassRig.active() && ((int)x != p.getXi() || (int)y != p.getYi())) { // showcase=horde moves the player itself
                // no teleports during the hold: the player may walk away from the end square (manual tests)
                p.teleportTo((int)x, (int)y, routeZ);
             }
             if ((turnDegPerSec != 0f || faceSet) && !MirrorWalk.active()) { // explore=mirror faces the player itself
                // spin the facing so the vision cone, lighting cone and buildings-in-front scans keep changing
-               turnAngle = (turnAngle + turnDegPerSec * Math.min(dt, 0.1f)) % 360f;
+               turnAngle = (turnAngle + turnDegPerSec * routeDt) % 360f;
                p.setDirectionAngle(turnAngle);
             }
             zoomCycle(p, nowNs);
+            int sceneEnd = Showcase.routeEnd(nowNs); // showcase end=horde_dead: the scene ends the route (horde dead, or end_cap)
+            if (sceneEnd == 0) {
+               return;
+            }
+            if (sceneEnd == 1) {
+               leg = legs.size();
+               holdSecs = 0f;
+            }
             if (leg >= legs.size() && holdSecs > 0f) {
                // end-of-route hold: no more teleports, the facing keeps turning (flag hold)
                if (holdStartNs == 0L) {
                   holdStartNs = nowNs;
+                  if (endAt != null) { // flag end_at: the hold starts on this exact square (the legs' float walk can end one square off)
+                     p.teleportTo(endAt[0], endAt[1], routeZ);
+                  }
                   Log.info("harness: route legs done at " + p.getXi() + "," + p.getYi() + "; holding " + holdSecs + " s" + (turnDegPerSec != 0f ? " with turn=" + turnDegPerSec : ""));
                }
                if ((nowNs - holdStartNs) / 1e9f < holdSecs) {
@@ -900,6 +941,7 @@ public final class Harness {
                runEndEpochMs = System.currentTimeMillis();
                Log.info("harness: route done in " + secs + "s, " + chunks + " chunks loaded (" + chunks / secs + "/s); quitting");
                Log.info("harness: player at route end: " + Scene.visionState(p)); // blur > 0 = the screen was soft (pinWornItems)
+               Benchmark.onRouteEnd("complete", ""); // built-in benchmark: results, next pass armed
                writeThreadCpu(secs);
                writeSummary(secs, chunks);
                Stats.flush();
@@ -1028,8 +1070,9 @@ public final class Harness {
                 + "\nroute_start_epoch_ms=" + runStartEpochMs + "\nroute_end_epoch_ms=" + runEndEpochMs
                 + "\nroute_seconds=" + secs + "\nchunks_loaded=" + chunks + "\nchunks_per_second=" + (secs > 0f ? chunks / secs : 0f)
                 + "\nsettings=" + Config.describe()
-                + "\nzombie_batches=" + AnimBatch.describe() + " | " + ActionEval.describe() + " | " + AnimParallel.describe() + " | " + LightingBatch.describe() + " | " + FrameBatch.describe() + " | " + UpdateBatch.describe() + " | " + LuaGate.describe() + " | " + PostupdateBatch.describe() + " | " + ReuseSpread.describe() // pzopt: entityUpdateParallel, its batch, Lua-suppression and deferral counters; luaWorkerGate
+                + "\nzombie_batches=" + AnimBatch.describe() + " | " + ZombieLate.describe() + " | " + ActionEval.describe() + " | " + AnimParallel.describe() + " | " + LightingBatch.describe() + " | " + FrameBatch.describe() + " | " + UpdateBatch.describe() + " | " + LuaGate.describe() + " | " + PostupdateBatch.describe() + " | " + ReuseSpread.describe() + " | " + VehicleNear.describe() + " | " + SeparateMask.describe() + " | " + RagdollGate.describe() + " | " + BodyModelCache.describe() + " | " + UpdateBatch.describeStream() // pzopt: entityUpdateParallel, its batch, Lua-suppression and deferral counters; luaWorkerGate
                 + "\ngt_offload=" + GtOffload.describe()
+                + "\ngc_slack=" + GcSlack.describe()
                 + "\nripples=" + Ripples.stats()
                 + "\nbake_counters=" + zombie.iso.fboRenderChunk.FBORenderCell.pzoptBakeCounters()
                 + "\nsway=" + Sway.stats()
@@ -1602,6 +1645,30 @@ public final class Harness {
       float distance = 0f;
       for (float[] leg : legs) distance += leg[2];
       return distance;
+   }
+
+   /**
+    * How far along the route the run is, 0 before the route start, 1 at its end (the built-in benchmark's HUD): the
+    * distance driven on a drive, the route time walked plus the end hold on a walk (so timedemo counts route time).
+    */
+   static float routeFraction() {
+      if (driving) {
+         float len = routeDistance();
+         float done = pilot != null ? pilot.progress() : drivenDistance;
+         return len > 0f ? Math.max(0f, Math.min(1f, done / len)) : 0f;
+      }
+      float scene = Showcase.progress(System.nanoTime()); // end=horde_dead: the scene's own end
+      if (scene >= 0f) {
+         return scene;
+      }
+      if (speed <= 0f) {
+         return 0f;
+      }
+      float walked = legDone;
+      for (int i = 0; i < leg && i < legs.size(); i++) walked += legs.get(i)[2];
+      float held = holdStartNs != 0L ? Math.min(holdSecs, (System.nanoTime() - holdStartNs) / 1e9f) : 0f;
+      float total = routeLength() / speed + holdSecs;
+      return total > 0f ? Math.min(1f, (walked / speed + held) / total) : 0f;
    }
 
    /**
@@ -2379,7 +2446,8 @@ public final class Harness {
             Log.info("harness: zoom step " + zoomSteps + " trace (bakes[/deferred]@ms per frame):" + zoomTrace);
             StringBuilder z = new StringBuilder("harness: zoom step " + zoomSteps + " retain: returned=" + (ZoomRetain.returned - zoomTraceReturned)
                   + " rebakes=" + (ZoomRetain.rebakes - zoomTraceRebakes) + " creations=" + (ZoomRetain.creations - zoomTraceCreations)
-                  + " urgent=" + (ZoomRetain.urgent - zoomTraceUrgent) + " flood frames=" + (ZoomRetain.floodFrames - zoomTraceFlood) + " placeholders=" + (ZoomRetain.placeholders - zoomTracePlaceholders) + " urgent flags:");
+                  + " urgent=" + (ZoomRetain.urgent - zoomTraceUrgent) + " flood frames=" + (ZoomRetain.floodFrames - zoomTraceFlood) + " placeholders=" + (ZoomRetain.placeholders - zoomTracePlaceholders)
+                  + " late prepared (total)=" + ZoomRetain.latePrepared + " late flag fixes (total)=" + ZoomRetain.lateFlagFixes + " urgent flags:");
             for (int b = 0; b < 16; b++) {
                if (ZoomRetain.urgentFlags[b] != zoomTraceUrgentFlags[b]) z.append(' ').append(1L << b).append('=').append(ZoomRetain.urgentFlags[b] - zoomTraceUrgentFlags[b]);
             }
@@ -2469,6 +2537,7 @@ public final class Harness {
       Stats.mark("route-end");
       runEndEpochMs = System.currentTimeMillis();
       Log.info("harness: route " + routeStatus + " in " + secs + "s, vehicle distance=" + drivenDistance + "; quitting");
+      Benchmark.onRouteEnd(routeStatus, ""); // built-in benchmark: results, next pass armed
       writeThreadCpu(secs);
       if (pilot != null) {
          writeDriveLog(); // before the summary: run.sh treats pzopt-bench.out as the end of the route
@@ -2593,6 +2662,7 @@ public final class Harness {
       runEndEpochMs = System.currentTimeMillis();
       writeSummary(0f, 0);
       Log.warn("harness: rejected driving run: " + reason);
+      Benchmark.onRouteEnd("rejected", reason);
       Stats.flush();
       state = DONE;
       requestQuit();

@@ -1,30 +1,21 @@
--- pzopt: the "PZ Optimization update" and "PZ Optimization mod compatibility check" items in the main menu.
---  The Java side (pzopt.Updater, reached through the overridden PerformanceSettings) asks the GitHub
---  releases once per boot whether a newer build for this game revision exists. The main menu (never
---  the pause menu) has one more item in the style of the stock ones (ISLabel, UIFont.Large, the same
---  hover fade and sounds) between Credits and Exit: greyed out and inert while the check runs and when
---  the build is current, enabled while a newer build is offered. A small line under it names the installed
---  build ("Version <commit>", "Version <commit> -> <offered commit>" while an update is offered). Clicking it opens a small dialog: what is installed, what is available, the release notes, and "Update now": the download
---  and the file swap run on a daemon thread while the item shows the progress; once done the dialog
---  offers Restart game (pzopt.Restart relaunches the game once it has quit), because the classes the JVM already
---  loaded stay the old ones until a restart. Usually the changed files were fetched in the background as soon
---  as the update was offered (updatePrefetch), so Update now only writes them.
+-- pzopt: the "PZ Optimization update" dialog, opened by the UPDATE card of the PZ Optimization screen (main menu
+--  PZ OPTIMIZATION, pzopt_mainscreen_menu.lua; that file also starts the check and shows the updater's news under the item).
+--  The Java side (pzopt.Updater, reached through the overridden PerformanceSettings) asks the GitHub releases once per
+--  boot whether a newer build for this game revision exists. The dialog: what is installed, what is available, the
+--  release notes, and "Update now": the download and the file swap run on a daemon thread while the dialog shows the
+--  progress; once done it offers Restart game (pzopt.Restart relaunches the game once it has quit), because the classes
+--  the JVM already loaded stay the old ones until a restart. Usually the changed files were fetched in the background as
+--  soon as the update was offered (updatePrefetch), so Update now only writes them. With nothing to install (checking,
+--  up to date, no check at this launch, the check failed) it says so and has only Close.
 --  A copy without pzopt-installed.txt (a hand-unpacked zip) cannot swap its own files: the dialog
 --  then only opens the release page.
 --  The offer can be the Steam Workshop copy already on disk (source "workshop", issue #16): the dialog says so,
 --  Update now copies it without a download, and the page button opens the Workshop change notes. The GitHub
 --  answer may replace that offer with a newer release while the dialog is open (same state, another tag).
---  Controller: the item has its own row in the menu's joypad list while it is enabled (the D-pad reaches
---  it between Credits and Exit, A is the click), the dialog takes the joypad focus like the stock modals
---  (A = first button, B = second one or close, D-pad scrolls the notes) and hands it back to the item.
---  Under it, always enabled, "PZ OPTIMIZATION MOD COMPATIBILITY CHECK" opens PzoptCompatDialog
---  (pzopt_mainscreen_compat.lua): what the launch's Java mods patch and which settings that switched off.
+--  Controller: the dialog takes the joypad focus like the stock modals (A = first button, B = second one or close,
+--  D-pad scrolls the notes) and hands it back to the screen that opened it.
 -- Installed by scripts/pzopt.sh into <game dir>/media/lua/client/pzopt/ (loose game-dir Lua is
 -- loaded like any other, no mod to enable).
-
-local ITEM_TEXT = "PZ OPTIMIZATION UPDATE"   -- the stock items are capitals (UI_mainscreen_* translations)
-local COMPAT_TEXT = "PZ OPTIMIZATION MOD COMPATIBILITY CHECK"
-local ITEM_RESTART = "RESTART TO FINISH THE UPDATE"
 
 local function perf()
     return getPerformance()
@@ -166,7 +157,22 @@ function PzoptUpdateDialog:refresh(force)
         self.primary:setTitle(pageTitle)
         self.secondary:setTitle("Close")
     else
-        body = "No update is offered right now."
+        local why
+        local installedLine = "Installed build: " .. installed .. " <LINE> <LINE> "
+        if s == "checking" then
+            why = "Checking whether a newer build exists for this game revision."
+        elseif s == "up-to-date" then
+            why = "This is the newest PZ Optimization build for this game revision. Nothing to install."
+        elseif s == "error" then
+            why = "<RGB:1,0.6,0.6> The update check failed: " .. (p:getPzoptUpdateMessage():gsub("[<>]", "")) .. " <RGB:1,1,1> <LINE> <LINE> "
+                .. "The game asks again at its next start."
+        else
+            local off = false
+            pcall(function() off = p:getPzoptOption("updateCheck") == "false" end)
+            why = off and "No update check at this launch: \"Offer new releases in the main menu\" is off in the settings (PZ Optimization tab)."
+                or "No update check ran at this launch."
+        end
+        body = installedLine .. why
         self.primary:setTitle("Close")
         self.secondary:setTitle("")
     end
@@ -240,6 +246,8 @@ function PzoptUpdateDialog:prerender()
     self:drawText("PZ Optimization update", PAD, PAD, 1, 1, 1, 1, UIFont.Medium)
     -- progress bar above the buttons: the download share, full while the files swap, green when done
     local s = self.shownState
+    -- the bar only where there is something to show (an offer, its progress, its outcome)
+    if s ~= "available" and s ~= "downloading" and s ~= "installing" and s ~= "installed" and s ~= "error" then return end
     local barY = self.height - PAD - BTN_HGT - PAD - BAR_HGT
     local barW = self.width - PAD * 2
     self:drawRectBorder(PAD, barY, barW, BAR_HGT, 0.6, 1, 1, 1)
@@ -312,17 +320,11 @@ function PzoptUpdateDialog:close()
     if ms and ms.bottomPanel then
         ms.bottomPanel:setVisible(true)
     end
-    -- the controller's focus goes back where it came from (the menu, whose focus reset lands on the default
-    -- item) and then onto the update item, so a "Later" leaves the cursor where the player pressed A
+    -- the controller's focus goes back where it came from (the PZ Optimization screen, its cursor still on UPDATE)
     local joypadData = self.joyfocus
     if joypadData and joypadData.focus == self then
         joypadData.focus = self.prevFocus
         updateJoypadFocus(joypadData)
-        if ms and joypadData.focus == ms and ms.joyfocus and ms.pzoptUpdateOption then
-            if ms:setJoypadFocus(ms.pzoptUpdateOption, joypadData) then
-                ms:updateBottomPanelButtons()
-            end
-        end
     end
 end
 
@@ -349,196 +351,6 @@ function PzoptUpdateDialog.show()
         joypadData.focus = dlg
         updateJoypadFocus(joypadData)
     end
-end
-
--- --- the menu item -------------------------------------------------------------------------------
-
--- Clickable while an update is offered, being installed, installed, or failed (the dialog explains);
--- greyed out and inert while the check runs, when the build is current, or when the check itself failed.
-local function itemEnabled(s)
-    return s == "available" or s == "downloading" or s == "installing" or s == "installed"
-        or (s == "error" and perf():getPzoptUpdateTag() ~= "")
-end
-
-local function onItemClick(item, x, y)
-    if not item.pzoptEnabled then return end
-    local ms = MainScreen.instance
-    if ms.delay > 0 or ms.tutorialButton or ms.checkSavefileModal then return end
-    getSoundManager():playUISound("UIActivateMainMenuItem")
-    PzoptUpdateDialog.show()
-end
-
-local function onCompatClick(item, x, y)
-    local ms = MainScreen.instance
-    if ms.delay > 0 or ms.tutorialButton or ms.checkSavefileModal or not PzoptCompatDialog then return end
-    getSoundManager():playUISound("UIActivateMainMenuItem")
-    PzoptCompatDialog.show()
-end
-
--- The version line under the item: the installed build's commit, and "-> <commit>" of the offered
--- release (tag b<version>-<yyyymmdd>-<hhmm>-<commit>) while one is offered, downloading, installed or failed.
-local function versionText()
-    local p = perf()
-    local text = "Version " .. p:getPzoptUpdateInstalledCommit()
-    local tag = p:getPzoptUpdateTag()
-    if tag ~= "" then
-        text = text .. " -> " .. (tag:match("([^-]+)$") or tag)
-    end
-    return text
-end
-
--- The stock hover fade only while enabled; a disabled item is a plain grey label. The item is taller
--- than the stock ones by the version line: the label text stays centred in the stock row height (the
--- hover rectangle covers both) and the version is drawn under it in the small font.
-local function itemPrerender(self)
-    local fullHgt = self.height
-    self.height = self.pzoptRowHgt
-    if self.fade then
-        MainScreen.prerenderBottomPanelLabel(self)
-    else
-        ISLabel.prerender(self)
-    end
-    self.height = fullHgt
-    if self.pzoptVersion then
-        local a = self.pzoptEnabled and 0.75 or 0.45
-        self:drawText(self.pzoptVersion, 0, self.pzoptRowHgt - 6, a, a, a, 1, UIFont.Small)
-    end
-end
-
--- Adds the labels to the column right after the stock instantiate, between Credits and Exit (Exit and
--- the panel move down two rows). Same metrics as the stock labels in MainScreen:instantiate. Always
--- there, like the stock items; the update item enabled or greyed by the updater's state (syncItem), the
--- compatibility check always enabled.
-local function addItem(self)
-    if self.inGame or not self.creditOption or not self.exitOption or self.pzoptUpdateOption then return end
-    local rowHgt = getTextManager():getFontHeight(UIFont.Large) + 8 * 2
-    local labelHgt = rowHgt + FONT_HGT_SMALL   -- the version line starts 6 px above the stock row's bottom
-    local label = ISLabel:new(0, self.creditOption:getBottom(), labelHgt, ITEM_TEXT, 1, 1, 1, 1, UIFont.Large, true)
-    label.internal = "PZOPT_UPDATE"
-    label:initialise()
-    label.onMouseDown = onItemClick
-    label.prerender = itemPrerender
-    label.pzoptRowHgt = rowHgt
-    label.pzoptEnabled = false
-    label:setColor(0.45, 0.45, 0.45)
-    label:setVisible(false)
-    local compat = ISLabel:new(0, label:getBottom(), rowHgt, COMPAT_TEXT, 1, 1, 1, 1, UIFont.Large, true)
-    compat.internal = "PZOPT_COMPAT"
-    compat:initialise()
-    compat.onMouseDown = onCompatClick
-    compat.fade = UITransition.new()
-    compat.fade:setFadeIn(false)
-    compat.prerender = MainScreen.prerenderBottomPanelLabel
-    compat:setVisible(false)
-    self.exitOption:setY(self.exitOption:getY() + labelHgt + rowHgt)
-    self.bottomPanel:setHeight(self.bottomPanel:getHeight() + labelHgt + rowHgt)
-    self.maxMenuItemWidth = math.max(self.maxMenuItemWidth or 0, getTextManager():MeasureStringX(UIFont.Large, ITEM_RESTART),
-        getTextManager():MeasureStringX(UIFont.Large, COMPAT_TEXT))
-    label:setWidth(self.maxMenuItemWidth)
-    compat:setWidth(self.maxMenuItemWidth)
-    self.bottomPanel:addChild(label)
-    self.bottomPanel:addChild(compat)
-    self.pzoptUpdateOption = label
-    self.pzoptCompatOption = compat
-    pcall(function() perf():pzoptUpdateCheck() end)
-    PzoptLogInfo("[pzopt] update: main menu item added")
-end
-
--- Controller. The D-pad walks self.joypadButtonsY, which the stock MainScreen:onGainJoypadFocus rebuilds
--- from its own list of labels (so a controller went from Credits straight to Exit), and A goes through
--- onMenuItemMouseDownMainMenu, which only knows the stock `internal` names. Each label gets its own row
--- (after Credits, the compatibility check after the update item) while it is enabled and visible; a greyed
--- item has no row, the D-pad skips it like the mouse ignores it. Runs after every stock rebuild and once per
--- frame while the menu holds the focus.
-local function joypadRowOf(rows, element)
-    if not element then return nil end
-    for i, row in ipairs(rows) do
-        if row[1] == element then return i end
-    end
-    return nil
-end
-
-local function syncJoypadRowOf(self, label, after, want)
-    local rows = self.joypadButtonsY
-    if not label or not rows then return end
-    local at = joypadRowOf(rows, label)
-    if want and not at then
-        local pos = joypadRowOf(rows, after) or joypadRowOf(rows, self.creditOption)
-        if pos then
-            pos = pos + 1
-        else
-            pos = joypadRowOf(rows, self.exitOption) or (#rows + 1)
-        end
-        table.insert(rows, pos, { label })
-        if (self.joypadIndexY or 0) >= pos then
-            self.joypadIndexY = self.joypadIndexY + 1
-        end
-    elseif at and not want then
-        table.remove(rows, at)
-        label:setJoypadFocused(false)
-        if self.joypadIndexY == at then
-            -- the focused item just went inert: the cursor moves to the row that took its place
-            local row = rows[math.min(at, #rows)]
-            if row then
-                self:setJoypadFocus(row[1], self.joyfocus)
-                self:updateBottomPanelButtons()
-            end
-        elseif (self.joypadIndexY or 0) > at then
-            self.joypadIndexY = self.joypadIndexY - 1
-        end
-    end
-end
-
-local function syncJoypadRow(self)
-    local label = self.pzoptUpdateOption
-    if not label then return end
-    syncJoypadRowOf(self, label, self.creditOption, label.pzoptEnabled and label:isVisible())
-    local compat = self.pzoptCompatOption
-    if compat then
-        syncJoypadRowOf(self, compat, label, compat:isVisible())
-    end
-end
-
--- Once per frame: enabled state, colour and text follow the updater; the item is shown whenever Exit
--- is, i.e. after the intro fade and not while a stock dialog hid the panel.
-local function syncItem(self)
-    local label = self.pzoptUpdateOption
-    if not label then return end
-    local s = state()
-    local enabled = itemEnabled(s)
-    if enabled ~= label.pzoptEnabled then
-        label.pzoptEnabled = enabled
-        if enabled then
-            label.fade = UITransition.new()
-            label.fade:setFadeIn(false)
-            label:setColor(1, 1, 1)
-            PzoptLogInfo("[pzopt] update: main menu item enabled (" .. s .. ", " .. perf():getPzoptUpdateTag() .. ")")
-        else
-            if self.overBottomPanelButton == label then self.overBottomPanelButton = nil end
-            label.fade = nil
-            label:setColor(0.45, 0.45, 0.45)
-        end
-    end
-    local text = ITEM_TEXT
-    if s == "downloading" then
-        text = "UPDATING... " .. perf():getPzoptUpdateProgress() .. " %"
-    elseif s == "installing" then
-        text = "UPDATING... INSTALLING"
-    elseif s == "installed" then
-        text = ITEM_RESTART
-    elseif s == "error" and enabled then
-        text = "UPDATE FAILED"
-    end
-    if label.name ~= text then
-        label:setNameWithoutMoving(text)
-        label:setWidth(self.maxMenuItemWidth or label:getWidth())
-    end
-    label.pzoptVersion = versionText()
-    label:setVisible(self.exitOption:isVisible())
-    if self.pzoptCompatOption then
-        self.pzoptCompatOption:setVisible(self.exitOption:isVisible())
-    end
-    if self.joyfocus then syncJoypadRow(self) end
 end
 
 -- devUpdateDrive (dev rig, Config key): the real buttons pressed in order once the menu is up: open the dialog,
@@ -577,55 +389,76 @@ end
 local function install()
     if not MainScreen or MainScreen.pzoptUpdateItem then return end
     local ok, has = pcall(function() return getPerformance():hasPzoptOptions() end)
-    if not ok or not has then
-        print("[pzopt] update item: PerformanceSettings override not loaded or overrides disabled, item not added")
-        return
-    end
+    if not ok or not has then return end
     MainScreen.pzoptUpdateItem = true
-    local stockInstantiate = MainScreen.instantiate
-    function MainScreen:instantiate(...)
-        stockInstantiate(self, ...)
-        local okAdd, err = pcall(addItem, self)
-        if not okAdd then print("[pzopt] update item: failed: " .. tostring(err)) end
-    end
     local stockPrerender = MainScreen.prerender
     function MainScreen:prerender(...)
         stockPrerender(self, ...)
-        if self.pzoptUpdateOption then
-            pcall(driveTick, self)
-            local okSync, err = pcall(syncItem, self)
-            if not okSync then
-                print("[pzopt] update item: sync failed, item removed: " .. tostring(err))
-                self.pzoptUpdateOption:setVisible(false)
-                self.pzoptUpdateOption = nil
-                if self.pzoptCompatOption then
-                    self.pzoptCompatOption:setVisible(false)
-                    self.pzoptCompatOption = nil
-                end
-            end
-        end
-    end
-    -- controller: the row right after the stock rebuild of the joypad list, and A on the item is the click
-    local stockGainJoypadFocus = MainScreen.onGainJoypadFocus
-    function MainScreen:onGainJoypadFocus(...)
-        stockGainJoypadFocus(self, ...)
-        if self.pzoptUpdateOption then pcall(syncJoypadRow, self) end
-    end
-    local stockJoypadDown = MainScreen.onJoypadDown
-    function MainScreen:onJoypadDown(button, ...)
-        local label = self.pzoptUpdateOption
-        local focused = button == Joypad.AButton and self.joypadButtons and self.joypadButtons[self.joypadIndex]
-        if label and focused == label then
-            onItemClick(label, 0, 0)
-            return
-        end
-        if self.pzoptCompatOption and focused == self.pzoptCompatOption then
-            onCompatClick(focused, 0, 0)
-            return
-        end
-        return stockJoypadDown(self, button, ...)
+        if not self.inGame then pcall(driveTick, self) end
     end
 end
 
 install()
 Events.OnGameBoot.Add(install)
+
+-- The UPDATE page of the main menu's PZ Optimization screen (pzopt_mainscreen_menu.lua): the updater's state as list rows,
+-- the text and the actions of that state (the same as the dialog's; nothing installs before Update now is pressed).
+PzoptUpdateApi = {}
+
+function PzoptUpdateApi.view()
+    local s = state()
+    local p = perf()
+    local v = { state = s, installed = p:getPzoptUpdateInstalledCommit(), tag = p:getPzoptUpdateTag(),
+        published = p:getPzoptUpdatePublished(), workshop = source() == "workshop", actions = {} }
+    local okC, can = pcall(function() return p:canPzoptUpdateInstall() end)
+    v.canInstall = okC and can
+    local pageTitle = v.workshop and "OPEN WORKSHOP PAGE" or "OPEN RELEASE PAGE"
+    local function page() openUrl(p:getPzoptUpdatePageUrl()) end
+    if s == "available" then
+        if v.canInstall then
+            v.text = (v.workshop and "Update now copies the files Steam already downloaded with the Workshop item (nothing is downloaded), "
+                or "Update now downloads the release zip, ") .. "replaces the installed files that changed (the ones listed in "
+                .. "pzopt-installed.txt; the game's own files are never touched) and offers to restart the game: the new classes load on "
+                .. "the next start. Saves and options stay as they are."
+            table.insert(v.actions, { label = "UPDATE NOW", danger = true, key = "y",
+                confirm = "Install the update now? The changed files are replaced; the game asks to restart after.", act = function()
+                if not p:pzoptUpdateInstall() then print("[pzopt] update: install refused (state " .. state() .. ")") end
+            end })
+        else
+            v.text = "This copy was not installed by install.sh / install.ps1 (no pzopt-installed.txt in the game folder), so it cannot "
+                .. "replace its own files. " .. (v.workshop and "Run install.ps1 / install.bash from the Workshop item's folder once; later updates then install from here."
+                    or "Get the new zip from the release page and unpack it by hand, or install it once with the installer.")
+        end
+        table.insert(v.actions, { label = pageTitle, act = page, key = "x", confirm = "Open the page in your web browser?" })
+    elseif s == "downloading" then
+        v.text = "Downloading the files that changed... " .. p:getPzoptUpdateProgress() .. " %"
+        v.progress = p:getPzoptUpdateProgress() / 100
+    elseif s == "installing" then
+        v.text = v.workshop and "Copying the Steam Workshop files over the installed ones..." or "Replacing the installed files..."
+        v.progress = 1
+    elseif s == "installed" then
+        v.text = "<RGB:0.6,1,0.6> " .. (p:getPzoptUpdateMessage():gsub("[<>]", "")) .. " <RGB:1,1,1> <LINE> <LINE> The game keeps running the "
+            .. "previous build until it restarts. Restart game closes it and starts it again with the update."
+        table.insert(v.actions, { label = "RESTART GAME", danger = true, key = "y", confirm = "Restart the game now to load the update?", act = function()
+            local ok, started = pcall(function() return p:pzoptRestartGame() end)
+            if not ok or not started then print("[pzopt] update: could not start the restart helper, quitting only") end
+            MainScreen.instance:quitToDesktop()
+        end })
+    elseif s == "error" then
+        v.text = "<RGB:1,0.6,0.6> " .. (p:getPzoptUpdateMessage():gsub("[<>]", "")) .. " <RGB:1,1,1> <LINE> <LINE> Nothing was changed if the "
+            .. (v.workshop and "copy" or "download") .. " failed; if the file swap failed, run the installer again (install.sh / install.ps1, "
+            .. "--uninstall first)."
+        if v.tag ~= "" then table.insert(v.actions, { label = pageTitle, act = page, key = "x", confirm = "Open the page in your web browser?" }) end
+    elseif s == "checking" then
+        v.text = "Checking whether a newer build exists for this game revision."
+    elseif s == "up-to-date" then
+        v.text = "This is the newest PZ Optimization build for this game revision. Nothing to install."
+    else
+        local off = false
+        pcall(function() off = p:getPzoptOption("updateCheck") == "false" end)
+        v.text = off and "No update check at this launch: \"Offer new releases in the main menu\" is off in the settings (PZ Optimization tab)."
+            or "No update check ran at this launch."
+    end
+    v.notes = richNotes(p:getPzoptUpdateNotes())
+    return v
+end

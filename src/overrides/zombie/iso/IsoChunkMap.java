@@ -88,6 +88,7 @@ public final class IsoChunkMap {
 
    public IsoChunkMap(IsoCell cell) {
       this.cell = cell;
+      pzopt.CellObjectSet.install(cell); // pzopt: animalLosWalk (tail pass), the cell's still-empty object set swapped for the counting subclass
       WorldReuserThread.instance.finished = false;
       this.chunksSwapB = new IsoChunk[chunkGridWidth * chunkGridWidth];
       this.chunksSwapA = new IsoChunk[chunkGridWidth * chunkGridWidth];
@@ -146,11 +147,13 @@ public final class IsoChunkMap {
       IsoChunk.loadGridSquare.clear();
       this.chunksSwapA = null;
       this.chunksSwapB = null;
+      pzopt.VehicleNear.changed(); // pzopt: nearVehicleGrid, the chunk map changed
    }
 
    public void setInitialPos(int wx, int wy) {
       this.worldX = wx;
       this.worldY = wy;
+      pzopt.VehicleNear.changed(); // pzopt: nearVehicleGrid, the chunk map changed
       this.xMinTiles = -1;
       this.xMaxTiles = -1;
       this.yMinTiles = -1;
@@ -225,6 +228,8 @@ public final class IsoChunkMap {
    private void updateInternal() {
       boolean bChanged = false;
       pzopt.LootDefer.drain(); // pzopt: lootDefer, this frame's share of the queued far containers
+      pzopt.PoolWarm.frame(); // pzopt: renderPoolMax (render-data pool caps) and devPoolLog
+      pzopt.ChunkPace.frame(IsoChunk.loadGridSquare.size() + (pzoptStaged != null ? 1 : 0)); // pzopt: chunkHandoffPaceMs, this frame's hand-off credit
       int count = IsoChunk.loadGridSquare.size();
       if (count != 0) {
          count = 1 + count * 3 / chunkGridWidth;
@@ -236,6 +241,7 @@ public final class IsoChunkMap {
          if (pzoptDiv > 0) {
             count = Math.min(count, 1 + IsoChunk.loadGridSquare.size() / pzoptDiv);
          }
+         count = pzopt.ChunkPace.limit(count, IsoChunk.loadGridSquare.size()); // pzopt: chunkHandoffPaceMs, a steady rate instead of a row at once
          if (pzopt.ChunkHandoff.defer(IsoChunk.loadGridSquare.size())) { // pzopt: chunkHandoffSlack, wait for a frame with headroom
             count = 0; // pzopt
          } // pzopt
@@ -252,12 +258,22 @@ public final class IsoChunkMap {
          } // pzopt
       } // pzopt
 
+      // pzopt: chunkHandoffFrameBudgetUs (f8-handoff), a backlog's in-frame hand-off stops once this frame's hand-offs took the
+      // budget (at least one chunk, at most the stock count); the rest wait for the slack or the next frame
+      long pzoptBudgetNs = pzopt.Config.CHUNK_HANDOFF_FRAME_BUDGET_US > 0 && pzopt.Overrides.enabled() && pzopt.GtAb.on(pzopt.GtAb.HANDOFF_SCHED) // pzopt
+         && pzopt.SlackWork.active() && IsoChunk.loadGridSquare.size() < pzopt.Config.CHUNK_HANDOFF_PACE_BACKLOG ? pzopt.Config.CHUNK_HANDOFF_FRAME_BUDGET_US * 1000L : 0L; // pzopt
+      long pzoptLoopT0 = System.nanoTime(); // pzopt
       while (count > 0) {
+         if (pzoptBudgetNs > 0L && System.nanoTime() - pzoptLoopT0 >= pzoptBudgetNs) { // pzopt
+            break; // pzopt
+         } // pzopt
          IsoChunk chunk = (IsoChunk)IsoChunk.loadGridSquare.poll();
          if (chunk != null) {
+            long pzoptT0 = System.nanoTime(); // pzopt: chunkHandoffCost=chunk learns from the in-frame hand-offs too
             if (this.pzoptHandOffChunk(chunk)) { // pzopt: the body moved to pzoptHandOffChunk
                bChanged = true; // pzopt
             } // pzopt
+            PZOPT_CHUNK_COST.learn(System.nanoTime() - pzoptT0); // pzopt
          }
 
          count--;
@@ -295,6 +311,7 @@ public final class IsoChunkMap {
    private static int pzoptStagedFrame; // pzopt
    private static final pzopt.SlackWork.Cost PZOPT_LEVEL_COST = new pzopt.SlackWork.Cost(20_000.0, 0.5); // pzopt: hand-off ns per square (levels of a downtown tower are mostly empty)
    private static int pzoptStagedSquares; // pzopt
+   private static final pzopt.SlackWork.Cost PZOPT_CHUNK_COST = new pzopt.SlackWork.Cost(500_000.0, 0.0); // pzopt: chunkHandoffCost=chunk, a whole hand-off's running mean (slack and in-frame ones)
    private static final pzopt.SlackWork.Producer PZOPT_HANDOFF = new pzopt.SlackWork.Producer() { // pzopt
       public boolean pending() { // pzopt
          if (pzoptStaged == null) { // pzopt
@@ -302,13 +319,22 @@ public final class IsoChunkMap {
             pzoptStagedFrame = pzopt.SlackWork.frame(); // pzopt
             pzoptStagedSquares = pzoptSquares(pzoptStaged); // pzopt
          } // pzopt
-         return pzoptStaged != null; // pzopt
+         return pzoptStaged != null && pzopt.ChunkPace.mayTake(IsoChunk.loadGridSquare.size() + 1); // pzopt: chunkHandoffPaceMs in the slack too
       } // pzopt
       public long nextCostNs() { // pzopt
+         if (pzopt.Config.CHUNK_HANDOFF_COST_CHUNK && pzopt.GtAb.on(pzopt.GtAb.HANDOFF_SCHED)) { // pzopt: chunkHandoffCost=chunk (f8-handoff), the running mean of a whole hand-off
+            return PZOPT_CHUNK_COST.estimate(); // pzopt
+         } // pzopt
          return PZOPT_LEVEL_COST.estimate() * pzoptStagedSquares; // pzopt
+      } // pzopt
+      public boolean forceAnyFrame() { // pzopt: chunkHandoffSlackMaxWait with chunkHandoffForceAnyFrame (f8-handoff): an overdue chunk joins in the next slack, light or not
+         return pzopt.Config.CHUNK_HANDOFF_FORCE_ANY_FRAME && pzopt.GtAb.on(pzopt.GtAb.HANDOFF_SCHED); // pzopt
       } // pzopt
       public int nextAgeFrames() { // pzopt
          return pzopt.SlackWork.frame() - pzoptStagedFrame; // pzopt
+      } // pzopt
+      public int maxWaitFrames() { // pzopt: chunkHandoffSlackMaxWait (f8-handoff), a staged chunk that does not fit the slack joins after this many frames (0 = slackMaxWaitFrames)
+         return pzopt.Config.CHUNK_HANDOFF_SLACK_MAX_WAIT > 0 && pzopt.GtAb.on(pzopt.GtAb.HANDOFF_SCHED) ? pzopt.Config.CHUNK_HANDOFF_SLACK_MAX_WAIT : pzopt.Config.SLACK_MAX_WAIT_FRAMES; // pzopt
       } // pzopt
       public void runNext() { // pzopt
          IsoChunk chunk = pzoptStaged; // pzopt
@@ -316,7 +342,14 @@ public final class IsoChunkMap {
          pzoptStaged = null; // pzopt
          IsoChunkMap cm = IsoWorld.instance.currentCell.chunkMap[0]; // pzopt
          long t0 = System.nanoTime(); // pzopt
-         if (cm.pzoptHandOffChunk(chunk)) { // pzopt
+         pzopt.ChunkHandoff.inSlack = true; // pzopt: census
+         boolean pzoptJoined; // pzopt
+         try { // pzopt
+            pzoptJoined = cm.pzoptHandOffChunk(chunk); // pzopt
+         } finally { // pzopt
+            pzopt.ChunkHandoff.inSlack = false; // pzopt
+         } // pzopt
+         if (pzoptJoined) { // pzopt
             for (int n = 0; n < IsoPlayer.numPlayers; n++) { // pzopt: the loop's calculateZExtentsForChunkMap, for each player's map
                IsoChunkMap m = IsoWorld.instance.currentCell.chunkMap[n]; // pzopt
                if (m != null && !m.ignore) { // pzopt
@@ -324,7 +357,10 @@ public final class IsoChunkMap {
                } // pzopt
             } // pzopt
          } // pzopt
-         PZOPT_LEVEL_COST.learn((System.nanoTime() - t0) / squares); // pzopt
+         long pzoptNs = System.nanoTime() - t0; // pzopt
+         PZOPT_LEVEL_COST.learn(pzoptNs / squares); // pzopt
+         PZOPT_CHUNK_COST.learn(pzoptNs); // pzopt: chunkHandoffCost=chunk
+         pzopt.ChunkPace.took(); // pzopt: chunkHandoffPaceMs
       } // pzopt
    }; // pzopt
 
@@ -348,6 +384,23 @@ public final class IsoChunkMap {
    /** pzopt: one chunk's hand-off, the stock loop body of updateInternal (true when the chunk joined the world); also run from the frame's slack (chunkHandoffSlackWork). */
    private boolean pzoptHandOffChunk(IsoChunk chunk) { // pzopt
       boolean bChanged = false; // pzopt
+      pzopt.ChunkHandoff.waited(chunk.pzoptQueuedNs); // pzopt: f8-handoff census
+      if (pzopt.Config.DEV_HANDOFF_LOG && pzopt.Config.INSTRUMENT) { // pzopt: devHandoffLog, the chunk's shape before its hand-off
+         int pzoptObj = 0; // pzopt
+         if (chunk.squares != null) { // pzopt
+            for (IsoGridSquare[] pzoptLevel : chunk.squares) { // pzopt
+               if (pzoptLevel != null) { // pzopt
+                  for (IsoGridSquare pzoptSq : pzoptLevel) { // pzopt
+                     if (pzoptSq != null) { // pzopt
+                        pzoptObj += pzoptSq.getObjects().size(); // pzopt
+                     } // pzopt
+                  } // pzopt
+               } // pzopt
+            } // pzopt
+         } // pzopt
+         pzopt.ChunkHandoff.lastShape = "levels " + (chunk.maxLevel - chunk.minLevel + 1) + " squares " + pzoptSquares(chunk) + " objects " + pzoptObj // pzopt
+            + " new " + (chunk.isNewChunk() ? 1 : 0) + " at " + chunk.wx + "," + chunk.wy; // pzopt
+      } // pzopt
             boolean loaded = false;
 
             for (int n = 0; n < IsoPlayer.numPlayers; n++) {
@@ -684,6 +737,7 @@ public final class IsoChunkMap {
       } else {
          this.chunksSwapB[chunkGridWidth * y + x] = c;
       }
+      pzopt.VehicleNear.changed(); // pzopt: nearVehicleGrid, the chunk map changed
    }
 
    public boolean setChunkDirect(IsoChunk c, boolean bRequireLock) {
@@ -709,6 +763,7 @@ public final class IsoChunkMap {
             } else {
                this.chunksSwapB[chunkGridWidth * y + x] = c;
             }
+            pzopt.VehicleNear.changed(); // pzopt: nearVehicleGrid, the chunk map changed
 
             c.loaded = true;
             if (c.jobType == IsoChunk.JobType.None) {
@@ -810,6 +865,7 @@ public final class IsoChunkMap {
       this.xMinTiles = this.xMaxTiles = -1;
       this.yMinTiles = this.yMaxTiles = -1;
       this.readBufferA = !this.readBufferA;
+      pzopt.VehicleNear.changed(); // pzopt: nearVehicleGrid, the chunk map changed
    }
 
    private void setChunk(int n, IsoChunk c) {
@@ -818,6 +874,7 @@ public final class IsoChunkMap {
       } else {
          this.chunksSwapB[n] = c;
       }
+      pzopt.VehicleNear.changed(); // pzopt: nearVehicleGrid, the chunk map changed
    }
 
    private IsoChunk getChunk(int n) {
@@ -962,6 +1019,7 @@ public final class IsoChunkMap {
       }
 
       this.worldY--;
+      pzopt.VehicleNear.changed(); // pzopt: nearVehicleGrid, the chunk map changed
    }
 
    private void Down() {
@@ -1000,6 +1058,7 @@ public final class IsoChunkMap {
       }
 
       this.worldY++;
+      pzopt.VehicleNear.changed(); // pzopt: nearVehicleGrid, the chunk map changed
    }
 
    private void Left() {
@@ -1038,6 +1097,7 @@ public final class IsoChunkMap {
       }
 
       this.worldX--;
+      pzopt.VehicleNear.changed(); // pzopt: nearVehicleGrid, the chunk map changed
    }
 
    private void Right() {
@@ -1076,6 +1136,7 @@ public final class IsoChunkMap {
       }
 
       this.worldX++;
+      pzopt.VehicleNear.changed(); // pzopt: nearVehicleGrid, the chunk map changed
    }
 
    public int getWorldXMin() {
@@ -1159,6 +1220,7 @@ public final class IsoChunkMap {
                player.square = null;
                this.worldX = x;
                this.worldY = y;
+               pzopt.VehicleNear.changed(); // pzopt: nearVehicleGrid, the chunk map changed
                if (!GameServer.server) {
                   WorldSimulation.instance.activateChunkMap(this.playerId);
                }
@@ -1420,6 +1482,7 @@ public final class IsoChunkMap {
       IsoChunkMap to = this;
       to.worldX = from.worldX;
       to.worldY = from.worldY;
+      pzopt.VehicleNear.changed(); // pzopt: nearVehicleGrid, the chunk map changed
       to.xMinTiles = -1;
       to.yMinTiles = -1;
       to.xMaxTiles = -1;
@@ -1431,10 +1494,12 @@ public final class IsoChunkMap {
             if (from.chunksSwapA[n] != null) {
                from.chunksSwapA[n].refs.add(to);
                to.chunksSwapA[n] = from.chunksSwapA[n];
+               pzopt.VehicleNear.changed(); // pzopt: nearVehicleGrid, the chunk map changed
             }
          } else if (from.chunksSwapB[n] != null) {
             from.chunksSwapB[n].refs.add(to);
             to.chunksSwapB[n] = from.chunksSwapB[n];
+            pzopt.VehicleNear.changed(); // pzopt: nearVehicleGrid, the chunk map changed
          }
       }
    }
@@ -1467,6 +1532,7 @@ public final class IsoChunkMap {
 
                this.chunksSwapA[y * chunkGridWidth + x] = null;
                this.chunksSwapB[y * chunkGridWidth + x] = null;
+               pzopt.VehicleNear.changed(); // pzopt: nearVehicleGrid, the chunk map changed
             }
          }
       }

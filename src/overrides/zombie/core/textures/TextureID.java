@@ -412,10 +412,13 @@ public final class TextureID extends Asset implements IDestroyable, Serializable
    }
 
    private void generateHwId(boolean setPixels) {
-      pzopt.TexCompress.pollStaging(); // pzopt: texCompress, releases GPU staging ranges whose fence signalled
+      pzopt.TexCompress.pollStagingIfLow(); // pzopt: texCompress, releases GPU staging ranges whose fence signalled (tail pass: only when the staging buffer runs low; once a frame after the swap otherwise)
       this.id = pzopt.GlNames.texture(); // pzopt: glNoSync, a pooled name instead of a driver round trip
       this.pzoptSentMin = this.pzoptSentMag = -1; // pzopt: texParamCache, a new name has the GL defaults
       Texture.totalTextureID++;
+      if (pzopt.Config.DEV_TEX_CENSUS) { // pzopt: devTexCensus (tail pass), which textures are created during play
+         pzopt.TexCensus.add(this.pathFileName, this.width, this.height); // pzopt
+      } // pzopt
       GL11.glBindTexture(3553, Texture.lastTextureID = this.id);
       SpriteRenderer.ringBuffer.restoreBoundTextures = true;
       int flags;

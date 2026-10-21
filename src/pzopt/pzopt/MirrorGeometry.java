@@ -169,6 +169,50 @@ final class MirrorGeometry {
    static long unseenSquares;
 
    /**
+    * The pane's room is closed to the camera: most walls on its camera side (the west wall of the square east of a room
+    * square, the north wall of the one south of it) stand full height, not cut away. The player left the room: the frame
+    * shows those walls' outer faces where the room's inside was, and the march's hits on the east wall's outer face lie
+    * within the tolerance of the geometry's own far wall, so they won: a pale see-through glass with a stair-stepped edge
+    * (maintainer's gym, 2026-10-16). Mirrors then takes the room geometry wherever it has a texel. (dev skip2 bit 4: off)
+    */
+   static boolean roomClosed(Mirrors.Refl r) {
+      if ((Config.DEV_MIRRORS_SKIP2 & 4) != 0 || !r.mirror || !(r.key instanceof IsoObject o) || o.square == null) {
+         return false;
+      }
+      IsoRoom room = o.square.getRoom();
+      IsoCell cell = IsoWorld.instance == null ? null : IsoWorld.instance.getCell();
+      if (room == null || cell == null) {
+         return false;
+      }
+      // the player outside the room closes it at once: the walls go up on screen the frame he leaves, the flags read here
+      // follow ~0.8 s later (the cutaway's lock), and the march smeared the frame's walls meanwhile. (Only the geometry
+      // then, where his room's cutaway opens this one too: the room's own tiles, never a smear.)
+      IsoGridSquare ps = IsoCamera.frameState.camCharacterSquare;
+      if (ps != null && ps.getRoom() != room) {
+         return true;
+      }
+      int z = o.square.z, pi = IsoCamera.frameState.playerIndex, walls = 0, up = 0;
+      long now = System.currentTimeMillis();
+      java.util.ArrayList<IsoGridSquare> sqs = room.getSquares();
+      for (int i = 0, n = sqs.size(); i < n; i++) {
+         IsoGridSquare s = sqs.get(i);
+         if (s == null || s.z != z) {
+            continue;
+         }
+         IsoGridSquare e = cell.getGridSquare(s.x + 1, s.y, z), so = cell.getGridSquare(s.x, s.y + 1, z);
+         if (e != null && e.getRoom() != room && e.getWall(false) != null) {
+            walls++;
+            up += (e.getPlayerCutawayFlag(pi, now) & 2) == 0 ? 1 : 0;
+         }
+         if (so != null && so.getRoom() != room && so.getWall(true) != null) {
+            walls++;
+            up += (so.getPlayerCutawayFlag(pi, now) & 1) == 0 ? 1 : 0;
+         }
+      }
+      return walls > 0 && up * 2 > walls;
+   }
+
+   /**
     * What a mirror pane's reflection is made of, as one number: the room squares its rays can reach (as collect walks them),
     * their objects, light (sixteenths), seen state and cutaway flags, and the pane's own light. Mirrors re-marches a pane
     * when this changes instead of every mirrorsStaticReuse frames: every re-march resampled the frame at the camera's new
@@ -219,6 +263,7 @@ final class MirrorGeometry {
             }
          }
       }
+      h = h * 31L + (roomClosed(r) ? 3L : 4L); // (the room closing or opening to the camera re-marches the pane at once)
       SIG[1] = soft == 0L ? 1L : soft;
       return h == 0L ? 1L : h;
    }
@@ -252,6 +297,7 @@ final class MirrorGeometry {
       int axis, z, playerIndex;
       float c;
       boolean furniture; // the next add() is furniture standing in the room (not a floor, wall or edge piece)
+      boolean overlay; // the next add() is an overlay of the tile drawn before it (a wall's trim, wallpaper, a rug): a hair nearer
    }
 
    private static final Ctx CTX = new Ctx();
@@ -275,7 +321,7 @@ final class MirrorGeometry {
             continue;
          }
          PropertyContainer p = s.getProperties();
-         if (p.has("IsMirror")) {
+         if (p.has("IsMirror") || isPropMirror(s)) {
             continue;
          }
          float ryo = obj.getRenderYOffset();
@@ -283,7 +329,16 @@ final class MirrorGeometry {
          boolean wallW = p.has(IsoFlagType.WallW) || p.has(IsoFlagType.DoorWallW) || p.has(IsoFlagType.WindowW) || s.cutW;
          boolean wallN = p.has(IsoFlagType.WallN) || p.has(IsoFlagType.DoorWallN) || p.has(IsoFlagType.WindowN) || s.cutN;
          if (p.has(IsoFlagType.WallNW) || p.has(IsoFlagType.WallSE) || wallW && wallN) {
-            continue; // (a corner holds both orientations: one across the plane, one along it)
+            // (a corner holds both orientations: one across the plane, one along it.) Its straight half across the plane
+            // (CornerNorthWall / CornerWestWall) stands in for it: a mirror beside the room's corner looks along that wall,
+            // which was missing from its room, and with the player outside the room the march smeared the frame's walls
+            // there (maintainer's gym, pane 79 by the NW corner, 2026-10-16; dev skip2 bit 8: corners left out)
+            IsoSprite half = (Config.DEV_MIRRORS_SKIP2 & 8) != 0 || !p.has(IsoFlagType.WallNW) && !(wallW && wallN) ? null
+                  : IsoSpriteManager.instance.namedMap.get(p.get(k.axis == 1 ? "CornerNorthWall" : "CornerWestWall"));
+            if (half != null && half.getProperties() != null) {
+               add(k, half, depthOf(half, k.axis == 1 ? TileDepthMapManager.TileDepthPreset.NWall : TileDepthMapManager.TileDepthPreset.WWall), mx, my, ryo, false, light, Float.NaN);
+            }
+            continue;
          }
          if (wallW || wallN) {
             // a wall across the plane maps onto a wall of the same orientation (its texture mirrored along it, the shape
@@ -329,6 +384,19 @@ final class MirrorGeometry {
       }
    }
 
+   /**
+    * A prop mirror (the gym's recreational_sports_01_76..79: no IsMirror, it reflects through pzopt.Props), never part of
+    * the rebuilt room (2026-10-16, the maintainer's gym: each panel's room held its neighbour panels as furniture right
+    * behind the glass, a flat pale slab over two of the three panes). Dev skip bit 1073741824: the old room.
+    */
+   private static boolean isPropMirror(IsoSprite s) {
+      if ((Mirrors.skipNow() & 1073741824) != 0) {
+         return false;
+      }
+      float[] pi = Props.info(s);
+      return pi != null && (int)pi[0] == Props.MIRROR;
+   }
+
    /** A floor's / wall's overlays (rugs, wallpaper, trims) drawn with it; never a mirror. */
    private static void attached(Ctx k, IsoObject obj, float mx, float my, float ryo, ColorInfo light, TileDepthMapManager.TileDepthPreset preset) {
       java.util.ArrayList<IsoSpriteInstance> a = obj.getAttachedAnimSprite();
@@ -341,7 +409,9 @@ final class MirrorGeometry {
          if (s == null || s.getProperties() == null || s.getProperties().has("IsMirror")) {
             continue;
          }
+         k.overlay = true;
          add(k, s, depthOf(s, preset), mx, my, ryo, false, light, Float.NaN);
+         k.overlay = false;
       }
    }
 
@@ -399,7 +469,9 @@ final class MirrorGeometry {
                   for (IsoSpriteInstance si : a) {
                      IsoSprite s = si == null ? null : si.getParentSprite();
                      if (s != null && s.getProperties() != null && !s.getProperties().has("IsMirror")) {
+                        k.overlay = true;
                         add(k, s, null, wx, wy, paintObj.getRenderYOffset(), false, light, dist);
+                        k.overlay = false;
                      }
                   }
                }
@@ -627,6 +699,11 @@ final class MirrorGeometry {
       boolean wall = !Float.isNaN(wallDist);
       d[o + 19] = wall ? 0F : 1F;
       d[o + 20] = wall ? wallDist : depth == null ? -0.75F : -1.5F; // (no depth map: the square's middle, d = 0.5)
+      // an overlay shares its tile's depth texel for texel: at the same distance the two fought per texel (the gym's
+      // reflected baseboard a dotted band of wall and trim, 2026-10-16), so it is drawn a hair nearer (dev skip bit 1073741824: not)
+      if (k.overlay && (Mirrors.skipNow() & 1073741824) == 0) {
+         d[o + 20] -= 0.02F;
+      }
       d[o + 21] = wall || depth == null ? 0F : 1.5F;
       d[o + 22] = 0F;
       d[o + 23] = 0F;

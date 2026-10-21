@@ -451,6 +451,7 @@ public final class TexBcGpu {
       stageSize = bytes;
       synchronized (free) {
          free.put(0, bytes);
+         freeBytes = bytes;
       }
       staging = true;
       return true;
@@ -474,6 +475,7 @@ public final class TexBcGpu {
                if (rest > 0) {
                   free.put(off + need, rest);
                }
+               freeBytes -= need;
                return off;
             }
          }
@@ -498,7 +500,20 @@ public final class TexBcGpu {
             size += hi;
          }
          free.put(start, size);
+         freeBytes += need;
       }
+   }
+
+   private static volatile int freeBytes; // tail pass: staging bytes not reserved (under the free map's lock)
+
+   /**
+    * Tail pass: a texture creation polls the fences only while less than a quarter of the staging buffer is free. Every
+    * glClientWaitSync makes NVIDIA's threaded driver drain its queue; polled at every TextureID.generateHwId it synced the
+    * render thread once per new texture in the frames that load zombie clothing (run t1-g1). The once-a-frame poll after
+    * the swap (RenderThread) still returns the ranges; a reserve that finds no room takes the unstaged path as before.
+    */
+   public static boolean stagingLow() {
+      return staging && freeBytes < stageSize / 4;
    }
 
    /** Address of a staging offset, for the worker's copy. */
@@ -543,7 +558,7 @@ public final class TexBcGpu {
 
    /** Levels 1.. of a consecutive chain at byte offset base of buf, each from its parent (ImageData's filter). */
    public static void mips(int buf, int base, int[] widths, int[] heights, boolean preserveTransparent) {
-      int prev = GL11C.glGetInteger(GL20C.GL_CURRENT_PROGRAM);
+      int prev = GlState.currentProgram(); // tail pass: ShaderHelper's record (weatherNoGlGet), not a glGet: with NVIDIA's threaded driver every glGet waited for its queue, 18-36 ms in the frames that load new zombie clothing (JFR native samples, run t1-jfrn1)
       GL20C.glUseProgram(mipProgram);
       GL30C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 0, buf);
       GL20C.glUniform1i(uPreserve, preserveTransparent ? 1 : 0);
@@ -609,7 +624,7 @@ public final class TexBcGpu {
          GL15C.glBufferData(GL43C.GL_SHADER_STORAGE_BUFFER, dstCap, GL15C.GL_STREAM_COPY);
          GL15C.glBindBuffer(GL43C.GL_SHADER_STORAGE_BUFFER, 0);
       }
-      int prev = GL11C.glGetInteger(GL20C.GL_CURRENT_PROGRAM);
+      int prev = GlState.currentProgram(); // tail pass: ShaderHelper's record (weatherNoGlGet), not a glGet: with NVIDIA's threaded driver every glGet waited for its queue, 18-36 ms in the frames that load new zombie clothing (JFR native samples, run t1-jfrn1)
       GL20C.glUseProgram(program);
       GL30C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 0, src);
       GL30C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 1, dstBuf);

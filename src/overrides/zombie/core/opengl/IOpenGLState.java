@@ -33,6 +33,11 @@ public abstract class IOpenGLState<T extends IOpenGLState.Value> {
       return this.currentValue;
    }
 
+   /** pzopt: hordeBatch, the cached value restore() would issue (render thread). */
+   public final IOpenGLState.Value pzoptCurrent() { // pzopt
+      return this.currentValue; // pzopt
+   } // pzopt
+
    /** pzopt: a fresh value of this state's type (a recorder's own cache slot). */
    public final IOpenGLState.Value pzoptNewValue() { // pzopt
       return this.defaultValue(); // pzopt

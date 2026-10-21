@@ -11,7 +11,7 @@ public final class AnimationMultiTrack {
    }
 
    private final ArrayList<AnimationTrack> tracks = new ArrayList<>();
-   private static final ThreadLocal<ArrayList<AnimationTrack>> pzoptTempTracks = ThreadLocal.withInitial(ArrayList::new); // pzopt: animatorParallel, was one static list
+   private static final pzopt.Tl<ArrayList<AnimationTrack>> pzoptTempTracks = new pzopt.Tl<>(ArrayList::new); // pzopt: animatorParallel, was one static list
 
    public void addTrack(AnimationTrack track) {
       this.tracks.add(track);

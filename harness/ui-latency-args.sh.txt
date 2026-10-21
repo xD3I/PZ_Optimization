@@ -1,0 +1,9 @@
+# The UI latency pass (2026-10-14): source it, then harness/queue.sh submit run ... -- --label <name> "${UI_ARGS[@]}" [--prop devUiTruth=true]
+# (an empty options file: the desktop's tab file turns on HDR / DLSS / AO; vrr=off + vsync=false for a true 240 cap)
+: > /tmp/pzopt-empty-options.ini
+UI_ARGS=(--mode bench --flag route=S:1 --flag speed=0.0075 --flag zoom=max --flag zombies=off --flag ui_script=latency --flag ui_quit=true
+  --prop frameCapFps=240 --prop uncappedFps=false --prop vrr=off --option vsync=false
+  --vmarg -Dpzopt.userOptionsFile=/tmp/pzopt-empty-options.ini
+  --option uiRenderOffscreen=true --option uiRenderFPS=60 --prop uiProfile=true --no-dashboard --no-mangohud)
+# previous behaviour on the same build: --prop uiVerify=false --prop uiAnimate=false --prop uiHoverHz=60 --prop uiMoveReplay=false --prop uiSlack=false
+# stock UI path: --prop uiRetained=false

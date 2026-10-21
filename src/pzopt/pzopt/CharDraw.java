@@ -131,7 +131,7 @@ public final class CharDraw {
          final AtomicInteger n = new AtomicInteger();
          p = java.util.concurrent.Executors.newFixedThreadPool(THREADS, r -> {
             Thread t = new Thread(() -> {
-               CorePlacement.background(); // macOS: utility QoS (E cores first)
+               CorePlacement.frameCritical(); // macOS: workerQosMac (utility by default, E cores first)
                r.run();
             }, "pzopt-chardraw-" + n.getAndIncrement());
             t.setDaemon(true);
@@ -145,6 +145,7 @@ public final class CharDraw {
 
    /** Executor thread: the on-screen objects in the set's order, and the zombies whose model tests pass so far. */
    private static void runWalk(Set<IsoMovingObject> objects, boolean stockOnly, boolean alphaForced) {
+      CorePlacement.frameCritical(); // f11-mac: workerQosMac alternation
       long t0 = System.nanoTime();
       try {
          onScreen.clear();
@@ -220,6 +221,7 @@ public final class CharDraw {
       ExecutorService exec = pool();
       int chunkStart = 0;
       pending.set(0);
+      boolean sight = FirstSight.active() && FirstSight.anyPending(candidates); // zombieFirstSightSprite, a zombie waits for its first composite: every zombie tested first, the composites granted, then the tasks (else the tasks overlap the tests as before)
       for (int i = 0; i < candidates.size(); i++) {
          IsoZombie zombie = candidates.get(i);
          IsoGridSquare square = zombie.getCurrentSquare();
@@ -239,7 +241,7 @@ public final class CharDraw {
 
             batch.add(zombie);
          }
-         if (batch.size() - chunkStart >= chunk || i == candidates.size() - 1) {
+         if (!sight && (batch.size() - chunkStart >= chunk || i == candidates.size() - 1)) {
             if (batch.size() > chunkStart) {
                final int from = chunkStart;
                final int to = batch.size();
@@ -247,6 +249,15 @@ public final class CharDraw {
                exec.execute(() -> buildRange(from, to));
                chunkStart = to;
             }
+         }
+      }
+      if (sight) {
+         FirstSight.grant(batch);
+         for (int from = 0; from < batch.size(); from += chunk) {
+            final int f = from;
+            final int to = Math.min(batch.size(), from + chunk);
+            pending.incrementAndGet();
+            exec.execute(() -> buildRange(f, to));
          }
       }
       candidates.clear();
@@ -289,6 +300,7 @@ public final class CharDraw {
 
    /** Pool thread: the draw data of the batched zombies from .. to - 1 (a chunk the game thread just handed over). */
    private static void buildRange(int from, int to) {
+      CorePlacement.frameCritical(); // f11-mac: workerQosMac alternation
       try {
          ArrayList<IsoZombie> list = batch;
          for (int i = from; i < to; i++) {

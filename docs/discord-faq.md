@@ -49,10 +49,10 @@ Options gets an **Optimizations** tab and Display gets an **Uncapped** frame-rat
 # 🔄 Updates and uninstall
 
 **How do I update?**
-The main menu has a **PZ OPTIMIZATION UPDATE** item, which lights up when a newer build is out. Click **Update now**, then **Restart game**. Your saves and settings stay. Every new release is announced in this server.
+The main menu has a **PZ OPTIMIZATION** item; when a newer build is out it says "Update available" under it. Open it, click **UPDATE**, then **Update now**, then **Restart game**. Your saves and settings stay. Every new release is announced in this server.
 
 **How do I uninstall?**
-In the main menu: **Options > Optimizations > Uninstall PZ Optimization...**
+In the main menu: **PZ OPTIMIZATION > Uninstall PZ Optimization** (its home page)
 ⚠️ Do this **before** unsubscribing from the Workshop item. Unsubscribing removes the Workshop copy, not the files installed in the game folder.
 From a terminal instead:
 Windows: `& ([scriptblock]::Create((irm https://github.com/xD3I/PZ_Optimization/releases/latest/download/install.ps1))) -Uninstall`
@@ -67,11 +67,11 @@ A build made for the old version can stop the new game at start-up. Once the mat
 # ⚙️ Settings and gameplay
 
 **Do I need to configure anything?**
-No. The defaults are what all the numbers were measured with. Every optimization has its own switch in **Options > Optimizations**:
-- **Disable all (stock game)** gives you the vanilla game from the next launch, without uninstalling, so you can compare on your own PC.
+No. The defaults are what all the numbers were measured with. Every optimization has its own switch in **PZ OPTIMIZATION > Optimizations** (main menu):
+- The **Stock game** preset (PZ OPTIMIZATION home page) gives you the vanilla game from the next launch, without uninstalling, so you can compare on your own PC.
 - The **Low-end hardware** presets are for 4-core machines.
 
-**Enhancements tab:** optional visual features (FSR / DLSS upscaling, HDR, ambient occlusion, sun shadows, reflections, colour grading, and more). Most of them are off by default.
+**PZ OPTIMIZATION > Enhancements:** optional visual features (FSR / DLSS upscaling, HDR, ambient occlusion, sun shadows, reflections, colour grading, and more). Most of them are off by default.
 
 **Does it change gameplay? Is it safe for my saves?**
 The save format is untouched, and the mod is built to play exactly like vanilla. Every part of the game it replaces but does not deliberately change is checked automatically against the original game code. If something plays differently from vanilla (spawns, zombies, cars), that's a bug: please report it.
@@ -98,7 +98,7 @@ Please include:
 - **`console.txt`**, from `%USERPROFILE%\Zomboid` on Windows or `~/Zomboid` on Linux / Mac
 
 ⚠️ Copy `console.txt` right after the problem happens: the next launch overwrites it.
-Tip: if it still happens with **Options > Optimizations > Disable all**, it's a vanilla bug.
+Tip: if it still happens with **PZ OPTIMIZATION > "Stock game" preset**, it's a vanilla bug.
 
 **Where's the source code?**
 <https://github.com/xD3I/PZ_Optimization>. Every change to the game's code is marked and described.

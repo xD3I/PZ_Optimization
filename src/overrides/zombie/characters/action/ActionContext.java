@@ -39,6 +39,8 @@ public final class ActionContext {
 
    /** animatorPipeline: the generation whose evaluation has finished (stamped or not), set last by the evaluating thread. */
    public volatile int pzoptEvalDone;
+   public int pzoptTaskGen; // pzopt: f8-streamfix, the generation whose evaluation went to an asynchronous task (game thread; ActionEval.settle)
+   public volatile int pzoptTaskClaim; // pzopt: f8-streamfix, the generation whose evaluation a thread has taken (ActionEval.claim: the task or settle, never both)
 
    /** pzopt: headOnWorker, an evaluation task that left the zombie to the game thread: done, unstamped. */
    public void pzoptMarkEvalDone() {
@@ -50,9 +52,27 @@ public final class ActionContext {
       try {
          this.pzoptEvaluateInner();
       } finally {
-         this.pzoptEvalDone = pzopt.ActionEval.generation();
+         if (!pzopt.ActionEval.deferEvalDone()) { // pzopt: postupdateFuse, a stream task marks it after its fused tail decided
+            this.pzoptEvalDone = pzopt.ActionEval.generation();
+         } // pzopt
       }
    }
+
+   /**
+    * pzopt: postupdateFuse, a frame worker right after this frame's evaluation: update() for a context whose evaluation
+    * changes nothing, which is then (pzoptApplyEvaluated's transfer of an equal container) only the stamp consumed and the
+    * context's events cleared: no transition, no pending state-changed callbacks, no recorder. False: the game thread runs
+    * update() in its apply loop as before.
+    */
+   public boolean pzoptUpdateNoChange() { // pzopt
+      if (this.pzoptEvaluatedGeneration != pzopt.ActionEval.generation() || this.statesChanged || pzopt.Config.DEV_ACTION_EVAL_CHECK // pzopt
+         || this.owner.isAnimationRecorderActive() || !this.actionStateContainer.equalTo(this.nextActionStateContainer)) { // pzopt
+         return false; // pzopt
+      } // pzopt
+      this.pzoptEvaluatedGeneration = 0; // pzopt
+      this.clearActionContextEvents(); // pzopt
+      return true; // pzopt
+   } // pzopt
 
    private void pzoptEvaluateInner() {
       this.nextActionStateContainer.set(this.actionStateContainer);
@@ -75,8 +95,15 @@ public final class ActionContext {
     * — into the snapshot the worker serves instead of calling them. Their side effects thus happen here, in order,
     * as in stock; a callback that stock would have short-circuited past is called once more than stock.
     */
+   /** pzopt: zombie redesign census, the last snapshot read no side-effecting callback value. */
+   public boolean pzoptSnapshotEmpty() { // pzopt
+      return this.pzoptSnapshot.isEmpty(); // pzopt
+   } // pzopt
+
    public void pzoptSnapshot() {
-      this.pzoptSnapshot.clear();
+      if (!this.pzoptSnapshot.isEmpty()) { // pzopt: zombie redesign (f8-zomb2), IdentityHashMap.clear fills its whole table: a third of the submit
+         this.pzoptSnapshot.clear();
+      } // pzopt
       IAnimatable owner = this.getOwner();
       // pzopt: no state of this container defines a variable, so none can shadow a game variable and the operands
       // resolve straight to the character's slot array; checked once here instead of walked per operand.
@@ -168,6 +195,31 @@ public final class ActionContext {
    private static final Object[] PZOPT_UNSAFE_STATE = new Object[0];
 
    /** The state's variable lookups (for the snapshot), or the UNSAFE marker when a condition type cannot run on a worker. */
+   // pzopt: postupdateClean (f8-zomb2), the states found safe with no snapshot operand, readable from a frame worker
+   private static final java.util.concurrent.ConcurrentHashMap<ActionState, Boolean> pzoptCleanStates = new java.util.concurrent.ConcurrentHashMap<>(); // pzopt
+
+   /** pzopt: postupdateClean, a frame worker: the current state and sub-states are safe and need no snapshot (known on the game thread). */
+   public boolean pzoptCleanSafe() { // pzopt
+      ActionState root = this.actionStateContainer.getRootState(); // pzopt
+      if (root == null || pzoptCleanStates.get(root) != Boolean.TRUE) { // pzopt
+         return false; // pzopt
+      } // pzopt
+      for (int i = 0; i < this.actionStateContainer.childStateCount(); i++) { // pzopt
+         if (pzoptCleanStates.get(this.actionStateContainer.getChildStateAt(i)) != Boolean.TRUE) { // pzopt
+            return false; // pzopt
+         } // pzopt
+      } // pzopt
+      return true; // pzopt
+   } // pzopt
+
+   /** pzopt: postupdateClean, a frame worker: pzoptSnapshot() of a context whose states have no snapshot operand (the map ends empty). */
+   public void pzoptSnapshotClear() { // pzopt
+      if (!this.pzoptSnapshot.isEmpty()) { // pzopt
+         this.pzoptSnapshot.clear(); // pzopt
+      } // pzopt
+      this.pzoptDirectVariables = !this.actionStateContainer.hasStateVariables(); // pzopt
+   } // pzopt
+
    private static boolean pzoptStateSafe(ActionState state) {
       Object[] known = pzoptStateLookups.get(state);
       if (known != null) {
@@ -229,6 +281,9 @@ public final class ActionContext {
       }
 
       pzoptStateLookups.put(state, safe ? lookups.toArray() : PZOPT_UNSAFE_STATE);
+      if (safe && lookups.isEmpty()) { // pzopt: postupdateClean, readable from the workers
+         pzoptCleanStates.put(state, Boolean.TRUE); // pzopt
+      } // pzopt
       if (pzopt.Config.DEV_ACTION_EVAL_CHECK && safe) {
          pzoptStateAllLookups.put(state, allLookups.toArray());
       }
@@ -291,6 +346,7 @@ public final class ActionContext {
    }
 
    public void update() {
+      pzopt.ActionEval.settle(this, pzopt.ActionEval.S_CONTEXT); // pzopt: f8-streamfix, never beside this context's own evaluation task
       AbstractPerformanceProfileProbe var1 = this.updateInternal.profile();
 
       try {
@@ -444,6 +500,7 @@ public final class ActionContext {
    }
 
    public void setPlaybackStateSnapshot(ActionStateSnapshot snapshot) {
+      pzopt.ActionEval.settle(this, pzopt.ActionEval.S_CONTEXT); // pzopt: f8-streamfix, the clear below raced with an evaluation task of this context
       this.nextActionStateContainer.clear();
       this.nextActionStateContainer.setPlaybackStateSnapshot(this, snapshot);
       this.transferActionState(this.nextActionStateContainer);
@@ -454,6 +511,7 @@ public final class ActionContext {
    }
 
    public void setCurrentState(ActionState nextState) {
+      pzopt.ActionEval.settle(this, pzopt.ActionEval.S_CONTEXT); // pzopt: f8-streamfix, the clear below raced with an evaluation task of this context (setGroup: resetForReuse)
       this.nextActionStateContainer.clear();
       this.nextActionStateContainer.setCurrentState(nextState, null);
       this.transferActionState(this.nextActionStateContainer);
@@ -477,6 +535,7 @@ public final class ActionContext {
    private void invokeAnyStateChangedEvents() {
       if (this.statesChanged) {
          this.statesChanged = false;
+         pzopt.ZombTiming.add(pzopt.ZombTiming.X2, 1L); // pzopt: zombie redesign census, state changes a frame
 
          for (IActionStateChanged callback : this.onStateChanged) {
             callback.actionStateChanged(this);
@@ -489,6 +548,7 @@ public final class ActionContext {
    }
 
    public void clearActionContextEvents() {
+      pzopt.ActionEval.settle(this, pzopt.ActionEval.S_EVENT); // pzopt: f8-streamfix, the events an evaluation task of this context reads
       this.occurredAnimEvents.clear();
    }
 
@@ -510,6 +570,7 @@ public final class ActionContext {
    }
 
    public void reportEvent(String state, String event) {
+      pzopt.ActionEval.settle(this, pzopt.ActionEval.S_EVENT); // pzopt: f8-streamfix, the events an evaluation task of this context reads (and its fused update clears)
       this.occurredAnimEvents.add(event, state);
       if (state == null && GameClient.client && this.owner instanceof IsoPlayer player && player.isLocalPlayer()) {
          player.getNetworkCharacterAI().getState().reportEvent(state, event);

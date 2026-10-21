@@ -26,6 +26,11 @@ public final class VisionBatch {
    private VisionBatch() {
    }
 
+   /** This frame batches (the key on and, under devGtAlternate, its phase on: GtAb bit 50). */
+   public static boolean active() {
+      return ENABLED && GtAb.on(GtAb.VISION_BATCH);
+   }
+
    /** Game thread, before the chunk loop: precompute the dirty levels of the chunks lighting will update. */
    public static void prepare(IsoChunk[] chunks, int count, int playerIndex, IsoDirections[] dirs) {
       clear();

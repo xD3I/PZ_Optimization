@@ -124,6 +124,7 @@ public final class RecalcPool {
    private static void publish(OrderedPublisher.Entry<Task> e) {
       Task task = e.item;
       Parity.capture(task.chunk);
+      task.chunk.pzoptQueuedNs = System.nanoTime(); // f8-handoff census (hand-off wait)
       IsoChunk.loadGridSquare.add(task.chunk);
       task.timing.publishNs = System.nanoTime();
       Stats.done(task.chunk, task.timing);

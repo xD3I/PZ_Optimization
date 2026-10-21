@@ -431,7 +431,7 @@ public final class WorldSoundManager {
 
    // pzopt: the shared result object for the game thread (stock), one per thread for any other caller: a mod that
    // updates zombies on several threads (PZMulticore) would otherwise overwrite a result another thread still reads
-   private static final ThreadLocal<WorldSoundManager.ResultBiggestSound> pzoptResultOther = ThreadLocal.withInitial(WorldSoundManager.ResultBiggestSound::new);
+   private static final pzopt.Tl<WorldSoundManager.ResultBiggestSound> pzoptResultOther = new pzopt.Tl<>(WorldSoundManager.ResultBiggestSound::new); // pzopt: pzopt.Tl (zombie redesign, f8-zomb2)
 
    private static WorldSoundManager.ResultBiggestSound pzoptResultBiggestSound() { // pzopt
       return Thread.currentThread() == zombie.GameWindow.gameThread ? resultBiggestSound : pzoptResultOther.get();

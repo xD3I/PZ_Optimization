@@ -37,9 +37,11 @@ public final class FrameCapture {
    private static BlockingQueue<Object[]> QUEUE = new ArrayBlockingQueue<>(64);
    private static boolean ram; // field "ram": frames held in native memory until written (no drops on a slow disk)
    private static Thread writer;
+   private static long swaps; // presented frames so far (with devHordeModes the index lines carry it and the frame's horde mode)
 
    /** Render thread, Display.swapBuffers, before the swap. */
    public static void beforeSwap() {
+      swaps++;
       if (done || failed || Config.DEV_CAPTURE.isEmpty()) {
          return;
       }
@@ -152,7 +154,8 @@ public final class FrameCapture {
          GL11.glEnable(GL11.GL_SCISSOR_TEST);
       }
       frames++;
-      if (!QUEUE.offer(new Object[] {b, System.currentTimeMillis()})) {
+      Object stamp = Config.DEV_HORDE_MODES.isEmpty() ? (Object)System.currentTimeMillis() : System.currentTimeMillis() + " " + swaps + " " + HordeDraw.frameMode;
+      if (!QUEUE.offer(new Object[] {b, stamp})) {
          frames--; // the writer fell behind: the frame is dropped (its stamp too)
       }
    }

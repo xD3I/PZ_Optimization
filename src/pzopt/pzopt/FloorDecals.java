@@ -49,6 +49,7 @@ public final class FloorDecals {
       if (floor == null) {
          floor = compute(sprite);
          if (floor == null) {
+            BakeRecord.unsure(); // bakeRecordParallel: a worker's render-info pass ahead of the bake may not know what the bake's time knows
             return false; // texture size not known yet: baked this time, asked again at the next layer calculation
          }
          cache.put(sprite, floor);

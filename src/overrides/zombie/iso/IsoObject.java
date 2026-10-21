@@ -201,6 +201,7 @@ public class IsoObject extends GameEntity implements Serializable, ILuaIsoObject
    private static final class PzoptScratch { // pzopt
       final ColorInfo stCol = new ColorInfo(); // pzopt
       final ColorInfo stCol2 = new ColorInfo(); // pzopt
+      final ColorInfo modelCol = new ColorInfo(); // pzopt: tileRecordModels, the door light copy (renderModel)
    } // pzopt
 
    private static IsoObject.PzoptScratch pzoptScratch() { // pzopt
@@ -467,6 +468,26 @@ public class IsoObject extends GameEntity implements Serializable, ILuaIsoObject
    public HashMap<Class<? extends ECSComponent>, ECSComponent> getECSComponentMap() {
       return this.ecsComponentMap;
    }
+
+   private ECSComponent[] pzoptEcsValues; // pzopt: ecsValuesCache (zombie redesign, f8-zomb2), the component map's values in iteration order
+
+   @Override
+   public ECSComponent[] pzoptEcsValues() { // pzopt: the map only changes through ECSEntity.setECSComponent / removeECSComponent, which clear this
+      if (!pzopt.Config.ECS_VALUES_CACHE) { // pzopt
+         return null; // pzopt
+      } // pzopt
+      ECSComponent[] v = this.pzoptEcsValues; // pzopt
+      if (v == null) { // pzopt
+         v = this.ecsComponentMap.values().toArray(new ECSComponent[0]); // pzopt: the iterator's order
+         this.pzoptEcsValues = v; // pzopt
+      } // pzopt
+      return v; // pzopt
+   } // pzopt
+
+   @Override
+   public void pzoptEcsChanged() { // pzopt
+      this.pzoptEcsValues = null; // pzopt
+   } // pzopt
 
    public boolean isUnbentObject(GridSquareEdgeFacingDirection facingDirection) {
       return BentFences.getInstance().isUnbentObject(this, facingDirection);
@@ -6394,6 +6415,10 @@ public class IsoObject extends GameEntity implements Serializable, ILuaIsoObject
       if (bDoor && this.square != null && !DebugOptions.instance.fboRenderChunk.nolighting.getValue()) {
          col = this.square.getLightInfo(playerIndex);
       }
+      IsoObject.PzoptScratch pzoptMs = pzoptScratch(); // pzopt: tileRecordModels, a recording thread scales its own copy of the light (stock scales the square's shared light info and puts it back after)
+      if (pzoptMs != null) { // pzopt
+         col = pzoptMs.modelCol.set(col); // pzopt
+      } // pzopt
 
       ColorInfo colOrig = col;
       float a = col.a;
@@ -6526,12 +6551,12 @@ public class IsoObject extends GameEntity implements Serializable, ILuaIsoObject
          } else if (FBORenderCell.pzoptTranslucentOnly()) { // pzopt: tileRecordParallel, a recording thread sees the translucent pass's render mode
             renderInfo.renderX = this.sx - IsoCamera.frameState.offX;
             renderInfo.renderY = this.sy - IsoCamera.frameState.offY;
-         } else if (FBORenderChunkManager.instance.renderChunk.highRes) {
-            renderInfo.renderX = this.sx + FBORenderChunkManager.instance.getXOffset() - FBORenderChunkManager.instance.renderChunk.w / 4.0F;
-            renderInfo.renderY = this.sy + FBORenderChunkManager.instance.getYOffset();
+         } else if (pzopt.BakeRecord.renderChunk().highRes) { // pzopt: bakeRecordParallel, a recording thread draws into its unit's texture
+            renderInfo.renderX = this.sx + pzopt.BakeRecord.xOffset() - pzopt.BakeRecord.renderChunk().w / 4.0F; // pzopt: bakeRecordParallel, a recording thread draws into its unit's texture
+            renderInfo.renderY = this.sy + pzopt.BakeRecord.yOffset(); // pzopt: bakeRecordParallel, a recording thread draws into its unit's texture
          } else {
-            renderInfo.renderX = this.sx + FBORenderChunkManager.instance.getXOffset();
-            renderInfo.renderY = this.sy + FBORenderChunkManager.instance.getYOffset();
+            renderInfo.renderX = this.sx + pzopt.BakeRecord.xOffset(); // pzopt: bakeRecordParallel, a recording thread draws into its unit's texture
+            renderInfo.renderY = this.sy + pzopt.BakeRecord.yOffset(); // pzopt: bakeRecordParallel, a recording thread draws into its unit's texture
          }
 
          renderInfo.renderWidth = tex.getWidthOrig() * scaleX;

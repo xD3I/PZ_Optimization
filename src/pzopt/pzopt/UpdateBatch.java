@@ -53,7 +53,7 @@ public final class UpdateBatch {
    private static volatile float[] snapY = new float[4096];
    private static volatile float[] snapZ = new float[4096];
    private static volatile long snapshotFrame;
-   private static final ThreadLocal<IsoMovingObject> CURRENT = new ThreadLocal<>();
+   private static final Tl<IsoMovingObject> CURRENT = new Tl<>(null);
 
    // setForwardDirectionFromIsoDirection's scratch vector. The jar's method writes the direction into the STATIC
    // IsoGameCharacter.tempVector2_2 and reads it back, and getVectorFromDirection ZEROES the vector before the
@@ -62,7 +62,7 @@ public final class UpdateBatch {
    // 37-exception Louisville residue: WalkTowardState, ThumpState, ClimbOverFenceState — the last from
    // setDir(IsoDirections.N), a constant, which is what ruled the states' own math out). Between throws the same
    // race silently handed a walker another zombie's direction. Per-thread vector, same idiom as VehicleCull.near.
-   private static final ThreadLocal<zombie.iso.Vector2> DIR_SCRATCH = ThreadLocal.withInitial(zombie.iso.Vector2::new);
+   private static final Tl<zombie.iso.Vector2> DIR_SCRATCH = new Tl<>(zombie.iso.Vector2::new);
 
    /** This thread's direction scratch vector, for the IsoGameCharacter override. */
    public static zombie.iso.Vector2 dirScratch() {
@@ -73,7 +73,16 @@ public final class UpdateBatch {
    // float[1] holder instead of ThreadLocal<Float> so the per-task set/clear never boxes. Written by the
    // batch runner from the value captured at dispatch; read by pom() at the five consumer sites so a task
    // keeps its bucket's multiplier even after the game thread has moved on to the next bucket's write.
-   private static final ThreadLocal<float[]> POM = ThreadLocal.withInitial(() -> new float[]{Float.NaN});
+   private static final Tl<float[]> POM = new Tl<>(() -> new float[]{Float.NaN});
+
+   /** postupdateFuse (f8-zomb2): this thread's tasks read {@code m} as the perObjectMultiplier until {@link #pomClear}. */
+   public static void pomSet(float m) {
+      POM.get()[0] = m;
+   }
+
+   public static void pomClear() {
+      POM.get()[0] = Float.NaN;
+   }
 
    /** The perObjectMultiplier this thread should see: the dispatch-time capture inside a batch task, the live field otherwise. */
    public static float pom(zombie.GameTime gameTime) {
@@ -86,8 +95,8 @@ public final class UpdateBatch {
    // anything concurrently share one vector — run lou-pipe-off caught ZombieEatBodyState throwing the
    // zero-length exception through exactly that path). Worker-reachable users read these; the debug/render/
    // death-path users keep the statics.
-   private static final ThreadLocal<zombie.iso.Vector2> TEMPO = ThreadLocal.withInitial(zombie.iso.Vector2::new);
-   private static final ThreadLocal<zombie.iso.Vector2> TEMPO2 = ThreadLocal.withInitial(zombie.iso.Vector2::new);
+   private static final Tl<zombie.iso.Vector2> TEMPO = new Tl<>(zombie.iso.Vector2::new);
+   private static final Tl<zombie.iso.Vector2> TEMPO2 = new Tl<>(zombie.iso.Vector2::new);
 
    /** This thread's tempo scratch vector, for the IsoGameCharacter override. */
    public static zombie.iso.Vector2 tempoScratch() {
@@ -101,8 +110,8 @@ public final class UpdateBatch {
 
    // WalkTowardState's singleton temp/worldPos scratch, per thread (the State instance is shared by every
    // walking zombie; its fields are the same disease as the statics above).
-   private static final ThreadLocal<zombie.iso.Vector2> WALK = ThreadLocal.withInitial(zombie.iso.Vector2::new);
-   private static final ThreadLocal<org.joml.Vector3f> WALK3 = ThreadLocal.withInitial(org.joml.Vector3f::new);
+   private static final Tl<zombie.iso.Vector2> WALK = new Tl<>(zombie.iso.Vector2::new);
+   private static final Tl<org.joml.Vector3f> WALK3 = new Tl<>(org.joml.Vector3f::new);
 
    /** This thread's WalkTowardState temp scratch, for that override. */
    public static zombie.iso.Vector2 walkScratch() {
@@ -128,11 +137,11 @@ public final class UpdateBatch {
    // method, residual state included (closestPointOnPath resets pathIndex but not dist, and advanceAlongPath
    // accumulates into dist — stock carries that over from the previous call on the static, and a thread's own
    // holder carries it over the same way, now only from its own calls).
-   private static final ThreadLocal<zombie.iso.Vector2> PATH = ThreadLocal.withInitial(zombie.iso.Vector2::new);
-   private static final ThreadLocal<zombie.iso.Vector2> PATH2 = ThreadLocal.withInitial(zombie.iso.Vector2::new);
-   private static final ThreadLocal<org.joml.Vector3f> PATH3 = ThreadLocal.withInitial(org.joml.Vector3f::new);
-   private static final ThreadLocal<zombie.pathfind.PathFindBehavior2.PointOnPath> PATH_POINT =
-         ThreadLocal.withInitial(zombie.pathfind.PathFindBehavior2.PointOnPath::new);
+   private static final Tl<zombie.iso.Vector2> PATH = new Tl<>(zombie.iso.Vector2::new);
+   private static final Tl<zombie.iso.Vector2> PATH2 = new Tl<>(zombie.iso.Vector2::new);
+   private static final Tl<org.joml.Vector3f> PATH3 = new Tl<>(org.joml.Vector3f::new);
+   private static final Tl<zombie.pathfind.PathFindBehavior2.PointOnPath> PATH_POINT =
+         new Tl<>(zombie.pathfind.PathFindBehavior2.PointOnPath::new);
 
    /** This thread's PathFindBehavior2 tempVector2 scratch, for that override. */
    public static zombie.iso.Vector2 pathScratch() {
@@ -160,7 +169,24 @@ public final class UpdateBatch {
     * override's getX/getY/getZ — with the key off the volatile is always false and nothing else is read.
     */
    public static boolean frozen(IsoMovingObject entity) {
-      return inFlight && entity.pzoptSnapshotFrame == snapshotFrame && entity != CURRENT.get();
+      return inFlight && (long) SNAP_FRAME.getAcquire(entity) == snapshotFrame && entity != current(); // acquire: entityUpdateStream stamps entities while tasks run (index and slot before the frame, release)
+   }
+
+   /**
+    * The entity this thread's flight task is updating, or null (zombie redesign, f8-zomb2): a worker keeps it in a field
+    * of its own Thread object, so the per-getX() self test is a type check and a field load instead of a ThreadLocal
+    * lookup; the game thread (helping at the join) and any other thread still use the ThreadLocal.
+    */
+   private static IsoMovingObject current() {
+      return Thread.currentThread() instanceof FrameBatch.Worker w ? (IsoMovingObject) w.zCurrent : CURRENT.get();
+   }
+
+   private static void setCurrent(IsoMovingObject entity) {
+      if (Thread.currentThread() instanceof FrameBatch.Worker w) {
+         w.zCurrent = entity;
+      } else {
+         CURRENT.set(entity);
+      }
    }
 
    /** The frozen X of an entity {@link #frozen} said yes for. */
@@ -194,7 +220,7 @@ public final class UpdateBatch {
     * caller returns without touching the square lists); false = no batch window, run the stock body.
     */
    public static boolean deferMovingSquare(IsoMovingObject entity, zombie.iso.IsoGridSquare square) {
-      if (!inFlight || CURRENT.get() == null) {
+      if (!inFlight || current() == null) {
          return false;
       }
 
@@ -216,7 +242,7 @@ public final class UpdateBatch {
    // perObjectMultiplier exactly as stock's inline dispatch did (AnimParallel dispatches under useMultiplier for
    // the same reason: ThumpState counts strikes over it). With the key off the guard counts and drops, as before.
    private static java.util.ArrayList<Object[]>[] luaCaptures = newLuaCaptureArray(4096);
-   private static final ThreadLocal<java.util.ArrayList<Object[]>> LUA_CAPTURE = new ThreadLocal<>();
+   private static final Tl<java.util.ArrayList<Object[]>> LUA_CAPTURE = new Tl<>(null);
    private static long luaCaptured, luaReplayed;
 
    @SuppressWarnings("unchecked")
@@ -232,7 +258,7 @@ public final class UpdateBatch {
    // scratch). joinPending runs the queued ticks on the game thread in queue order — stock's serial order —
    // under the flight's captured multiplier. The tick still lands in the same frame, before anything renders.
    private static java.util.ArrayList<zombie.characters.IsoGameCharacter>[] emitterCaptures = newEmitterCaptureArray(4096);
-   private static final ThreadLocal<java.util.ArrayList<zombie.characters.IsoGameCharacter>> EMITTER_CAPTURE = new ThreadLocal<>();
+   private static final Tl<java.util.ArrayList<zombie.characters.IsoGameCharacter>> EMITTER_CAPTURE = new Tl<>(null);
    private static long emitterDeferred, emitterDrained;
 
    @SuppressWarnings("unchecked")
@@ -316,11 +342,12 @@ public final class UpdateBatch {
    private static final class PhysicsSlot {
       final java.util.ArrayList<zombie.characters.IsoGameCharacter> ballistics = new java.util.ArrayList<>();
       final java.util.ArrayList<RagdollHit> ragdolls = new java.util.ArrayList<>();
+      final java.util.ArrayList<RagdollHit> vehicleHits = new java.util.ArrayList<>(); // vehicleHitDefer (2026-10-13)
    }
 
    private static PhysicsSlot[] physicsSlots = new PhysicsSlot[4096];
-   private static final ThreadLocal<PhysicsSlot> PHYSICS_CAPTURE = new ThreadLocal<>();
-   private static long ballisticsDeferred, ballisticsDrained, ragdollDeferred, ragdollDrained;
+   private static final Tl<PhysicsSlot> PHYSICS_CAPTURE = new Tl<>(null);
+   private static long ballisticsDeferred, ballisticsDrained, ragdollDeferred, ragdollDrained, vehicleHitDeferred, vehicleHitDrained;
 
    /**
     * A batch task reached {@code updateBallisticsTarget} with a live target: queue the character for the join's
@@ -356,6 +383,46 @@ public final class UpdateBatch {
       slot.ragdolls.add(new RagdollHit(zombie, vehicle));
       ragdollDeferred++;
       return true;
+   }
+
+   /**
+    * vehicleHitDefer (zombie pass 2026-10-13): a batch task reached IsoZombie.updateInternal's vehicle hit test (a moving
+    * vehicle's update had set the zombie's vehicle4testCollision): checkNetworkCollision -> hitCharacter -> onHitByVehicle ->
+    * slideAwayFromWalls runs PolygonalMap2's CollideWithObstacles, whose scratch is shared; on a worker it threw and left
+    * the scratch broken, and the player's own postupdate then crashed the game out of the world (run zomb-9-def). The test
+    * is queued with the vehicle (the task nulls the field) and made by the game thread at the join, in queue order. Off a
+    * batch task the slot is unset and the caller runs the stock branch in place.
+    */
+   public static boolean deferVehicleHit(zombie.characters.IsoZombie zombie, zombie.vehicles.BaseVehicle vehicle) {
+      PhysicsSlot slot = PHYSICS_CAPTURE.get();
+      if (slot == null) {
+         return false;
+      }
+
+      slot.vehicleHits.add(new RagdollHit(zombie, vehicle));
+      vehicleHitDeferred++;
+      return true;
+   }
+
+   /** Game thread, after the join: every task's queued vehicle hit tests, in queue order. */
+   private static void drainVehicleHits(int n) {
+      float[] h = POM.get();
+      final float[] poms = flightPomArr;
+      for (int i = 0; i < n; i++) {
+         PhysicsSlot slot = physicsSlots[i];
+         if (slot == null || slot.vehicleHits.isEmpty()) {
+            continue;
+         }
+
+         h[0] = poms != null ? poms[i] : flightPom;
+         for (int j = 0; j < slot.vehicleHits.size(); j++) {
+            RagdollHit hit = slot.vehicleHits.get(j);
+            hit.zombie().pzoptVehicleHit(hit.vehicle());
+            vehicleHitDrained++;
+         }
+
+         slot.vehicleHits.clear();
+      }
    }
 
    /**
@@ -410,16 +477,94 @@ public final class UpdateBatch {
     * {@code entityUpdateLuaReplay} is off. The varargs array only ever allocates on this already-guarded path.
     */
    public static void captureLuaEvent(String event, Object... params) {
+      Object[] record = luaRecord(event, params.length + 1);
+      if (record != null) {
+         System.arraycopy(params, 0, record, 1, params.length);
+      }
+   }
+
+   // fixed-arity forms (GC pass 2026-10-14): LuaEventManager's calls bind to these, so no varargs array is made per event
+   public static void captureLuaEvent(String event) {
+      luaRecord(event, 1);
+   }
+
+   public static void captureLuaEvent(String event, Object param1) {
+      Object[] record = luaRecord(event, 2);
+      if (record != null) {
+         record[1] = param1;
+      }
+   }
+
+   public static void captureLuaEvent(String event, Object param1, Object param2) {
+      Object[] record = luaRecord(event, 3);
+      if (record != null) {
+         record[1] = param1;
+         record[2] = param2;
+      }
+   }
+
+   public static void captureLuaEvent(String event, Object param1, Object param2, Object param3) {
+      Object[] record = luaRecord(event, 4);
+      if (record != null) {
+         record[1] = param1;
+         record[2] = param2;
+         record[3] = param3;
+      }
+   }
+
+   /** The task's next capture record (event in slot 0), or null when the event is not captured. */
+   private static Object[] luaRecord(String event, int len) {
+      if (zombieUpdateSilent && "OnZombieUpdate".equals(event)) {
+         return null; // luaSilentSkip: no Lua function listens to it this frame (the replay would find no callback and return)
+      }
       java.util.ArrayList<Object[]> list = LUA_CAPTURE.get();
       if (list == null || !Config.ENTITY_UPDATE_LUA_REPLAY) {
          onLuaSuppressed();
-         return;
+         return null;
       }
 
-      Object[] record = new Object[params.length + 1];
+      Object[] record = list instanceof CaptureList c ? c.take(len) : new Object[len];
       record[0] = event;
-      System.arraycopy(params, 0, record, 1, params.length);
       list.add(record);
+      return record;
+   }
+
+   /**
+    * A task's capture list whose record arrays are kept after the replay and reused by the next captures of the same
+    * length (GC pass 2026-10-14: one record per captured event, ~5 MB/s on Louisville). The replay empties each record
+    * before keeping it, so nothing it referenced stays reachable.
+    */
+   static final class CaptureList extends java.util.ArrayList<Object[]> {
+      private Object[][] spare = new Object[8][];
+      private int spareN;
+
+      Object[] take(int len) {
+         for (int k = this.spareN - 1; k >= 0 && k >= this.spareN - 4; k--) {
+            Object[] r = this.spare[k];
+            if (r.length == len) {
+               this.spareN--;
+               this.spare[k] = this.spare[this.spareN];
+               this.spare[this.spareN] = null;
+               return r;
+            }
+         }
+         return new Object[len];
+      }
+
+      /** Game thread, after the replay: empty the records, keep up to 32, clear the list. */
+      void recycle() {
+         for (int j = 0; j < this.size(); j++) {
+            Object[] r = this.get(j);
+            java.util.Arrays.fill(r, null);
+            if (this.spareN < 32) {
+               if (this.spareN == this.spare.length) {
+                  this.spare = java.util.Arrays.copyOf(this.spare, this.spareN * 2);
+               }
+               this.spare[this.spareN++] = r;
+            }
+         }
+         this.clear();
+      }
    }
 
    /**
@@ -478,7 +623,11 @@ public final class UpdateBatch {
             luaReplayed++;
          }
 
-         list.clear();
+         if (list instanceof CaptureList c) {
+            c.recycle(); // GC pass: the record arrays are reused by the next frames' captures
+         } else {
+            list.clear();
+         }
       }
    }
 
@@ -539,7 +688,7 @@ public final class UpdateBatch {
     * set and vanilla behaviour is untouched (deferMovingSquare has used this same condition from the start).
     */
    public static boolean onBatchTaskNow() {
-      return inFlight && CURRENT.get() != null;
+      return inFlight && current() != null;
    }
 
    public static long frames, batched, maxBatch, workNanos, waitNanos;
@@ -672,6 +821,7 @@ public final class UpdateBatch {
     */
    public static void latchFrame(boolean combined) {
       combinedFrame = combined;
+      hoistedCount = 0; // entityUpdateStreamHoist: a frame that does not hoist must not skip anyone
       if (combinedFrame) {
          clear();
          // The abandoned inline entities are nulled, not just forgotten: a frame that threw between queueInline and
@@ -701,6 +851,10 @@ public final class UpdateBatch {
 
    /** Combined add: the entity plus its bucket's multiplier (the live global — the bucket just set it) and level. */
    public static void add(IsoMovingObject entity, int simulationLevelOrdinal) {
+      if (streamOpen) {
+         addStream(entity, simulationLevelOrdinal); // entityUpdateStream
+         return;
+      }
       if (count == queue.length) {
          queue = java.util.Arrays.copyOf(queue, count * 2);
          queuePom = java.util.Arrays.copyOf(queuePom, count * 2);
@@ -854,18 +1008,19 @@ public final class UpdateBatch {
       final boolean flightReplay = luaReplay;
 
       flightFailure = null;
+      checkSilent(); // luaSilentSkip
       inFlight = true; // onWorkerNow() and frozen(): the workers are running this batch's entities from here to joinPending
       LightingDefer.prepare(n); // gt-offload: the tasks' lazy light-read side effects, applied at the join
       FrameBatch.runAsync(n, i -> {
          IsoMovingObject entity = q[i];
          LightingDefer.begin(i);
-         CURRENT.set(entity); // frozen(): this task's entity reads itself live, everyone else frozen
+         setCurrent(entity); // frozen(): this task's entity reads itself live, everyone else frozen
          POM.get()[0] = pomAtDispatch; // pom(): this task reads the dispatch-time multiplier
          java.util.ArrayList<Object[]> capture = null;
          if (flightReplay) {
             capture = luaCaptures[i];
             if (capture == null) {
-               capture = new java.util.ArrayList<>();
+               capture = new CaptureList(); // GC pass: records reused after the replay
                luaCaptures[i] = capture; // published to the game thread by the join
             }
             LUA_CAPTURE.set(capture); // captureLuaEvent appends here for this task
@@ -895,7 +1050,7 @@ public final class UpdateBatch {
             entity.update();
          } finally {
             LightingDefer.end();
-            CURRENT.set(null); // a pooled worker must not carry the reference into the next task
+            setCurrent(null); // a pooled worker must not carry the reference into the next task
             POM.get()[0] = Float.NaN; // pom() follows the live field again off-task
             if (capture != null) {
                LUA_CAPTURE.set(null);
@@ -929,11 +1084,306 @@ public final class UpdateBatch {
     * is sized n + inlineCount + 64 — the walk finished before this call, so the inline count is exact rather
     * than the pipeline's fixed INLINE_SLACK guess.
     */
+   /** One flight task: entity i's four update calls with its captures (the combined dispatch's and the stream's body). */
+   private static void flightTask(int i, IsoMovingObject[] q, float[] poms, int[] levels, boolean flightReplay, boolean flightDefer, boolean flightPhysics) {
+      long zt0 = ZombTiming.ON ? System.nanoTime() : 0L; // zombie redesign timers (f8-zomb2)
+      IsoMovingObject entity = q[i];
+      LightingDefer.begin(i);
+      setCurrent(entity); // frozen(): this task's entity reads itself live, everyone else frozen
+      POM.get()[0] = poms[i]; // spec 3.3: per-task, not per-flight — this flight spans every bucket of the frame
+      java.util.ArrayList<Object[]> capture = null;
+      if (flightReplay) {
+         capture = luaCaptures[i];
+         if (capture == null) {
+            capture = new CaptureList(); // GC pass: records reused after the replay
+            luaCaptures[i] = capture; // published to the game thread by the join
+         }
+         LUA_CAPTURE.set(capture); // captureLuaEvent appends here for this task
+      }
+      java.util.ArrayList<zombie.characters.IsoGameCharacter> emitterSlot = null;
+      if (flightDefer) {
+         emitterSlot = emitterCaptures[i];
+         if (emitterSlot == null) {
+            emitterSlot = new java.util.ArrayList<>();
+            emitterCaptures[i] = emitterSlot; // published to the game thread by the join
+         }
+         EMITTER_CAPTURE.set(emitterSlot); // deferEmitter queues here for this task
+      }
+      PhysicsSlot physicsSlot = null;
+      if (flightPhysics) {
+         physicsSlot = physicsSlots[i];
+         if (physicsSlot == null) {
+            physicsSlot = new PhysicsSlot();
+            physicsSlots[i] = physicsSlot; // published to the game thread by the join
+         }
+         PHYSICS_CAPTURE.set(physicsSlot); // deferBallistics / deferRagdollVehicle queue here for this task
+      }
+      try {
+         entity.setCurrentSimulationLevel(LEVELS[levels[i]]);
+         entity.preupdate();
+         entity.frameStep();
+         entity.update();
+      } finally {
+         LightingDefer.end();
+         setCurrent(null); // a pooled worker must not carry the reference into the next task
+         POM.get()[0] = Float.NaN; // pom() follows the live field again off-task
+         if (capture != null) {
+            LUA_CAPTURE.set(null);
+         }
+         if (emitterSlot != null) {
+            EMITTER_CAPTURE.set(null);
+         }
+         if (physicsSlot != null) {
+            PHYSICS_CAPTURE.set(null); // a pooled worker must not defer for the next batch's inline work
+         }
+         if (zt0 != 0L) {
+            ZombTiming.task(zt0, !(Thread.currentThread() instanceof FrameBatch.Worker));
+         }
+      }
+   }
+
+   // ---- entityUpdateStream (zombie redesign pass, 2026-10-13, f8-zomb2) ----
+   //
+   // The combined flight used to leave at the end of the buckets' collection, and the only game-thread work under it was
+   // the short inline phase (~0.12 ms of a ~0.83 ms flight): the game thread then ran a tenth of the tasks itself at the
+   // join. With the stream, the flight opens as soon as the frame's last in-place entity (player, vehicle: the ones
+   // entityUpdatePlayerFirst updates at their place) has updated, and every zombie the collection hands over after that is
+   // published to the running workers at once. Everything a task can see is what it saw before: no entity updates on the
+   // game thread between the stream's opening and the inline phase (the rest of the collection only reads and queues),
+   // a task's position snapshot is taken when it is queued, before any task can move it (a zombie only moves itself),
+   // and the per-task captures, deferrals and the join are the combined flight's. The scheduler counts the frame's in-place
+   // entities while it fills the buckets (MovingObjectUpdateSchedulerUpdateBucket.add).
+   private static final java.lang.invoke.VarHandle SNAP_FRAME;
+
+   static {
+      try {
+         SNAP_FRAME = java.lang.invoke.MethodHandles.publicLookup().findVarHandle(IsoMovingObject.class, "pzoptSnapshotFrame", long.class);
+      } catch (ReflectiveOperationException e) {
+         throw new ExceptionInInitializerError(e);
+      }
+   }
+
+   private static boolean streamFrame; // this frame streams (latched at the scheduler's update entry)
+   private static boolean streamOpen; // the stream is on the workers and takes new tasks
+   private static int inPlaceLeft;
+   private static int streamCap;
+   private static long streamFrames, streamOpenedEarly, streamTasksAtOpen, streamOverflow, streamLate, streamUnopened;
+
+   // entityUpdateStreamHoist: the stream opens only after the frame's last player / vehicle, and on Louisville that one sits
+   // near the end of the full bucket (~2,150 of ~2,400 zombies collected before it, run zomb2-ab2), so the frame's players
+   // and vehicles update first, in bucket order, and the stream opens before the collection. The one difference from
+   // entityUpdatePlayerFirst's order: a zombie listed before the player is now classified (calm or not, near the player or
+   // not) after the player's update instead of before it, as every zombie after the player always was.
+   private static IsoMovingObject[] HOISTED = new IsoMovingObject[64]; // grows: every parked car of the loaded area is one (a fixed 16 double-updated the 17th, run zomb2-ab3)
+   private static int hoistedCount;
+   private static long hoistFrames;
+
+   /** Game thread: this frame hoists its players and vehicles (the stream's key, its hoist key, a combined frame). */
+   public static boolean hoistFrame() {
+      hoistedCount = 0;
+      boolean on = combinedFrame && Config.ENTITY_UPDATE_STREAM && Config.ENTITY_UPDATE_STREAM_HOIST && Config.ENTITY_UPDATE_PLAYER_FIRST
+         && ZombAb.on(ZombAb.STREAM) && GtAb.on(GtAb.PLAYER_FIRST);
+      if (on) {
+         hoistFrames++;
+      }
+      return on;
+   }
+
+   public static void markHoisted(IsoMovingObject o) {
+      if (hoistedCount == HOISTED.length) {
+         HOISTED = java.util.Arrays.copyOf(HOISTED, hoistedCount * 2);
+      }
+      HOISTED[hoistedCount++] = o;
+   }
+
+   /** Game thread, the bucket loop's in-place branch: this entity already updated in the hoist. */
+   public static boolean wasHoisted(IsoMovingObject o) {
+      for (int i = 0; i < hoistedCount; i++) {
+         if (HOISTED[i] == o) {
+            return true;
+         }
+      }
+      return false;
+   }
+
+   /** Game thread, the scheduler's update entry after the latch: this frame's in-place entities and its entity total. */
+   public static void beginStreamFrame(int inPlace, int total) {
+      streamOpen = false;
+      streamFrame = combinedFrame && Config.ENTITY_UPDATE_STREAM && Config.ENTITY_UPDATE_PLAYER_FIRST && ZombAb.on(ZombAb.STREAM)
+         && GtAb.on(GtAb.PLAYER_FIRST);
+      if (!streamFrame) {
+         return;
+      }
+      streamFrames++;
+      inPlaceLeft = inPlace;
+      streamCap = total + 64;
+      if (inPlaceLeft <= 0) {
+         streamOpenedEarly++;
+         openStream();
+      }
+   }
+
+   /** Game thread, the bucket loop: an in-place entity is about to update (it must never run under an open stream). */
+   public static void inPlaceStarting() {
+      if (streamOpen) {
+         streamLate++; // a miscount: counted, and the entity still updates here (the flight sees it live, as the inline phase)
+      }
+   }
+
+   /** Game thread, the bucket loop: an in-place entity finished its update. */
+   public static void inPlaceDone() {
+      if (streamFrame && !streamOpen && --inPlaceLeft <= 0) {
+         openStream();
+      }
+   }
+
+   /** True while the collection should publish batchables to the running stream. */
+   public static boolean streamOpen() {
+      return streamOpen;
+   }
+
+   private static void openStream() {
+      joinPending(); // a flight left over from an earlier shape (never on a streamed frame)
+      if (zombie.iso.IsoWorld.instance != null && zombie.iso.IsoWorld.instance.currentCell != null) {
+         for (zombie.vehicles.BaseVehicle vehicle : zombie.iso.IsoWorld.instance.currentCell.getVehicles()) {
+            if (vehicle.getScript() != null) {
+               vehicle.getPoly(); // as dispatchCombined: every vehicle has updated, the workers only read the polygons
+            }
+         }
+      }
+      int cap = Math.max(streamCap, count + 64);
+      if (queue.length < cap) {
+         queue = java.util.Arrays.copyOf(queue, cap);
+      }
+      if (queuePom.length < queue.length) {
+         queuePom = java.util.Arrays.copyOf(queuePom, queue.length);
+         queueLevel = java.util.Arrays.copyOf(queueLevel, queue.length);
+      }
+      cap = queue.length;
+      int need = cap + INLINE_SLACK + 64;
+      if (snapX.length < need) {
+         snapX = new float[need];
+         snapY = new float[need];
+         snapZ = new float[need];
+      }
+      boolean luaReplay = Config.ENTITY_UPDATE_LUA_REPLAY;
+      if (luaReplay && luaCaptures.length < cap) {
+         luaCaptures = java.util.Arrays.copyOf(luaCaptures, cap);
+      }
+      if (Config.EMITTER_DEFER && emitterCaptures.length < cap) {
+         emitterCaptures = java.util.Arrays.copyOf(emitterCaptures, cap);
+      }
+      if (Config.PHYSICS_DEFER && physicsSlots.length < cap) {
+         physicsSlots = java.util.Arrays.copyOf(physicsSlots, cap);
+      }
+      LightingDefer.prepare(cap);
+      snapshotFrame++;
+      int n = count;
+      for (int i = 0; i < n; i++) {
+         stampStream(queue[i], i);
+      }
+      streamTasksAtOpen += n;
+      final IsoMovingObject[] q = queue;
+      final float[] poms = queuePom;
+      final int[] levels = queueLevel;
+      final boolean flightReplay = luaReplay;
+      final boolean flightDefer = Config.EMITTER_DEFER;
+      final boolean flightPhysics = Config.PHYSICS_DEFER;
+      flightFailure = null;
+      checkSilent(); // luaSilentSkip
+      inFlight = true;
+      ZombTiming.flightDispatched(0);
+      FrameBatch.runStream(i -> flightTask(i, q, poms, levels, flightReplay, flightDefer, flightPhysics), fx -> flightFailure = fx);
+      FrameBatch.publish(n);
+      flightLuaReplay = flightReplay;
+      snapAppend = need; // a (miscounted) in-place stamp under the open stream goes past every queue slot
+      streamOpen = true;
+      flightPending = true;
+   }
+
+   /** The snapshot slot of a queued entity: its position, then (release) the frame stamp that makes frozen() read it. */
+   private static void stampStream(IsoMovingObject entity, int i) {
+      snapX[i] = entity.getX(); // live: its frame stamp is still the previous one and no task moves it
+      snapY[i] = entity.getY();
+      snapZ[i] = entity.getZ();
+      entity.pzoptSnapshotIndex = i;
+      SNAP_FRAME.setRelease(entity, snapshotFrame);
+   }
+
+   /** Game thread: a batchable entity of an open stream, published to the workers at once. */
+   private static void addStream(IsoMovingObject entity, int simulationLevelOrdinal) {
+      int i = count;
+      if (i >= queue.length || !FrameBatch.streamOpen()) {
+         streamOverflow++;
+         queueInline(entity, simulationLevelOrdinal); // no room (or the stream was sealed elsewhere): the inline phase runs it in order
+         return;
+      }
+      queuePom[i] = zombie.GameTime.getInstance().perObjectMultiplier;
+      queueLevel[i] = simulationLevelOrdinal;
+      queue[i] = entity;
+      stampStream(entity, i);
+      count = i + 1;
+      FrameBatch.publish(count);
+   }
+
+   /** Game thread: the end of the collection (dispatchCombined) or an early landing (joinPending): the stream's final size. */
+   private static void sealStream() {
+      streamOpen = false;
+      int n = count;
+      FrameBatch.seal(n);
+      ZombTiming.add(ZombTiming.FLIGHT_N, n);
+      frames++;
+      batched += n;
+      if (n > maxBatch) {
+         maxBatch = n;
+      }
+      flightArr = queue;
+      flightN = n;
+      flightPomArr = queuePom;
+      flightLevelArr = queueLevel;
+      flightPom = Float.NaN;
+      snapAppend = n;
+      queue = spareQueue != null && spareQueue.length >= flightArr.length ? spareQueue : new IsoMovingObject[flightArr.length];
+      queuePom = sparePom != null && sparePom.length >= queue.length ? sparePom : new float[queue.length];
+      queueLevel = spareLevel != null && spareLevel.length >= queue.length ? spareLevel : new int[queue.length];
+      spareQueue = null;
+      sparePom = null;
+      spareLevel = null;
+      count = 0;
+   }
+
+   public static String describeStream() {
+      return "luaSilent frames=" + luaSilentFrames + " late=" + luaSilentLate + " | stream frames=" + streamFrames + " hoisted=" + hoistFrames + " openedEarly=" + streamOpenedEarly + " tasksAtOpen=" + streamTasksAtOpen + " overflow=" + streamOverflow
+         + " late=" + streamLate + " unopened=" + streamUnopened + " sealedByJoin=" + FrameBatch.streamSealedByJoin;
+   }
+
    public static boolean dispatchCombined() {
+      if (streamOpen) { // entityUpdateStream: the flight is up already; this is its seal
+         long zs = ZombTiming.begin();
+         sealStream();
+         ZombTiming.end(ZombTiming.DISPATCH, zs);
+         return true;
+      }
+      if (streamFrame) {
+         streamUnopened++; // the in-place count never reached zero (a miscount): the plain combined dispatch below
+      }
       joinPending();
       int n = count;
       if (n == 0) {
          return false;
+      }
+      long zt = ZombTiming.begin(); // zombie redesign timers (f8-zomb2)
+
+      // static audit (2026-10-13): a batched zombie's update reaches BaseVehicle.getPoly (getNearVehicle -> DistToSquared ->
+      // getClosestPointOnPoly), whose lazy re-init of a moved vehicle's polygons runs VehiclePoly.init on shared statics.
+      // The vehicles updated before this point (entityUpdatePlayerFirst), so every polygon is brought up to date here and
+      // the workers only read them.
+      if (Config.ENTITY_UPDATE_PLAYER_FIRST && zombie.iso.IsoWorld.instance != null && zombie.iso.IsoWorld.instance.currentCell != null) {
+         for (zombie.vehicles.BaseVehicle vehicle : zombie.iso.IsoWorld.instance.currentCell.getVehicles()) {
+            if (vehicle.getScript() != null) {
+               vehicle.getPoly();
+            }
+         }
       }
 
       frames++;
@@ -984,58 +1434,8 @@ public final class UpdateBatch {
       flightFailure = null;
       inFlight = true; // onWorkerNow() and frozen(): the workers are running this batch's entities from here to joinPending
       LightingDefer.prepare(n); // gt-offload: the tasks' lazy light-read side effects, applied at the join (merge fix: the combined flight needs it like dispatchAsync)
-      FrameBatch.runAsync(n, i -> {
-         IsoMovingObject entity = q[i];
-         LightingDefer.begin(i);
-         CURRENT.set(entity); // frozen(): this task's entity reads itself live, everyone else frozen
-         POM.get()[0] = poms[i]; // spec 3.3: per-task, not per-flight — this flight spans every bucket of the frame
-         java.util.ArrayList<Object[]> capture = null;
-         if (flightReplay) {
-            capture = luaCaptures[i];
-            if (capture == null) {
-               capture = new java.util.ArrayList<>();
-               luaCaptures[i] = capture; // published to the game thread by the join
-            }
-            LUA_CAPTURE.set(capture); // captureLuaEvent appends here for this task
-         }
-         java.util.ArrayList<zombie.characters.IsoGameCharacter> emitterSlot = null;
-         if (flightDefer) {
-            emitterSlot = emitterCaptures[i];
-            if (emitterSlot == null) {
-               emitterSlot = new java.util.ArrayList<>();
-               emitterCaptures[i] = emitterSlot; // published to the game thread by the join
-            }
-            EMITTER_CAPTURE.set(emitterSlot); // deferEmitter queues here for this task
-         }
-         PhysicsSlot physicsSlot = null;
-         if (flightPhysics) {
-            physicsSlot = physicsSlots[i];
-            if (physicsSlot == null) {
-               physicsSlot = new PhysicsSlot();
-               physicsSlots[i] = physicsSlot; // published to the game thread by the join
-            }
-            PHYSICS_CAPTURE.set(physicsSlot); // deferBallistics / deferRagdollVehicle queue here for this task
-         }
-         try {
-            entity.setCurrentSimulationLevel(LEVELS[levels[i]]);
-            entity.preupdate();
-            entity.frameStep();
-            entity.update();
-         } finally {
-            LightingDefer.end();
-            CURRENT.set(null); // a pooled worker must not carry the reference into the next task
-            POM.get()[0] = Float.NaN; // pom() follows the live field again off-task
-            if (capture != null) {
-               LUA_CAPTURE.set(null);
-            }
-            if (emitterSlot != null) {
-               EMITTER_CAPTURE.set(null);
-            }
-            if (physicsSlot != null) {
-               PHYSICS_CAPTURE.set(null); // a pooled worker must not defer for the next batch's inline work
-            }
-         }
-      }, fx -> flightFailure = fx);
+      ZombTiming.flightDispatched(n);
+      FrameBatch.runAsync(n, i -> flightTask(i, q, poms, levels, flightReplay, flightDefer, flightPhysics), fx -> flightFailure = fx); // the task body: flightTask (shared with entityUpdateStream)
 
       flightArr = q;
       flightN = n;
@@ -1054,6 +1454,7 @@ public final class UpdateBatch {
       sparePom = null;
       spareLevel = null;
       count = 0;
+      ZombTiming.end(ZombTiming.DISPATCH, zt);
       return true;
    }
 
@@ -1063,7 +1464,93 @@ public final class UpdateBatch {
     * through it, the POM holder stays NaN here by construction), stampInline publishing its post-update
     * position into the airborne snapshot. Global back to 1.0 after, stock's guarantee.
     */
+   /**
+    * entityUpdatePlayerFirst (2026-10-13): on a combined (pipelined) frame, a player is not queued for the inline phase
+    * under the airborne flight but updates at its place in the collection loop, before the dispatch. Its update writes the
+    * zombies it sees (updateLOS -> spotted: target, path, alert) and those writes raced the zombies' own updates on the
+    * workers; the brawl rig showed the horde closing in slower with the pipeline (harness/brawl.py, runs zomb-br-*).
+    */
+   /**
+    * PolygonalMap2.resolveCollision (zombie pass static audit, 2026-10-13): whether this call must take the
+    * CollideWithObstacles lock — a frame worker, or any thread while an entity flight or a postupdate movement batch is on
+    * the workers. Outside those windows only the game thread can be in there and the call stays lock-free.
+    */
+   // instrument (zombie pass 2026-10-13): why the safe-state filter kept a zombie on the game thread, per reason / state
+   private static final java.util.TreeMap<String, long[]> INLINE_REASONS = new java.util.TreeMap<>();
+
+   /** Game thread, IsoZombie.pzoptBatchSafe: one zombie kept inline this frame, and why. */
+   public static void inlineBecause(String reason, Object state) {
+      if (!Config.INSTRUMENT) {
+         return;
+      }
+      String key = state != null ? reason + ":" + state.getClass().getSimpleName() : reason;
+      long[] c = INLINE_REASONS.get(key);
+      if (c == null) {
+         INLINE_REASONS.put(key, c = new long[1]);
+      }
+      c[0]++;
+   }
+
+   /**
+    * entityUpdateAlerted (zombie redesign, f8-zomb2): a zombie turning toward a sound it heard (ZombieTurnAlerted) is calm too.
+    * The state has no execute (the update is the idle zombie's), its enter sets the turn angle and its exit asks for a path to
+    * the sound, both where a state change happens. When a sound reaches the horde (an alarm, a shot, a car) ~300 zombies a frame
+    * sat in it on the Louisville bench and updated on the game thread in the inline phase (~1 ms a frame, run zomb2-prof2).
+    */
+   public static boolean alertedCalm() {
+      return Config.ENTITY_UPDATE_ALERTED && !GameClient.client && ZombAb.on(ZombAb.ALERTED);
+   }
+
+   public static boolean moreCalmStates() {
+      return Config.ENTITY_UPDATE_MORE_STATES && !GameClient.client && GtAb.on(GtAb.MORE_STATES);
+   }
+
+   public static boolean nearPlayerAllowed() {
+      return Config.ENTITY_UPDATE_NEAR_PLAYER && (!combinedFrame || Config.ENTITY_UPDATE_PLAYER_FIRST && GtAb.on(GtAb.PLAYER_FIRST)) && GtAb.on(GtAb.NEAR_PLAYER);
+   }
+
+   public static boolean collideLockNeeded() {
+      return inFlight || PostupdateBatch.activeNow() || Thread.currentThread() instanceof FrameBatch.Worker;
+   }
+
+   public static boolean playerFirst(IsoMovingObject entity) {
+      return Config.ENTITY_UPDATE_PLAYER_FIRST && (entity instanceof IsoPlayer && !animalInline(entity) || entity instanceof zombie.vehicles.BaseVehicle) && GtAb.on(GtAb.PLAYER_FIRST);
+   }
+
+   /**
+    * entityUpdateAnimalsInline (zombie redesign round 3, f8-zomb3): IsoAnimal extends IsoPlayer, so entityUpdatePlayerFirst moved
+    * the animals before the flight with the players; with the key they go back to the inline phase under the flight (the
+    * semantics entityUpdatePipeline shipped with for them: the batched zombies' positions read as dispatched), as runway.
+    */
+   private static boolean animalInline(IsoMovingObject entity) {
+      return Config.ENTITY_UPDATE_ANIMALS_INLINE && entity instanceof IsoAnimal && ZombAb.on(ZombAb.ANIMALS_INLINE);
+   }
+
+   // luaSilentSkip (zombie redesign pass, 2026-10-13, f8-zomb2): every batched zombie's update fires OnZombieUpdate, which
+   // the workers captured (an Object[] each) for a game-thread replay that found no listener (none in the vanilla Lua) and did
+   // nothing: ~5 % of the flight and the replay loop. Checked on the game thread when the flight opens; a listener a mod adds
+   // while the flight is up is seen from the next frame (counted: luaSilentLate).
+   private static volatile boolean zombieUpdateSilent;
+   private static long luaSilentFrames, luaSilentLate;
+
+   /** Game thread, when a flight opens. */
+   private static void checkSilent() {
+      zombieUpdateSilent = Config.LUA_SILENT_SKIP && ZombAb.on(ZombAb.LUA_SILENT) && !zombie.Lua.LuaEventManager.pzoptHasListeners("OnZombieUpdate");
+      if (zombieUpdateSilent) {
+         luaSilentFrames++;
+      }
+   }
+
+   /** Game thread, at the join. */
+   private static void endSilent() {
+      if (zombieUpdateSilent && zombie.Lua.LuaEventManager.pzoptHasListeners("OnZombieUpdate")) {
+         luaSilentLate++;
+      }
+      zombieUpdateSilent = false;
+   }
+
    public static void runInlinePhase() {
+      long zt = ZombTiming.begin(); // zombie redesign timers (f8-zomb2)
       zombie.GameTime gt = zombie.GameTime.getInstance();
       for (int i = 0; i < inlineCount; i++) {
          IsoMovingObject entity = inlineQueue[i];
@@ -1078,6 +1565,7 @@ public final class UpdateBatch {
       gt.perObjectMultiplier = 1.0F;
       java.util.Arrays.fill(inlineQueue, 0, inlineCount, null);
       inlineCount = 0;
+      ZombTiming.end(ZombTiming.INLINE, zt);
    }
 
    /**
@@ -1086,16 +1574,23 @@ public final class UpdateBatch {
     * failure latch. No-op without a pending batch.
     */
    public static void joinPending() {
+      if (streamOpen) {
+         sealStream(); // entityUpdateStream: a nested landing before the collection ended seals what it has
+      }
       if (!flightPending) {
          return;
       }
 
       long j0 = System.nanoTime();
       FrameBatch.join(); // runs the completion above on this thread: flightFailure is set past here
-      waitNanos += System.nanoTime() - j0; // the game thread's cost of this batch IS the join wait: with the
+      long zj = System.nanoTime(); // zombie redesign timers (f8-zomb2)
+      ZombTiming.add(ZombTiming.JOIN, zj - j0);
+      ZombTiming.flightJoined(FrameBatch.lastPreClaimed());
+      waitNanos += zj - j0; // the game thread's cost of this batch IS the join wait: with the
       // pipeline it did the next bucket's collection instead of task work, so work ms stays ~0 by design
       preClaimed += FrameBatch.lastPreClaimed(); // THIS flight's runway, taken at its own join — see the field
       inFlight = false;
+      endSilent(); // luaSilentSkip
       int n = flightN;
 
       // The window's latched setMovingSquare calls, applied in one place on the game thread — also after a
@@ -1112,6 +1607,7 @@ public final class UpdateBatch {
       try {
          drainEmitters(n); // before the replay: a handler reading a zombie's sound state sees the ticked emitter
          drainRagdolls(n); // physicsDefer, in one zombie's own order: vehicleCollision sits above its super.update()
+         drainVehicleHits(n); // vehicleHitDefer: the hit test sits right after vehicleCollision in updateInternal
          drainBallistics(n); // ... which is what reaches updateBallisticsTarget; both before the replay, so no
          // handler of a captured event can observe a hitbox that is still where the zombie stood last frame
          if (flightLuaReplay) {
@@ -1132,6 +1628,9 @@ public final class UpdateBatch {
          }
       }
 
+      if (ZombTiming.ON) {
+         ZombTiming.add(ZombTiming.DRAIN, System.nanoTime() - zj); // zombie redesign timers (f8-zomb2)
+      }
       java.util.Arrays.fill(flightArr, 0, n, null);
       spareQueue = flightArr; // the next dispatch collects into it
       flightArr = null;
@@ -1256,7 +1755,8 @@ public final class UpdateBatch {
             + " luaCaptured=" + luaCaptured + " luaReplayed=" + luaReplayed
             + " emitterDeferred=" + emitterDeferred + " emitterDrained=" + emitterDrained
             + " ballisticsDeferred=" + ballisticsDeferred + " ballisticsDrained=" + ballisticsDrained
-            + " ragdollDeferred=" + ragdollDeferred + " ragdollDrained=" + ragdollDrained
+            + " inline(" + INLINE_REASONS.entrySet().stream().map(e -> e.getKey() + "=" + e.getValue()[0]).collect(java.util.stream.Collectors.joining(" ")) + ")"
+            + " ragdollDeferred=" + ragdollDeferred + " ragdollDrained=" + ragdollDrained + " vehicleHitDeferred=" + vehicleHitDeferred + " vehicleHitDrained=" + vehicleHitDrained
             + " luaSuppressed=" + luaSuppressed.get() + " lightEffectsDeferred=" + LightingDefer.deferred + " pathfindRaceEscaped=" + pathfindRaceEscaped.get()
             + " surfacePropertyRaceSkipped=" + surfacePropertyRaceSkipped.get()
             + " movingSquareDeferred=" + movingSquareDeferred

@@ -346,6 +346,42 @@ public final class Hdr {
       }
    }
 
+   /** Why the HDR window could not be made (Display fell back to an X11 SDR window); null otherwise. */
+   private static String windowFallback;
+
+   /**
+    * Display.create(): glfwCreateWindow returned no window on the Wayland platform that HDR selected (wantsWayland). True =
+    * the caller re-initialises GLFW on X11, the platform the game itself picks, and creates an SDR window there. Discord,
+    * 2026-10-17: on a hybrid Intel + RTX 3050 laptop (Fedora 44, the NVIDIA driver rendering) the FP16 EGL window failed
+    * with "EGL: Failed to create window surface: EGL failed to allocate resources" and the game closed on start; without
+    * the NVIDIA module (iGPU only) it opened. False when the player asked for Wayland (zomboid.wayland=1) or X11 is absent.
+    */
+   public static boolean windowFailed() {
+      if (!wantsWayland() || "1".equals(System.getProperty("zomboid.wayland")) || GLFW.glfwGetPlatform() != GLFW.GLFW_PLATFORM_WAYLAND
+            || !GLFW.glfwPlatformSupported(GLFW.GLFW_PLATFORM_X11)) {
+         return false;
+      }
+      if (autoNote != null) {
+         Log.info(autoNote); // before the window this time: the reason Wayland was picked
+         autoNote = null;
+      }
+      windowFallback = "the Wayland FP16 window could not be created; X11 SDR window instead (hdr=" + Config.HDR + " hdrAuto=" + Config.HDR_AUTO + ")";
+      Log.warn("hdr: " + windowFallback + "; re-initialising GLFW on X11");
+      return true;
+   }
+
+   private static boolean devFailDone;
+
+   /** devHdrWindowFail: true once, for the first HDR window on Wayland (Display destroys it and takes the failure path). */
+   public static boolean devFailWindow() {
+      if (!Config.DEV_HDR_WINDOW_FAIL || devFailDone || !wantsWayland() || GLFW.glfwGetPlatform() != GLFW.GLFW_PLATFORM_WAYLAND) {
+         return false;
+      }
+      devFailDone = true;
+      Log.warn("hdr: devHdrWindowFail: the HDR window is thrown away as if its creation had failed");
+      return true;
+   }
+
    /** Display.create(), context current: check the back buffer really is float and tag the surface. */
    public static void windowCreated(long window) {
       addWaylandExitHook();
@@ -353,6 +389,11 @@ public final class Hdr {
          Log.info(autoNote);
       }
       if (!REQUESTED) {
+         return;
+      }
+      if (windowFallback != null) {
+         state = windowFallback;
+         Log.warn("hdr: SDR output: " + state);
          return;
       }
       try {

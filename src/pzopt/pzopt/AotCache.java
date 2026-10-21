@@ -56,6 +56,9 @@ public final class AotCache {
    private static final String OPT_OUT = "-XX:AOTCacheOutput=" + CACHE;
    private static final String OPT_USE = "-XX:AOTCache=" + CACHE;
    private static final String OPT_LOG = "-Xlog:aot=info:file=" + LOG + "::filecount=0";
+   /** aotNoIndy: the pair that keeps the cache assembly off the archived-heap crash (Config.AOT_NO_INDY). */
+   static final String OPT_UNLOCK_DIAG = "-XX:+UnlockDiagnosticVMOptions";
+   static final String OPT_NO_INDY = "-XX:-AOTInvokeDynamicLinking";
    /** Manifests of other installs whose loose class files the jar carries too (one relative path per line). */
    static final String[] COMPANIONS = {"pzctl/installed.txt"};
 
@@ -339,6 +342,10 @@ public final class AotCache {
       }
       j.put("classpath", ncp);
       forEachVmArgs(j, args -> {
+         if (Config.AOT_NO_INDY) {
+            args.put(OPT_UNLOCK_DIAG); // aotNoIndy: the pair is stripped together (stripAot)
+            args.put(OPT_NO_INDY);
+         }
          args.put(aotOption);
          args.put(OPT_LOG);
       });
@@ -403,14 +410,18 @@ public final class AotCache {
    }
 
    private static boolean isAotArg(String a) {
-      return a.startsWith("-XX:AOTCache") || a.equals(OPT_LOG);
+      return a.startsWith("-XX:AOTCache") || a.equals(OPT_LOG) || a.equals(OPT_NO_INDY);
    }
 
    private static void stripAot(JSONObject j) {
       forEachVmArgs(j, args -> {
          for (int i = args.length() - 1; i >= 0; i--) {
-            if (isAotArg(args.optString(i))) {
+            String a = args.optString(i);
+            if (isAotArg(a)) {
                args.remove(i);
+               if (a.equals(OPT_NO_INDY) && i > 0 && OPT_UNLOCK_DIAG.equals(args.optString(i - 1))) {
+                  args.remove(--i); // aotNoIndy's unlock flag, written right before it
+               }
             }
          }
       });

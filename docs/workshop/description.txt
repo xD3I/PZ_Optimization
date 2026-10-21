@@ -12,7 +12,7 @@
 [*][b]Subscribing is not enough.[/b] This replaces game classes; it needs the one-time install below.
 [*][b]Mods: untested, unsupported.[/b] Other mods may work alongside it; nobody checks them and problems with them are not fixed.
 [*][b]Multiplayer: untested, unsupported.[/b] It installs on your client only; joining a server may work, may not.
-[*]Something wrong? Options > PZ Optimization > "Stock game" preset, restart, then tell us on Discord.
+[*]Something wrong? main menu > PZ OPTIMIZATION > "Stock game" preset, restart, then tell us on Discord.
 [/list][/quote]
 [img]https://raw.githubusercontent.com/xD3I/PZ_Optimization/master/docs/workshop/images/72-install-script.avif[/img]
 [url=https://github.com/xD3I/PZ_Optimization][img]https://raw.githubusercontent.com/xD3I/PZ_Optimization/master/docs/workshop/images/link-github-small.png[/img][/url] [url=https://discord.gg/W32aAnKpK][img]https://raw.githubusercontent.com/xD3I/PZ_Optimization/master/docs/workshop/images/link-discord-small.png[/img][/url]
@@ -30,9 +30,12 @@ Linux, macOS: [code]curl -fsSL https://github.com/xD3I/PZ_Optimization/releases/
 [img]https://raw.githubusercontent.com/xD3I/PZ_Optimization/master/docs/workshop/images/73-install-manual.avif[/img]
 Steam: right-click the game, Manage > Browse local files. Go up to [b]steamapps[/b], then workshop\content\108600\3805285544\mods\PZ_Optimization\42\pzopt-classes. Copy everything in it into the game folder (where projectzomboid.jar is), skipping files that already exist.
 
-[h1]New! Puddle ripples[/h1]
-[img]https://raw.githubusercontent.com/xD3I/PZ_Optimization/master/docs/workshop/images/85-new-puddle-ripples-2.avif[/img]
-[img]https://raw.githubusercontent.com/xD3I/PZ_Optimization/master/docs/workshop/images/86-new-puddle-ripples-2-changes.png[/img]
+[h1]New! A built-in benchmark, one menu for everything[/h1]
+[img]https://raw.githubusercontent.com/xD3I/PZ_Optimization/master/docs/workshop/images/89-new-benchmark-menu.avif[/img]
+
+[h1]New! Voxel lighting[/h1]
+[img]https://raw.githubusercontent.com/xD3I/PZ_Optimization/master/docs/workshop/images/90-new-voxel-lighting.avif[/img]
+[i]Lamps and room lights traced through walls, windows and fences. Off by default: PZ OPTIMIZATION > Enhancements > Lighting and shadows > Per-pixel lighting.[/i]
 
 [h1]Features[/h1]
 [img]https://raw.githubusercontent.com/xD3I/PZ_Optimization/master/docs/workshop/images/65-feature-fast-boot-load-split.avif[/img]
@@ -57,8 +60,8 @@ Steam: right-click the game, Manage > Browse local files. Go up to [b]steamapps[
 [i]Every side of a route ran back to back. On the drive every mod is within 3 % of stock. Project Zomboid Optimiser and Multi-Cpu Enhance gain in the horde by changing the launcher's garbage collector and heap (stock with the same switch runs as fast); Multi-Cpu adds a 300-390 ms pause to every route. Zed's Better FPS does not load on 42.21: it asks for ZombieBuddy 2.4, which is not released. Zed's Better FPS KA ports code from this project: five of its classes are ours, decompiled and renamed (ScriptText, ZombieNoise, PngFilters, AnimClipCache, RainTiles); its page credits PZ Optimization, its code does not.[/i]
 
 [h1]Updates, uninstall[/h1]
-Updates arrive in the main menu (PZ OPTIMIZATION UPDATE, one click). After a game update the next start removes a build made for the old version by itself (or installs the matching one from this item) and starts the game again.
-[b]To remove it:[/b] Options > PZ Optimization > [b]Uninstall PZ Optimization[/b]. Game does not start, or already unsubscribed? Steam > Project Zomboid > Manage > [b]Browse local files[/b], double-click [b]Uninstall-PZ-Optimization.cmd[/b] (Linux, macOS: [b]bash uninstall-pz-optimization.bash[/b] there). Or paste into PowerShell:
+Updates arrive in the main menu (PZ OPTIMIZATION > UPDATE, one click). After a game update the next start removes a build made for the old version by itself (or installs the matching one from this item) and starts the game again.
+[b]To remove it:[/b] main menu > PZ OPTIMIZATION > [b]Uninstall PZ Optimization[/b]. Game does not start, or already unsubscribed? Steam > Project Zomboid > Manage > [b]Browse local files[/b], double-click [b]Uninstall-PZ-Optimization.cmd[/b] (Linux, macOS: [b]bash uninstall-pz-optimization.bash[/b] there). Or paste into PowerShell:
 [code]irm https://github.com/xD3I/PZ_Optimization/releases/latest/download/uninstall.ps1 | iex[/code]
 Linux, macOS: [code]curl -fsSL https://github.com/xD3I/PZ_Optimization/releases/latest/download/uninstall.sh | bash[/code]
 Unsubscribing and "Verify integrity of game files" leave these files in the game folder; the uninstaller removes them.

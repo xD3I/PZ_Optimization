@@ -210,8 +210,12 @@ public final class LowLatency {
       }
    }
 
+   /** The last frame hand-off's own wait (game thread waiting for a free render state), whatever reflexSleep says. */
+   static volatile long handoffWaitNs;
+
    /** Game thread, RenderThread.Ready after pushFrameDown; startNs = before the hand-off (its wait included). */
    public static void pushed(long startNs) {
+      handoffWaitNs = System.nanoTime() - startNs; // the built-in benchmark's game-thread busy time = step minus this
       if (!REFLEX) {
          return;
       }

@@ -33,6 +33,12 @@ public final class FrameBatch {
       public boolean noInterpolate; // animatorParallel: this thread's keyframe sampling behaves as interpolateAnims=false
       public AnimCapture capture; // animatorParallel: the character whose anim events this thread is capturing, or null
       public Object drawRecorder; // tileRecordParallel: the DrawRecorder of the tile draw unit this thread is recording, or null
+      public Object[] tl = new Object[64];
+      int index; // frameThreadsAlt: this worker's number (a batch uses workers 0..limit-1) // pzopt.Tl: this worker's thread-local values (zombie redesign, f8-zomb2)
+      public java.util.Random rng; // randPerWorker (f8-zomb3): this worker's own generator (pzopt.WorkerRand)
+      public boolean bgTask; // zombieDrawLate (f8-zomb3): this worker is running a background-lane task
+      public int coreGen; // coreFrameCpus alternation (f8-flip): the placement generation this worker last applied
+      public Object zCurrent; // entityUpdateParallel (zombie redesign, f8-zomb2): the entity this worker's flight task updates (UpdateBatch.CURRENT without the ThreadLocal lookup)
 
       Worker(Runnable r, String name) {
          super(r, name);
@@ -40,6 +46,14 @@ public final class FrameBatch {
    }
 
    public static final int THREADS = Math.max(1, Math.min(Config.FRAME_THREADS, Config.CPUS - 1));
+   // frameThreadsAlt (zombie redesign, f8-zomb2): the worker count of the alternation's "on" half (bit 40, in-run A/B of the
+   // pool size); the pool starts the larger of the two and a batch only wakes its own count's workers into work
+   private static final int ALT = Config.FRAME_THREADS_ALT > 0 ? Math.max(1, Math.min(Config.FRAME_THREADS_ALT, Config.CPUS - 1)) : 0;
+   private static final int SPAWN = Math.max(THREADS, ALT);
+
+   private static int batchLimit() {
+      return ALT > 0 && ZombAb.on(ZombAb.THREADS_ALT) ? ALT : THREADS;
+   }
 
    /**
     * One batch: its runner, size and counters in one object, published to the workers through {@link #current}. A worker
@@ -49,7 +63,9 @@ public final class FrameBatch {
     */
    private static final class Batch {
       final Runner runner;
-      final int count;
+      volatile int count; // entityUpdateStream (zombie redesign, f8-zomb2): grows while the batch is a stream, final once sealed
+      volatile boolean sealed; // false only for a stream the game thread is still publishing tasks into
+      final int limit = batchLimit(); // frameThreadsAlt: workers past this many leave the batch to the others
       final AtomicInteger cursor = new AtomicInteger();
       final AtomicInteger finished = new AtomicInteger();
       volatile Throwable failure;
@@ -57,14 +73,64 @@ public final class FrameBatch {
       Batch(Runner runner, int count) {
          this.runner = runner;
          this.count = count;
+         this.sealed = true;
+      }
+
+      Batch(Runner runner) { // a stream: tasks are published as the game thread collects them (runStream / publish / seal)
+         this.runner = runner;
+         this.count = 0;
+         this.sealed = false;
+      }
+
+      /** A claimed index past the published count: wait for it to be published (true) or for the seal to drop it (false). */
+      private boolean awaitPublished(int i) {
+         int spins = 0;
+         while (i >= this.count) {
+            if (this.sealed) {
+               return i < this.count; // seal writes the final count before the flag
+            }
+            if (++spins < 2000) {
+               Thread.onSpinWait();
+            } else {
+               ShortWait.pause(10_000L);
+            }
+         }
+         return true;
+      }
+
+      /** zombieDrawLate (f8-zomb3), background lane: claim and run one task; false when none is left to claim. */
+      boolean workOne() {
+         int i = this.cursor.getAndIncrement();
+         if (i >= this.count) {
+            return false;
+         }
+         try {
+            this.runner.run(i);
+         } catch (Throwable t) {
+            if (this.failure == null) {
+               this.failure = t;
+            }
+         } finally {
+            this.finished.incrementAndGet();
+         }
+         return true;
+      }
+
+      boolean hasUnclaimed() {
+         return this.cursor.get() < this.count;
       }
 
       void work() {
          boolean serve = !(Thread.currentThread() instanceof Worker); // the game thread runs the workers' Lua calls (LuaGate)
          int i;
-         while ((i = this.cursor.getAndIncrement()) < this.count) {
+         while (true) {
+            i = this.cursor.getAndIncrement();
+            if (i >= this.count && (this.sealed && i >= this.count || !this.awaitPublished(i))) {
+               break;
+            }
             if (serve) {
                LuaGate.service();
+               gtTaskDepth++; // zombie round 3: the game thread inside a task (ZombieLate.touch must not apply from here)
             }
             try {
                this.runner.run(i);
@@ -73,6 +139,9 @@ public final class FrameBatch {
                   this.failure = t;
                }
             } finally {
+               if (serve) {
+                  gtTaskDepth--;
+               }
                this.finished.incrementAndGet();
             }
          }
@@ -132,7 +201,207 @@ public final class FrameBatch {
       }
    }
 
+   // ---- the background lane (zombieDrawLate, zombie redesign round 3, 2026-10-13, f8-zomb3) ----
+   // One batch beside the foreground one: the workers take its tasks one at a time whenever no foreground batch has work for
+   // them, and go back to the foreground after each task, so a render-time batch (tile records, render prep, the bakes' own
+   // batches) never waits for it nor joins it. Only its owner joins it (joinBackground); join() and the foreground's
+   // one-batch rule ignore it. The bone batch is its only user: it runs from FinishAnimation through the render.
+   private static volatile Batch background;
+   private static Completion backgroundDone;
+   private static boolean gtInBackground; // game thread: running a background task inside joinBackground
+   public static long backgrounds, backgroundJoinNanos, backgroundHelped;
+
+   /** Game thread: start a background batch (the previous one is joined first; a foreground batch in flight stays). */
+   public static void runBackground(int n, Runner r, Completion done) {
+      joinBackground();
+      if (n <= 0) {
+         done.done(null);
+         return;
+      }
+      if (workers == null) {
+         start();
+      }
+      batches++;
+      tasks += n;
+      backgrounds++;
+      backgroundDone = done;
+      background = new Batch(r, n);
+      synchronized (gate) {
+         gate.notifyAll(); // parked workers re-check: the background has work
+      }
+   }
+
+   /** True while a background batch has not been joined. */
+   public static boolean hasBackground() {
+      return background != null;
+   }
+
+   private static int gtTaskDepth; // game thread (or a non-worker caller): inside a batch task it runs itself (work / helpOne)
+
+   /** Game thread: inside a batch task it runs itself (a join or a help): a hook there must not start or join a batch. */
+   public static boolean gameThreadInTask() {
+      return gtTaskDepth > 0 || gtInBackground;
+   }
+
+   /** zombieDrawLate: the game thread is running a background task (the bone math reads the live arrays). */
+   public static boolean gameThreadInBackgroundTask() {
+      return gtInBackground;
+   }
+
+   private static boolean joiningBackground; // game thread: inside joinBackground (a task it runs may reach a guard: no nested join)
+   private static volatile boolean backgroundFailed; // a background join gave up waiting: the lane is off for the session
+   public static long backgroundTimeouts, backgroundNested;
+   private static final long BACKGROUND_WAIT_LIMIT_NANOS = 200_000_000L;
+
+   /** zombieDrawLate: false once a background join gave up (the bone batch is then joined like any async batch). */
+   public static boolean backgroundUsable() {
+      return !backgroundFailed;
+   }
+
+   /**
+    * Game thread: finish the background batch: take its unclaimed tasks here, wait for the rest, run its completion. A call
+    * from inside a task this thread runs for the join (a guard reached by the bone math) returns at once: the outer join
+    * finishes the batch. The wait for tasks running on workers is bounded: past 200 ms it is logged once, the lane is off for
+    * the session and the completion runs (the task that never ended is a lost one; one slow frame, not a hung game).
+    */
+   public static void joinBackground() {
+      Batch batch = background;
+      if (batch == null) {
+         return;
+      }
+      if (joiningBackground) {
+         backgroundNested++;
+         return;
+      }
+      joiningBackground = true;
+      try {
+         joinBackground(batch);
+      } finally {
+         joiningBackground = false;
+      }
+   }
+
+   private static void joinBackground(Batch batch) {
+      long t0 = System.nanoTime();
+      gtInBackground = true;
+      try {
+         while (batch.workOne()) {
+            backgroundHelped++;
+         }
+      } finally {
+         gtInBackground = false;
+      }
+      int spins = 0;
+      while (batch.finished.get() < batch.count) {
+         if (++spins < 200) {
+            Thread.onSpinWait();
+         } else {
+            ShortWait.pause(20_000L);
+            if (System.nanoTime() - t0 > BACKGROUND_WAIT_LIMIT_NANOS) {
+               backgroundTimeouts++;
+               if (!backgroundFailed) {
+                  backgroundFailed = true;
+                  Log.warn("frame batch: a background task did not finish in 200 ms (" + batch.finished.get() + " of " + batch.count + "); the background lane is off for the session");
+               }
+               break;
+            }
+         }
+      }
+      background = null;
+      Completion done = backgroundDone;
+      backgroundDone = null;
+      backgroundJoinNanos += System.nanoTime() - t0;
+      done.done(batch.failure);
+   }
+
    public static long helped; // tasks of an asynchronous batch the game thread ran while waiting for one (helpOne)
+
+   // ---- entityUpdateStream (zombie redesign pass, 2026-10-13, f8-zomb2) ----
+   // An asynchronous batch whose task count grows while the game thread still collects: workers start on the first
+   // published tasks at once, claim an index past the count and wait for it to be published (or for the seal to drop it).
+   public static long streams, streamSealedByJoin;
+
+   /**
+    * Game thread: start an empty stream on the workers only (joined like runAsync's batch, after {@link #seal}). Returns the
+    * stream's token: {@link #publish(Object, int)} / {@link #seal(Object, int)} / {@link #streamOpen(Object)} act on that stream
+    * only (f8-streamfix: the untokened calls act on whatever batch is pending, so a user whose stream another user had joined and
+    * replaced with its own stream would have published into that one).
+    */
+   public static Object runStream(Runner r, Completion done) {
+      landEntityFlight();
+      join();
+      if (running) {
+         throw new IllegalStateException("FrameBatch.runStream inside a batch");
+      }
+      if (workers == null) {
+         start();
+      }
+      batches++;
+      asyncBatches++;
+      streams++;
+      Batch batch = new Batch(r);
+      pending = batch;
+      pendingDone = done;
+      current = batch;
+      synchronized (gate) {
+         generation++;
+         gate.notifyAll();
+      }
+      return batch;
+   }
+
+   /** Game thread: tasks 0..count-1 of the stream {@code token} may run, if it is still the pending, unsealed batch. */
+   public static void publish(Object token, int count) {
+      if (token != null && token == pending) {
+         publish(count);
+      }
+   }
+
+   /** Game thread: the final task count of the stream {@code token}, if it is still pending (a join already sealed it otherwise). */
+   public static void seal(Object token, int count) {
+      if (token != null && token == pending) {
+         seal(count);
+      }
+   }
+
+   /** Game thread: the asynchronous batch {@link #runAsync} just started (the token of {@link #isPending}), or null. */
+   public static Object pendingBatch() {
+      return pending;
+   }
+
+   /** Game thread: true while {@code token} is still the pending batch (f9-los: an in-order consumer helps only its own stream). */
+   public static boolean isPending(Object token) {
+      return token != null && token == pending;
+   }
+
+   /** Game thread: true while the stream {@code token} is pending and unsealed. */
+   public static boolean streamOpen(Object token) {
+      return token != null && token == pending && !((Batch) token).sealed;
+   }
+
+   /** Game thread: tasks 0..count-1 of the pending stream may run (count only grows). */
+   public static void publish(int count) {
+      Batch batch = pending;
+      if (batch != null && !batch.sealed && count > batch.count) {
+         batch.count = count;
+      }
+   }
+
+   /** Game thread: the pending stream's final task count; no task past it runs. */
+   public static void seal(int count) {
+      Batch batch = pending;
+      if (batch != null && !batch.sealed) {
+         tasks += Math.max(count, batch.count);
+         batch.count = Math.max(count, batch.count);
+         batch.sealed = true;
+      }
+   }
+
+   /** Game thread: true while a stream is pending and unsealed. */
+   public static boolean streamOpen() {
+      Batch batch = pending;
+      return batch != null && !batch.sealed;
+   }
 
    private static volatile int lastPreClaimed; // spec 3.5 (review finding 7): cursor position at the last join's entry
 
@@ -180,7 +449,7 @@ public final class FrameBatch {
    public static boolean helpOne() {
       LuaGate.service(); // every caller is a game-thread wait loop
       Batch batch = pending;
-      if (batch == null) {
+      if (batch == null || !batch.sealed) { // entityUpdateStream: an index claimed past an unsealed stream's count could never run
          return false;
       }
       int i = batch.cursor.getAndIncrement();
@@ -188,6 +457,7 @@ public final class FrameBatch {
          return false;
       }
       helped++;
+      gtTaskDepth++;
       try {
          batch.runner.run(i);
       } catch (Throwable t) {
@@ -195,6 +465,7 @@ public final class FrameBatch {
             batch.failure = t;
          }
       } finally {
+         gtTaskDepth--;
          batch.finished.incrementAndGet();
       }
       return true;
@@ -208,6 +479,10 @@ public final class FrameBatch {
       Batch batch = pending;
       if (batch == null) {
          return;
+      }
+      if (!batch.sealed) { // entityUpdateStream: its owner seals it before any join; a join from elsewhere lands what is published
+         streamSealedByJoin++;
+         seal(batch.count);
       }
       pending = null;
       Completion done = pendingDone;
@@ -230,6 +505,95 @@ public final class FrameBatch {
       }
       asyncJoinNanos += System.nanoTime() - t0;
       done.done(batch.failure);
+   }
+
+   /**
+    * f8-render1 (recording passes): {@link #join} with a bound. False when the batch did not finish within {@code timeoutNs}:
+    * it is abandoned (its completion never runs; a worker still inside it is lost to later batches, which the other workers
+    * and the game thread finish), so the caller can take its stock path instead of hanging.
+    */
+   public static boolean joinWithin(long timeoutNs) {
+      Batch batch = pending;
+      if (batch == null) {
+         return true;
+      }
+      if (!batch.sealed) { // integ-r2: as join(): an unsealed entityUpdateStream lands what is published before the bounded wait
+         streamSealedByJoin++;
+         seal(batch.count);
+      }
+      pending = null;
+      Completion done = pendingDone;
+      pendingDone = null;
+      long t0 = System.nanoTime();
+      batch.work();
+      int spins = 0;
+      while (batch.finished.get() < batch.count) {
+         LuaGate.service();
+         if (++spins < 200) {
+            Thread.onSpinWait();
+         } else {
+            ShortWait.pause(20_000L);
+            if ((spins & 15) == 0 && System.nanoTime() - t0 > timeoutNs) {
+               Log.warn("frame batch: an asynchronous batch did not finish in " + timeoutNs / 1_000_000L + " ms (" + batch.finished.get() + " of " + batch.count
+                  + " tasks); abandoned");
+               asyncJoinNanos += System.nanoTime() - t0;
+               return false;
+            }
+         }
+      }
+      asyncJoinNanos += System.nanoTime() - t0;
+      done.done(batch.failure);
+      return true;
+   }
+
+   /** f8-render1: what {@link #runWithin} returns when its batch did not finish in time (the batch is abandoned). */
+   public static final class Timeout extends RuntimeException {
+      Timeout(String msg) {
+         super(msg, null, false, false);
+      }
+   }
+
+   /** f8-render1 (recording passes): {@link #run} with a bound; a {@link Timeout} when the tasks did not all finish in time. */
+   public static Throwable runWithin(int n, Runner r, long timeoutNs) {
+      landEntityFlight();
+      if (n <= 0) {
+         return null;
+      }
+      if (running) {
+         throw new IllegalStateException("FrameBatch.run is not reentrant");
+      }
+      if (!joinWithin(timeoutNs)) {
+         return new Timeout("the batch before did not finish");
+      }
+      if (workers == null) {
+         start();
+      }
+      running = true;
+      long t0 = System.nanoTime();
+      batches++;
+      tasks += n;
+      Batch batch = new Batch(r, n);
+      current = batch;
+      synchronized (gate) {
+         generation++;
+         gate.notifyAll();
+      }
+      batch.work();
+      int spins = 0;
+      while (batch.finished.get() < n) {
+         LuaGate.service();
+         if (++spins < 200) {
+            Thread.onSpinWait();
+         } else {
+            ShortWait.pause(20_000L);
+            if ((spins & 15) == 0 && System.nanoTime() - t0 > timeoutNs) {
+               running = false;
+               return new Timeout("a batch did not finish in " + timeoutNs / 1_000_000L + " ms (" + batch.finished.get() + " of " + n + " tasks)");
+            }
+         }
+      }
+      running = false;
+      return batch.failure;
    }
 
    /**
@@ -284,9 +648,10 @@ public final class FrameBatch {
       // zombies serialized. Free in the game, where the frame limiter has called onStep since boot; active() has no
       // side effect, unlike background(), which would put the CALLING thread on the efficient cores on macOS.
       CorePlacement.active();
-      workers = new Thread[THREADS];
-      for (int k = 0; k < THREADS; k++) {
-         Thread t = new Worker(FrameBatch::workerLoop, "pzopt-frame-" + k);
+      workers = new Thread[SPAWN];
+      for (int k = 0; k < SPAWN; k++) {
+         Worker t = new Worker(FrameBatch::workerLoop, "pzopt-frame-" + k);
+         t.index = k;
          t.setDaemon(true);
          t.setPriority(Thread.NORM_PRIORITY);
          workers[k] = t;
@@ -298,13 +663,14 @@ public final class FrameBatch {
    private static final long SPIN_NANOS = Config.FRAME_SPIN_US * 1000L;
 
    private static void workerLoop() {
-      CorePlacement.background(); // macOS: utility QoS (E cores first)
+      CorePlacement.frameCritical(); // macOS: workerQosMac (utility by default, E cores first)
+      Worker self = (Worker) Thread.currentThread();
       int seen = 0;
       while (true) {
          // frameSpinUs: the frame's batches come back to back (separation, transitions, animators, bones, lighting);
          // a worker that just finished one spins a little for the next instead of parking, so it starts within
          // microseconds instead of queueing on the monitor behind the others
-         if (SPIN_NANOS > 0) {
+         if (SPIN_NANOS > 0 && GtAb.on(GtAb.FRAME_SPIN)) { // devGtAlternate: frameSpin, the within-run A/B of the spin
             long until = System.nanoTime() + SPIN_NANOS;
             while (generation == seen && System.nanoTime() < until) {
                Thread.onSpinWait();
@@ -312,27 +678,41 @@ public final class FrameBatch {
          }
          if (generation != seen) {
             seen = generation;
+            CorePlacement.frameWorker(self); // f8-flip: coreFrameCpus alternation
+            CorePlacement.frameCritical(); // f11-mac: workerQosMac alternation (one thread-local read otherwise)
             Batch batch = current;
-            if (batch != null) {
+            if (batch != null && self.index < batch.limit) {
                batch.work();
                PoolStats.flush(); // poolStatsBatched: this worker's pool counts of the batch
             }
             continue;
          }
+         Batch bg = background; // zombieDrawLate (f8-zomb3): one background task, then the foreground is looked at again
+         if (bg != null && bg.hasUnclaimed()) {
+            self.bgTask = true;
+            boolean ran;
+            try {
+               ran = bg.workOne();
+            } finally {
+               self.bgTask = false;
+            }
+            if (!ran) {
+               PoolStats.flush();
+            }
+            continue;
+         }
          synchronized (gate) {
             while (generation == seen) {
+               Batch b2 = background;
+               if (b2 != null && b2.hasUnclaimed()) {
+                  break; // zombieDrawLate: background work arrived
+               }
                try {
                   gate.wait();
                } catch (InterruptedException e) {
                   return;
                }
             }
-            seen = generation;
-         }
-         Batch batch = current;
-         if (batch != null) {
-            batch.work();
-            PoolStats.flush(); // poolStatsBatched
          }
       }
    }

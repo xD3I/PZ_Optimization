@@ -1,9 +1,11 @@
 #!/bin/bash
 # Check of the controller shortcut of the performance overlay (pzopt.Overlay: L3 + R3 held together on one pad toggles
-# it, once per press) and of the shortcut text on the menu item (pzopt_mainscreen_overlay.lua: "... (F9 / L3 + R3)"),
-# with a virtual Xbox 360 pad (harness/pad.py). Run it through the queue:
+# it, once per press), with a virtual Xbox 360 pad (harness/pad.py). The overlay's menu item is gone since 2026-10-18 (its
+# toggle is PZ OPTIMIZATION > Profiler > Performance overlay, "Performance overlay (F9 / L3 + R3)"; the readability tours
+# read that row and benchmark-pad-check.sh presses the chord on that screen: one toggle, neither L3 nor R3 alone fires).
+# Run it through the queue:
 #   harness/queue.sh submit cmd --install keep --label pad-chord -- harness/pad-chord-check.sh
-#  Main menu (direct launch, overlaySampling on): the item names both shortcuts; the chord before the pad is activated,
+#  Main menu (direct launch, overlaySampling on): the chord before the pad is activated,
 #    the chord again, a 1.5 s chord hold (one toggle, not one per frame), L3 alone and R3 alone (no toggle), F9 (one
 #    toggle); every step counts the "overlay: shown|hidden" console lines.
 #  World (run.sh bench on the bench save, 1-tile route + hold; the harness implies sampling; the player is on keyboard
@@ -14,10 +16,12 @@ set -u
 cd "$(dirname "$0")/.."
 source scripts/pz-env.sh
 OUT=${OUT:-/tmp/pad-chord-check}; rm -rf "$OUT"; mkdir -p "$OUT"
+# an empty tab file for both launches: the player's own (the desktop's turns on the Enhancements and HDR) stays out
+EMPTY="$OUT/empty-options.ini"; : > "$EMPTY"
 UI=harness/ui-drive.py
 FIFO=/tmp/pzopt-pad.fifo
 GUID=030000005e0400008e02000010010000
-LUA=pzopt_mainscreen_overlay.lua
+LUA=pzopt_mainscreen_menu.lua
 scripts/pzopt.sh status | tee "$OUT/status.txt" | grep -q "^installed: *yes" || { echo "overrides not installed"; exit 1; }
 cmp -s "src/lua/client/pzopt/$LUA" "$PZ_DIR/media/lua/client/pzopt/$LUA" || { echo "installed $LUA differs from src"; exit 1; }
 
@@ -52,13 +56,11 @@ cp "$ZOMBOID/options.ini" "$OUT/options.ini.orig"
 grep -q "^controller=$GUID" "$ZOMBOID/options.ini" || echo "controller=$GUID" >> "$ZOMBOID/options.ini"
 
 # --- main menu ---
-( cd "$PZ_DIR/.." && JAVA_TOOL_OPTIONS="-Dzomboid.steam=0 -Dpzopt.overlaySampling=true -Dpzopt.updateCheck=false" exec setsid ./projectzomboid.sh </dev/null >"$OUT/game.log" 2>&1 ) &
+( cd "$PZ_DIR/.." && JAVA_TOOL_OPTIONS="-Dzomboid.steam=0 -Dpzopt.overlaySampling=true -Dpzopt.updateCheck=false -Dpzopt.userOptionsFile=$EMPTY" exec setsid ./projectzomboid.sh </dev/null >"$OUT/game.log" 2>&1 ) &
 sleep 3; GAME_PID=$(pgrep -f '^([^ ]*/)?ProjectZomboid64( |$)' | head -1)
-for i in $(seq 1 45); do sleep 2; ocr | grep -qi "PERFORMANCE OVERLAY" && break; done
+for i in $(seq 1 45); do sleep 2; ocr | grep -q "PZ OPTIMIZATION" && break; done
 sleep 3; shot menu 0
 ocr > "$OUT/menu-ocr.txt"
-if grep -qE "PERFORMANCE OVERLAY.*F9.*L3 ?\+ ?R3" "$OUT/menu-ocr.txt"; then echo "PASS: the item names both shortcuts: $(grep -oE "(SHOW|HIDE) PERFORMANCE OVERLAY.*" "$OUT/menu-ocr.txt" | head -1)"
-else echo "FAIL: item text without the shortcuts: $(grep -oE "(SHOW|HIDE) PERFORMANCE OVERLAY.*" "$OUT/menu-ocr.txt" | head -1)"; FAILS=$((FAILS + 1)); fi
 xdotool search --name "Project Zomboid" windowactivate --sync 2>/dev/null; sleep 0.5
 
 step "main menu: L3 + R3 before any other pad press" 1 pad "chord l3 r3"; shot main-chord-1 0.3
@@ -77,7 +79,7 @@ kill -0 "$GAME_PID" 2>/dev/null && { kill -9 "$GAME_PID"; sleep 2; }
 GAME_PID=""
 
 # --- world: bench save, the player holds still on a 1-tile route for 60 s ---
-harness/run.sh --label padchord-world --mode bench --launcher direct --flag route=S:1 --flag speed=1 --flag hold=60 --route-seconds 1 --no-dashboard --no-mangohud > "$OUT/run.log" 2>&1 &
+harness/run.sh --label padchord-world --mode bench --launcher direct --vmarg "-Dpzopt.userOptionsFile=$EMPTY" --flag route=S:1 --flag speed=1 --flag hold=60 --route-seconds 1 --no-dashboard --no-mangohud > "$OUT/run.log" 2>&1 &
 RUN_PID=$!
 sleep 10   # console.txt is rewritten at launch
 for i in $(seq 1 90); do sleep 2; grep -aq "harness: route start" "$ZOMBOID/console.txt" 2>/dev/null && break; done

@@ -149,8 +149,8 @@ public class WeatherFxMask {
    }
 
    public static boolean isRenderingMask() {
-      if (renderingMask && pzopt.DrawRecorder.recording && pzopt.DrawRecorder.currentRecorder() != null) { // pzopt: tileRecordParallel, a thread recording a translucent unit is not in the mask pass
-         return false; // pzopt
+      if (pzopt.DrawRecorder.recording && pzopt.DrawRecorder.currentRecorder() != null) { // pzopt: tileRecordParallel, a recording thread's own pass: a translucent unit is not in the mask pass, a tileRecordWeather unit is
+         return pzopt.DrawRecorder.currentRecorder().weatherMask; // pzopt
       } // pzopt
       return renderingMask;
    }
@@ -901,36 +901,52 @@ public class WeatherFxMask {
       IndieGL.glDepthMask(false);
       IndieGL.disableDepthTest();
       SpriteRenderer.instance.StartShader(0, nPlayer);
-      WeatherFxMask[] masks = playerMasks[nPlayer].masks;
-      int maskPointer = playerMasks[nPlayer].maskPointer;
+      if (!pzopt.TileRecord.spliceWeather(nPlayer)) { // pzopt: tileRecordWeather, the mask loop recorded on a frame worker and spliced here
+         pzoptMaskLoop(nPlayer); // pzopt
+      } // pzopt
 
-      for (int i = 0; i < maskPointer; i++) {
+      IndieGL.glBlendFunc(770, 771);
+      SpriteRenderer.instance.glBuffer(5, nPlayer);
+      SpriteRenderer.instance.glDoEndFrameFx(nPlayer);
+      renderingMask = false;
+   }
+
+   /** pzopt: tileRecordWeather, stock drawFxMask's mask loop (on the game thread, or recorded on a frame worker). */
+   public static void pzoptMaskLoop(int nPlayer) { // pzopt
+      pzoptMaskLoop(nPlayer, 0, playerMasks[nPlayer].maskPointer); // pzopt
+   } // pzopt
+
+   /** pzopt: tileRecordWeather, masks [from, to) of the loop (a recorded part; each mask sets the blend flag before its blend sets). */
+   public static void pzoptMaskLoop(int nPlayer, int from, int to) { // pzopt
+      WeatherFxMask[] masks = playerMasks[nPlayer].masks;
+
+      for (int i = from; i < to; i++) { // pzopt
          WeatherFxMask mask = masks[i];
          if (mask.enabled) {
             if ((mask.flags & 4) == 4) {
-               SpriteRenderer.glBlendfuncEnabled = true;
+               pzoptBlend(true); // pzopt: tileRecordWeather, the calling thread's flag
                IndieGL.glBlendFunc(scrMaskSub, dstMaskSub);
                SpriteRenderer.instance.glBlendEquation(32779);
                IndieGL.enableAlphaTest();
                IndieGL.glAlphaFunc(516, 0.02F);
-               SpriteRenderer.glBlendfuncEnabled = false;
+               pzoptBlend(false); // pzopt
                boolean wN = (mask.flags & 1) == 1;
                boolean wW = (mask.flags & 2) == 2;
                renderMaskWall(mask.gs, mask.x, mask.y, mask.z, wN, wW, nPlayer);
-               SpriteRenderer.glBlendfuncEnabled = true;
+               pzoptBlend(true); // pzopt: tileRecordWeather, the calling thread's flag
                SpriteRenderer.instance.glBlendEquation(32774);
-               SpriteRenderer.glBlendfuncEnabled = false;
+               pzoptBlend(false); // pzopt
                boolean door = (mask.flags & 64) == 64;
                if (door && mask.gs != null) {
-                  SpriteRenderer.glBlendfuncEnabled = true;
+                  pzoptBlend(true); // pzopt: tileRecordWeather, the calling thread's flag
                   IndieGL.glBlendFunc(scrMaskAdd, dstMaskAdd);
-                  SpriteRenderer.glBlendfuncEnabled = false;
-                  mask.gs.RenderOpenDoorOnly();
+                  pzoptBlend(false); // pzopt
+                  if (!pzopt.TileRecord.deferMask(0, mask)) mask.gs.RenderOpenDoorOnly(); // pzopt: tileRecordWeather, drawn by the game thread at its place
                }
             } else {
-               SpriteRenderer.glBlendfuncEnabled = true;
+               pzoptBlend(true); // pzopt: tileRecordWeather, the calling thread's flag
                IndieGL.glBlendFunc(scrMaskAdd, dstMaskAdd);
-               SpriteRenderer.glBlendfuncEnabled = false;
+               pzoptBlend(false); // pzopt
                renderMaskFloor(mask.x, mask.y, mask.z);
                boolean doObjects = (mask.flags & 16) == 16;
                boolean doChars = (mask.flags & 8) == 8;
@@ -947,24 +963,64 @@ public class WeatherFxMask {
                }
 
                if (doObjects && mask.gs != null) {
-                  mask.gs.RenderMinusFloorFxMask(mask.z + 1, false, false);
+                  if (!pzopt.TileRecord.deferMask(1, mask)) mask.gs.RenderMinusFloorFxMask(mask.z + 1, false, false); // pzopt
                }
 
                if (doChars && mask.gs != null) {
-                  mask.gs.renderCharacters(mask.z + 1, false, false);
-                  SpriteRenderer.glBlendfuncEnabled = true;
+                  if (!pzopt.TileRecord.deferMask(2, mask)) mask.gs.renderCharacters(mask.z + 1, false, false); // pzopt
+                  pzoptBlend(true); // pzopt: tileRecordWeather, the calling thread's flag
                   IndieGL.glBlendFunc(scrMaskAdd, dstMaskAdd);
-                  SpriteRenderer.glBlendfuncEnabled = false;
+                  pzoptBlend(false); // pzopt
                }
             }
          }
       }
+   } // pzopt
 
-      IndieGL.glBlendFunc(770, 771);
-      SpriteRenderer.instance.glBuffer(5, nPlayer);
-      SpriteRenderer.instance.glDoEndFrameFx(nPlayer);
-      renderingMask = false;
-   }
+   /** pzopt: tileRecordWeather, SpriteRenderer.glBlendfuncEnabled as the calling thread sets it (a recording thread keeps its own). */
+   private static void pzoptBlend(boolean v) { // pzopt
+      if (!pzopt.DrawRecorder.setBlendEnabled(v)) { // pzopt
+         SpriteRenderer.glBlendfuncEnabled = v; // pzopt
+      } // pzopt
+   } // pzopt
+
+   /** pzopt: tileRecordWeather, the mask loop can be recorded this frame: the masks are final (no scan adds this frame) and the stock gates of drawFxMask hold now. */
+   public static boolean pzoptMaskRecordable(int nPlayer) { // pzopt
+      if (IsoCamera.frameState.camCharacterZ < 0.0F || !DebugOptions.instance.weather.fx.getValue() || GameServer.server || IsoWeatherFX.instance == null) { // pzopt
+         return false; // pzopt
+      } // pzopt
+      if (LuaManager.thread != null && LuaManager.thread.step || nPlayer != curPlayerIndex || debugMask || debugMaskAndParticles) { // pzopt
+         return false; // pzopt
+      } // pzopt
+      WeatherFxMask.PlayerFxMask m = playerMasks[nPlayer]; // pzopt
+      if (!m.maskEnabled || !maskingEnabled || !m.hasMaskToDraw || m.requiresUpdate && !m.diamondIterDone || m.maskPointer == 0) { // pzopt: a scan this frame may still add masks
+         return false; // pzopt
+      } // pzopt
+      if (fboMask == null || fboParticles == null || pzoptMaskIdle(nPlayer)) { // pzopt
+         return false; // pzopt
+      } // pzopt
+      return true; // pzopt
+   } // pzopt
+
+   /** pzopt: tileRecordWeather, the mask list as recorded (spliceWeather checks it is unchanged). */
+   public static Object pzoptMaskList(int nPlayer) { // pzopt
+      return playerMasks[nPlayer].masks; // pzopt
+   } // pzopt
+
+   public static int pzoptMaskCount(int nPlayer) { // pzopt
+      return playerMasks[nPlayer].maskPointer; // pzopt
+   } // pzopt
+
+   /** pzopt: tileRecordWeather, a deferred mask call on the game thread (kind 0 open door, 1 objects, 2 characters). */
+   public static void pzoptMaskDeferred(int kind, WeatherFxMask mask) { // pzopt
+      if (kind == 0) { // pzopt
+         mask.gs.RenderOpenDoorOnly(); // pzopt
+      } else if (kind == 1) { // pzopt
+         mask.gs.RenderMinusFloorFxMask(mask.z + 1, false, false); // pzopt
+      } else { // pzopt
+         mask.gs.renderCharacters(mask.z + 1, false, false); // pzopt
+      } // pzopt
+   } // pzopt
 
    private static void drawFxLayered(int nPlayer, boolean doClouds, boolean doFog, boolean doPrecip) {
       int ox = IsoCamera.getOffscreenLeft(nPlayer);

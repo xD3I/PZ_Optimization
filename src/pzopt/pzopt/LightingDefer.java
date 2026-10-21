@@ -18,7 +18,7 @@ public final class LightingDefer {
    private LightingDefer() {
    }
 
-   private static final ThreadLocal<ArrayList<Runnable>> SINK = new ThreadLocal<>();
+   private static final Tl<ArrayList<Runnable>> SINK = new Tl<>(null);
    private static ArrayList<Runnable>[] lists = newLists(256);
    public static long deferred;
 
@@ -53,7 +53,7 @@ public final class LightingDefer {
 
    /** Worker, at the end of a task. */
    static void end() {
-      SINK.remove();
+      SINK.set(null); // tail pass: set(null), not remove(): the thread's map entry stays and the next set() reuses it (remove + set made a ThreadLocalMap.Entry per task, 12.5 MB/s on the Louisville horde); get() reads null either way
    }
 
    /** Game thread: task i's effects (tileRecordParallel splices unit by unit, each unit's effects first). */

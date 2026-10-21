@@ -15,7 +15,9 @@ import zombie.iso.weather.ClimateManager;
  *       weather generation, then pins the climate overrides a stock STAGE_STORM sets (rain 1.0,
  *       full cloud, wind, dark ambient) every frame, plus a lightning strike next to the player every
  *       {@code thunder_secs} seconds (default 6) so the flash + forced grid-stack recalc is part of
- *       every run at the same instants; {@code clear} stops weather and pins the fair-weather values;</li>
+ *       every run at the same instants; {@code clear} stops weather and pins the fair-weather values; with
+ *       {@code time_of_day} the light follows that hour (the storm's dimming on top: a rainy night stays night), without it the
+ *       light is pinned to daylight as before;</li>
  *   <li>{@code fog=heavy|off|0..1} — pins the fog intensity ({@code heavy} = 1.0, the value a stock
  *       BLIZZARD stage without its own roll uses; a storm stage rolls at most 0.5) every frame. On its own it
  *       stops the save's weather period too (every WeatherPeriod stage re-pins fog to 0) but leaves the other
@@ -525,7 +527,10 @@ public final class Scene {
       ThumpRig.tick(p, nowNs); // thump=N: zombies thumping a door off-screen (the thump-burst repro)
       CarGlassRig.tick(p, nowNs); // car_rig=N: a ring of parked cars around the player (the car glass rig)
       GateRig.tick(p, nowNs); // gate=auto|place: the double gate toggled / everything re-baked in turn
+      DoorRig.tick(p, nowNs); // find=sundoor: the sunlit door toggled open / closed
       CarSiege.tick(p, nowNs); // siege=N: zombies around the player's parked car (the "crowd the car, never attack" repro)
+      BrawlRig.tick(p, nowNs); // brawl=N: hostile zombies round a visible player (the zombie behaviour check, 2026-10-13)
+      MeleeRig.tick(p, nowNs); // melee=N: the player swings a melee weapon at standing zombies (the phasing repro, 2026-10-18)
       crowdTick(p, nowNs); // crowd=N: a crowd around the player (the capsule shadow rig)
       animalsTick(p, nowNs); // animals=N[:type]: animals around the player (the animal line-of-sight rig; mixed kinds: the detailed shadow rig)
       if (zombiesOff) {
@@ -690,6 +695,7 @@ public final class Scene {
    /** Reset the per-run counters (route start), so the strike cadence is counted from the route. */
    static void routeStart(long nowNs) {
       GateRig.routeStart(nowNs);
+      DoorRig.routeStart(nowNs);
       lastThunderNs = nowNs;
       thunderCount = 0;
       if (helicopter) {
@@ -906,9 +912,11 @@ public final class Scene {
          set(cm, ClimateManager.FLOAT_FOG_INTENSITY, 0.0f); // no fog flag: a storm/clear run has no fog (the 2026-09-20 baselines)
       }
       set(cm, ClimateManager.FLOAT_DESATURATION, storm ? 0.3f : 0.0f);
-      set(cm, ClimateManager.FLOAT_GLOBAL_LIGHT_INTENSITY, storm ? 0.4f : 1.0f);
-      set(cm, ClimateManager.FLOAT_AMBIENT, storm ? 0.45f : 1.0f);
-      set(cm, ClimateManager.FLOAT_DAYLIGHT_STRENGTH, storm ? 0.45f : 1.0f);
+      // the light: with a forced hour (time_of_day=) the climate's own value for that hour, times the storm's dimming (a
+      // night stays night: weather=rain|storm|clear at 01:00); without one the old daylight pin (the weather= baselines)
+      light(cm, ClimateManager.FLOAT_GLOBAL_LIGHT_INTENSITY, storm ? 0.4f : 1.0f);
+      light(cm, ClimateManager.FLOAT_AMBIENT, storm ? 0.45f : 1.0f);
+      light(cm, ClimateManager.FLOAT_DAYLIGHT_STRENGTH, storm ? 0.45f : 1.0f);
       cm.getClimateBool(ClimateManager.BOOL_IS_SNOW).setOverride(false);
    }
 
@@ -942,6 +950,16 @@ public final class Scene {
       } catch (NumberFormatException e) {
          Log.warn("harness: unknown fog '" + raw + "' (heavy|off|0..1); leaving the save's fog");
          return -1f;
+      }
+   }
+
+   /** A light float under weather=: the hour's own value x the weather's factor when the hour is forced, else the factor itself (daylight). */
+   private static void light(ClimateManager cm, int id, float factor) {
+      if (timeOfDay >= 0f) {
+         ClimateManager.ClimateFloat f = cm.getClimateFloat(id);
+         f.setOverride(f.getInternalValue() * factor, 1.0f);
+      } else {
+         set(cm, id, factor);
       }
    }
 
@@ -1096,6 +1114,6 @@ public final class Scene {
             + "\nsee_all=" + seeAll
             + (carSpawn > 0 ? "\ncar_spawn=" + carSpawn + "\nvehicles_loaded=" + zombie.iso.IsoWorld.instance.currentCell.getVehicles().size() : "")
             + (soundRadius > 0 ? "\nsound_radius=" + soundRadius + "\nsound_every=" + soundEvery + "\nsound_stats=" + soundStats() : "")
-            + (helicopter ? "\nhelicopter=" + helicopterState() : "") + ThumpRig.summary() + CarSiege.summary() + SoundProbe.summary();
+            + (helicopter ? "\nhelicopter=" + helicopterState() : "") + ThumpRig.summary() + CarSiege.summary() + BrawlRig.summary() + MeleeRig.summary() + SoundProbe.summary();
    }
 }

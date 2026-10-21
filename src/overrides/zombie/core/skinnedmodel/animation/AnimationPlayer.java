@@ -94,7 +94,7 @@ public final class AnimationPlayer extends PooledObject {
    private final Vector3f grappleOffset = new Vector3f();
    private AnimationPlayerRecorder recorder;
    private static final ThreadLocal<AnimationTrack[]> tempTracks = ThreadLocal.withInitial(() -> new AnimationTrack[0]);
-   private static final ThreadLocal<Vector2> tempo = ThreadLocal.withInitial(Vector2::new); // pzopt: per thread (pzopt.AnimBatch)
+   private static final pzopt.Tl<Vector2> tempo = new pzopt.Tl<>(Vector2::new); // pzopt: per thread (pzopt.AnimBatch)
    private RagdollController ragdollController;
    private final org.lwjgl.util.vector.Vector3f ragdollWorldPosition = new org.lwjgl.util.vector.Vector3f();
    private final Quaternion ragdollWorldRotation = new Quaternion();
@@ -276,6 +276,8 @@ public final class AnimationPlayer extends PooledObject {
 
    public void onReleased() {
       if (this.pzoptInFlight) { pzopt.AnimBatch.guard(); } // pzopt: animBatchAsync, join the bone batch before a game-thread touch
+      this.pzoptDrawValid = false; // pzopt: zombieDrawLate (f8-zomb3), a released player has no draw copy
+      if (this.character != null && this.character.pzoptBmPlayer == this) { this.character.pzoptBmPlayer = null; } // pzopt: bodyModelCache, a released player is no longer known to carry anything
       this.model = null;
       this.skinningData = null;
       this.propTransforms.setIdentity();
@@ -333,7 +335,7 @@ public final class AnimationPlayer extends PooledObject {
    private int pzoptBoneIndexCount;
 
    public int getSkinningBoneIndex(String boneName, int defaultVal) {
-      if (pzopt.Overrides.enabled() && pzopt.Config.BONE_INDEX_CACHE && boneName != null) {
+      if (pzopt.Overrides.enabled() && pzopt.Config.BONE_INDEX_CACHE && boneName != null && !(this.pzoptInFlight && pzopt.ZombieLate.serving(this))) { // pzopt: zombieDrawLate (f8-zomb3), the render's lookups skip the cache the bone worker may be filling
          SkinningData skinningData = this.getSkinningData();
          if (skinningData != this.pzoptBoneIndexData) {
             this.pzoptBoneIndexData = skinningData;
@@ -612,6 +614,8 @@ public final class AnimationPlayer extends PooledObject {
    }
 
    private void updateInternal(float deltaT) {
+      this.pzoptDrawShadowNextValid = this.pzoptShadowValid; // pzopt: zombieDrawLate (f8-zomb3), the shadow pair of the pose the draw copy keeps
+      this.pzoptDrawShadowNextPacked = this.pzoptShadowPacked; // pzopt
       this.pzoptShadowValid = false; // pzopt: shadowPrep, the bones are about to move
       this.pzoptCapsulesValid = false; // pzopt: sunShadows, likewise the capsule end points
       if (this.isReady()) {
@@ -683,7 +687,7 @@ public final class AnimationPlayer extends PooledObject {
 
    /** pzopt: shadowPrep, the pair computed by the last deferred update, or 0 when the game thread must compute it. */
    public long pzoptShadowParams() {
-      if (this.pzoptInFlight) { pzopt.AnimBatch.guard(); } // pzopt: animBatchAsync, join the bone batch before a game-thread touch
+      if (this.pzoptInFlight) { if (pzopt.ZombieLate.serving(this)) { return this.pzoptDrawShadowValid ? this.pzoptDrawShadowPacked : 0L; } pzopt.AnimBatch.guard(); } // pzopt: zombieDrawLate (f8-zomb3), the draw copy; else animBatchAsync's join
       return this.pzoptShadowValid ? this.pzoptShadowPacked : 0L;
    }
 
@@ -750,7 +754,7 @@ public final class AnimationPlayer extends PooledObject {
     * matrices itself). Game thread; the set is the one getSkinTransforms would return.
     */
    public java.nio.FloatBuffer pzoptSkinPalette(SkinningData skinnedTo) {
-      if (this.pzoptInFlight) { pzopt.AnimBatch.guard(); } // pzopt: animBatchAsync, join the bone batch before a game-thread touch
+      if (this.pzoptInFlight) { if (pzopt.ZombieLate.serving(this)) { return this.pzoptDrawPalette(skinnedTo); } pzopt.AnimBatch.guard(); } // pzopt: zombieDrawLate (f8-zomb3), the draw copy; else animBatchAsync's join
       if (skinnedTo == null) {
          return null;
       }
@@ -772,10 +776,133 @@ public final class AnimationPlayer extends PooledObject {
       return data.pzoptPalette;
    }
 
-   private static final ThreadLocal<SkinningData[]> pzoptSkinnedTo = ThreadLocal.withInitial(() -> new SkinningData[16]);
+   private static final pzopt.Tl<SkinningData[]> pzoptSkinnedTo = new pzopt.Tl<>(() -> new SkinningData[16]); // pzopt: pzopt.Tl (zombie redesign, f8-zomb2)
 
    /** pzopt: animBatchAsync, set by the game thread when this player's bone math is queued, cleared when its batch is joined. */
    public boolean pzoptInFlight;
+
+   // pzopt: zombieDrawLate (zombie redesign round 3, f8-zomb3). The render outputs of the previous bone update, copied when
+   // this player's bone math is queued (pzopt.AnimBatch.submit, before any worker writes the live arrays); the accessors the
+   // render reads serve it while the batch runs on the frame workers' background lane (pzopt.ZombieLate.serving). Written
+   // only while the player is not in flight, read only while it is: never both at once.
+   public volatile boolean pzoptDrawValid; // pzopt
+   private float pzoptDrawAngle; // pzopt
+   private boolean pzoptDrawNeedFirstFrame; // pzopt
+   private Matrix4f[] pzoptDrawModel = new Matrix4f[0]; // pzopt
+   private int pzoptDrawModelCount; // pzopt
+   private SkinningData[] pzoptDrawSkinnedTo = new SkinningData[4]; // pzopt
+   private java.nio.FloatBuffer[] pzoptDrawPalettes = new java.nio.FloatBuffer[4]; // pzopt
+   private int[][] pzoptDrawBoneMaps = new int[4][]; // pzopt
+   private int pzoptDrawPaletteCount; // pzopt
+   private long pzoptDrawShadowPacked, pzoptDrawShadowNextPacked; // pzopt
+   private boolean pzoptDrawShadowValid, pzoptDrawShadowNextValid; // pzopt
+
+   /** pzopt: zombieDrawLate, the thread queuing this player's bone math: copy the render outputs of its last bone update. */
+   public void pzoptDrawSnapshot() { // pzopt
+      Matrix4f[] mt = this.modelTransforms; // pzopt
+      if (mt == null || this.skinningData == null) { // pzopt
+         this.pzoptDrawValid = false; // pzopt: no complete pose yet: the render's touch joins the batch
+         return; // pzopt
+      } // pzopt
+      if (this.pzoptDrawModel.length < mt.length) { // pzopt
+         Matrix4f[] grown = java.util.Arrays.copyOf(this.pzoptDrawModel, mt.length); // pzopt
+         for (int i = this.pzoptDrawModel.length; i < mt.length; i++) { // pzopt
+            grown[i] = new Matrix4f(); // pzopt
+         } // pzopt
+         this.pzoptDrawModel = grown; // pzopt
+      } // pzopt
+      for (int i = 0; i < mt.length; i++) { // pzopt
+         this.pzoptDrawModel[i].load(mt[i]); // pzopt
+      } // pzopt
+      this.pzoptDrawModelCount = mt.length; // pzopt
+      int n = 0; // pzopt
+      synchronized (this) { // pzopt: the set list, as pzoptSkinPalette walks it
+         for (AnimationPlayer.SkinTransformData data = this.skinTransformData; data != null; data = data.next) { // pzopt
+            if (data.skinnedTo == null || data.dirty || !data.pzoptPaletteValid || data.pzoptPalette == null) { // pzopt
+               continue; // pzopt: no palette of the current pose: getSkinTransforms' served path computes it
+            } // pzopt
+            if (n == this.pzoptDrawSkinnedTo.length) { // pzopt
+               this.pzoptDrawSkinnedTo = java.util.Arrays.copyOf(this.pzoptDrawSkinnedTo, n * 2); // pzopt
+               this.pzoptDrawPalettes = java.util.Arrays.copyOf(this.pzoptDrawPalettes, n * 2); // pzopt
+               this.pzoptDrawBoneMaps = java.util.Arrays.copyOf(this.pzoptDrawBoneMaps, n * 2); // pzopt
+            } // pzopt
+            java.nio.FloatBuffer src = data.pzoptPalette.duplicate(); // pzopt
+            src.rewind(); // pzopt
+            java.nio.FloatBuffer dst = this.pzoptDrawPalettes[n]; // pzopt
+            if (dst == null || dst.capacity() < src.limit()) { // pzopt
+               dst = org.lwjgl.BufferUtils.createFloatBuffer(src.limit()); // pzopt
+               this.pzoptDrawPalettes[n] = dst; // pzopt
+            } // pzopt
+            dst.clear(); // pzopt
+            dst.put(src); // pzopt
+            dst.flip(); // pzopt
+            this.pzoptDrawSkinnedTo[n] = data.skinnedTo; // pzopt
+            this.pzoptDrawBoneMaps[n] = data.boneMap; // pzopt
+            n++; // pzopt
+         } // pzopt
+      } // pzopt
+      for (int i = n; i < this.pzoptDrawPaletteCount; i++) { // pzopt
+         this.pzoptDrawSkinnedTo[i] = null; // pzopt
+      } // pzopt
+      this.pzoptDrawPaletteCount = n; // pzopt
+      this.pzoptDrawAngle = this.angle; // pzopt
+      this.pzoptDrawNeedFirstFrame = this.boneTransformsNeedFirstFrame; // pzopt: the bone math's own DoAngles moves it: here it is still the last update's
+      this.pzoptDrawShadowPacked = this.pzoptDrawShadowNextPacked; // pzopt
+      this.pzoptDrawShadowValid = this.pzoptDrawShadowNextValid; // pzopt
+      this.pzoptDrawValid = true; // pzopt
+   } // pzopt
+
+   private java.nio.FloatBuffer pzoptDrawPalette(SkinningData skinnedTo) { // pzopt: zombieDrawLate, the copied palette of this set or null
+      for (int i = 0; i < this.pzoptDrawPaletteCount; i++) { // pzopt
+         if (this.pzoptDrawSkinnedTo[i] == skinnedTo) { // pzopt
+            java.nio.FloatBuffer b = this.pzoptDrawPalettes[i].duplicate(); // pzopt: a private cursor (two readers may copy it)
+            b.rewind(); // pzopt
+            return b; // pzopt
+         } // pzopt
+      } // pzopt
+      pzopt.ZombieLate.drawPaletteMisses++; // pzopt
+      return null; // pzopt
+   } // pzopt
+
+   /** pzopt: zombieDrawLate, getSkinTransforms of the copied pose: the copy's model transforms through the set's bone map (stock's multiply), in a new array. */
+   private Matrix4f[] pzoptDrawSkinTransforms(SkinningData skinnedTo) { // pzopt
+      pzopt.ZombieLate.drawSkinComputes++; // pzopt
+      if (skinnedTo == null) { // pzopt
+         return this.pzoptDrawModel; // pzopt
+      } // pzopt
+      int[] boneMap = null; // pzopt
+      for (int i = 0; i < this.pzoptDrawPaletteCount; i++) { // pzopt
+         if (this.pzoptDrawSkinnedTo[i] == skinnedTo) { // pzopt
+            boneMap = this.pzoptDrawBoneMaps[i]; // pzopt
+         } // pzopt
+      } // pzopt
+      if (boneMap == null) { // pzopt
+         synchronized (this) { // pzopt
+            for (AnimationPlayer.SkinTransformData data = this.skinTransformData; data != null && boneMap == null; data = data.next) { // pzopt
+               if (data.skinnedTo == skinnedTo) { // pzopt
+                  boneMap = data.boneMap; // pzopt
+               } // pzopt
+            } // pzopt
+         } // pzopt
+      } // pzopt
+      int bones = skinnedTo.numBones(); // pzopt
+      Matrix4f[] out = new Matrix4f[bones]; // pzopt
+      for (int b = 0; b < bones; b++) { // pzopt
+         out[b] = new Matrix4f(); // pzopt: identity, as stock leaves a bone the map does not reach
+      } // pzopt
+      if (boneMap == null) { // pzopt
+         return out; // pzopt
+      } // pzopt
+      for (int bone = 0; bone < this.pzoptDrawModelCount && bone < boneMap.length; bone++) { // pzopt
+         int boneTo = boneMap[bone]; // pzopt
+         if (boneTo != -1 && boneTo < bones) { // pzopt
+            if (skinnedTo.boneOffset != null && skinnedTo.boneOffset.get(boneTo) != null) { // pzopt
+               Matrix4f.mul((Matrix4f)skinnedTo.boneOffset.get(boneTo), this.pzoptDrawModel[bone], out[boneTo]); // pzopt
+            } // pzopt
+         } // pzopt
+      } // pzopt
+      return out; // pzopt
+   } // pzopt
 
    /** pzopt: pzopt.AnimBatch eligibility: no parent player to copy from, no ragdoll, no recorder. */
    public boolean pzoptBatchable() {
@@ -1328,7 +1455,7 @@ public final class AnimationPlayer extends PooledObject {
    }
 
    public boolean isBoneTransformsNeedFirstFrame() {
-      if (this.pzoptInFlight) { pzopt.AnimBatch.guard(); } // pzopt: animBatchAsync, join the bone batch before a game-thread touch
+      if (this.pzoptInFlight) { if (pzopt.ZombieLate.serving(this)) { return this.pzoptDrawNeedFirstFrame; } pzopt.AnimBatch.guard(); } // pzopt: zombieDrawLate (f8-zomb3), the draw copy (renderShadow's getAnimAngleRadians); else animBatchAsync's join
       return this.boneTransformsNeedFirstFrame;
    }
 
@@ -1729,6 +1856,7 @@ public final class AnimationPlayer extends PooledObject {
             }
 
             this.ragdollController = ragdollController;
+            pzopt.RagdollGate.changed(false, true); // pzopt: ragdollGate, players holding a controller
          }
       }
    }
@@ -1762,6 +1890,7 @@ public final class AnimationPlayer extends PooledObject {
       if (this.ragdollController != null) { pzopt.AnimParallel.noteRagdoll("controller released"); } // pzopt: evidence rig, ragdoll physics off the game thread
       RagdollController pzoptReleased = this.ragdollController; // pzopt: ragdollQuitSweep, ledger
       this.ragdollController = (RagdollController)Pool.tryRelease(this.ragdollController);
+      pzopt.RagdollGate.changed(pzoptReleased != null, this.ragdollController != null); // pzopt: ragdollGate, players holding a controller
       if (pzoptReleased != null) { pzopt.RagdollLedger.released(pzoptReleased); } // pzopt: ragdollQuitSweep, ledger
       if (this.ragdollAnimationClip != null) {
          this.ragdollAnimationClip.setRagdollSimulationActive(false);
@@ -1783,12 +1912,12 @@ public final class AnimationPlayer extends PooledObject {
    }
 
    public int getModelTransformsCount() {
-      if (this.pzoptInFlight) { pzopt.AnimBatch.guard(); } // pzopt: animBatchAsync, join the bone batch before a game-thread touch
+      if (this.pzoptInFlight) { if (pzopt.ZombieLate.serving(this)) { return this.pzoptDrawModelCount; } pzopt.AnimBatch.guard(); } // pzopt: zombieDrawLate (f8-zomb3), the draw copy while the bones are in flight; else animBatchAsync's join
       return PZArrayUtil.lengthOf(this.modelTransforms);
    }
 
    public Matrix4f getModelTransformAt(int idx) {
-      if (this.pzoptInFlight) { pzopt.AnimBatch.guard(); } // pzopt: animBatchAsync, join the bone batch before a game-thread touch
+      if (this.pzoptInFlight) { if (pzopt.ZombieLate.serving(this)) { return this.pzoptDrawModel[idx]; } pzopt.AnimBatch.guard(); } // pzopt: zombieDrawLate (f8-zomb3), the draw copy while the bones are in flight; else animBatchAsync's join
       return this.modelTransforms[idx];
    }
 
@@ -1975,7 +2104,7 @@ public final class AnimationPlayer extends PooledObject {
    }
 
    public Matrix4f[] getSkinTransforms(SkinningData skinnedTo) {
-      if (this.pzoptInFlight) { pzopt.AnimBatch.guard(); } // pzopt: animBatchAsync, join the bone batch before a game-thread touch
+      if (this.pzoptInFlight) { if (pzopt.ZombieLate.serving(this)) { return this.pzoptDrawSkinTransforms(skinnedTo); } pzopt.AnimBatch.guard(); } // pzopt: zombieDrawLate (f8-zomb3), the draw copy; else animBatchAsync's join
       if (skinnedTo == null) {
          return this.modelTransforms;
       }
@@ -2093,12 +2222,12 @@ public final class AnimationPlayer extends PooledObject {
    }
 
    public float getRenderedAngle() {
-      if (this.pzoptInFlight) { pzopt.AnimBatch.guard(); } // pzopt: animBatchAsync, join the bone batch before a game-thread touch
+      if (this.pzoptInFlight) { if (pzopt.ZombieLate.serving(this)) { return this.pzoptDrawAngle + (float) (Math.PI / 2); } pzopt.AnimBatch.guard(); } // pzopt: zombieDrawLate (f8-zomb3), the draw copy while the bones are in flight; else animBatchAsync's join
       return this.angle + (float) (Math.PI / 2);
    }
 
    public float getAngle() {
-      if (this.pzoptInFlight) { pzopt.AnimBatch.guard(); } // pzopt: animBatchAsync, join the bone batch before a game-thread touch
+      if (this.pzoptInFlight) { if (pzopt.ZombieLate.serving(this)) { return this.pzoptDrawAngle; } pzopt.AnimBatch.guard(); } // pzopt: zombieDrawLate (f8-zomb3), the draw copy while the bones are in flight; else animBatchAsync's join
       return this.angle;
    }
 
@@ -2160,7 +2289,7 @@ public final class AnimationPlayer extends PooledObject {
 
    private static class L_applyTwistBone {
       // pzopt: one scratch set per thread; the standard-animation math of a zombie runs on a worker (pzopt.AnimBatch)
-      static final ThreadLocal<AnimationPlayer.L_applyTwistBone> TL = ThreadLocal.withInitial(AnimationPlayer.L_applyTwistBone::new);
+      static final pzopt.Tl<AnimationPlayer.L_applyTwistBone> TL = new pzopt.Tl<>(AnimationPlayer.L_applyTwistBone::new); // pzopt: pzopt.Tl (zombie redesign, f8-zomb2)
       final Matrix4f twistParentBoneTrans = new Matrix4f();
       final Matrix4f twistParentBoneTransInv = new Matrix4f();
       final Matrix4f twistBoneTrans = new Matrix4f();
@@ -2178,14 +2307,14 @@ public final class AnimationPlayer extends PooledObject {
 
    private static class L_getBoneModelTransform {
       // pzopt: one scratch set per thread; the standard-animation math of a zombie runs on a worker (pzopt.AnimBatch)
-      static final ThreadLocal<AnimationPlayer.L_getBoneModelTransform> TL = ThreadLocal.withInitial(AnimationPlayer.L_getBoneModelTransform::new);
+      static final pzopt.Tl<AnimationPlayer.L_getBoneModelTransform> TL = new pzopt.Tl<>(AnimationPlayer.L_getBoneModelTransform::new); // pzopt: pzopt.Tl (zombie redesign, f8-zomb2)
       final Matrix4f boneTransform = new Matrix4f();
       final Matrix4f modelTransform = new Matrix4f();
    }
 
    private static final class L_getTrackTransform {
       // pzopt: one scratch set per thread; the standard-animation math of a zombie runs on a worker (pzopt.AnimBatch)
-      static final ThreadLocal<AnimationPlayer.L_getTrackTransform> TL = ThreadLocal.withInitial(AnimationPlayer.L_getTrackTransform::new);
+      static final pzopt.Tl<AnimationPlayer.L_getTrackTransform> TL = new pzopt.Tl<>(AnimationPlayer.L_getTrackTransform::new); // pzopt: pzopt.Tl (zombie redesign, f8-zomb2)
       final Matrix4f Pa = new Matrix4f();
       final Matrix4f mA = new Matrix4f();
       final Matrix4f mB = new Matrix4f();
@@ -2198,7 +2327,7 @@ public final class AnimationPlayer extends PooledObject {
 
    private static class L_getUnweightedBoneTransform {
       // pzopt: one scratch set per thread; the standard-animation math of a zombie runs on a worker (pzopt.AnimBatch)
-      static final ThreadLocal<AnimationPlayer.L_getUnweightedBoneTransform> TL = ThreadLocal.withInitial(AnimationPlayer.L_getUnweightedBoneTransform::new);
+      static final pzopt.Tl<AnimationPlayer.L_getUnweightedBoneTransform> TL = new pzopt.Tl<>(AnimationPlayer.L_getUnweightedBoneTransform::new); // pzopt: pzopt.Tl (zombie redesign, f8-zomb2)
       final org.lwjgl.util.vector.Vector3f pos = new org.lwjgl.util.vector.Vector3f();
       final Quaternion rot = new Quaternion();
       final org.lwjgl.util.vector.Vector3f scale = new org.lwjgl.util.vector.Vector3f();
@@ -2206,7 +2335,7 @@ public final class AnimationPlayer extends PooledObject {
 
    private static class L_getUnweightedModelTransform {
       // pzopt: one scratch set per thread; the standard-animation math of a zombie runs on a worker (pzopt.AnimBatch)
-      static final ThreadLocal<AnimationPlayer.L_getUnweightedModelTransform> TL = ThreadLocal.withInitial(AnimationPlayer.L_getUnweightedModelTransform::new);
+      static final pzopt.Tl<AnimationPlayer.L_getUnweightedModelTransform> TL = new pzopt.Tl<>(AnimationPlayer.L_getUnweightedModelTransform::new); // pzopt: pzopt.Tl (zombie redesign, f8-zomb2)
       final Matrix4f boneTransform = new Matrix4f();
    }
 
@@ -2216,7 +2345,7 @@ public final class AnimationPlayer extends PooledObject {
 
    private static final class L_updateBoneAnimationTransform {
       // pzopt: one scratch set per thread; the standard-animation math of a zombie runs on a worker (pzopt.AnimBatch)
-      static final ThreadLocal<AnimationPlayer.L_updateBoneAnimationTransform> TL = ThreadLocal.withInitial(AnimationPlayer.L_updateBoneAnimationTransform::new);
+      static final pzopt.Tl<AnimationPlayer.L_updateBoneAnimationTransform> TL = new pzopt.Tl<>(AnimationPlayer.L_updateBoneAnimationTransform::new); // pzopt: pzopt.Tl (zombie redesign, f8-zomb2)
       final Quaternion rot = new Quaternion();
       final org.lwjgl.util.vector.Vector3f pos = new org.lwjgl.util.vector.Vector3f();
       final org.lwjgl.util.vector.Vector3f scale = new org.lwjgl.util.vector.Vector3f();
@@ -2285,7 +2414,7 @@ public final class AnimationPlayer extends PooledObject {
 
    private static final class updateMultiTrackBoneTransforms_DeferredMovementOnly {
       // pzopt: one scratch set per thread; the standard-animation math of a zombie runs on a worker (pzopt.AnimBatch)
-      static final ThreadLocal<AnimationPlayer.updateMultiTrackBoneTransforms_DeferredMovementOnly> TL = ThreadLocal.withInitial(AnimationPlayer.updateMultiTrackBoneTransforms_DeferredMovementOnly::new);
+      static final pzopt.Tl<AnimationPlayer.updateMultiTrackBoneTransforms_DeferredMovementOnly> TL = new pzopt.Tl<>(AnimationPlayer.updateMultiTrackBoneTransforms_DeferredMovementOnly::new); // pzopt: pzopt.Tl (zombie redesign, f8-zomb2)
       int[] boneIndices = new int[60];
    }
 }

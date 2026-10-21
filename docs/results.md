@@ -243,6 +243,27 @@ Louisville with the fix (`win-g1sw-*`, one each): spin 201.5 (195) / with Enhanc
 and sway +0.12 (program switches); the bigger gap is the base itself, 2.86 vs 1.67 ms with the render thread at 93-95 % in the
 defaults (Linux ~1.3 ms of render thread a frame): the Windows GL driver's per-call cost, not an Enhancement.
 
+
+## UI latency pass (2026-10-14, worktree `ui-latency`, `docs/findings-ui-latency-2026-10-14.md`)
+
+Desktop, bench save standing still, 240 cap (vsync / VRR off, 165 Hz panel), `ui_script=latency` with a 200-item stack,
+empty options file. Ground truth `devUiTruth` (stale = a visible UI element differs from rendering it fresh that frame).
+
+| scene | stale frames: stock 60 Hz / previous / new / new without display cap | UI % of frame: stock / previous / new |
+|---|---|---|
+| hover over inventory rows | 23 / 25 / 8.7 / 0.0 | 10.0 / 7.6 / 11.5 |
+| hover over a 200-item stack | 28 / 29 / 10.3 / 0.0 | 9.1 / 6.1 / 10.0 |
+| scrolling the 200-item stack | 56 / 58 / 22 / 0.0 | 7.6 / 8.2 / 15.1 |
+| dragging an item | 62 / 62 / 26 / 0.1 | 9.0 / 6.4 / 16.6 |
+| dragging a window | 61 / 62 / 24 / 0.0 | 8.7 / 6.8 / 9.8 |
+| inventory items changing | 8.7 / 43 / 2.7 / 0.4 | 8.1 / 3.0 / 3.9 |
+| skills panel, XP arriving | 1.0 / 61 / 0.3 / 0.7 | 7.2 / 1.2 / 4.4 |
+| 200-item stack, renames | 0.2 / 19 / 0.0 / 0.1 | 7.3 / 1.2 / 1.9 |
+| HUD only | 0.1 / 0.1 / 0.4 / 0.0 | 2.7 / 1.2 / 2.3 |
+
+240 fps held in every scene; uncapped ~-1 % fps. Runs: `uil13-cost-new`, `uil13-cost-prev`, `uil6-cost-stock`,
+`uil12-truth-new`, `uil12-truth-nocap`, `uil7-truth-prev`, `uil11-unc-prev`, `uil11-unc-new` (harness/runs of the worktree).
+
 ## 2026-10-18 16:20-16:25 — KI5 LAV-300 flicker report, single-player repro (`docs/findings-ki5-vehicle-flicker-2026-10-18.md`)
 
 Desktop, direct launch, `--mode bench --mod damnlib --mod 84gageV300`, LAV-300 APC + vanilla Van parked by the car rig at

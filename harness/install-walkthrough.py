@@ -88,10 +88,10 @@ HELPER_LINES = [
     "1. Copy the command below.",
     "2. Open {shell}, paste it, press Enter.",
     "3. Quit the game (QUIT). The installer waits for that, then copies the files.",
-    "4. Start the game: Options now has an Optimizations tab.",
+    "4. Start the game: the main menu now has a PZ OPTIMIZATION item.",
     "",
     "Then disable this mod in the Mods list: it only shows this window.",
-    "To uninstall later: Options > Optimizations > Uninstall PZ Optimization.",
+    "To uninstall later: PZ OPTIMIZATION > Uninstall PZ Optimization...",
 ]
 SHELL_NAME = {"win": "PowerShell (Start menu, type powershell, Enter)", "linux": "a terminal", "mac": "Terminal (Applications > Utilities)"}
 
@@ -297,7 +297,7 @@ def frame(o, t, shots):
             x, y = to_view(*UNINSTALL_AT)
             d.rounded_rectangle((x - 92 * sc, y - 14 * sc, x + 92 * sc, y + 14 * sc), radius=6, outline=STOCK, width=3)
         canvas.paste(view, (0, 0))
-        caption(canvas, 5, "Start the game: Options > Optimizations",
+        caption(canvas, 5, "Start the game: main menu > PZ OPTIMIZATION",
                 "Uninstall there too, before you unsubscribe" if lt >= 1.6 else "Then disable the mod again")
     return canvas
 
@@ -384,7 +384,7 @@ def write_posters(shots):
 CARD_W, CARD_PAD, CARD_X0 = 1280, 16, 32
 BEFORE = "find the item's folder and type its path, close the game first, uninstall with a command before unsubscribing."
 NOW = ("enable the mod once, Copy, paste, QUIT: the installer waits for the game. No window? One line: irm .../install.ps1 | iex "
-       "(Linux, macOS: curl ... | bash). Uninstall: Options > Optimizations.")
+       "(Linux, macOS: curl ... | bash). Uninstall: main menu > PZ OPTIMIZATION.")
 FOOTER = [
     "The Windows walkthrough; Linux and macOS show a terminal. The game pictures are the game's own screenshots of the install "
     "check on the flip laptop (harness/uninstall-e2e.sh), which ran every step for real, the uninstall too.",

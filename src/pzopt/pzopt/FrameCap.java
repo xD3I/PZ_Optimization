@@ -49,6 +49,7 @@ public final class FrameCap {
 
    public static void stepDone(long startNs) {
       lastStepNs = System.nanoTime() - startNs;
+      UiRetained.frameWorkDone(lastStepNs); // uiSlack: the step's own length, the time left before the cap is the UI's room
       if (!CORES_OFF || !PSTATE_OFF) {
          boolean unc = uncappedNow();
          boolean world = GameWindow.isIngameState();
@@ -133,6 +134,11 @@ public final class FrameCap {
          return 0;
       }
       return playerUncappedNow() || playerLockNow() > cap ? cap : 0;
+   }
+
+   /** Main thread: the cap comes from vrrCap alone (the player chose Uncapped, variable refresh caps the frames). */
+   static boolean vrrOnlyCapNow() {
+      return !(Config.FRAME_CAP_FPS > 0 && Overrides.enabled()) && vrrCapNow() > 0 && playerUncappedNow();
    }
 
    private static boolean playerUncappedNow() {

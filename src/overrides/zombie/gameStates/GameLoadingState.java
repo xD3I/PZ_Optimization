@@ -185,6 +185,7 @@ public final class GameLoadingState extends GameState {
       }
 
       pzopt.BootAsync.joinAnimSets(); // pzopt: the loader thread's IsoPlayer needs "player"; normally done long ago
+      pzopt.AnimalPreload.start(); // pzopt: animalPreload (tail pass), the animal types' anim sets and action groups off the game thread
       if (pzopt.LuaPrecompiler.enabled()) {
          pzopt.Log.info(pzopt.LuaPrecompiler.stats());
       }

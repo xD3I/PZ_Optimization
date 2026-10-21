@@ -51,6 +51,7 @@ public final class AnimBatch {
       }
       count = 0;
       slot.set(0);
+      drawFrame = ASYNC && ZombieLate.DRAW && ZombAb.on(ZombAb.DRAW_LATE) && !CapsuleShadow.wanted(); // zombieDrawLate (f8-zomb3): latched for the frame's batch
       // the slots are claimed without a lock (animatorParallel submits from every frame worker), so the arrays are
       // sized up front for every moving object of the cell; a submit past the end runs its bone math inline
       int need = zombie.iso.IsoWorld.instance.getCell().getObjectList().size() + 64;
@@ -86,6 +87,9 @@ public final class AnimBatch {
       players[i] = player;
       deltas[i] = deltaT;
       if (ASYNC) {
+         if (drawFrame) {
+            player.pzoptDrawSnapshot(); // zombieDrawLate (f8-zomb3): the pose the render keeps while this bone math runs
+         }
          player.pzoptInFlight = true;
       }
       batched++;
@@ -112,6 +116,18 @@ public final class AnimBatch {
          // the render phase) or the next frame batch joins it.
          pendingCount = count;
          count = 0;
+         for (int i = 0; i < pendingCount; i++) {
+            players[i].pzoptInFlight = true; // zombieLateApply cleared the held zombies' flags before its apply
+         }
+         if (drawFrame && FrameBatch.backgroundUsable()) {
+            // zombieDrawLate (f8-zomb3): the background lane, past FinishAnimation and through the render; the render draws
+            // these players from their copies; ZombieLate.frameStart (the next frame) or a touch the copy does not cover joins it
+            background = true;
+            snapshots += pendingCount;
+            FrameBatch.runBackground(pendingCount, i -> players[i].pzoptRunDeferred(deltas[i]), AnimBatch::asyncDone);
+            return;
+         }
+         background = false;
          FrameBatch.runAsync(pendingCount, i -> players[i].pzoptRunDeferred(deltas[i]), AnimBatch::asyncDone);
          return;
       }
@@ -138,6 +154,7 @@ public final class AnimBatch {
       }
       java.util.Arrays.fill(players, 0, pendingCount, null);
       pendingCount = 0;
+      background = false;
    }
 
    private static Thread gameThread;
@@ -145,10 +162,22 @@ public final class AnimBatch {
 
    /** AnimationPlayer accessors of a player whose bones are in flight: the game thread waits for the batch first; a worker (the batch itself) goes on. */
    public static void guard() {
-      if (pendingCount == 0 || Thread.currentThread() != gameThread || !FrameBatch.hasPending()) {
+      if (Thread.currentThread() != gameThread || FrameBatch.gameThreadInBackgroundTask()) {
+         return; // a worker, or the game thread running a bone task itself inside the background join: never a join from inside the batch (z3-ld1 hung so)
+      }
+      if (ZombieLate.held()) {
+         ZombieLate.touch(ZombieLate.R_ANIM); // zombieLateApply (f8-zomb3): a held zombie's player is touched: its apply runs first
+      }
+      if (pendingCount == 0 || !(background ? FrameBatch.hasBackground() : FrameBatch.hasPending())) {
          return;
       }
       guardJoins++;
+      if (background) {
+         ZombieLate.drawJoinsGuard++;
+         if (ZombieLate.drawJoinsGuard <= 10) {
+            Log.info("zombieDrawLate: a render-time touch not covered by the draw copy joins the bones: " + java.util.Arrays.toString(java.util.Arrays.copyOfRange(Thread.currentThread().getStackTrace(), 2, 9)));
+         }
+      }
       if (Config.DEV_ANIM_ASYNC_TRACE && guardJoins <= 20) {
          Log.info("animBatchAsync: early join from " + java.util.Arrays.toString(java.util.Arrays.copyOfRange(Thread.currentThread().getStackTrace(), 2, 9)));
       }
@@ -158,8 +187,26 @@ public final class AnimBatch {
    /** Game thread: wait for the bone batch in flight (animBatchAsync); every reader of a zombie's bones after the postupdate loop is behind this. */
    public static void join() {
       if (pendingCount > 0) {
-         FrameBatch.join();
+         if (background) {
+            FrameBatch.joinBackground(); // zombieDrawLate: runs asyncDone
+         } else {
+            FrameBatch.join();
+         }
       }
+   }
+
+   private static boolean drawFrame; // zombieDrawLate (f8-zomb3): this frame's bone batch goes to the background lane
+   private static boolean background; // the batch in flight is on the background lane
+   public static long snapshots;
+
+   /** zombieDrawLate: the frame's bone batch is (or will be) drawn late. */
+   static boolean drawLate() {
+      return drawFrame && ASYNC && FrameBatch.backgroundUsable();
+   }
+
+   /** Game thread or reader: a bone batch is in flight on the background lane. */
+   static boolean pendingBackground() {
+      return background && pendingCount > 0;
    }
 
    /** One line for the periodic FBORenderCell log. */

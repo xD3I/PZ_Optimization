@@ -63,13 +63,14 @@ public final class VisPolyAsync {
    }
 
    private static void loop() {
-      CorePlacement.background();
+      CorePlacement.frameCritical(); // macOS: workerQosMac (utility by default)
       while (true) {
          Object d = job;
          if (d == null) {
             LockSupport.park();
             continue;
          }
+         CorePlacement.frameCritical(); // f11-mac: workerQosMac alternation
          try {
             VisibilityPolygon2.pzoptCalculate(d, jobPlayer);
          } catch (Throwable t) {

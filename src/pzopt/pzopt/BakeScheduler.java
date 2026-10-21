@@ -176,7 +176,7 @@ public final class BakeScheduler {
       if (this.budgetNow < 0) {
          this.budgetNow = max;
       }
-      long cost = Math.max(FrameCap.lastStepNs, Pacing.lastSubmitNs);
+      long cost = Math.max(FrameCap.lastStepNs, Pacing.lastSubmitNs + (Config.BAKE_BUDGET_GPU && GtAb.on(GtAb.BAKE_GPU) ? Pacing.lastGpuPastNs : 0L)); // bakeBudgetGpu (f8-resid): the render side's span to GPU done
       if (cost > intervalNs * Config.BAKE_BUDGET_HIGH_PCT / 100) {
          this.budgetNow = Math.max(min, this.budgetNow / 2);
          this.calmFrames = 0;
@@ -214,6 +214,10 @@ public final class BakeScheduler {
 
    /** Grants this frame's bakes (see the class comment); {@code budget} is this frame's bakeFrameBudget. */
    public void plan(int budget) {
+      boolean hold = Config.DEV_BAKE_HOLD_FRAMES > 0 && this == players[0] && this.frame / Config.DEV_BAKE_HOLD_FRAMES % 2 == 1;
+      if (Config.DEV_BAKE_HOLD_FRAMES > 0 && this == players[0]) {
+         BakeLog.holdBlock(hold); // devBakeHoldFrames: this frame's block, for the timing row
+      }
       boolean burst = this.burstLeft > 0;
       if (burst) {
          this.burstLeft--;
@@ -257,6 +261,12 @@ public final class BakeScheduler {
       }
       Arrays.sort(this.key, 0, this.n);
       int hard = Math.max(budget, Config.BAKE_FRAME_BUDGET_HARD);
+      // bakeCapUs: the grants beyond the must class that fit the frame's bake time, from the measured cost of a grant
+      int cap = Config.BAKE_CAP_US > 0 ? Math.max(1, (int)(Config.BAKE_CAP_US * 1000.0 / Math.max(20_000.0, this.grantNs))) : Integer.MAX_VALUE;
+      if (Config.BAKE_CAP_US > 0) {
+         hard = Math.max(hard, cap); // the cap is the burst limit now
+         this.capSum += cap;
+      }
       if (smooth) {
          // demand bound: the levels due within d frames need ceil(count / d) bakes a frame from now on; the largest over d
          // is the least rate that meets every deadline, so a backlog drains evenly instead of in budget-sized bursts
@@ -271,10 +281,27 @@ public final class BakeScheduler {
          budget = Math.min(budget, need);
          this.smoothSum += budget;
       }
+      int slack = this.slackCap(); // bakeSlackCap: grants (all tiers but must) that still fit this step, MAX_VALUE when off
+      int musts = 0;
       for (int j = 0; j < this.n; j++) {
          int i = (int)(this.key[j] & 0xFFFF);
          long tier = this.key[j] >>> 48;
          boolean grant = tier == 0 || tier == 1 && arrivals < Config.BAKE_ARRIVAL_QUOTA || tier == 2 && given < hard || tier == 3 && given < budget;
+         if (grant && tier != 0 && given + arrivals >= cap) {
+            grant = false; // bakeCapUs: this frame's bake time is spent; the rest keeps its order for the next plan
+            this.capped++;
+         }
+         if (grant && tier >= 2 && given + arrivals + musts >= slack && given >= Config.BAKE_SLACK_MIN
+               && !(tier == 2 && this.wait[i] >= 4 * Math.max(1, maxWait(this.cls[i])))) {
+            grant = false; // bakeSlackCap: the step has no room left for it; a level 4x past its longest wait still goes
+            this.slackHeld++;
+         }
+         if (tier == 0) {
+            musts++;
+         }
+         if (hold && this.cls[i] != MUST) {
+            grant = false; // devBakeHoldFrames: a hold block bakes only what must change at once
+         }
          if (!grant) {
             continue;
          }
@@ -306,6 +333,7 @@ public final class BakeScheduler {
          }
       }
       this.frames++;
+      this.slackPlanGrants = given + arrivals + musts; // bakeSlackCap: this step's bakes, for the next step's rest estimate
       this.grantsMade += given + arrivals;
       if (given + arrivals < this.n) {
          this.deferredFrames++;
@@ -316,6 +344,54 @@ public final class BakeScheduler {
       }
       if (this == players[0]) {
          DynRes.onBakesPlanned(given + arrivals, this.n - given - arrivals, budget); // dynResBakeFeedforward: this frame's bakes, the backlog for the next
+      }
+   }
+
+   private double grantNs = 250_000.0; // bakeCapUs: EWMA of the game thread's chunk-loop time per grant (a grant bakes its texture's levels)
+   private long capped, capSum;
+
+   // ---- bakeSlackCap (tail6 2026-10-14) ----
+   private long slackPlanStep; // Pacing.stepStartNs of the last plan
+   private long slackPlanOffsetNs; // its plan time after the step start
+   private int slackPlanGrants; // its grants
+   private double slackRestNs = 3_000_000.0; // EWMA: a step's time after the plan, its bakes excluded
+   private long slackHeld, slackCapSum, slackCapFrames;
+
+   /**
+    * bakeSlackCap: how many grants this step still has room for: (interval - time used before the plan - the rest of the step
+    * - bakeSlackMarginUs) / the measured cost of a grant. The rest of the step (after the plan, bakes excluded) is learned from
+    * the steps before: their length (FrameCap.lastStepNs) less their plan offset less their grants' cost. MAX_VALUE when off,
+    * uncapped or in the off half of a GtAb alternation.
+    */
+   private int slackCap() {
+      long interval = Pacing.capIntervalNs();
+      if (!Config.BAKE_SLACK_CAP || interval <= 0L || this != players[0]) {
+         return Integer.MAX_VALUE;
+      }
+      long now = System.nanoTime();
+      long step = Pacing.stepStartNs();
+      if (this.slackPlanStep != 0L && step != this.slackPlanStep) {
+         long rest = FrameCap.lastStepNs - this.slackPlanOffsetNs - (long)(this.slackPlanGrants * this.grantNs);
+         if (rest > 0L && rest < 4L * interval) {
+            this.slackRestNs += 0.1 * (rest - this.slackRestNs);
+         }
+      }
+      this.slackPlanStep = step;
+      this.slackPlanOffsetNs = now - step;
+      if (!GtAb.on(GtAb.BAKE_SLACK)) {
+         return Integer.MAX_VALUE;
+      }
+      double room = interval - (now - step) - this.slackRestNs - Config.BAKE_SLACK_MARGIN_US * 1000.0;
+      int cap = (int)Math.max(0.0, Math.floor(room / Math.max(20_000.0, this.grantNs)));
+      this.slackCapSum += cap;
+      this.slackCapFrames++;
+      return cap;
+   }
+
+   /** bakeCapUs, game thread: a chunk whose levels took {@code ns} in the chunk loop baked {@code grants} granted textures. */
+   public void grantCost(long ns, int grants) {
+      if (grants > 0 && ns > 0L) {
+         this.grantNs += 0.1 * (ns / (double)grants - this.grantNs);
       }
    }
 
@@ -389,6 +465,17 @@ public final class BakeScheduler {
          .append(" deadline holds=").append(this.deadlineFrames)
          .append(" smooth avg=").append(this.frames == 0 ? 0 : String.format(java.util.Locale.ROOT, "%.2f", this.smoothSum / (double)this.frames))
          .append(" level-change frames=").append(this.burstFrames).append(" grants=").append(this.burstGrants);
+      if (Config.BAKE_CAP_US > 0) {
+         sb.append(" cap: grant us=").append(Math.round(this.grantNs / 1000.0)).append(" cap avg=")
+            .append(this.frames == 0 ? 0 : String.format(java.util.Locale.ROOT, "%.1f", this.capSum / (double)this.frames)).append(" held by cap=").append(this.capped);
+         this.capped = this.capSum = 0L;
+      }
+      if (Config.BAKE_SLACK_CAP) {
+         sb.append(" slack cap: grant us=").append(Math.round(this.grantNs / 1000.0)).append(" rest us=").append(Math.round(this.slackRestNs / 1000.0))
+            .append(" cap avg=").append(this.slackCapFrames == 0 ? "-" : String.format(java.util.Locale.ROOT, "%.1f", this.slackCapSum / (double)this.slackCapFrames))
+            .append(" held=").append(this.slackHeld);
+         this.slackHeld = this.slackCapSum = this.slackCapFrames = 0L;
+      }
       for (int k = 0; k < CLASSES; k++) {
          if (this.offered[k] == 0) {
             continue;

@@ -9,7 +9,7 @@ list used to be kept by hand (72 keys on 2026-09-22) and went stale with every n
 
 * every boolean key of src/pzopt/pzopt/Config.java -> false, except the keys in KEEP (master switch, harness,
   overlay / profiler, multiplayer-only) and the dev*/debug keys, which are left at their defaults;
-* every numeric / choice key the Options tab marks with a "stock" or "vanilla" note -> that value;
+* every numeric / choice key whose settings entry (pzopt_optimizations_options.lua) marks a "stock" or "vanilla" note -> that value;
 * the numeric keys in STOCK below (stock values read from their Config comments; the rest are inert once their
   feature's boolean is off, or only change load-time thread counts).
 

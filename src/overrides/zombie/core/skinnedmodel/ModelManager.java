@@ -187,6 +187,7 @@ public final class ModelManager {
          this.femaleModel = femaleModel;
          this.skeletonMaleModel = skeletonMaleModel;
          this.skeletonFemaleModel = skeletonFemaleModel;
+         pzopt.BodyModelCache.bump(); // pzopt: bodyModelCache, the body models changed
          this.created = true;
          AdvancedAnimator.systemInit();
          PopTemplateManager.instance.init();
@@ -462,6 +463,7 @@ public final class ModelManager {
    }
 
    public void Reset(IsoGameCharacter chr) {
+      if (pzopt.ZombieLate.held() && chr instanceof zombie.characters.IsoZombie pzoptZ) { pzopt.ZombieLate.touch(pzoptZ, pzopt.ZombieLate.R_MODEL); } // pzopt: zombieLateApply (f8-zomb3), a held zombie's model changes after its apply
       if (chr.legsSprite != null && chr.legsSprite.modelSlot != null) {
          ModelManager.ModelSlot modelSlot = chr.legsSprite.modelSlot;
          pzopt.ModelInitOrder.beforeReset(modelSlot); // pzopt: a draw init still queued reads slot.model: let it read the old one before the new goes in
@@ -492,6 +494,7 @@ public final class ModelManager {
    }
 
    public void Add(IsoGameCharacter chr) {
+      if (pzopt.ZombieLate.held() && chr instanceof zombie.characters.IsoZombie pzoptZ) { pzopt.ZombieLate.touch(pzoptZ, pzopt.ZombieLate.R_MODEL); } // pzopt: zombieLateApply (f8-zomb3), a held zombie's model changes after its apply
       if (this.created) {
          if (!chr.isAddedToModelManager()) {
             if (this.toRemove.contains(chr)) {
@@ -561,6 +564,16 @@ public final class ModelManager {
    }
 
    public Model getBodyModel(IsoGameCharacter chr) {
+      Model pzoptCached = pzopt.BodyModelCache.cached(chr); // pzopt: bodyModelCache, the character's own copy (no descriptor read)
+      if (pzoptCached != null) { // pzopt: bodyModelCache
+         return pzoptCached; // pzopt: bodyModelCache
+      } // pzopt: bodyModelCache
+      int pzoptEpoch = pzopt.BodyModelCache.begin(chr); // pzopt: bodyModelCache, epoch read before the inputs
+      return pzopt.BodyModelCache.store(chr, pzoptEpoch, this.pzoptStockBodyModel(chr)); // pzopt: bodyModelCache
+   } // pzopt: bodyModelCache
+
+   /** pzopt: bodyModelCache, stock getBodyModel's body. */
+   public Model pzoptStockBodyModel(IsoGameCharacter chr) { // pzopt: bodyModelCache
       if (chr.isAnimal()) {
          return chr.getVisual().getModel();
       } else if (chr.isZombie() && ((IsoZombie)chr).isSkeleton()) {
@@ -575,6 +588,7 @@ public final class ModelManager {
    }
 
    public void ResetCharacterEquippedHands(IsoGameCharacter chr) {
+      if (pzopt.ZombieLate.held() && chr instanceof zombie.characters.IsoZombie pzoptZ) { pzopt.ZombieLate.touch(pzoptZ, pzopt.ZombieLate.R_MODEL); } // pzopt: zombieLateApply (f8-zomb3), a held zombie's model changes after its apply
       if (chr != null && chr.legsSprite != null && chr.legsSprite.modelSlot != null) {
          this.DoCharacterModelEquipped(chr, chr.legsSprite.modelSlot);
       }
@@ -986,6 +1000,7 @@ public final class ModelManager {
    }
 
    private boolean DoRemove(IsoGameCharacter chr) {
+      if (pzopt.ZombieLate.held() && chr instanceof zombie.characters.IsoZombie pzoptZ) { pzopt.ZombieLate.touch(pzoptZ, pzopt.ZombieLate.R_MODEL); } // pzopt: zombieLateApply (f8-zomb3), a held zombie's model changes after its apply
       if (!this.contains.contains(chr)) {
          return false;
       }

@@ -134,10 +134,16 @@ reset_aot() {
 import json,sys
 p=sys.argv[1]; j=json.load(open(p)); jar="pzopt/aot/pzopt.jar"
 cp=j.get("classpath",[]); args=j.get("vmArgs",[])
-aot=[a for a in args if a.startswith("-XX:AOTCache") or a.startswith("-Xlog:aot=info:file=pzopt/aot/")]
+aot=[a for a in args if a.startswith("-XX:AOTCache") or a.startswith("-Xlog:aot=info:file=pzopt/aot/") or a=="-XX:-AOTInvokeDynamicLinking"]
 if jar in cp or aot:
     j["classpath"]=["."]+[e for e in cp if e not in (".",jar)]
-    j["vmArgs"]=[a for a in args if a not in aot]
+    na=[]
+    for a in args:
+        if a in aot:
+            if a=="-XX:-AOTInvokeDynamicLinking" and na and na[-1]=="-XX:+UnlockDiagnosticVMOptions": na.pop()  # aotNoIndy pair
+            continue
+        na.append(a)
+    j["vmArgs"]=na
     json.dump(j,open(p,"w"),indent="\t"); print("launcher: AOT-cache form put back to the loose classes")
 PYEOF
     elif [[ -f "$JSON.pzopt-backup" ]] && grep -q 'pzopt/aot/' "$JSON"; then
@@ -147,11 +153,28 @@ PYEOF
   rm -rf "$dir/pzopt/aot"
 }
 
-reset_gc() {  # undo pzopt.GcChoice's launcher edits (-Dpzopt.gc=g1 marker: G1 back to ZGC, our pause target removed; -Dpzopt.jit=steady: our JIT flags removed; -Dpzopt.heap=: the old -Xmx / -Xms back, our pre-touch removed)
+reset_gc() {  # undo pzopt.GcChoice's launcher edits (-Dpzopt.gc=g1 marker: G1 back to ZGC, our pause target removed; -Dpzopt.gctune=: our tuned G1 flags removed; -Dpzopt.jit=steady: our JIT flags removed; -Dpzopt.heap=: the old -Xmx / -Xms back, our pre-touch removed)
   [[ -f "$1" ]] && command -v python3 >/dev/null || return 0
   python3 - "$1" <<'PYEOF'
 import json,sys
 p=sys.argv[1]; j=json.load(open(p)); ch=[False]
+T="-Dpzopt.gctune="; TF=("-XX:G1NewSizePercent=2","-XX:G1MaxNewSizePercent=4","-XX:MaxTenuringThreshold=0","-XX:ReservedCodeCacheSize=512m","-XX:SweeperThreshold=50","-XX:-G1UseAdaptiveIHOP","-XX:InitiatingHeapOccupancyPercent=70","-XX:G1MixedGCCountTarget=24","-XX:G1MixedGCLiveThresholdPercent=50","-XX:G1HeapWastePercent=10")
+def rml(a,f):
+    if f in a: del a[max(k for k,x in enumerate(a) if x==f)]
+def fixt(a):  # gcG1Tuned (marker -Dpzopt.gctune=g1[,ignore][,unlock]): the tuned G1 flags it added
+    m=[x for x in a if x.startswith(T)]
+    if not m: return a
+    added=m[-1][len(T):].split(",")
+    a=[x for x in a if not x.startswith(T)]
+    for f in TF: rml(a,f)
+    if "unlock" in added: rml(a,"-XX:+UnlockExperimentalVMOptions")
+    if "ignore" in added: rml(a,"-XX:+IgnoreUnrecognizedVMOptions")
+    ch[0]=True; return a
+def walkt(o):
+    if isinstance(o,dict):
+        if isinstance(o.get("vmArgs"),list): o["vmArgs"]=fixt(o["vmArgs"])
+        for v in o.values(): walkt(v)
+walkt(j)
 M,MP="-Dpzopt.gc=g1","-Dpzopt.gc=g1,pause"
 def fix(a):
     if M not in a and MP not in a: return a
@@ -161,7 +184,7 @@ def fix(a):
 if "vmArgs" in j: j["vmArgs"]=fix(j["vmArgs"])
 for v in j.values():
     if isinstance(v,dict) and "vmArgs" in v: v["vmArgs"]=fix(v["vmArgs"])
-J="-Dpzopt.jit=steady"; JP=("-XX:PerMethodTrapLimit=","-XX:PerBytecodeTrapLimit=")
+J="-Dpzopt.jit=steady"; JP=("-XX:PerMethodTrapLimit=","-XX:PerBytecodeTrapLimit=","-XX:-UseTypeSpeculation")
 def fixj(a):
     if J not in a: return a
     ch[0]=True; return [x for x in a if x!=J and not x.startswith(JP)]

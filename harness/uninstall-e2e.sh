@@ -4,8 +4,8 @@
 # copies into ~/pzopt-e2e/: classes/ (the build under test), item/ (the Workshop mod folder PZ_Optimization/ as
 # scripts/workshop.sh stages it: 42/mod.info, install.bash, the install helper Lua, pzopt-classes/), install.sh.
 #
-#   A  build installed, devUninstallDrive=true: the menu opens Options > Optimizations, presses Uninstall PZ
-#      Optimization... and Yes (screenshots of the tab and the dialog); the game quits, pzopt.Uninstall's helper
+#   A  build installed, devUninstallDrive=true: the main menu's PZ OPTIMIZATION screen opens, its home page's Uninstall PZ
+#      Optimization... row, UNINSTALL and Yes are pressed (screenshots of the screen and the dialog); the game quits, pzopt.Uninstall's helper
 #      removes the files. Checked: every installed file and folder gone, the launcher JSON free of pzopt's edits
 #      (AOT jar form, G1 / JIT flags), uninstall.log clean.
 #   B  nothing installed, the helper mod enabled (~/Zomboid/mods, the game scans Steam's Workshop folder only with
@@ -177,7 +177,7 @@ import json, sys
 j = json.load(open(sys.argv[1])); args = list(j.get("vmArgs", []))
 for v in j.values():
     if isinstance(v, dict): args += v.get("vmArgs", [])
-bad = [a for a in args if a.startswith("-Dpzopt.") or a.startswith("-XX:AOTCache") or "pzopt/aot" in a or "TrapLimit" in a]
+bad = [a for a in args if a.startswith("-Dpzopt.") or a.startswith("-XX:AOTCache") or "pzopt/aot" in a or "TrapLimit" in a or a == "-XX:-UseTypeSpeculation" or a == "-XX:-AOTInvokeDynamicLinking"]
 bad += [e for e in j.get("classpath", []) if "pzopt" in e]
 print("ok" if not bad else "left: " + " ".join(bad))
 EOF
@@ -214,15 +214,15 @@ if [[ -f "$G/pzopt-installed.txt" || -f "$G/pzopt-files.txt" ]]; then bash "$E2E
 bash "$E2E/install.sh" --from "$E2E/classes" --dir "$G" > "$OUT/install-A.txt" 2>&1 || { cat "$OUT/install-A.txt"; die "install failed"; }
 tail -1 "$OUT/install-A.txt"
 [[ -f "$JSON" ]] && sed -i.e2e 's/-Dzomboid.steam=1/-Dzomboid.steam=0/' "$JSON" && rm -f "$JSON.e2e"   # no Steam client in these launches
-mkdir -p "$ZOMBOID/mods"; cp -R "$E2E/item" "$LOCALMOD"   # enabled from B on: in A its installed note would cover the tab screenshot
+mkdir -p "$ZOMBOID/mods"; cp -R "$E2E/item" "$LOCALMOD"   # enabled from B on: in A its installed note would cover the screen's screenshot
 printf 'devUninstallDrive=true\nupdateCheck=false\nhdrAuto=false\n' > "$G/pzopt.properties"
 cp "$G/pzopt-installed.txt" "$OUT/manifest-A.txt"
 
 # --- A: the in-game uninstall ----------------------------------------------------------------------------------------
-echo "=== A: Options > Optimizations > Uninstall PZ Optimization"
+echo "=== A: PZ OPTIMIZATION > Uninstall PZ Optimization... > UNINSTALL"
 t0=$(now_ms)
 launch "$OUT/A-stdout.txt"
-l=$(wait_line '\[pzopt-e2e\] tab shown' 150) && { echo "$l" | sed 's/^.*\[pzopt-e2e\]/  /' | cut -c1-400; shot A-tab; } || check fail "A: the tab and its Uninstall button"
+l=$(wait_line '\[pzopt-e2e\] screen shown' 150) && { echo "$l" | sed 's/^.*\[pzopt-e2e\]/  /' | cut -c1-400; shot A-screen; } || check fail "A: the screen and its UNINSTALL button"
 [[ "$l" == *'enabled=true'* && "$l" == *'visible=true'* ]] && check ok "A: button enabled and visible" || check fail "A: button enabled and visible"
 l=$(wait_line '\[pzopt-e2e\] dialog shown' 30) && { echo "$l" | sed 's/^.*\[pzopt-e2e\]/  /' | cut -c1-400; shot A-dialog; } || check fail "A: confirm dialog"
 wait_exit 90 && check ok "A: the game quit after Yes" || check fail "A: the game quit after Yes"

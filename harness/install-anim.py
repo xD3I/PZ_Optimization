@@ -166,12 +166,12 @@ HELPER_LINES = [   # PZ_Optimization_InstallHelper.lua as of the 5f910d9 release
     ("1. Copy the command below.", 'install'),
     ("2. Open {shell}, paste it, press Enter.", None),
     ("3. Quit the game (QUIT). The installer waits for that, then copies the files.", None),
-    ("4. Start the game: Options now has a PZ Optimization tab.", None),
+    ("4. Start the game: the main menu now has a PZ OPTIMIZATION item.", None),
     ("", None),
     ("Then disable this mod in the Mods list: it only shows this window.", None),
     ("To uninstall later: Options > PZ Optimization > Uninstall PZ Optimization...,", None),
     ("or double-click Uninstall-PZ-Optimization.cmd in the game folder (Steam: Manage >", None),
-    ("Browse local files). Installed, but no PZ Optimization tab? This removes it:", 'uninstall'),
+    ("Browse local files). Installed, but no PZ OPTIMIZATION item? This removes it:", 'uninstall'),
 ]
 
 

@@ -520,6 +520,7 @@ public final class WorldStreamer {
                   }
                }
 
+               chunk.pzoptQueuedNs = System.nanoTime(); // pzopt: f8-handoff census (hand-off wait)
                IsoChunk.loadGridSquare.add(chunk);
                timing.publishNs = System.nanoTime();
                pzopt.Stats.done(chunk, timing);

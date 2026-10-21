@@ -27,6 +27,11 @@ import java.util.Properties;
  *                            pixelLight / reflections pick at start-up (default true)
  *   profilerEnabled true/false  the Profiler tab's master switch: false reads overlaySampling, overlay and overlayLog as
  *                            false (no overlay, samplers or frame log; harness runs still measure). Live (default true)
+ *   cat<Category>Enabled true/false  a category's master switch (2026-10-16), one per category of the PZ Optimization tab
+ *                            (PERFORMANCE_CATEGORY_MASTERS: catSmooth / Drive / World / Weather / Zombies / Load / Ui / System,
+ *                            next launch; VISUALS_CATEGORY_MASTERS: catImage / Light / Refl / Atmos, live). false reads the
+ *                            category's keys listed in GATED at their stock value (Visuals: off), like the tab masters; the
+ *                            Tools category's switch is profilerEnabled (default true)
  *   consoleLog  all|warnings|errors|off  which [pzopt] lines reach console.txt / the debug console (pzopt.Log): all, only
  *                            warnings and errors, only errors, or none, so other mods' output stays readable (2026-10-01,
  *                            a player's request). Not tied to profilerEnabled. Live; harness runs pin it to all (default all)
@@ -382,11 +387,21 @@ public final class Config {
    private static final java.util.HashSet<String> LIVE = new java.util.HashSet<>();
    private static boolean loadingLive;
    /**
-    * The Enhancements and Profiler tabs' master switches (2026-09-28): key -> {master, value while the master is off}.
-    * Off, these keys read as their off value unless -D or pzopt.properties pins them (harness runs keep their props);
-    * the player's own choices stay in options.ini for when the master is on again. Declared before the first read.
+    * The Enhancements and Profiler tabs' master switches (2026-09-28) and the category ones (2026-10-16): key -> {value
+    * while a master is off, its masters...}. Off, these keys read as their off value unless -D or pzopt.properties pins
+    * them (harness runs keep their props); the player's own choices stay in options.ini for when the master is on again.
+    * Declared before the first read.
     */
    private static final java.util.Map<String, String[]> GATED = gated();
+   /**
+    * The category master switches of the PZ Optimization tab (2026-10-16), one per category of
+    * pzopt_optimizations_layout.lua (its {@code master} field; the Tools group has one category, its switch is
+    * profilerEnabled). The Performance ones apply on the next launch, the Visuals ones at once (registered in loadLive).
+    * Declared before the first read (the static block after ENABLED registers the Performance ones).
+    */
+   static final String[] PERFORMANCE_CATEGORY_MASTERS = {"catSmoothEnabled", "catDriveEnabled", "catWorldEnabled",
+      "catWeatherEnabled", "catZombiesEnabled", "catLoadEnabled", "catUiEnabled", "catSystemEnabled"};
+   static final String[] VISUALS_CATEGORY_MASTERS = {"catImageEnabled", "catLightEnabled", "catReflEnabled", "catAtmosEnabled"};
    private static final Properties props = load();
    /** The player's Options > Optimizations choices (Zomboid/pzopt/options.ini), below props and -D. */
    private static final Properties userProps = UserOptions.load();
@@ -400,6 +415,13 @@ public final class Config {
    private static final Properties compatProps = ModCompat.scan(upper("modCompat") != null ? upper("modCompat") : MOD_COMPAT_DEFAULT);
    /** Master switch, read by {@link Overrides#enabled()}; false = stock behaviour everywhere. */
    public static final boolean ENABLED = bool("enabled", true);
+
+   static {
+      for (String master : PERFORMANCE_CATEGORY_MASTERS) {
+         bool(master, true); // registered for the options tab; read through raw() by the keys it gates (GATED)
+      }
+   }
+
    public static final boolean PARALLEL = bool("parallel", true);
    public static final int WORKERS = clampWorkers(integer("workers", defaultWorkers(Runtime.getRuntime().availableProcessors())));
    public static final boolean INSTRUMENT = bool("instrument", false);
@@ -487,6 +509,16 @@ public final class Config {
    public static final int BAKE_ARRIVAL_QUOTA = Math.max(0, integer("bakeArrivalQuota", 4));
    /** bakeScheduler: the most bakes a frame when levels past their longest wait are pending. */
    public static final int BAKE_FRAME_BUDGET_HARD = Math.max(1, integer("bakeFrameBudgetHard", 12));
+   public static final boolean BAKE_NO_SYNC = bool("bakeNoSync", true); // the bake passes on the render thread (chunk AO in and after the bakes, sway attributes) never ask the driver for state or names: the framebuffer from TextureFBO's record, a bake's viewport from its texture size, AO jobs after the bakes leave the viewport to a stock glDoStartFrame, names from pzopt.GlNames' pools, the AO occlusion queries read after the swap. Each such call inside a bake made the render thread wait for NVIDIA's driver thread to work off every queued bake draw (single baked levels of 10-35 ms on the Louisville horde, 2026-10-12)
+   public static final int DEV_BAKE_NO_SYNC_CHECK = Math.max(0, integer("devBakeNoSyncCheck", 0)); // dev: bakeNoSync, every Nth AO job also asks the driver for the framebuffer and viewport and logs where the recorded ones differ (console "bake no-sync check")
+   public static final boolean BAKE_RECORD_PARALLEL = bool("bakeRecordParallel", false); // the draw lists of the frame's granted chunk-level bakes recorded on the frame workers (pzopt.BakeRecord; the tile-record machinery of tileRecordParallel): before the chunk loop the game thread predicts the levels that bake from the scheduler's grants, the workers run their render-info pass and record their floors, plants and objects while the loop runs, and each level's list is spliced at its stock place; what a worker may not draw (corpses, items, snow, blood, other object classes) is drawn by the game thread at its place in the stream
+   public static final int BAKE_RECORD_LANES = Math.max(1, integer("bakeRecordLanes", 4)); // bakeRecordParallel: how many frame workers record the bake units at once (the rest stay parked: the chunk loop shares the cores with the game, render and lighting threads and the characters' draw pool)
+   public static final boolean BAKE_RECORD_PREWAKE = bool("bakeRecordPrewake", false); // bakeRecordParallel: the recording lanes start when the prediction starts and spin until the units are published (measured worse: the spinning lanes slowed the game thread, the first unit's wait stayed; off)
+   public static final boolean BAKE_RECORD_LEAD = bool("bakeRecordLead", true); // bakeRecordParallel: the game thread records the first level itself right after the dispatch (the first level the chunk loop splices; a worker took about as long to wake and record it, and the game thread waited)
+   public static final int DEV_BAKE_RECORD_CHECK = Math.max(0, integer("devBakeRecordCheck", 0)); // dev: bakeRecordParallel, every Nth frame each recorded level's stock draw runs first on the game thread, is rolled back, and is compared entry by entry with the spliced list (console "bake record check")
+   public static final boolean DEV_BAKE_RECORD_SERIAL = bool("devBakeRecordSerial", false); // dev: bakeRecordParallel, every unit recorded on the game thread at its splice (the machinery and its overhead without workers)
+   public static final int BAKE_CAP_US =Math.max(0, integer("bakeCapUs", 0)); // bakeScheduler: the game-thread time a frame's bakes may take beyond the must class, in us (0 = off): arrivals, overdue and budgeted grants together stop at the number that fits, from the measured cost of a grant (EWMA of the chunk loop's time per grant); at least one a frame. It replaces the overdue tier's own count cap (bakeFrameBudgetHard) as the burst limit
+   public static final int DEV_BAKE_HOLD_FRAMES = Math.max(0, integer("devBakeHoldFrames", 0)); // dev: bakeScheduler, frames in blocks of N; every other block grants only the must class (no arrivals, overdue or budget): a within-run A/B of the bakes' cost on the frame (pzopt-bakes.out t rows carry the block, harness/bake-times.py splits by it)
    /** bakeScheduler: longest wait (frames) per class before a level jumps the queue. */
    public static final int BAKE_MAX_WAIT_CUTAWAY = Math.max(0, integer("bakeMaxWaitCutaway", 3));
    public static final int BAKE_LEVEL_CHANGE_RADIUS = integer("bakeLevelChangeRadius", 1); // bakeLevelChangeFrames: only chunks at most this many chunks from the camera character bake at once (-1: all on screen; 1, the 3x3 around the player: as calm as all on the stairs walk, first arrival on a floor 80 ms instead of 170 ms on the flip)
@@ -547,7 +579,7 @@ public final class Config {
    public static final String ZOOM_EASE = string("zoomEase", "0.25,0.1,0.25,1.0"); // Bézier control points x1,y1,x2,y2 (CSS "ease")
    public static final int LIGHTING_STRONG_DELTA = Math.max(1, integer("lightingStrongDelta", 6)); // a square's light moved by this much (0-255, summed since the level's last bake): the level re-bakes now instead of being held (pzopt.LightDirt)
    public static final int LIGHTING_STRONG_BUDGET = Math.max(0, integer("lightingStrongBudget", 8)); // strong levels that re-bake at once per frame; the rest take the holds (0 = unlimited, the 2026-09-21 behaviour: turning marks ~every exterior level strong, 10.8 fps in downtown Louisville)
-   public static final float LIGHTING_STRONG_FRAME_MS = Math.max(0, integer("lightingStrongFrameMs", 0)); // game-thread frame step above which the strong re-bake budget halves for the next frame (grows back under 3/4 of it); 0 = fixed budget. Breaks the slow-frame -> more strong marks -> more bakes -> slower frame loop of downtown Louisville (FBORenderCell.pzoptStrongBudget)
+   public static final float LIGHTING_STRONG_FRAME_MS = Math.max(0, integer("lightingStrongFrameMs", 9)); // 9 by default since 2026-10-15 (maintainer, timing only; f8-resid lock set); game-thread frame step above which the strong re-bake budget halves for the next frame (grows back under 3/4 of it); 0 = fixed budget. Breaks the slow-frame -> more strong marks -> more bakes -> slower frame loop of downtown Louisville (FBORenderCell.pzoptStrongBudget)
    public static final float LIGHTING_GLOBAL_DELTA = Math.max(0, integer("lightingGlobalDeltaPct", 2)) / 100.0F; // a per-frame move of the global light (colour, ambient, night, sky) past this is a flash or dusk: the spread applies for lightingRebakeMaxFrames
    public static final boolean LIGHTING_FLUSH = bool("lightingFlush", true); // drain the lightingBudget queue before a lighting pass rewrites the dirty bits (false = the 2026-09-21 morning behaviour, for A/Bs)
    public static final int LIGHT_SWITCH_CHECK_FRAMES = integer("lightSwitchCheckFrames", 15);
@@ -555,6 +587,7 @@ public final class Config {
    public static final boolean DEV_WORLD_SOUND_TIMING = bool("devWorldSoundTiming", false); // dev: per-section nanoTime totals of WorldSoundManager.addSound (pzoptTiming())
    public static final boolean DEV_PROFILE_LOG_OFF = bool("devProfileLogOff", false); // dev: harness runs sample the game-thread stack only while the overlay is shown (baseline for the overlay cost)
    public static final boolean DEV_CUTAWAY_LOG = bool("devCutawayLog", false); // dev: roof hide/show decisions per frame in the log
+   public static final boolean DEV_ZOOM_STALE_FLAGS = bool("devZoomStaleFlags", false); // dev: zoomRetain A/B, a granted level bakes with the square flags of its last preparation (the pre-2026-10-18 behaviour; lateFlagFixes still counted)
    public static final boolean GPU_SECTIONS = bool("gpuSections", false); // measurement only: GPU time per frame section in the log
    public static final boolean DEV_WEATHER_FX_OFF = bool("devWeatherFxOff", false); // measurement only: skip the weather FX pass
    public static final boolean TREE_BAKE_DIRECT = bool("treeBakeDirect", true);
@@ -564,23 +597,87 @@ public final class Config {
    public static final int CUTAWAY_RADIUS = integer("cutawayRadius", 6);
    public static final int GRID_STACK_INTERVAL = integer("gridStackInterval", 8);
    public static final boolean WEATHER_MASK_IDLE_SKIP = bool("weatherMaskIdleSkip", true);
-   public static final boolean SLACK_WORK = bool("slackWork", false); // at a frame cap, deferred game-thread jobs (far loot rolls, far zombie spawns, far chunk hand-offs) run in the step's slack before the limiter's park, each while its learned cost fits the time left (pzopt.SlackWork)
+   public static final boolean SLACK_WORK = bool("slackWork", true); // on by default since 2026-10-14 (maintainer): at a frame cap, deferred game-thread jobs (far loot rolls, far zombie spawns, far chunk hand-offs) run in the step's slack before the limiter's park, each while its learned cost fits the time left (pzopt.SlackWork)
    public static final int SLACK_MARGIN_US = Math.max(0, integer("slackMarginUs", 700)); // slackWork: time kept free before the next step
    public static final int SLACK_MAX_WAIT_FRAMES = Math.max(1, integer("slackMaxWaitFrames", 600)); // slackWork: a job that waited this long runs whatever its cost (one a frame)
-   public static final boolean ZOMBIE_SPAWN_SPREAD = bool("zombieSpawnSpread", false); // the zombies the native population turns real in one frame are created from a queue under zombieSpawnBudgetUs a frame (ZombiePopulationManager.updateMain): a chunk row next to a horde made dozens of IsoZombies in one frame. They appear a few frames later (an intended edit)
+   public static final boolean GC_SLACK = bool("gcSlack", true); // on by default since 2026-10-14 (maintainer); GC pass 2026-10-14: at a cap, the G1 young collection due within gcSlackFrames frames runs in the step's slack (eden filled with short-lived filler while the learned pause fits), not mid-step (pzopt.GcSlack); timing only
+   public static final int GC_SLACK_FRAMES = Math.max(1, integer("gcSlackFrames", 6)); // gcSlack: how many frames ahead of eden's end a collection may be pulled into a frame's slack
+   public static final int GC_SLACK_OVER_US = Math.max(0, integer("gcSlackOverUs", 4000)); // gcSlack: how far the learned pause may run past the step's slack (the frame queue's hold absorbs it); a collection due inside the next step runs at once
+   public static final int GC_SLACK_EARLY_PCT = Math.max(10, Math.min(100, integer("gcSlackEarlyPct", 40))); // gcSlack (40 by default since 2026-10-14: the Eden pool reads up to ~180 MB above the eden G1 actually collects at, so 60 % came too late): a collection is also due once eden is this full (chunk streaming allocates in bursts the per-step rate cannot foresee)
+   public static final boolean GC_SLACK_TARGET_AFTER = bool("gcSlackTargetAfter", true); // gcSlack: eden's next trigger point = the Eden pool's committed size right after a collection (G1's new target), not the usage before the last ones
+   public static final boolean GC_SLACK_UNINIT = bool("gcSlackUninit", true); // gcSlack: the filler arrays uninitialised (jdk.internal.misc.Unsafe, exported by the game's launcher), no zeroing
+   public static final boolean GC_SLACK_ALTERNATE = bool("gcSlackAlternate", false); // dev, gcSlack: every other collection cycle stays natural (within-run A/B)
+   /**
+    * gcSlack under frameQueue (f8-pace2 2026-10-15): where the due young collection runs, from its own thread
+    * (pzopt.GcSlack.queueLoop) instead of the game thread's slack, where it overlapped the hold's end and delayed the swap (8 of
+    * 28 pauses in run pace2-q1). off | swap (right after the render thread's next held swap) | hold (inside a hold that has room
+    * for the filler and the pause before its swap: the render thread only waits there, and the game step it delays has its D) |
+    * slack (the game thread's slack as before, but only while the render thread's hold has that room).
+    */
+   public static final String GC_SLACK_QUEUE = string("gcSlackQueue", "slack"); // slack by default with the frame queue since 2026-10-15 (maintainer; runs pace2-q16 / q17: its own pauses 35 / 35 without a late frame)
+   /** gcSlackQueue=swap: how long after the held swap the filler may run before it stops short of the collection (us). */
+   public static final int GC_SLACK_QUEUE_FILL_US = Math.max(100, integer("gcSlackQueueFillUs", 800));
+   public static final boolean GC_SLACK_FIT = bool("gcSlackFit", false); // gcSlack v2 (tail6 2026-10-14, needs frameQueue): a scheduled collection runs only where the filler plus the expected pause (p75 of the last 8 measured) delay no swap of the frame queue and drop no limiter slot (pzopt.Pacing.planPause): at a step start, or in the slack right after the render thread's swap (the game thread waits for it); otherwise it waits for a later step until eden is about to run out (urgent). GtAb key gcSlackFit (bit 59) alternates it within a run
+   public static final int GC_SLACK_FIT_FALLBACK_MB = Math.max(0, integer("gcSlackFitFallbackMb", 0)); // gcSlackFit: with this little eden left (MB) a collection that found no fitting place takes the slack rule (gcSlack's v1) instead of waiting for a natural, mid-step one (0 = never)
+   public static final boolean GC_SLACK_FIT_START = bool("gcSlackFitStart", true); // gcSlackFit: also place collections at a step's start (before its work: the step and the ones after it start late; false = only where the game thread idles)
+   public static final int GC_SLACK_FIT_OVER_US = integer("gcSlackFitOverUs", -1); // gcSlackFit, in the slack: how far the filler + pause may run past the step's deadline (-1 = any, within the planner's frame limits)
+   public static final int GC_SLACK_FIT_MARGIN_US = Math.max(0, integer("gcSlackFitMarginUs", 500)); // gcSlackFit: room kept before the render thread's next swap
+   public static final int GC_SLACK_FILL_CHUNK_KB = Math.max(64, integer("gcSlackFillChunkKb", 256)); // gcSlack: filler array size (KB; capped at a quarter region, never humongous): larger = fewer slow-path allocations before the collection
+   public static final boolean HORDE_PALETTE_MISMATCH = bool("hordePaletteMismatch", true); // on by default (maintainer, 2026-10-15; exact: devHordePaletteCheck 228,114 compares, 0 disagreed) hordeBatch (tail6 2026-10-14): the palette-sharing compare as one MemorySegment.mismatch of the two float ranges' raw bytes (same result as the long-by-long compare; LWJGL's memGetLong walks the stack per call until C2 compiles it: the horde's first sight). GtAb key hordePaletteMismatch (bit 60)
+   public static final boolean DEV_HORDE_PALETTE_CHECK = bool("devHordePaletteCheck", false); // dev: hordePaletteMismatch, every compare also runs the long-by-long one; console "horde palette check" counts the disagreements
+   public static final boolean BAKE_SLACK_CAP = bool("bakeSlackCap", false); // bakeScheduler (tail6 2026-10-14): at a cap, the overdue and budgeted grants stop at the number whose measured cost (EWMA per grant) still fits the step's interval after the time already used and the rest of the step (EWMA of the last steps' time after the plan, less their bakes); at least bakeSlackMin a frame, and a level overdue by 4x its class's longest wait goes regardless (up to bakeFrameBudgetHard). GtAb key bakeSlackCap (bit 58)
+   public static final int BAKE_SLACK_MIN = Math.max(0, integer("bakeSlackMin", 2)); // bakeSlackCap: grants a frame the cap never goes under
+   public static final int BAKE_SLACK_MARGIN_US = Math.max(0, integer("bakeSlackMarginUs", 700)); // bakeSlackCap: room kept before the step's deadline
+   public static final boolean ZOMBIE_SPAWN_SPREAD = bool("zombieSpawnSpread", true); // on by default since 2026-10-15 (maintainer, round 11, timing only); the zombies the native population turns real in one frame are created from a queue under zombieSpawnBudgetUs a frame (ZombiePopulationManager.updateMain): a chunk row next to a horde made dozens of IsoZombies in one frame. They appear a few frames later (an intended edit)
    public static final int ZOMBIE_SPAWN_BUDGET_US = Math.max(0, integer("zombieSpawnBudgetUs", 600));
    public static final int ZOMBIE_SPAWN_DRAIN_FRAMES = Math.max(1, integer("zombieSpawnDrainFrames", 240)); // zombieSpawnSpread: the budget grows so any backlog is created within this many frames (up to zombieSpawnMaxUs a frame)
    public static final int ZOMBIE_SPAWN_MAX_US = Math.max(0, integer("zombieSpawnMaxUs", 1500));
    public static final int ZOMBIE_SPAWN_LOAD_MS = Math.max(0, integer("zombieSpawnLoadMs", 3000)); // zombieSpawnSpread: for this long after the first population update (the load's mass spawn) every queued zombie is created at once, as stock
-   public static final int ZOMBIE_SPAWN_MAX_AGE_MS = Math.max(0, integer("zombieSpawnMaxAgeMs", 1000)); // zombieSpawnSpread: a queued zombie waits at most this long (wall time), so a slow machine's small per-frame budget never thins the horde (the flip / Mac test of 2026-10-06 had half the zombies at route start)
+   public static final int ZOMBIE_SPAWN_MAX_AGE_MS = Math.max(0, integer("zombieSpawnMaxAgeMs", 3000)); // 3000 by default since 2026-10-15 (maintainer, timing only; f9-burst set 4); zombieSpawnSpread: a queued zombie waits at most this long (wall time), so a slow machine's small per-frame budget never thins the horde (the flip / Mac test of 2026-10-06 had half the zombies at route start)
    public static final int ZOMBIE_SPAWN_NEAR = Math.max(0, integer("zombieSpawnNear", 25)); // zombieSpawnSpread: a zombie this close (squares) to a player is created at once, as stock
    public static final int ZOMBIE_SPAWN_MIN = Math.max(1, integer("zombieSpawnMin", 2));
+   /**
+    * burstGovernor (f8-resid 2026-10-15, timing only, on by default since 2026-10-15, maintainer): in a heavy step (it started more than burstLateUs after its cap
+    * slot, or the previous step's work before the hand-off took more than burstWorkPct of the interval) the deferrable
+    * per-frame work gets smaller budgets: zombieSpawnSpread's creations zombieSpawnBurstUs (and one zombie at least instead
+    * of zombieSpawnMin), zombieModelAddBudgetUs's promotions zombieModelAddBurstUs. Louisville's horde first sight is ~45
+    * such steps in a row, ~0.7 ms of spawns and ~0.6 ms of model adds each; the work moves to the lighter steps after.
+    */
+   public static final boolean BURST_GOVERNOR = bool("burstGovernor", true); // on by default since 2026-10-15 (maintainer, timing only)
+   public static final boolean DEV_GT_PHASE_RANDOM = bool("devGtPhaseRandom", false); // dev (f8-resid): devGtAlternate's cycle starts at a random offset, so fixed-time route events split between the phases across runs
+   public static final boolean BAKE_BUDGET_GPU = bool("bakeBudgetGpu", true); // on by default since 2026-10-15 (maintainer); f8-resid (timing only): bakeBudgetAdaptive's render-side cost is the submit plus the GPU's time past it (frameQueueGpu's timestamps), so a frame whose GPU ran long (the horde in view) halves the next frames' bake budget
+   public static final boolean LOOKUP_MEMO = bool("lookupMemo", true); // on by default since 2026-10-15 (maintainer); f8-resid (exact): pzopt.LookupMemo, exact-string memos in front of FileGuidTable's and AnimationVariableHandlePool's case-insensitive trees (outfit dressing in spawn / model-add bursts)
+   public static final boolean DEV_LOOKUP_MEMO_CHECK = bool("devLookupMemoCheck", false); // dev: every lookupMemo hit compared with the tree's answer (log line "lookup memo: ... mismatches N")
+   public static final int BURST_LATE_US = Math.max(0, integer("burstLateUs", 1000));
+   public static final int BURST_WORK_PCT = Math.max(1, integer("burstWorkPct", 95));
+   public static final int ZOMBIE_SPAWN_BURST_US = Math.max(0, integer("zombieSpawnBurstUs", 150));
+   public static final int ZOMBIE_SPAWN_AGED_CAP_US = Math.max(0, integer("zombieSpawnAgedCapUs", 600)); // 600 by default since 2026-10-15 (maintainer); zombieSpawnSpread (f9-burst, timing only): the queued zombies past zombieSpawnMaxAgeMs are created under this much time a frame (a heavy step: zombieSpawnBurstUs) instead of all at once, unless they waited 3x zombieSpawnMaxAgeMs (0 = all at once, as before)
+   public static final int ZOMBIE_SPAWN_SLACK_BUDGET_US = Math.max(0, integer("zombieSpawnSlackBudgetUs", 1500)); // 1500 by default since 2026-10-15 (maintainer); zombieSpawnSpread (f9-burst, timing only): at a frame cap the in-frame spawn budget is the last step's unused interval less this margin (us), up to zombieSpawnMaxUs, instead of zombieSpawnBudgetUs / the backlog rule; 0 = off
+   public static final int ZOMBIE_SPAWN_HEAVY_MIN = Math.max(0, integer("zombieSpawnHeavyMin", 0)); // 0 by default since 2026-10-15 (maintainer); burstGovernor (f9-burst, timing only): the zombies a heavy step creates from the spawn queue at least (1 as before; 0 = none unless aged)
+   public static final int ZOMBIE_MODEL_ADD_HEAVY_EVERY = Math.max(0, integer("zombieModelAddHeavyEvery", 4)); // 4 by default since 2026-10-15 (maintainer); burstGovernor (f9-burst, timing only): in a run of heavy steps only every Nth one gives zombies their 3D model (the others none; they stay flat sprites a frame longer); 0 = every heavy step adds within zombieModelAddBurstUs, as before
+   public static final int ZOMBIE_MODEL_ADD_BURST_US = Math.max(0, integer("zombieModelAddBurstUs", 150));
    public static final boolean LOOT_DEFER = bool("lootDefer", false); // time-sliced loot: a chunk arriving lootDeferDistance squares or more from every player queues its unexplored containers and they roll under lootDeferBudgetUs a frame (pzopt.LootDefer; single player). A downtown chunk's loot roll was up to 32 ms of one frame. Changes the order of random draws (an intended edit)
    public static final int LOOT_DEFER_DISTANCE = Math.max(0, integer("lootDeferDistance", 20));
    public static final int LOOT_DEFER_BUDGET_US = Math.max(0, integer("lootDeferBudgetUs", 400));
    public static final int CHUNK_HANDOFF_DIVISOR = integer("chunkHandoffDivisor", 8);
+   public static final int CHUNK_HANDOFF_PACE_MS = Math.max(0, integer("chunkHandoffPaceMs", 0)); // chunk pass 2026-10-13: queued chunks join the world at a steady rate, the queue's peak (+8) spread over this many ms, instead of within ~10 frames of a row's arrival; 0 = off (pzopt.ChunkPace)
+   public static final int CHUNK_HANDOFF_PACE_BACKLOG = Math.max(1, integer("chunkHandoffPaceBacklog", 160)); // chunkHandoffPaceMs: with this many chunks waiting (a load, a teleport, a fast car) the pace is off
+   public static final int RENDER_POOL_MAX = Math.max(0, integer("renderPoolMax", 0)); // chunk pass 2026-10-13: the free-object caps of the character render-data pools (ModelSlotRenderData 1,024, ModelInstanceRenderData 4,096, ...) raised to this (0 = stock): a horde's releases past the cap were dropped and re-made with their 60-bone palettes, the largest class G1 copied in the young pauses (pzopt.PoolWarm)
+   public static final boolean DEV_POOL_LOG = bool("devPoolLog", false); // dev: every 2 s the squares created and the free sizes of the square / object / render pools (pzopt.PoolWarm)
    public static final boolean CHUNK_HANDOFF_SLACK_WORK = bool("chunkHandoffSlackWork", true); // slackWork: at a cap, queued chunks join the world in the step's slack, one at a time while their learned cost fits (IsoChunkMap.pzoptHandOffChunk)
+   public static final boolean CHUNK_HANDOFF_COST_CHUNK = "chunk".equals(string("chunkHandoffCost", "chunk")); // chunk by default (maintainer, 2026-10-15) f8-handoff 2026-10-15, chunkHandoffSlackWork: square (the 2026-10-05 model: a learned cost per square, at least half its decaying peak, learned in the slack only) or chunk (the running mean of a whole hand-off, slack and in-frame ones)
+   public static final int CHUNK_HANDOFF_FRAME_BUDGET_US = Math.max(0, integer("chunkHandoffFrameBudgetUs", 1500)); // 1500 by default (maintainer, 2026-10-15) f8-handoff 2026-10-15, at a cap with slackWork: a backlog's in-frame hand-off (queue >= chunkHandoffSlackBacklog) stops once this frame's hand-offs took this long (at least one chunk, at most the stock count), the rest join in the slack; a world-load / teleport backlog (chunkHandoffPaceBacklog, 160) keeps the stock count; 0 = stock
+   public static final boolean CHUNK_HANDOFF_FORCE_ANY_FRAME = bool("chunkHandoffForceAnyFrame", true); // on by default (maintainer, 2026-10-15) f8-handoff, chunkHandoffSlackMaxWait: an overdue chunk joins in the next slack, light frame or not (one forced job a frame as before)
+   public static final boolean DEV_HANDOFF_LOG = bool("devHandoffLog", false); // dev, f8-handoff: one console line per chunk hand-off (levels, squares, objects, new, in slack, ns per part)
+   public static final int CHUNK_HANDOFF_SLACK_MAX_WAIT = Math.max(0, integer("chunkHandoffSlackMaxWait", 6)); // 6 by default (maintainer, 2026-10-15) f8-handoff 2026-10-15, chunkHandoffSlackWork: a queued chunk whose hand-off does not fit the slack joins after this many frames, into a light frame (four times as many: any frame); 0 = slackMaxWaitFrames (600)
    public static final int CHUNK_HANDOFF_SLACK_BACKLOG = Math.max(1, integer("chunkHandoffSlackBacklog", 24)); // chunkHandoffSlackWork: with this many queued (a world load, a teleport) the in-frame hand-off runs as before
+   public static final boolean PROP_ID_CACHE = bool("propIdCache", true); // on by default (exact: devPropIdCheck 17.8 M lookups, 0 mismatches) f8-handoff 2026-10-14 (pzopt.PropIds): PropertyContainer.has / get(IsoPropertyType) without the alias map's name lookup (the id kept per type and map generation); exact
+   public static final boolean DEV_PROP_ID_CHECK = bool("devPropIdCheck", false); // dev, propIdCache: every cached id compared with the map's lookup (console "prop id cache check:" every 2^20)
+   public static final boolean HANDOFF_RECALC_FAST = bool("handoffRecalcFast", true); // on by default (exact: devHandoffRecalcCheck 0 differences over ~10,000 chunks) f8-handoff 2026-10-14 (pzopt.HandoffRecalc): the hand-off's border recalc without its repeats (one property recompute per square and phase, the last blocked-grid pointer call per square); exact (devHandoffRecalcCheck)
+   public static final boolean HANDOFF_RECALC_MEMO = bool("handoffRecalcMemo", false); // handoffRecalcFast (measured, off: a pair repeats only 1.3 times, the bookkeeping cost more than it saved): a pair's collide / path / vision bit kept for its repeats within the phase (stock computes each about three times)
+   public static final boolean HANDOFF_RECALC_PARALLEL = bool("handoffRecalcParallel", false); // handoffRecalcFast: the border pairs' collide / path / vision bits computed on the frame workers before the phase (fork-join), the phase reads them
+   public static final int HANDOFF_RECALC_PARALLEL_MIN = integer("handoffRecalcParallelMin", 200); // handoffRecalcParallel: fewer pairs than this run on the game thread as before (the wake costs more)
+   public static final boolean DEV_HANDOFF_RECALC_CHECK = bool("devHandoffRecalcCheck", false); // dev: every hand-off's recalc phase runs fast, then restored and stock (whose result stays); the fields both write are compared (console "chunk hand-off:" census)
    public static final boolean CHUNK_HANDOFF_SLACK = bool("chunkHandoffSlack", false); // pzopt.ChunkHandoff: after a heavy frame the chunk hand-off waits for one with headroom
    public static final int CHUNK_HANDOFF_SLACK_PCT = integer("chunkHandoffSlackPct", 60); // chunkHandoffSlack: a game step above this share of the cap interval is heavy
    public static final int CHUNK_HANDOFF_SLACK_QUEUE = integer("chunkHandoffSlackQueue", 8); // chunkHandoffSlack: never wait with this many chunks queued
@@ -594,9 +691,11 @@ public final class Config {
    public static final boolean PLAYER_LOS_FAST = bool("playerLosFast", true); // IsoPlayer.updateLOS: the remembered-spotted membership is an identity set beside the stack (stock walked the stack per spotted object per frame), loop invariants hoisted, the sneak spot modifier memoised per frame (pzopt.PlayerLos)
    public static final boolean ZOMBIE_SPOT_FAST = bool("zombieSpotFast", true); // IsoZombie.spottedNew: a zombie whose spot chance is already zero (facing away, beyond its vision radius) skips the modifiers, the vehicle test and the roll, keeping the same outcome
    public static final boolean PLAYER_LOS_NATIVE = bool("playerLosNative", false); // experiment: the LOS arithmetic (distances, close count, branch per object) in C++ over arrays Java packs, one FFM call per player per frame (pzopt.NativeLos, natives/libpzopt_los64.so built with PZOPT_NATIVE=1); off = the Java loop
+   public static final boolean PLAYER_LOS_PARALLEL = bool("playerLosParallel", true); // on by default since 2026-10-15 (maintainer); f9-los (2026-10-15): IsoPlayer.updateLOS's per-object reads (distance, the could-see / can-see bits of the object's square, the zombie head-square state test) computed on the frame workers (one asynchronous batch after the walk of the object set); the game thread applies the stock loop body in the set's order with those answers. An object whose square's light is stale this frame (the read would refresh it), a zombie climbing through a window (head square), a grappled corpse or another player keeps the stock reads at its place. A zombie that neither could nor can be seen gets its stock target alpha 0 on the worker and is not visited again. Exact (devPlayerLosCheck), single player only
+   public static final boolean DEV_PLAYER_LOS_CHECK = bool("devPlayerLosCheck", false); // dev: playerLosParallel, every worker answer compared with the stock reads at the object's place in the loop (mismatches on the gt_offload= line)
    public static final String PLAYER_LOS_NATIVE_LIB = string("playerLosNativeLib", ""); // experiment: absolute path of libpzopt_los64.so when it is not under the game dir's natives/ (build/native/ of the checkout survives other sessions' builds; build/classes does not)
    public static final boolean ANIM_BONES_PARALLEL = bool("animBonesParallel", true); // the zombies' animation bone math (blend, twist, model and skin matrices) runs on worker threads after the postupdate loop (pzopt.AnimBatch)
-   public static final int ANIM_BONES_THREADS = Math.max(1, integer("animBonesThreads", 8)); // (2026-09-22: the old name of frameThreads, read as its default)
+   public static final int ANIM_BONES_THREADS = Math.max(1, integer("animBonesThreads", CpuTopology.frameThreadsDefault())); // (2026-09-22: the old name of frameThreads, read as its default). f8-flip (2026-10-15): the default is 8, or on a hybrid CPU with more than nine physical cores one per physical core besides the game thread's, at most 11 (the flip: 11 workers ran the Louisville frame 0.64 / 0.75 ms faster than 8 in two in-run A/Bs, 16 no better than 11; pzopt.CpuTopology)
    public static final int FRAME_THREADS = Math.max(1, integer("frameThreads", ANIM_BONES_THREADS)); // worker threads of the per-frame zombie batches (bone math, action-context transitions; pzopt.FrameBatch; the game thread joins in); clamped to cores - 1
    public static final boolean ANIM_BATCH_ASYNC = bool("animBatchAsync", true); // the zombies' bone batch (animBonesParallel) runs on the frame workers while the game thread carries on with the frame's logic; joined at IsoWorld.FinishAnimation (the game's own animation join point, before the render phase) or by the next frame batch (pzopt.AnimBatch, pzopt.FrameBatch)
    public static final boolean ANIMATOR_PARALLEL = bool("animatorParallel", true); // the zombies' animator, move deltas and model update (track tick) run on the frame workers after the transition evaluation, anim events captured and dispatched on the game thread in order; a zombie whose animator fires an event, or whose anim states read a side-effecting variable callback, finishes on the game thread (pzopt.AnimParallel; IsoGameCharacter, IsoZombie, AnimationTrack, AnimationMultiTrack overrides)
@@ -606,7 +705,7 @@ public final class Config {
    public static final boolean GUARDED_CALLBACKS = bool("guardedCallbacks", true); // bHasTarget / shouldSprint / bPassengerExposed are read on the workers like pure callbacks; their rare side effect throws there and falls back to the game thread (pzopt.ActionEval.GUARDED_CALLBACKS)
    public static final boolean POOL_STATS_BATCHED = bool("poolStatsBatched", true); // the frame workers tally the game's pool statistics counters (shared AtomicDouble CAS loops) per thread and publish them once per batch (pzopt.PoolStats; PerformanceStatistic override)
    public static final boolean MODEL_LOCK_PER_INSTANCE = bool("modelLockPerInstance", true); // ModelInstance.lock is a new object per instance instead of stock's shared interned string (its only user, ModelSlot.Update, then no longer serialises the frame workers; ModelInstance override)
-   public static final boolean HEAD_ON_WORKER = bool("headOnWorker", false); // a queued zombie's postUpdateAnimating head (forward direction, aim angle, turning flags) runs in its transition-evaluation task on a frame worker; a turn-around that would fire Turn180Started / TargetChanged goes back to the game thread (IsoGameCharacter override, pzopt.ActionEval)
+   public static final boolean HEAD_ON_WORKER = bool("headOnWorker", true); // a queued zombie's postUpdateAnimating head (forward direction, aim angle, turning flags) runs in its transition-evaluation task on a frame worker; a turn-around that would fire Turn180Started / TargetChanged goes back to the game thread (IsoGameCharacter override, pzopt.ActionEval)
    public static final boolean LAZY_POSE = bool("lazyPose", true); // an animation track finds a bone's keyframe span when the bone is first read after a tick instead of all 60 spans every tick (same spans; AnimationTrack override)
    public static final boolean DEV_ANIM_ASYNC_TRACE = bool("devAnimAsyncTrace", false); // log the stack of the first 20 early joins of the async bone batch (a game-thread touch of an in-flight player)
    public static final boolean ACTION_EVAL_PARALLEL = bool("actionEvalParallel", true); // the zombies' action-context transition evaluation runs on the frame workers between the postupdate loop and the animator updates (pzopt.ActionEval; IsoGameCharacter + ActionContext + MovingObjectUpdateScheduler overrides); a state with a Lua condition, a grappled / grappling / reanimated zombie and multiplayer take the stock path
@@ -626,13 +725,20 @@ public final class Config {
    public static final boolean STATE_PARAM_MEMO = bool("stateParamMemo", true); // IsoZombie.getStateMachineParams keeps the last (state class, map) pair: an AI state reads several State.Param values of the same class in a row, each through the component map and an IdentityHashMap probe
    public static final int ZOMBIE_SIM_LOD_TILES = integer("zombieSimLodTiles", 0); // experiment: one extra simulation-level step (stock's own MovingObjectUpdateScheduler LOD, which already steps at 30 / 60 / 80 tiles) for a zombie further than this many tiles from the nearest player; 0 = stock
    public static final boolean SEPARATE_PARALLEL = bool("separateParallel", true); // the zombies' separation pass computed on the frame workers before the update loop, applied by the game thread in loop order (pzopt.SeparateBatch; needs separateFast); the neighbours' positions are then read at the top of the frame instead of as the loop advances
-   public static final boolean ENTITY_UPDATE_PARALLEL = bool("entityUpdateParallel", false); // the simulation bucket's own update loop on the frame workers (pzopt.UpdateBatch): a bucket's entities run setCurrentSimulationLevel / preupdate / frameStep / update on the workers instead of one after another on the game thread. Per bucket, never across two of them: GameTime.perObjectMultiplier is the bucket's frame mod for the whole loop and 1 after it. Default off: unlike the postupdate batches this one moves the simulation itself, so the entities' writes land in a different order within the frame
+   public static final boolean ENTITY_UPDATE_PARALLEL = bool("entityUpdateParallel", true); // default on since 2026-10-13 (zombie pass: the brawl behaviour check, harness/brawl.py). The simulation bucket's own update loop on the frame workers (pzopt.UpdateBatch): a bucket's entities run setCurrentSimulationLevel / preupdate / frameStep / update on the workers instead of one after another on the game thread. Per bucket, never across two of them: GameTime.perObjectMultiplier is the bucket's frame mod for the whole loop and 1 after it. The batched zombies read each other at the batch start and their writes land in a different order within the frame (the frame-start semantics the maintainer accepted on 2026-10-13)
    public static final boolean ENTITY_UPDATE_SAFE_STATES = bool("entityUpdateSafeStates", true); // with entityUpdateParallel: only zombies in a calm state (idle, walk toward, path find) with no ballistics target, ragdoll, fall, fire or grapple and no player within 12 squares run on the workers (IsoZombie.pzoptBatchSafe); false = PR #35's filter (every zombie but grapple / reanimated)
    public static final boolean RAGDOLL_QUIT_SWEEP = bool("ragdollQuitSweep", true); // WorldSimulation.destroy: ragdolls still in the Bullet world at quit are removed before the world is destroyed (libPZBullet deletes the world before its ragdolls: SIGSEGV in Ragdoll::deleteRigidBodies); pzopt.RagdollLedger logs each one
    public static final boolean RAGDOLL_CORPSE_GUARD = bool("ragdollCorpseGuard", true); // AnimationPlayer: no ragdoll controller for a character that has already turned into its corpse; stock builds one from the leftover ragdoll track in the frame the zombie dies (ZombieOnGroundState.enter -> die, then the model update), owned by nobody: an orphan Bullet body until the zombie is reused, counted against the active-ragdoll cap, and the quit crash when one is still there
+   public static final boolean RAGDOLL_GATE = bool("ragdollGate", true); // IsoGameCharacter.isRagdoll / isRagdollSimulationActive / isFullyRagdolling answer stock's false without touching the character's animation player (and its body-model check) while no animation player holds a ragdoll controller (pzopt.RagdollGate counts them), else from the player's controller field; only a character with a controller takes the stock path
+   public static final boolean DEV_RAGDOLL_GATE_CHECK = bool("devRagdollGateCheck", false); // dev: beside every gated ragdoll answer evaluate stock's (side-effect free) and count mismatches and skipped animation-player replacements (ragdoll gate in zombie_batches=)
+   public static final boolean BODY_MODEL_CACHE = bool("bodyModelCache", true); // ModelManager.getBodyModel / IsoGameCharacter.getAnimationPlayer: a character's body model and "its animation player carries it" kept on the character, invalidated exactly (descriptor reference, keyed descriptor gender writes, setSkeleton, the body models' load, player replace / release; animals and debug sessions never cached), so neither reads the descriptor or the player (pzopt.BodyModelCache)
+   public static final boolean DEV_BODY_MODEL_CHECK = bool("devBodyModelCheck", false); // dev: beside every cached body model / settled player recompute stock's answer and count mismatches (body model cache in zombie_batches=)
    public static final boolean DEV_RAGDOLL_LEDGER = bool("devRagdollLedger", false); // pzopt.RagdollLedger evidence: stacks of ragdolls made for characters on no square, where they left it, the ragdoll state at each death (deaths(track/ctl/sim)=), a per-frame off-square check
    public static final boolean ENTITY_UPDATE_LUA_REPLAY = bool("entityUpdateLuaReplay", true); // a worker mid-batch reaching LuaEventManager.triggerEvent captures the event and its arguments instead of dropping them (the first wired run counted 4.38M drops in 26 s — the per-zombie update event, so any mod hooking it was silently dead with the batch on); after the join the game thread replays the captures in queue order — stock's serial event order — still inside the bucket window, so handlers run under the bucket's perObjectMultiplier exactly like stock's inline dispatch. Off = the bare drop guard and its counter, kept for pricing the replay's game-thread cost
-   public static final boolean ENTITY_UPDATE_PIPELINE = bool("entityUpdatePipeline", false); // with entityUpdateParallel: a bucket batch is dispatched WITHOUT joining, the game thread collects the next bucket (and runs its inline players/vehicles/animals) while the workers run, and the join lands right before the next dispatch (the scheduler override joins after the last bucket). Each batch carries its dispatch-time perObjectMultiplier (pom()), so tasks and the Lua replay see their own bucket's time scale while the game thread is already writing the next one. Off = the synchronous dispatch-then-join shape
+   public static final boolean ENTITY_UPDATE_PIPELINE = bool("entityUpdatePipeline", true); // default on since 2026-10-13 with entityUpdatePlayerFirst. With entityUpdateParallel: a bucket batch is dispatched WITHOUT joining, the game thread collects the next bucket (and runs its inline players/vehicles/animals) while the workers run, and the join lands right before the next dispatch (the scheduler override joins after the last bucket). Each batch carries its dispatch-time perObjectMultiplier (pom()), so tasks and the Lua replay see their own bucket's time scale while the game thread is already writing the next one. Off = the synchronous dispatch-then-join shape
+   public static final boolean ENTITY_UPDATE_MORE_STATES = bool("entityUpdateMoreStates", true); // zombie pass 2026-10-13: entityUpdateSafeStates also lets ZombieSittingState and GenericDefaultState zombies go to the workers (both states' execute does nothing in single player; the Louisville census found ~310 a frame kept inline by them)
+   public static final boolean ENTITY_UPDATE_NEAR_PLAYER = bool("entityUpdateNearPlayer", false); // zombie pass 2026-10-13: with entityUpdateSafeStates, a calm zombie (idle / walking / path finding) within 12 squares of a player goes to the workers too; the 12-square rule dates from when the player updated beside the batch (entityUpdatePlayerFirst now updates it before)
+   public static final boolean ENTITY_UPDATE_PLAYER_FIRST = bool("entityUpdatePlayerFirst", true); // with entityUpdatePipeline: a player or a vehicle updates at its place in the bucket loop, before the combined flight is dispatched, instead of in the inline phase under the airborne flight. The player's update writes the zombies it sees (updateLOS -> spotted: target, path) and ran concurrently with those zombies' own updates on the workers: in the brawl rig the horde closed in visibly slower (zombie pass 2026-10-13, harness/brawl.py). First = the non-pipelined order for players
    public static final boolean EMITTER_DEFER = bool("emitterDefer", true); // with entityUpdateParallel: a batched zombie's updateEmitter (FMOD parameters, position, tick) is queued on its task's slot instead of running on the worker, and joinPending runs the queued ticks on the game thread in queue order under the flight's multiplier. Shortens the flight (the ticks serialized on the emitter monitors, against each other and the inline player's combat) and takes the workers off updateEmitter's static tempVectorBonePos scratch. Off = the ticks run on the workers under the emitter locks, as before
    public static final boolean PHYSICS_DEFER = bool("physicsDefer", true); // with entityUpdateParallel: the two Bullet calls a batched zombie's update can make are queued on its task's slot instead of running on the worker, and joinPending makes them on the game thread in queue order under the flight's multiplier. IsoGameCharacter.updateBallisticsTarget (the hitbox of a character a gun is aimed at: add / axis / position / skeleton / remove, five natives) and IsoZombie's RagdollController.vehicleCollision (the ragdoll-versus-car contact test: setRagdollBodyDynamics / resetRagdollBodyDynamics, plus BaseVehicle.testTouchingVehicle on a vehicle the game thread may be updating). Bullet is not thread-safe, a native crash is not catchable by the batch's failure latch, and BallisticsTarget hands the native a public static float[] its own initialize() can replace mid-fill — so this is a crash fix, not a speed one: shooting zombies with the batch on killed the process in both live runs. Off = the calls run on the workers, which is the crash
    public static final int DEV_PIPELINE_ALTERNATE = integer("devPipelineAlternate", 0); // seconds per window, 0 = off: the bucket seam alternates entityUpdatePipeline on/off every N seconds inside ONE run and logs each flip with its epoch, so the frame log splits into paired on/off distributions over the identical zombie population (the repo's devPplAlternate pattern; cross-run comparisons are confounded because a faster build loads more zombies by route start)
@@ -642,16 +748,50 @@ public final class Config {
    public static final boolean WORLDGEN_PATTERN_CACHE = bool("worldgenPatternCache", true); // WorldGenUtils.canPlace keeps each placement glob's compiled regex instead of compiling it on every String.matches (~5 % of the allocation, world streamer)
    public static final boolean STATS_NO_BOX = bool("statsNoBox", true); // Stats.get without getOrDefault's boxed default: a new Float on every stat read (10 % of the sampled allocation on the Louisville horde)
    public static final boolean STATE_MACHINE_NO_ITER = bool("stateMachineNoIter", true); // StateMachine.getMinimumSimulationLevel walks its substates by index instead of an iterator (10 % of the sampled allocation with tiered zombie updates)
-   public static final boolean POSTUPDATE_PARALLEL = bool("postupdateParallel", false); // Louisville 120 plan B (2026-10-06): the zombies' postupdate movement (impulse, vehicle resolution, DoCollide, the destination square) computed on the frame workers against a frozen world and committed on the game thread in stock order (pzopt.PostupdateBatch)
+   public static final boolean POSTUPDATE_PARALLEL = bool("postupdateParallel", true); // default on since 2026-10-13 (0 diffs in 692k devPostupdateCheck comparisons at 2,700 zombies). Louisville 120 plan B (2026-10-06): the zombies' postupdate movement (impulse, vehicle resolution, DoCollide, the destination square) computed on the frame workers against a frozen world and committed on the game thread in stock order (pzopt.PostupdateBatch)
    public static final boolean DEV_POSTUPDATE_CHECK = bool("devPostupdateCheck", false); // dev: postupdateParallel, a sample of the split movements recomputed by the stock body and compared field by field (pzopt.PostupdateBatch, counts in the postupdate stats line)
+   public static final boolean SEPARATE_MEMO = bool("separateMemo", false); // zombie pass 2026-10-13 (measured, no gain: in-run A/B zomb-12-sepmemo +0.03 ms schedUpdate, 0 diffs in 1.9 M checks; off): inside the separation batch (read-only grid and characters) a neighbour's isSolidForSeparate is computed once per frame per zombie and each frame worker caches the square-to-square blocked answers in its own table (pzopt.SeparateBatch, SeparateMask); same answers
+   public static final boolean DEV_SEPARATE_MEMO_CHECK = bool("devSeparateMemoCheck", false); // dev: separateMemo, one memoised answer in 16 also computed directly and compared (separate batch line)
+   // ---- zombie redesign pass (2026-10-13, f8-zomb2) ----
+   public static final boolean SEPARATE_ASYNC = bool("separateAsync", false); // zombie redesign: the separation batch starts on the frame workers at the end of the scheduler's startFrame and is joined at the top of its update, so it runs under the cell's pre-phases (spotted rooms, chunk map, items, objects) instead of on the game thread's time; a chunk-grid or vehicle-list change in that window recomputes every zombie at the join (pzopt.SeparateBatch)
+   public static final boolean ENTITY_UPDATE_STREAM = bool("entityUpdateStream", false); // zombie redesign: the combined entity flight opens as soon as the frame's last player / vehicle has updated in place, and the rest of the buckets' collection publishes each batchable zombie to the running workers (pzopt.UpdateBatch, FrameBatch.runStream); the tasks see what they saw before
+   public static final boolean SEPARATE_EDGE_CACHE = bool("separateEdgeCache", true); // zombie redesign: the separation's square-to-neighbour blocked answers kept per frame on the square itself, shared by the separation batch's workers and the game thread (pzopt.SeparateMask)
+   public static final boolean DEV_SEPARATE_EDGE_CHECK = bool("devSeparateEdgeCheck", false); // dev: separateEdgeCache, one cached answer in 32 asked of the grid again and compared (separate mask line)
+   public static final boolean ENTITY_UPDATE_STREAM_HOIST = bool("entityUpdateStreamHoist", true); // zombie redesign, with entityUpdateStream: the frame's players and vehicles update before the buckets' collection (bucket order kept among them), so the stream opens before the first zombie is collected; a zombie listed before the player is classified after the player's update (a behaviour difference: needs the maintainer's approval)
+   public static final boolean POSTUPDATE_NOOP_SKIP = bool("postupdateNoopSkip", true); // zombie redesign, with postupdateParallel: a computed zombie whose square move is the stock call with its own square (already in its list) commits nothing in the loop
+   public static final boolean POSTUPDATE_FUSE = bool("postupdateFuse", true); // zombie redesign: a zombie with no target queued for the transition evaluation starts it on the frame workers at once, during the postupdate loop, and when the evaluation changes no state the same task runs its context update and its animator and model update (pzopt.ActionEval stream); the game thread then only finishes it in order
+   public static final boolean LUA_SILENT_SKIP = bool("luaSilentSkip", true); // zombie redesign: a batched zombie's OnZombieUpdate is not captured for the replay while no Lua function listens to that event (checked when the entity flight opens; pzopt.UpdateBatch)
+   public static final boolean POSTUPDATE_ELIGIBLE_ON_WORKER = bool("postupdateEligibleOnWorker", true); // zombie redesign, with postupdateParallel: the movement batch's eligibility test runs in each zombie's task on the workers instead of in the game thread's scan (pzopt.PostupdateBatch)
+   public static final boolean POSTUPDATE_VEHICLE_ON_WORKER = bool("postupdateVehicleOnWorker", true); // zombie redesign, with postupdateParallel: a zombie whose move comes within reach of a vehicle resolves it in its task on the worker (PolygonalMap2's lock, polygons brought up to date first) instead of leaving its whole movement to the game thread (pzopt.PostupdateBatch)
+   public static final int POSTUPDATE_STREAM_MIN = integer("postupdateStreamMin", 128); // zombie redesign: postupdateFuse's early stream and postupdateClean run only in a frame with at least this many zombies in the movement queue (below it the synchronous shape: the stream's wake and join cost more than a handful of zombies save, -2.5 % fps on the 600 fps drive)
+   public static final boolean POSTUPDATE_CLEAN = bool("postupdateClean", true); // zombie redesign, with postupdateParallel + postupdateNoopSkip: a zombie whose square move is a no-op and whose remaining postupdate needs nothing of the game thread (no target, no hits, states without side-effecting condition variables, head on the evaluation task) finishes it in its movement task, and the bucket loop skips it by reference (pzopt.PostupdateBatch, IsoZombie.pzoptCleanPostupdate)
+   public static final boolean DEV_CLEAN_EARLY = bool("devCleanEarly", false); // dev: postupdateClean as before the f8-cleanfix (2026-10-13), the rig's control arm: a clean zombie's evaluation published before the bucket loop and nothing put back for a clean zombie the loop never reached (stock skips the entry after one that removes itself) — inexact
+   public static final boolean DEV_CLEAN_SKIP_CHECK = bool("devCleanSkipCheck", false); // dev: postupdateParallel / postupdateClean, every movement-queue zombie the bucket loop did not reach (stock never runs its postupdate that frame) compared, after the frame's postupdate and its streams, with its state before the movement batch (pzopt.PostupdateBatch, counts in the postupdate stats line)
+   public static final boolean ECS_VALUES_CACHE = bool("ecsValuesCache", true); // zombie redesign: an entity's ECS component values kept as an array (cleared when a component is set or removed) so the per-frame visits iterate without an iterator (13 MB/s of allocation on Louisville)
+   public static final boolean IS_LOCAL_FAST = bool("isLocalFast", true); // zombie redesign: IsoGameCharacter.isLocal() answers true at once in single player (what its network component lookup answers there), 6.5 % of the entity flight
+   public static final boolean ENTITY_UPDATE_ALERTED = bool("entityUpdateAlerted", false); // zombie redesign: a zombie in ZombieTurnAlerted (turning toward a heard sound) is one of the calm states that update on the frame workers (IsoZombie.pzoptBatchSafe)
+   public static final boolean ZOMBIE_LATE_APPLY = bool("zombieLateApply", false); // zombie redesign 2 (f8-zomb3, behaviour difference approved 2026-10-13, off until the maintainer has seen the checks): the queued zombies' transition apply, anim events and animator finish (ActionEval / AnimParallel apply) run at IsoWorld.FinishAnimation instead of the end of the postupdate, so the evaluations and fused animators on the frame workers overlap the rest of the frame's logic (pzopt.ZombieLate)
+   public static final boolean RAND_PER_WORKER = bool("randPerWorker", true); // zombie redesign round 3 (f8-zomb3, statistically identical, not bit-identical; on by default since 2026-10-14, maintainer): each frame worker draws Rand from its own generator instead of the game's lock-guarded one (pzopt.WorkerRand)
+   public static final boolean ANIMAL_LOS_SKIP = bool("animalLosSkip", false); // zombie redesign round 3 (f8-zomb3): an idle animal (spottedChr null, lastAlerted 0) with no zombie within 12 squares (when it flees zombies) and no player within 11 skips its updateLOS walk, which would change nothing (pzopt.AnimalLosSkip)
+   public static final boolean DEV_ANIMAL_LOS_SKIP_CHECK = bool("devAnimalLosSkipCheck", false); // dev: animalLosSkip runs the stock walk anyway for every skipped animal and counts any change (mismatches must stay 0)
+   public static final boolean ENTITY_UPDATE_ANIMALS_INLINE = bool("entityUpdateAnimalsInline", false); // zombie redesign round 3 (f8-zomb3, behaviour difference against today's default, off until the maintainer says): animals (IsoAnimal extends IsoPlayer, so entityUpdatePlayerFirst moved them with the players) update in the inline phase under the zombies' flight again instead of before it, as its runway (pzopt.UpdateBatch.playerFirst)
+   public static final boolean ZOMBIE_DRAW_LATE = bool("zombieDrawLate", false); // zombie redesign 3 (f8-zomb3, behaviour difference approved 2026-10-13, off until the maintainer has seen the checks): the zombies' bone batch runs on a background lane of the frame workers through the render and the frame draws each in-flight zombie with the pose of its previous bone update (a copy taken when its bone math is queued); joined at the next frame's update (pzopt.ZombieLate, AnimBatch)
+   public static final int FRAME_THREADS_ALT = integer("frameThreadsAlt", 0); // dev (zombie redesign): the frame worker count of the "on" half of an alternation of bit frameThreadsAlt (an in-run A/B of the pool size); 0 = off
+   public static final boolean DEV_SEPARATE_ASYNC_CHECK = bool("devSeparateAsyncCheck", false); // dev: separateAsync, one zombie in 8 recomputed at the join and compared with its asynchronous result (separate batch line)
+   public static final boolean NEAR_VEHICLE_GRID = bool("nearVehicleGrid", true); // zombie pass 2026-10-13: getNearVehicle / isNearSirenVehicle answer "no vehicle" from one per-frame grid of the chunk map (a summed-area table of the chunks holding a vehicle) instead of 16 chunk lookups per character; any other answer runs the stock loop (pzopt.VehicleNear, VehicleList)
+   public static final boolean DEV_NEAR_VEHICLE_CHECK = bool("devNearVehicleCheck", false); // dev: nearVehicleGrid, one "no vehicle" answer in 16 also runs the stock loop and counts a difference (pzopt.VehicleNear, zombie_batches= line)
    public static final boolean ZOMBIE_REUSE_SPREAD = bool("zombieReuseSpread", false); // Louisville 120 item 3 (2026-10-06): the zombies leaving the world are reset for reuse oldest first under zombieReuseBudgetUs a frame instead of all in their frame (a chunk row leaving the grid downtown: ~10 ms of resets in one frame; pzopt.ReuseSpread). Intended difference: the reset's random draws come later
    public static final int ZOMBIE_REUSE_BUDGET_US = Math.max(0, integer("zombieReuseBudgetUs", 300)); // zombieReuseSpread: resets a frame stop after this much time (at least backlog / zombieReuseDrainFrames)
    public static final int ZOMBIE_REUSE_DRAIN_FRAMES = Math.max(1, integer("zombieReuseDrainFrames", 60)); // zombieReuseSpread: the queue empties within this many frames whatever the budget
    public static final int ZOMBIE_SIM_LOD_STEPS = Math.max(1, integer("zombieSimLodSteps", 1)); // how many extra simulation-level steps zombieSimLodTiles may take, each at twice the distance of the previous one
-   public static final int ZOMBIE_MODEL_ADD_BUDGET_US = Math.max(0, integer("zombieModelAddBudgetUs", 0)); // IsoWorld.sceneCullZombies: zombies getting a 3D model this frame (ModelManager.Add, model + clothing) stop after this much time; the rest stay flat sprites a frame longer (0 = stock, all at once; 500 measured on Louisville, off by default until the maintainer decides)
+   public static final int ZOMBIE_MODEL_ADD_BUDGET_US = Math.max(0, integer("zombieModelAddBudgetUs", 500)); // 500 by default since 2026-10-15 (maintainer, round 11, timing only); IsoWorld.sceneCullZombies: zombies getting a 3D model this frame (ModelManager.Add, model + clothing) stop after this much time; the rest stay flat sprites a frame longer (0 = stock, all at once; 500 measured on Louisville). With zombieFirstSightSprite a zombie put off is drawn as its lit sprite (pzopt.FirstSight.newSprite)
    public static final boolean ZOMBIE_LOD_DYNAMIC = bool("zombieLodDynamic", false); // how many zombies get a 3D model (stock 510) and blend their animations (stock 20) follows the frame cap: lowered while frames miss it, raised back while there is headroom (pzopt.ZombieLod)
    public static final int ZOMBIE_LOD_MIN_3D = Math.max(0, integer("zombieLodMin3d", 128)); // zombieLodDynamic's floor for zombies drawn as 3D models (the rest are flat sprites)
    public static final int ZOMBIE_LOD_MIN_BLEND = Math.max(0, integer("zombieLodMinBlend", 6)); // zombieLodDynamic's floor for zombies that blend their animations
+   public static final int ZOMBIE_LOD_FIXED_3D = Math.max(0, integer("zombieLodFixed3d", 0)); // zombieLodDynamic: a fixed number of zombies drawn in 3D (the nearest) instead of the frame-cap controller; 0 = the controller
+   public static final int ZOMBIE_LOD_SPRITE_LIGHT = Math.max(0, integer("zombieLodSpriteLight", 60)); // 60 by default since 2026-10-14 (maintainer; without zombieLodDynamic it lights only zombieFirstSightSprite's new-zombie sprites): zombieLodDynamic: the flat zombie sprites drawn in this percentage of their square's light instead of black (0 = stock), closer to the lit 3D zombies beside them
+   public static final int ZOMBIE_LOD_HYSTERESIS = Math.max(0, integer("zombieLodHysteresis", 16)); // zombieLodDynamic: a zombie drawn in 3D keeps its model while it ranks within this many places past the 3D cap (new ones need a place inside it), so the group's edge does not flip while zombies walk or turn into view
+   public static final int ZOMBIE_LOD_FADE_MS = Math.max(0, integer("zombieLodFadeMs", 300)); // zombieLodDynamic: a zombie switching between 3D model and flat sprite crossfades over this long (both drawn, the model fading); 0 = the stock instant switch
    public static final int ZOMBIE_LOD_UNCAPPED_FPS = Math.max(0, integer("zombieLodUncappedFps", 0)); // zombieLodDynamic's target while uncapped; 0 = stock detail when uncapped
    public static final int ZOMBIE_CHECK_SPREAD = integer("zombieCheckSpread", 0); // experiment: a zombie's thump probe (the "is something thumpable in front of me" grid test) runs on one frame in N, spread by zombie id; 0 or 1 = stock, every frame. It must not cover the visible-to-player test: that one also decides whether the zombie is drawn
    public static final boolean ZOMBIE_CULL_SORT_FAST = bool("zombieCullSortFast", true); // IsoWorld.sceneCullZombies: one relevance score per zombie and a primitive key sort instead of a comparator sort that recomputes both scores per comparison; same order
@@ -672,7 +812,12 @@ public final class Config {
    public static final boolean PPL_PACK_PARALLEL = bool("pplPackParallel", true); // pixelLight: the lattice levels of a frame packed on the frame workers, each into its own block (pzopt.PixelLight)
    public static final boolean PPL_TORCH_NEAR_CHUNK = bool("pplTorchNearChunk", true); // pixelLight: the torch reach tested once per chunk level, the per-square test only in a chunk a torch reaches
    public static final boolean SCHEDULER_CLASSIFY_PARALLEL = bool("schedulerClassifyParallel", true); // the update scheduler's per-object simulation level computed on the frame workers, the buckets filled by the game thread in list order (MovingObjectUpdateScheduler.startFrame)
+   public static final boolean SCHEDULER_FILL_PARALLEL = bool("schedulerFillParallel", true); // on by default since 2026-10-15 (maintainer); f9-los (2026-10-15), with schedulerClassifyParallel: the rest of the scheduler's startFrame off the game thread: the missing-square test and the frame-mod tests move into the classification task, a zombie's minimum simulation level is read through the ecsLookupFast field (the component map probe was ~70 % of the classification on the flip), and the task also makes every read of the bucket fill (id modulo the frame mod, player / vehicle, zombie, due), so the game thread fills the buckets in the set's order from arrays without touching an object. Exact (devSchedFillCheck)
+   public static final boolean DEV_SCHED_FILL_CHECK = bool("devSchedFillCheck", false); // dev: schedulerFillParallel, every bucket list compared with a serial fill of the same classification (mismatches on the gt_offload= line)
    public static final boolean ANIMAL_LOS_FAST = bool("animalLosFast", true); // IsoAnimal.updateLOS: a zombie whose spotted() call can only clear spottedChr and tick lastAlerted (an animal that does not flee zombies, or a zombie farther than 10 squares at the stock distance) is counted instead of called, the ticks applied in one exact step before the next call that can act (the same fold as PR #35's far-zombie skip)
+   public static final boolean ANIMAL_PRELOAD = bool("animalPreload", false); // tail pass 2026-10-13: every animal type's animation set and action group parsed on a background thread from the loading screen (pzopt.AnimalPreload) instead of on the game thread in the chunk hand-off that first spawns one (15-37 ms frames)
+   public static final boolean ANIMAL_LOS_WALK = bool("animalLosWalk", false); // tail pass 2026-10-13: IsoAnimal.updateLOS (with animalLosFast) walks an array of the cell set's entries in its iteration order, rebuilt when the set changed (pzopt.CellObjectSet), reading live values; an idle animal (spottedChr null, lastAlerted 0) reads only x / y of zombies farther than 10 squares (their fold tick changes nothing). Exact (devAnimalLosCheck)
+   public static final boolean DEV_ANIMAL_LOS_CHECK = bool("devAnimalLosCheck", false); // dev (tail pass): every animalLosWalk walk checked against the stock fold walk's events listed from the live set (pzopt.AnimalLosWalk)
    public static final boolean ANIMAL_LOS_SNAPSHOT = bool("animalLosSnapshot", false); // IsoAnimal.updateLOS (with animalLosFast) scans one per-frame snapshot of the zombies and players (pzopt.AnimalLosSnapshot) instead of walking the cell's whole object set per animal: 10 % of the game thread on the Louisville horde. Zombie positions are the frame's first animal update's (an intended edit)
    public static final boolean WEATHER_PARTICLES_PARALLEL = bool("weatherParticlesParallel", false); // the weather particle cells built on the frame workers
    public static final boolean BAKE_PREP_PARALLEL = bool("bakePrepParallel", false); // chunk-level bake preparation (render lists, occlusion) on the frame workers (pzopt.BakePrep)
@@ -683,9 +828,19 @@ public final class Config {
    public static final boolean TILE_RECORD_PARALLEL = bool("tileRecordParallel", false); // the per-frame translucent tile pass recorded per chunk on the frame workers (pzopt.TileRecord / DrawRecorder; SpriteRendererStates + IOpenGLState overrides route a recording thread's draws and GL state to its own list) and spliced into the frame's draw list in stock order; objects a worker may not draw are drawn by the game thread at their place in the stream
    public static final boolean TILE_RECORD_ASYNC = bool("tileRecordAsync", true); // tileRecordParallel: every level's units handed to the workers in one batch after the chunk composite, recorded while the game thread draws the players, moving objects, water and attachments; the first translucent pass joins (false: one blocking batch per level's pass)
    public static final boolean TILE_RECORD_WALLS = bool("tileRecordWalls", true); // tileRecordParallel: walls, door frames and windows (IsoGridSquare's wall lighting, cutaway shaders) recorded on the workers too (false: only plain tiles and light switches; the wall path stays on the game thread)
+   public static final boolean RENDER_LAST_FAST = bool("renderLastFast", true); // IsoGameCharacter.renderlast skips its inventory walk for IUpdater items: every IUpdater the game has (HandWeapon, WeaponPart, Radio, DrainableComboItem) draws nothing there, and Java mods (which could add one) turn it off (f8-render1, 2026-10-13: ~2,500 zombies' inventories walked every frame on the Louisville horde; GtAb bit renderLastFast)
+   public static final boolean TILE_RECORD_FLOORS = bool("tileRecordFloors", true); // tileRecordParallel + tileRecordAsync: each level's translucent floor pass (water edges, transparent floors) recorded per chunk on the frame workers in the same batch and spliced at its place (f8-render1, 2026-10-13; GtAb bit tileRecordFloors)
+   public static final boolean TILE_RECORD_BATCH_SIM = bool("tileRecordBatchSim", true); // tileRecordParallel: a translucent unit records its tile starts raw and is spliced through TileBatch's merge / fold replay (bakeRecordParallel's moveBake), so the spliced stream is the stock one entry for entry; without it a unit's first tile start cannot merge with the stream before it (tileVertexDepth, 2026-10-09, came after tileRecordParallel: devDrawListCheck found 2-12 extra entries a pass, 2026-10-13)
+   public static final int RECORD_WAIT_TIMEOUT_MS = Math.max(1, integer("recordWaitTimeoutMs", 250)); // tileRecordParallel / bakeRecordParallel: the longest the game thread (or a recording worker) waits for recorded work; past it the wait logs, the recording turns off for the rest of the session and the stock path draws (a bug can never hang the game) (f8-render1, coordinator 2026-10-13)
+   public static final int DEV_RECORD_STALL_MS = Math.max(0, integer("devRecordStallMs", 0)); // dev: tileRecordParallel, once (the 600th recorded frame) the first unit's worker sleeps this long: exercises recordWaitTimeoutMs's fallback (the game must log, draw the stock passes and go on)
+   public static final boolean TILE_RECORD_WEATHER = bool("tileRecordWeather", true); // tileRecordParallel + tileRecordAsync: the weather mask's wall / floor loop (WeatherFxMask.drawFxMask) recorded on a frame worker with the frame's units and spliced in the mask pass, when the masks are final at the dispatch (no scan this frame); doors / objects / characters of the mask drawn by the game thread at their place (f8-render1, 2026-10-13; GtAb bit tileRecordWeather)
+   public static final boolean TILE_RECORD_MODELS = bool("tileRecordModels", true); // tileRecordParallel: a translucent unit draws static 3D sprite models (doors) itself when the model and texture are loaded, with no animation, render effect, highlight or outline (IsoObjectModelDrawer override: pools under a lock, the recorder's render mode); they were the most deferred objects (~29 a frame on the Louisville horde, ~0.08 ms of the splice) (f8-render1, 2026-10-13; GtAb bit tileRecordModels)
+   public static final boolean TILE_RECORD_MOVE_REF = bool("tileRecordMoveRef", true); // tileRecordParallel: the splice moves each recorded entry object into the frame's draw list (the frame's spare object takes its recorder slot) instead of copying its fields (f8-render1, 2026-10-13; GtAb bit tileRecordMoveRef)
    public static final boolean DEV_TILE_RECORD_SERIAL = bool("devTileRecordSerial", false); // dev: tileRecordParallel's phase A1, every chunk recorded through its recorder on the game thread (the splice machinery and its overhead without workers)
    public static final boolean DEV_TILE_RECORD_DEFER_ALL = bool("devTileRecordDeferAll", false); // dev: tileRecordParallel, every object deferred to the game thread (exercises the splice's defer path)
    public static final int DEV_DRAW_LIST_CHECK = integer("devDrawListCheck", 0); // dev: tileRecordParallel, every Nth frame the stock translucent pass runs first and is rolled back, then the recorded one, compared entry by entry (tile record line of the periodic log)
+   public static final boolean TILE_RECORD_LIGHT_ORDER = bool("tileRecordLightOrder", true); // tileRecordParallel (f8-twofix, 2026-10-14): a recorded unit keeps stock's order of the squares' lazy light refreshes (JNILighting.update rewrites the light later draws of the square read): a light switch on a square this lighting pass has not read is asked only the power part of shouldShowOnOverlay by the defer rule (its isSeen refreshed the square before the switch's draw; stock asks after it) and deferred when it could show its overlay, and after a deferred object on such a square the unit's later objects on it are deferred too (the deferred one's stock code refreshes at the splice) (pzopt.TileRecord.lightUnread / lightTainted)
+   public static final boolean DEV_DRAW_LIST_TRACE = bool("devDrawListTrace", false); // dev: devDrawListCheck, on a checked frame every lazy light refresh (JNILighting.update) and every translucent object draw is logged with its thread / phase / time; each difference prints what the recording and the stock re-run read and every refresh of the square in the frame, with its caller (pzopt.LightTrace)
    public static final boolean VIS_POLY_ASYNC = bool("visPolyAsync", true); // the vision cone's shadow polygon computed on its own thread from the top of the tile render, taken in VisibilityPolygon2.renderMain (pzopt.VisPolyAsync)
    public static final boolean LOS_LIGHT_PREFETCH = bool("losLightPrefetch", false); // the lazy per-square lighting refresh of the squares the player's line-of-sight pass reads, done ahead on the frame workers (one task per chunk level, room / meta hooks deferred; pzopt.LosPrefetch)
    public static final boolean DEV_SCHED_CHECK = bool("devSchedCheck", false); // dev: schedulerClassifyParallel, every worker classification compared with the game thread's own (mismatches in gt_offload=)
@@ -704,6 +859,26 @@ public final class Config {
    public static final int TORCH_SOURCE_BODY_PCT = integer("torchSourceBodyPct", 22); // torchSourceSelfShadow: the body's radius, hundredths of a square
    public static final boolean TORCH_SOURCE_FAST = bool("torchSourceFast", true); // torchSource: the item chain's fixed part cached per model instance, one sin / cos for the world mapping (false: the game's helpers every frame) // dev: torchSource draws the lens (yellow), the beam (orange) and the native's position (cyan)
    public static final String DEV_GT_ALTERNATE_KEYS = string("devGtAlternateKeys", ""); // dev: comma list of the offload keys the alternation switches (or "all")
+   public static final int DEV_GT_ALTERNATE2 = integer("devGtAlternate2", 0); // dev: ms; a second, independent alternation group (needs devGtAlternate): its keys flip on their own period, pzopt-gtab.out's phase column = on1 + 2 * on2 (harness/gtabsec.py --group 2)
+   public static final String DEV_GT_ALTERNATE_KEYS2 = string("devGtAlternateKeys2", ""); // dev: the keys of the second alternation group
+   public static final boolean DEV_TEX_CENSUS = bool("devTexCensus", false); // dev (tail pass): count the textures the render thread creates during play by folder (pzopt.TexCensus, a console line every 10 s)
+   public static final boolean COMBINER_POOL = bool("combinerPool", false); // tail2 pass 2026-10-13: TextureCombiner's composite textures (zombie / item clothing) pooled under a VRAM budget instead of 100 a size, storage kept on reuse, a reserve made right after the swap (pzopt.CombinerPool)
+   public static final boolean COMBINER_KEEP_STORAGE = bool("combinerKeepStorage", true); // combinerPool: a reused composite keeps its storage (stock re-specifies it with glTexImage2D(null) on every reuse although every combine clears it)
+   public static final int COMBINER_POOL_MB = integer("combinerPoolMb", 256); // combinerPool: VRAM the free composites may hold beyond stock's 100 a size; scaled down on GPUs under 6 GB (pzopt.CombinerPool.budgetBytes)
+   public static final int COMBINER_RESERVE = integer("combinerReserve", 24); // combinerPool: free composites kept ready per size that was asked for, made right after the swap (0 = no reserve)
+   public static final int COMBINER_RESERVE_PER_FRAME = integer("combinerReservePerFrame", 2); // combinerPool: at most this many reserve composites made after one swap
+   public static final boolean PACING_QUERY_BUFFER = bool("pacingQueryBuffer", false); // tail2 pass 2026-10-13: pzopt.Pacing's per-frame GPU timestamps written into a persistently mapped GL_QUERY_BUFFER and read from client memory instead of polled with glGetQueryObject (a threaded-driver sync every frame; up to 9 ms render-thread stalls)
+   public static final int DEV_COMBINER_CHECK = integer("devCombinerCheck", 0); // dev (tail2): every Nth combine into a reused composite drawn again into a stock-specified new one and compared byte for byte (pzopt.CombinerPool.compare; driver syncs, dev only)
+   public static final boolean DEV_COMBINER_CENSUS = bool("devCombinerCensus", false); // dev (tail2): TextureCombiner requests / reuses / new / destroyed / pooled per size and its render-thread time, a console line every 10 s
+   public static final boolean ZOMBIE_FIRST_SIGHT_SPRITE = bool("zombieFirstSightSprite", true); // f8-sight pass 2026-10-14 (on by default since 2026-10-15, maintainer, round 11; works without zombieLodDynamic since round 11: the crossfade clock and fade run on their own, the lit sprite only for the zombies waiting for their first composite or their model): a zombie whose clothing composite is not made yet is drawn as its lit flat sprite while the composites are spread over frames under zombieCompositeBudgetUs (nearest first), then its model crossfades in like the LOD's (pzopt.FirstSight)
+   public static final int ZOMBIE_COMPOSITE_BUDGET_US = Math.max(0, integer("zombieCompositeBudgetUs", 1000)); // zombieFirstSightSprite: render-thread time per frame for first clothing composites (at least one a frame; the count follows the measured cost of one)
+   public static final int ZOMBIE_FIRST_SIGHT_MAX_WAIT_MS = Math.max(0, integer("zombieFirstSightMaxWaitMs", 250)); // phasing fix 2026-10-18, zombieFirstSightSprite: a zombie waiting for its first clothing composite (drawn as nothing meanwhile, as stock while a composite is not ready) waits at most this long: the composites a frame rise past zombieCompositeBudgetUs / zombieCompositeMaxPerFrame to the even rate that meets every waiting zombie's deadline (0 = no bound)
+   public static final int ZOMBIE_COMPOSITE_MAX_PER_FRAME = Math.max(0, integer("zombieCompositeMaxPerFrame", 3)); // 3 by default since 2026-10-15 (maintainer); zombieFirstSightSprite (f9-burst, timing only): at most this many first clothing composites a frame (0 = only zombieCompositeBudgetUs): each composite also costs ~0.2 ms of GPU, which the render-thread budget does not see (0.6-1.5 ms of GPU in the bursts' heavy frames, gpuSections moving.composite)
+   public static final boolean RENDER_PREWARM = bool("renderPrewarm", true); // f8-sight pass 2026-10-14, on by default (maintainer, 2026-10-14): once the world exists, the render thread makes what the first zombie drawn in 3D would make (the horde batch's programs and buffers, the atlas batch's buffer, the composite shaders, the combiner pool's VRAM query) : the Louisville route's first sight was a 27 ms render-thread frame (exact: the same objects, made earlier)
+   public static final boolean RENDER_PREWARM_OUTLINES = bool("renderPrewarmOutlines", true); // on by default (maintainer, 2026-10-15) renderPrewarm (tail6 2026-10-14): also the outline pass's three screen-sized framebuffers and three programs (ModelOutlines' lazy setup, a 10-11 ms render-thread frame at its first use on the Louisville route); costs their VRAM from the start even if no outline is ever drawn
+   public static final int DEV_PREWARM_PARTS = integer("devPrewarmParts", 15); // dev: renderPrewarm's parts (1 horde batch programs / buffers, 2 atlas batch buffer, 4 combiner pool VRAM query + composite sizes, 8 composite shaders)
+   public static final boolean DEV_FIRST_SIGHT_CENSUS = bool("devFirstSightCensus", false); // dev: zombie clothing composites per frame and their render-thread time per frame, grants and deferrals (pzopt.FirstSight), a console line every 10 s
+   public static final boolean DEV_FRAME_SECTIONS = bool("devFrameSections", false); // dev (tail pass 2026-10-13): pzopt-gtab.out's per-frame rows and section timers without an alternation (phase column 1), the per-frame source of harness/slowframes.py
    public static final boolean DEV_GT_ABBA = bool("devGtAbba", true); // devGtAlternate: on, off, off, on periods instead of on, off (cancels a linear scene trend)
    public static final int CHAR_DRAW_THREADS = Math.max(1, integer("charDrawThreads", 14)); // threads of the characters draw pre-pass pool (pzopt.CharDraw; clamped to cores - 2): the ~480 zombies' draw data must finish inside the chunk bakes, eight threads left the game thread waiting 0.2 ms a frame, twelve 0.13
    public static final boolean DEV_SIM_CHECKSUM = bool("devSimChecksum", false); // dev: one line per frame in Zomboid/pzopt-sim.out hashing every zombie's position, target, action state and animation state after postupdate (pzopt.SimChecksum, harness/simdiff.py)
@@ -753,8 +928,11 @@ public final class Config {
    public static final boolean DEV_MAP_VISITED_CHECK = bool("devMapVisitedCheck", false);
    /** devMapStreetCheck: lay the street labels out on every reuse too and log when the kept layout differs. */
    public static final boolean DEV_MAP_STREET_CHECK = bool("devMapStreetCheck", false);
-   /** uiRetained: fresh renders from mouse movement alone, per element and second (clicks, wheel and keys are immediate). */
-   public static final int UI_HOVER_HZ = integer("uiHoverHz", 60);
+   /**
+    * uiRetained: fresh renders from mouse movement alone, per element and second (clicks, wheel and keys are immediate);
+    * 0 = on every frame the pointer moves over it (2026-10-14; was 60). Elements uiVerify can check ignore it.
+    */
+   public static final int UI_HOVER_HZ = integer("uiHoverHz", 0);
    /** uiRetained: longest time between fresh renders of an element whose output stayed identical. */
    public static final int UI_RETAINED_MAX_MS = integer("uiRetainedMaxMs", 1000);
    /** uiRetained: elements whose fresh render costs less than this (us) keep the stock rate. */
@@ -771,6 +949,38 @@ public final class Config {
    public static final int UI_RETAINED_SETTLE_MS = integer("uiRetainedSettleMs", 300);
    /** devUiRetainedCheck: render replays fresh anyway and count the ones that would have been stale. */
    public static final boolean DEV_UI_RETAINED_CHECK = bool("devUiRetainedCheck", false);
+   /**
+    * devUiTruth (2026-10-14, UI latency pass): the UI renders every frame with every top-level element fresh (the ground
+    * truth of what the screen should show), while the uiRetained schedule and stock's uiRenderFPS schedule are simulated
+    * beside it; each stretch where what a schedule would show differs from the truth is logged with its cause and
+    * length (X / Y lines in pzopt-ui.out, harness/uiprof.py --truth).
+    */
+   public static final boolean DEV_UI_TRUTH = bool("devUiTruth", false);
+   /**
+    * uiVerify (2026-10-14, UI latency pass): uiRetained elements replay only while their last fresh render's read set
+    * (pzopt.UiDeps: the Lua tables it read, the Java getters it called and their results, the pointer position) is
+    * unchanged, checked every frame; a change (an item renamed, a stat, the clock, the pointer over it) renders the element
+    * fresh in that same frame instead of after the back-off timer (up to uiRetainedMaxMs) or the hover rate (uiHoverHz).
+    */
+   public static final boolean UI_VERIFY = bool("uiVerify", true);
+   /**
+    * uiAnimate: an element whose output changed in its last fresh renders (an animation, smooth scrolling, a drag, the map
+    * while panning) renders fresh on every frame instead of at uiRenderFPS.
+    */
+   public static final boolean UI_ANIMATE = bool("uiAnimate", true);
+   /** uiVerify / uiAnimate: UI frames no click, key or UI event caused come at most this often (0 = the display refresh, -1 = every frame). */
+   public static final int UI_MAX_HZ = integer("uiMaxHz", 0);
+   /**
+    * uiSlack: those UI frames' fresh renders only when they fit in the time the frame has left before the frame cap (the
+    * game thread's measured work without them); an element left waiting renders at uiRenderFPS at the latest (stock).
+    */
+   public static final boolean UI_SLACK = bool("uiSlack", true);
+   /**
+    * uiMoveReplay: a window whose fresh render after a move was its previous commands shifted by the move (learned per
+    * window) is replayed shifted while it is dragged, instead of running its Lua every frame; it still renders fresh at
+    * uiRenderFPS at the least.
+    */
+   public static final boolean UI_MOVE_REPLAY = bool("uiMoveReplay", true);
    /** devHotsaveTiming: IsoMetaGrid.save logs its serialize / write time per file (the transfer hitch). */
    public static final boolean DEV_HOTSAVE_TIMING = bool("devHotsaveTiming", false);
    /** pzopt.HotsaveWarmup: the loader serialises the map metadata three times into a scratch buffer, so the first hot save runs JIT-compiled code. */
@@ -785,9 +995,12 @@ public final class Config {
     * profile never saw. A walk through the world deoptimized ~2,000 compiled methods per 100 s (unstable_if: a branch
     * never taken while profiling, then taken in a new street) and recompiled 16,600, a compiler thread busy for the whole
     * walk; without the traps the JIT used 0.43 cores instead of 0.83, same game-thread time (the flip, 2026-09-24).
+    * Since 2026-10-15 (maintainer) also -XX:-UseTypeSpeculation (f8-resid: the ~45 speculative-type deoptimizations of a
+    * Louisville route, IsoPlayer.updateLOS among them at the horde's first sight, gone); run.sh adds the same flags.
     */
    public static final boolean JIT_STEADY = bool("jitSteady", true);
-   public static final int GC_PAUSE_MS = integer("gcPauseMs", 0); // -XX:MaxGCPauseMillis added with the G1 switch (0 = G1's own 200 ms target)
+   public static final int GC_PAUSE_MS = integer("gcPauseMs", 0); // -XX:MaxGCPauseMillis added with the G1 switch (0 = auto: 5 ms with gcG1Tuned, else G1's own 200 ms target)
+   public static final boolean GC_G1_TUNED = bool("gcG1Tuned", true); // pzopt.GcChoice (2026-10-14, maintainer): with gcMode=g1 the next launch also gets the GC pass's G1 set for frame pacing (small young generation, no survivor copies, mixed collections in small steps, a larger code cache; GcChoice.TUNE_FLAGS, marker -Dpzopt.gctune=), written only on the Java release it was checked on
    public static final String GC_HEAP = string("gcHeap", "auto").toLowerCase(java.util.Locale.ROOT); // pzopt.GcChoice: the next launch's -Xmx: auto (default: gcHeapAutoMb, or gcHeapAutoModsMb with gcHeapAutoMods mods or more) | game (the launcher's own, 3072 MB on Steam) | a size in MB; never more than half the RAM
    public static final int GC_HEAP_AUTO_MB = integer("gcHeapAutoMb", 4096); // gcHeap=auto without a big mod list (vanilla horde: ~2.8 GB live, the launcher's 3 GB 95 % full)
    public static final int GC_HEAP_AUTO_MODS = integer("gcHeapAutoMods", 30); // gcHeap=auto: this many enabled mods (heap peak ~+20 MB a mod: 66 mods filled 4 GB to 3.7 GB on the drive, a horde adds ~0.4 GB) (main menu or the last save, the larger) or more take gcHeapAutoModsMb
@@ -810,7 +1023,7 @@ public final class Config {
     * check for render-chunk FBOs after the first complete one (TextureFBO).
     */
    public static final boolean GL_NO_SYNC = bool("glNoSync", false);
-   public static final int GL_NAME_POOL = Math.max(8, integer("glNamePool", 256)); // glNoSync: texture names kept ready
+   public static final int GL_NAME_POOL = Math.max(8, integer("glNamePool", 1024)); // glNoSync: texture names kept ready (1024 since 2026-10-12: on the Louisville horde 256 ran dry in the frames that bring new zombies, 2,327 glGenTextures round trips a run)
    public static final boolean WEATHER_NO_GLGET = bool("weatherNoGlGet", true); // WeatherParticleDrawer takes the current shader program from ShaderHelper's record instead of glGetInteger (a driver sync per call)
    public static final boolean DEV_GL_STATE_CHECK = bool("devGlStateCheck", false); // dev: also query the driver and count disagreements with the recorded program
    public static final boolean PROPERTY_SURFACE_NOALLOC = bool("propertySurfaceNoAlloc", true); // PropertyContainer.initSurface walks its entries without allocating a capturing lambda per call (C1 code, jitMode)
@@ -879,6 +1092,25 @@ public final class Config {
    public static final boolean AOT_CACHE = bool("aotCache", true);
    /** dev: let a harness run drive the aotCache cycle (normally inert there: run.sh owns the launcher JSON). */
    public static final boolean DEV_AOT_CACHE_HARNESS = bool("devAotCacheHarness", false);
+   /**
+    * aotCache (f9-burst, 2026-10-15): the record / use launches also carry -XX:+UnlockDiagnosticVMOptions
+    * -XX:-AOTInvokeDynamicLinking. With the game's Zulu 25.0.1 every recording session's cache assembly (the child JVM the
+    * JDK starts at exit) died in ArchiveHeapWriter::compute_ptrmap ("Metadata ... should have been archived": an archived
+    * invokedynamic / lambda object refers to a class the AOT cache excludes, the pre-Java-6 trove and lwjgl.util classes),
+    * so no player ever got a cache: hs_err_pid*.log in the game folder at every second quit, and the launcher went record
+    * -> use (cache missing) -> record forever. Without AOT-linked invokedynamic the assembly succeeds and keeps the classes
+    * and all method profiles (28,423 MethodTrainingData from a Louisville session). On by default since 2026-10-15 (maintainer).
+    */
+   public static final boolean AOT_NO_INDY = bool("aotNoIndy", true); // on by default since 2026-10-15 (maintainer): the players' aotCache gets its cache at last
+   /**
+    * f9-burst (2026-10-15): the 128 generic zombie bodies of DeadBodyAtlas (the flat sprites of atlas / LOD zombies) are
+    * requested a few a frame once the world exists, instead of in the frames a horde first comes into view (pzopt.BodyAtlasPrewarm;
+    * exact: the same cached textures, made earlier). On by default since 2026-10-15 (maintainer).
+    */
+   public static final boolean DEV_ZOMBIE_GROUP_CENSUS = bool("devZombieGroupCensus", false); // dev (f9-burst): ZombieGroupManager's groups / members / timing every 10 s in the console (also on in instrumented runs)
+   public static final boolean BODY_ATLAS_PREWARM = bool("bodyAtlasPrewarm", true); // on by default since 2026-10-15 (maintainer)
+   public static final int BODY_ATLAS_PREWARM_PER_FRAME = Math.max(1, integer("bodyAtlasPrewarmPerFrame", 2));
+   public static final int BODY_ATLAS_PREWARM_DELAY_FRAMES = Math.max(0, integer("bodyAtlasPrewarmDelayFrames", 60));
    public static final boolean ANIM_CLIP_CACHE = bool("animClipCache", true);
    /** auto = honour options.ini (frameRate / uncappedFPS); true / false force the frame cap off / on for a run. */
    public static final String UNCAPPED_FPS = string("uncappedFps", "auto");
@@ -920,8 +1152,104 @@ public final class Config {
     * steps (capped only). off | cpu | gpu | gpufinish | auto (auto = gpu wherever GL timestamp queries exist, cpu only while VRR is active, off under the macOS Metal bridge); see pzopt.Pacing.
     */
    public static final String PRESENT_PACING = string("presentPacing", "auto");
+   /** Unattended built-in benchmark at boot (technique 25): off, all, or scenarios[:passes[:ab]] (pzopt.Benchmark). */
+   public static final String BENCHMARK_AUTO = string("benchmarkAuto", "off");
+   /** dev: the main menu opens a benchmark screen by itself (panel | history | report:<run>) for the UI checks (harness/benchmark-run.sh). */
+   public static final String DEV_BENCHMARK_UI = string("devBenchmarkUi", "");
    public static final int PRESENT_PACING_PCT = Math.max(50, Math.min(100, integer("presentPacingPct", 90)));
    public static final int PRESENT_PACING_MARGIN_US = Math.max(0, integer("presentPacingMarginUs", 200));
+   /**
+    * Paced frame queue at a frame cap (f8-pace, 2026-10-13; ON by default since 2026-10-15, maintainer: it adds input latency for
+    * an even cadence: +3-7 ms step start -> swap over presentPacing, and frameQueueGpu + the decay another 3-5 ms on the
+    * Louisville horde / 5-7 ms on the 120 km/h drive (step start -> screen ~20 / 14-17 ms at the 120 cap); only while
+    * a world is played, never uncapped, in menus, with vsync on a fixed refresh, on macOS or with reflexSleep: Pacing.queueAllowed). Every capped
+    * step serves one slot of the limiter's grid (start + k / cap); the render thread presents frame k at slot k + D, D a high
+    * percentile ({@code frameQueuePct}) of how long frames take from their slot to "ready to swap" without the hold (the
+    * game thread's hand-off arrival + the render submit), so a slow game step is absorbed by the slack of the frames around
+    * it instead of reaching the screen.
+    * Replaces presentPacing at the cap while on (pzopt.Pacing).
+    */
+   public static final boolean FRAME_QUEUE = bool("frameQueue", true);
+   public static final int FRAME_QUEUE_PCT = Math.max(50, Math.min(100, integer("frameQueuePct", 99)));
+   public static final int FRAME_QUEUE_MARGIN_US = Math.max(0, integer("frameQueueMarginUs", 300));
+   /**
+    * frameQueue: the longest slot -> present delay D in percent of the cap interval. The three sprite states hold about two
+    * frames: past ~230 % the game thread starts to wait at the hand-off (300 %: 1.3 ms a frame on the Louisville cap, run
+    * pace-cap-fqdeep) but the share of frames within 9 ms still rose (p97 / 230 %: 81.7 %, p99 / 300 %: 83.3 %).
+    */
+   public static final int FRAME_QUEUE_MAX_PCT = Math.max(50, Math.min(400, integer("frameQueueMaxPct", 260))); // 260 by default since 2026-10-15 (f8-pace2: above ~2.5 intervals the game thread waits at the hand-off)
+   /** frameQueue: the shortest D in percent of the cap interval, at caps of {@code frameQueueFixedMinFps} fps or more. */
+   public static final int FRAME_QUEUE_MIN_PCT = Math.max(0, Math.min(400, integer("frameQueueMinPct", 260))); // 260 by default since 2026-10-15 (maintainer): with frameQueueMaxPct 260 a fixed D of 2.6 cap intervals (21.67 ms at 120 fps), the Louisville lock set; only at caps of frameQueueFixedMinFps or more since 2026-10-15 (round 11)
+   /**
+    * frameQueue (maintainer 2026-10-15, round 11): frameQueueMinPct (the fixed D) applies at frame caps of this many fps or
+    * more; below it D's floor is {@code frameQueueLowCapMinPct}, i.e. the adaptive queue of before (D follows the p99 of slot
+    * -> ready between that floor and frameQueueMaxPct). 2.6 intervals are 21.7 ms at 120 fps but 43 ms at 60 and 87 ms at 30.
+    * 0 = frameQueueMinPct at every cap.
+    */
+   public static final int FRAME_QUEUE_FIXED_MIN_FPS = Math.max(0, integer("frameQueueFixedMinFps", 100));
+   /** frameQueue: the shortest D in percent of the cap interval at caps below {@code frameQueueFixedMinFps} (the adaptive floor, frameQueueMinPct's default until 2026-10-15). */
+   public static final int FRAME_QUEUE_LOW_CAP_MIN_PCT = Math.max(0, Math.min(400, integer("frameQueueLowCapMinPct", 60)));
+   /**
+    * frameQueue at caps below {@code frameQueueFixedMinFps} (2026-10-15, after round 11): how long the frames must have been
+    * ready within one cap interval of their slot before D learns from them, after the queue turned on (a world loaded, a menu
+    * or the pause menu closed) or the cap changed. Until then D waits at its floor (frameQueueLowCapMinPct) with an empty
+    * window, at most 10 s. Round 11 learned from the world's start bursts (slot -> ready 77-411 ms): D began at the 260 %
+    * ceiling, 43 ms at a 60 fps cap and 87 ms at 30, and took 20 s / ~67 s to come down. 0 = learn from the first frame.
+    */
+   public static final int FRAME_QUEUE_LOW_CAP_CALM_MS = Math.max(0, Math.min(10_000, integer("frameQueueLowCapCalmMs", 1000)));
+   /**
+    * frameQueue at caps below frameQueueFixedMinFps: how fast D may fall, in percent of the cap interval per second (25: 4.2 ms/s
+    * at 60 fps, 8.3 ms/s at 30), instead of frameQueueDecayUsPerS's fixed 1 ms/s (12 % of an interval a second at 120 fps,
+    * 3 % at 30). 0 = frameQueueDecayUsPerS.
+    */
+   public static final int FRAME_QUEUE_LOW_CAP_DECAY_PCT = Math.max(0, Math.min(1000, integer("frameQueueLowCapDecayPct", 25)));
+   /**
+    * frameQueue at caps below frameQueueFixedMinFps: added to D on top of frameQueueMarginUs, in percent of the cap interval
+    * (20: 3.3 ms at 60 fps, 6.7 ms at 30). A D that falls within seconds sits close to the frames' p99 and every rise of the
+    * slow frames' time came late; replayed through round 11's logged 60 / 30 fps Louisville lags (route window, on-screen
+    * intervals): margin 0 / 10 / 15 / 20 % gave 21-29 / 18 / 16 / 14 intervals more than 0.5 ms long at 60 fps (round 11's
+    * slow-falling D: 14, D 23.1 ms on the route) and 4 / 1 / 1 / 0 at 30 (round 11: 0, D 63.6 ms); with 20 % D 23.2 / 26.5 ms.
+    * frameQueueSlewUs (500 us a frame) stays the slew at low caps too: a slew in percent of the interval (6-12 %) made each rise
+    * a run of 1-2 ms longer frames (60 fps p99 17.31 -> 17.78 ms on the Louisville route, run i11f-p60).
+    */
+   public static final int FRAME_QUEUE_LOW_CAP_MARGIN_PCT = Math.max(0, Math.min(100, integer("frameQueueLowCapMarginPct", 20)));
+   /**
+    * frameQueue (f8-pace2, 2026-10-15; on by default with the queue since 2026-10-15, maintainer): D's samples include the frame's GPU completion. The swap of an on-time
+    * frame goes at its slot + D, but the flip waits for the GPU: on the Louisville cap with the zombie LOD 8 % of the frames were
+    * still drawing at their swap call (GPU done 0.7-10 ms after it), so 111 of the 168 on-screen intervals over 9 ms had their
+    * swap call on the cadence (run integ6-lod2, present.txt), and the overlay / MangoHud frame time (swap return) blocked with
+    * them. A sample is then the frame's slot -> ready time plus how long the GPU took past the end of the render submit (GL
+    * timestamp, read a few frames later); without GL timestamps the CPU sample stays.
+    */
+   public static final boolean FRAME_QUEUE_GPU = bool("frameQueueGpu", true);
+   /**
+    * frameQueue: the most D may change from one frame to the next, in us (0 = D jumps to each new percentile). A jump of D
+    * makes one present interval longer by the jump: 22 of the 63 swap-call intervals over 9 ms of run integ6-lod2 were D rising
+    * 1-4 ms at a 15-frame recomputation. 500 keeps every interval within 8.33 +- 0.5 ms while D moves. With a slew the
+    * percentile is also recomputed every frame (else every 15), so D starts rising the frame a burst's first samples arrive.
+    */
+   public static final int FRAME_QUEUE_SLEW_US = Math.max(0, integer("frameQueueSlewUs", 500)); // 500 by default since 2026-10-15 (maintainer)
+   /**
+    * frameQueue: how fast D may fall, in us per second (0 = D follows the 240-frame percentile down at once). The percentile
+    * window forgets a burst in 2 s, so D fell to 7-10 ms in calm stretches and the next slow step was late (27 of the 63
+    * late swap calls of integ6-lod2 were game steps past a low D).
+    */
+   public static final int FRAME_QUEUE_DECAY_US_PER_S = Math.max(0, integer("frameQueueDecayUsPerS", 1000)); // 1000 by default since 2026-10-15 (maintainer)
+   /**
+    * frameQueue: how long before its swap target the holding render thread stops parking and spins (us; 1000 = the old hold,
+    * Pacing.waitUntil). Any other value also sets the render thread's timer slack to 1 ns, so a short spin still wakes on time.
+    */
+   public static final int FRAME_QUEUE_SPIN_US = Math.max(0, Math.min(5000, integer("frameQueueSpinUs", 1000)));
+   public static final int FRAME_QUEUE_RT_HOLD = Math.max(0, Math.min(2, integer("frameQueueRtHold", 0))); // f9-present (timing only): the render thread runs SCHED_FIFO (frameQueueRtPrio) while it holds a frame for its present slot (1; only with frameQueueSpinUs != 1000, i.e. a short spin), or from the hold to the swap's return (2), so a CFS thread on its core cannot make the hold end late (Louisville lock runs: 8-16 holds a run ended 0.2-4.5 ms late); needs RLIMIT_RTPRIO > 0, else it logs once and stays off. In-run A/B: devGtAlternateKeys=frameQueueRtHold
+   public static final int FRAME_QUEUE_RT_PRIO = Math.max(1, Math.min(98, integer("frameQueueRtPrio", 1))); // frameQueueRtHold: the SCHED_FIFO priority (any RT priority preempts CFS threads; 1 stays below audio servers' RT threads)
+   /**
+    * Frame limiter: how many missed slots of the cap grid the next steps make up (they start back to back until the grid is
+    * reached again). 0 = stock (`accumulator %= interval`: a step longer than two intervals drops the whole intervals it
+    * overran). Raises the mean after a burst by running the next steps back to back, but those catch-up frames arrive late
+    * for their slots, so with frameQueue they go out at once instead of on the cadence (trace model on run pace-cap-fq1:
+    * catch-up 3 with the queue 79.7 % of frames within 9 ms, the stock limiter 83.8 %).
+    */
+   public static final int LIMITER_CATCH_UP = Math.max(0, Math.min(240, integer("limiterCatchUp", 0)));
    /**
     * A borderless window covering the monitor is created as a GLFW monitor window at the desktop's own mode (no mode switch,
     * no auto-iconify), so the compositor sees a fullscreen window: KWin / Mutter / gamescope only switch variable refresh on
@@ -955,6 +1283,19 @@ public final class Config {
     */
    public static final String CORE_PLACEMENT = string("corePlacement", "auto");
    /**
+    * macOS: the QoS class of the frame-critical pools whose batches the game thread joins every frame (frame workers, CharDraw,
+    * VisPolyAsync; pzopt.CorePlacement.frameCritical): user-initiated | utility (the old class, E cores first; loses its
+    * cores to outside load) | user-interactive | default. f11-mac, 2026-10-16, MacBook Pro M1 Pro, Louisville horde
+    * uncapped: with 4 busy cores beside the game utility 35 fps, user-initiated 55; quiet 55.5 -> 59.5.
+    */
+   public static final String WORKER_QOS_MAC = string("workerQosMac", "user-initiated");
+   /**
+    * The game thread's wait for a player-sight chunk a frame worker claimed (pzopt.PlayerLosBatch.await) spins briefly and then
+    * parks in short slices instead of spinning until the worker is done (f11-mac: a worker preempted by outside load kept the
+    * game thread spinning on a core the other workers needed). Measured off: in-run A/B under load +2.3 +- 4.1 ms a frame.
+    */
+   public static final boolean JOIN_SPIN_PARK = bool("joinSpinPark", false);
+   /**
     * The machine's logical CPUs, read when Config loads (boot, before corePlacement narrows any thread's affinity: Java's
     * availableProcessors() follows the calling thread's mask, so a pool sized later from the game thread got 8 of 24).
     */
@@ -978,6 +1319,17 @@ public final class Config {
    public static final String CORE_BACKGROUND_CPUS = string("coreBackgroundCpus", "");
    /** corePlacement: the CPUs the game / render / GL threads use when they are on the fast class (a list; empty = the fast class). */
    public static final String CORE_CRITICAL_CPUS = string("coreCriticalCpus", "");
+   /**
+    * corePlacement (f8-flip, 2026-10-15): the CPUs of the frame workers ({@code pzopt-frame-N}, the zombie batches) in a world, a
+    * list like "1-3,13-15"; empty = the background class (the efficient cores, every core while frames miss the cap). On the
+    * flip the workers otherwise land on the Zen 5c cluster (2.8 GHz, the other L3) while the game thread that waits for them
+    * runs on Zen 5. Only where threads run: no result changes.
+    */
+   public static final String CORE_FRAME_CPUS = string("coreFrameCpus", "");
+   /** corePlacement (f8-flip): the CPUs of the game thread alone while the critical class is on the fast cores (empty = the critical class's). */
+   public static final String CORE_GAME_CPUS = string("coreGameCpus", "");
+   /** corePlacement (f8-flip): with coreGameCpus, no other thread (the GC pause class excepted) runs on the game thread's CPUs or their SMT siblings. */
+   public static final boolean CORE_GAME_EXCLUSIVE = bool("coreGameExclusive", false);
    /** corePlacement=auto: the game step's p90 (share of the frame interval) above which the game and render threads move to the fast cores. */
    public static final int CORE_PROMOTE_PCT = Math.max(30, Math.min(100, integer("corePromotePct", 85)));
    /** corePlacement=auto: back to the efficient cores when the work, scaled by the measured fast/slow speed ratio, fits this share of the interval. */
@@ -1317,6 +1669,17 @@ public final class Config {
    public static final boolean GOD_RAYS_LATE_DRAW = bool("godRaysLateDraw", false); // god rays: the light volumes and local lights drawn over the finished world at the screen composite (measured: +10 us, the extra FBO switch; off)
    public static final boolean GOD_RAYS_ROOF_RULE = bool("godRaysRoofRule", true); // god rays: a window or doorway whose outside square has a roof, a porch roof or a floor right above it lets no light in (no shaft, no sunlit patch)
    public static final boolean GOD_RAYS_DOOR_GLASS = bool("godRaysDoorGlass", true); // god rays: closed doors with glass (a window in the door, sliding glass doors) let the light through their glass, unless curtained or barricaded
+   public static volatile boolean GOD_RAYS_DOOR_LEAF; // god rays: an open door's leaf stands in its doorway's light (pzopt.DoorLight): the shaft and its sunlit patch lose what the leaf shades, a glass door's glass lets its share through (live: loadLive)
+   public static volatile int GOD_RAYS_DOOR_SWING_MS; // god rays: a door toggle swings the leaf about its hinge over this many ms for the light (opening: the light sweeps in through the widening gap; closing: it is cut off as the leaf shuts); 0 = at once, as the sprite (live: loadLive)
+   public static final boolean GOD_RAYS_DOOR_MERGE = bool("godRaysDoorMerge", true); // god rays: the tiles of one wide open door (a garage door, a double door) let the light in as one opening (each tile kept its frame margins: dark bars across the shaft)
+   public static volatile boolean GOD_RAYS_SPILL; // god rays at night: a lit room's light spills out through its open doors and windows into the fog and the rain (its frustum through the opening, soft-edged; pzopt.DoorLight) (live: loadLive)
+   public static volatile int GOD_RAYS_SPILL_PCT; // god rays at night: how bright the light spilling out of lit rooms is, % (live: loadLive)
+   public static volatile boolean GOD_RAYS_CHAR_SHADOWS; // god rays: people standing in a shaft through a window or a doorway cast their shadow into the lit dust and onto its sunlit patch (two soft capsules each, analytic) (live: loadLive)
+   public static volatile int GOD_RAYS_DOOR_DUST_PCT; // god rays: a door opening stirs the dust in its shaft (thicker swirls drifting in with the draft, more motes, settling over a few seconds), %; 0 = none (live: loadLive)
+   public static volatile int GOD_RAYS_BOUNCE_PCT; // god rays: the sunlit patch a shaft lays on the floor bounces its light onto the walls and furniture of its room round it, %; 0 = none (the default: measured 2026-10-18, a few levels on the walls for ~17 us at the cap; the game's own room light outweighs it) (live: loadLive)
+   public static volatile boolean GOD_RAYS_BOUNCE_OFF; // (the bounce shader did not compile)
+   public static final boolean GOD_RAYS_ROOF_EXACT = bool("godRaysRoofExact", false); // god rays: instead of the roof rule's "no light under a porch roof", the light comes in under the roof's edge as the sun's height allows (a low sun reaches in under the porch, a high one does not); off: the maintainer's rule (2026-10-04)
+   public static final boolean GOD_RAYS_DOOR_WATCH = bool("godRaysDoorWatch", true); // god rays: the doors (open, curtain) and window curtains round the camera are checked every frame and a change rebuilds that chunk's light at once (42.21 draws doors per frame: a door toggle baked nothing and the shaft came with the 30 s refresh)
    public static final boolean GOD_RAYS_AP_CLIP = bool("godRaysApClip", true); // god rays: a light volume ends at the first wall or the edge of the building at every height of its aperture (one wall test at the aperture's middle let the upper part of a long evening shaft through the far wall onto the street)
    public static final boolean GOD_RAYS_AP_CULL = bool("godRaysApCull", true); // god rays: light volumes only in rooms the game shows (its building cut away, the player's level)
    public static final boolean GOD_RAYS_AP_DEPTH_TEST = bool("godRaysApDepthTest", true); // god rays: the light volumes' faces depth-tested against the scene (behind a roof or wall: never shaded)
@@ -1330,6 +1693,8 @@ public final class Config {
    public static final int DEV_GOD_RAYS_ALTERNATE = integer("devGodRaysAlternate", 0); // dev: ms; god rays switch on and off every period (the screen pass's GPU time split by it)
    public static final boolean DEV_GOD_RAYS_TOUCH_DEPTH = bool("devGodRaysTouchDepth", false); // dev (cost attribution): the off phase of devGodRaysAlternateAll still reads one scene depth texel
    public static final int DEV_GOD_RAYS_SKIP = integer("devGodRaysSkip", 0); // dev (cost attribution): 1 no god ray buffer pass (the last one stays), 2 no composite tap, 4 no volume compute, 8 no fog shade, 16 light volumes read no depth, 32 light volume pass draws nothing, 64 light volumes blend plainly
+   public static final int DEV_GOD_RAYS_DOOR_ALTERNATE = integer("devGodRaysDoorAlternate", 0); // dev: ms; the door features (leaf in the shader, the night spill) switch on and off every period (harness/godrays/doorab.py --alt door; devGodRaysTiming splits the passes .d1 / .d0)
+   public static final boolean DEV_GOD_RAYS_BOUNCE_VIEW = bool("devGodRaysBounceView", false); // dev: the bounce boxes tinted by why a pixel takes no light (blue: out of reach or below the patch, red: another room) or takes it (green)
    public static final boolean DEV_GOD_RAYS_ALTERNATE_ALL = bool("devGodRaysAlternateAll", false); // dev: the alternation's off half skips every god ray pass (frame-time A/B within one run: harness/godrays/abframes.py)
    public static final boolean DEV_GOD_RAYS_TIMING = bool("devGodRaysTiming", false); // dev: GL timestamps around the volume updates and the screen pass (on / off), medians logged every 5 s
    public static final boolean DEV_GOD_RAYS_SOFT_VIEW = bool("devGodRaysSoftView", false); // dev: the light volumes show their soft cover (red: the mean along the view column, green: the hull's stretch)
@@ -1412,7 +1777,69 @@ public final class Config {
    public static final String DEV_PPL_TOGGLE_AT = string("devPplToggleAt", ""); // dev: seconds after the world is up at which pixelLight flips on / off (every texture re-baked), for A/Bs of one scene in one run
    public static final String DEV_CAPTURE = string("devCapture", ""); // dev: start,seconds,fps,scalePct: the presented frames read back to ~/Zomboid/pzopt-capture/ (pzopt.FrameCapture), a recorder-free video rig
    public static final String DEV_PPL_DUMP_AT = string("devPplDumpAt", ""); // dev: seconds after the world is up at which the per-square lighting, the light sources and the scene depth + colour go to ~/Zomboid/pzopt-ppl/ (pzopt.PixelLight)
+   // voxel lighting (pzopt.VoxelLight, 2026-10-18): the static lights (lamps, room lights), the sky and one bounce traced through
+   // the god rays' voxel occupancy into a world-anchored light volume, lit per pixel by pixelLight's chunk composite
+   public static final boolean VOXEL_LIGHT = bool("voxelLight", false); // voxel lighting on (needs pixelLight; applies at the next launch)
+   public static final int VOXEL_LIGHT_SQUARES = pow2Clamp(integer("voxelLightSquares", 256), 64, 256); // squares per side of the light volume round the camera (power of two, within the occupancy's 256)
+   public static final int VOXEL_LIGHT_RES = Math.max(1, Math.min(4, integer("voxelLightRes", 2))); // light volume texels per square across (1, 2 or 4)
+   public static final int VOXEL_LIGHT_LEVEL_RES = Math.max(1, Math.min(4, integer("voxelLightLevelRes", 2))); // light volume texels per level of height
+   public static final int VOXEL_LIGHT_BRICKS = Math.max(8, integer("voxelLightBricksPerFrame", 256)); // light volume bricks (4 x 4 squares x 1 level) traced a frame at most, nearest first
+   public static final int VOXEL_LIGHT_STRENGTH_PCT = integer("voxelLightStrengthPct", 100); // the traced lamps' and room lights' brightness, % of the native's
+   public static final String VOXEL_LIGHT_COMBINE = string("voxelLightCombine", "max"); // how lights add up at a point: max (the native's), hue (summed, scaled back under 1 keeping the colour), screen (1 - (1 - a)(1 - b)), add
+   public static final boolean VOXEL_LIGHT_SKY = bool("voxelLightSky", true); // the ambient from the open sky, flooded through windows and doorways into rooms (replaces the native's indoor darkening)
+   public static final String VOXEL_LIGHT_SKY_METHOD = string("voxelLightSkyMethod", "flood"); // the sky term: flood (open columns flooded through openings) or cones (17 rays a cell through the occupancy, the flood softening them)
+   public static final int VOXEL_LIGHT_SKY_DECAY_PCT = integer("voxelLightSkyDecayPct", 72); // sky flood: what is left of the sky light a square further from the open sky, %
+   public static final int VOXEL_LIGHT_SKY_FLOOR_PCT = integer("voxelLightSkyFloorPct", 20); // sky flood: the least ambient a room keeps, % of the outdoor ambient
+   public static final boolean VOXEL_LIGHT_AMBIENT_ADD = bool("voxelLightAmbientAdd", false); // the lamps add to the sky's ambient (off: the brighter of the two, as the native)
+   public static final boolean VOXEL_LIGHT_BOUNCE = bool("voxelLightBounce", true); // one bounce: the traced light's reflection, flooded through the occupancy (warm spill from lit windows, fill near lamp pools)
+   public static final int VOXEL_LIGHT_BOUNCE_PCT = integer("voxelLightBouncePct", 15); // one bounce: the surfaces' albedo, %
+   public static final String VOXEL_LIGHT_BOUNCE_METHOD = string("voxelLightBounceMethod", "flood"); // the bounce: flood (the brightest neighbour, non-directional) or cube (six directional fluxes propagated: a wall facing the lit area takes more)
+   public static final int VOXEL_LIGHT_CUBE_GAIN_PCT = integer("voxelLightCubeGainPct", 100); // cube: the directional bounce's strength, %
+   public static final int VOXEL_LIGHT_BOUNCE_DECAY_PCT = integer("voxelLightBounceDecayPct", 60); // one bounce: what is left a square further, %
+   public static final int VOXEL_LIGHT_PROP_ITERS = Math.max(1, integer("voxelLightPropIters", 4)); // flood iterations a frame while the flood has not settled
+   public static final int VOXEL_LIGHT_GLASS_PCT = integer("voxelLightGlassPct", 85); // light through a window pane, %
+   public static final int VOXEL_LIGHT_FENCE_PCT = integer("voxelLightFencePct", 80); // light through a see-through fence (bars, chain link), %
+   public static final int VOXEL_LIGHT_CROWN_PCT = integer("voxelLightCrownPct", 100); // how much tree crowns stop light, %
+   public static final int VOXEL_LIGHT_WRAP_PCT = integer("voxelLightWrapPct", 35); // facing to the light: wrap, % (as pplWrapPct)
+   public static final String VOXEL_LIGHT_NORMAL = string("voxelLightNormal", "texel"); // the surface normal for the facing: texel (pplTexelPos's), screen (derivatives), none (no facing)
+   public static final int DEV_VOXEL_LIGHT_VIEW = integer("devVoxelLightView", 0); // dev (with devPplView != 0 for the dev variant): 1 the traced light, 2 the sky term, 3 the bounce, 4 validity, 5 the facing, 6 the voxel light alone (no native), 7 native vs voxel split screen
+   public static final String DEV_VOXEL_LIGHT_VIEW_LIST = string("devVoxelLightViewList", "0,1,2,3,4,5,6,7"); // dev: the views devVoxelLightViewCycle steps through
+   public static final int DEV_VOXEL_LIGHT_VIEW_CYCLE = integer("devVoxelLightViewCycle", 0); // dev: every N ms the next dev view (0..7, logged with its epoch; needs devPplView != 0, e.g. 99, for the dev programs)
+   public static final boolean DEV_VOXEL_LIGHT_TORCH_LOG = bool("devVoxelLightTorchLog", false); // dev: every torch retrace to the console (epoch ms, position, height, level, the share of its map in shadow; reads the map back)
+   public static final String DEV_VOXEL_LIGHT_PROBE = string("devVoxelLightProbe", ""); // dev: x0,y0,x1,y1,z: every 5 s the lights reaching that box and each square's room / roof / occupancy word to the console
+   public static final String DEV_VOXEL_LIGHT_DUMP_AT = string("devVoxelLightDumpAt", ""); // dev: seconds after the first voxel frame at which the light volumes are read back to ~/Zomboid/pzopt-voxel/ (A, C as float32, + the frame's mapping)
+   public static final String VOXEL_LIGHT_APPLY = string("voxelLightApply", "cache"); // how the composite reads it: cache (a light layer per chunk texture, relit by compute when it or the volume changes: one fetch a pixel), pixel (the volume per pixel)
+   public static final int VOXEL_LIGHT_CACHE_LAYERS = Math.max(64, integer("voxelLightCacheLayers", 1536)); // cache: light layers (one a chunk texture on screen)
+   public static final int VOXEL_LIGHT_CACHE_W = Math.max(32, integer("voxelLightCacheW", 128)); // cache: a layer's texels across (a chunk texture is ~1024-1500 px wide)
+   public static final int VOXEL_LIGHT_CACHE_H = Math.max(32, integer("voxelLightCacheH", 96)); // cache: a layer's texels down (a chunk texture is 1024 px tall)
+   public static final String VOXEL_LIGHT_PENDING = string("voxelLightPending", "native"); // cache: a chunk texture whose layer is not lit yet (new on screen, a frame or two): native (the native's light, free) or pixel (the volume per pixel, ~+130 us at 5K while any is)
+   public static final int VOXEL_LIGHT_RELIGHTS_BAKED = Math.max(1, integer("voxelLightRelightsBaked", 8)); // cache: of those, layers relit only because their chunk re-baked (turning near cut walls re-bakes many)
+   public static final int VOXEL_LIGHT_RELIGHTS = Math.max(1, integer("voxelLightRelightsPerFrame", 32)); // cache: layers relit a frame at most (new ones first)
+   public static final boolean VOXEL_LIGHT_TORCH_SHADOWS = bool("voxelLightTorchShadows", true); // carried torches cast shadows: a visibility map round each traced through the occupancy every frame it moves (walls, fences, floors, crowns)
+   public static final boolean VOXEL_LIGHT_SKIP = bool("voxelLightSkip", true); // traces cross 4 x 4 square blocks with nothing in them in one step (a coarse occupancy)
+   public static final String VOXEL_LIGHT_DIRECT = string("voxelLightDirect", "dda"); // the direct light's visibility: dda (each texel marches to each lamp) or maps (a 64 x 64 octahedral visibility map per lamp, marched from the lamp; texels look it up)
+   public static final int VOXEL_LIGHT_GATHER_FRAMES = Math.max(1, integer("voxelLightGatherFrames", 10)); // the light list is read every N frames (and when the window moves)
+   public static final boolean DEV_VOXEL_LIGHT_TIMING = bool("devVoxelLightTiming", false); // dev: GPU time of the light volume's passes in the log every 5 s
+   public static final int DEV_VOXEL_LIGHT_ALTERNATE = integer("devVoxelLightAlternate", 0); // dev: every N ms voxel lighting flips on / off (its passes and the composite term), for within-run frame-time A/Bs
+   public static final boolean DEV_VOXEL_LIGHT_FULL = bool("devVoxelLightFull", false); // dev: every brick traced again every frame (the brute-force cost reference)
    public static final boolean DEV_SSR_TIMING = bool("devSsrTiming", false); // dev: GPU time of the water pass in the log every 600 frames, apart for reflections on / off (devSsrAlternate)
+   public static final String HORDE_BATCH = string("hordeBatch", "exact"); // exact by default since 2026-10-14 (maintainer): the 3D zombies' model draws in batches on the render thread (pzopt.HordeBatch): one program, a draw record + bone palette per draw in storage buffers, one attribute push / pop per run; off | exact (a run ends at anything drawn between two zombies: the stock order) | defer (the moving pass's zombies drawn at its end, stock order among them); GL 4.3, stock elsewhere
+   public static final String HORDE_BATCH_UPLOAD = string("hordeBatchUpload", "mapped"); // hordeBatch's records: mapped (persistent coherent buffers, GL 4.4, four frames in turn behind fences) | subdata (glBufferSubData per run)
+   public static final String HORDE_BATCH_VAO = string("hordeBatchVao", "format"); // format by default since 2026-10-14 (maintainer); hordeBatch's vertex array objects: mesh (one per mesh, made at its first draw: ~1 ms wait each on the threaded driver) | format (one per vertex layout, GL 4.3 attribute format, the mesh's buffers bound per draw; horde round 2)
+   public static final int HORDE_BATCH_UNITS = integer("hordeBatchUnits", 16); // 16 by default since 2026-10-14 (maintainer); horde round 2: hordeBatch draws a run's character textures from up to N (<= 16) texture units bound once a chunk (pzopt_hordeu programs, the record's unit picks the sampler) instead of one bind before every draw; 0 = off
+   public static final String HORDE_BATCH_ORDER = string("hordeBatchOrder", "window"); // window by default since 2026-10-14 (maintainer); horde round 2, with hordeBatch=exact and atlasBatch: stock (a run ends at anything between two zombies) | window (the 3D zombies and the atlas quads between two other commands drawn as two groups, the first-come kind first, a quad or zombie joining only when its screen rectangle overlaps no earlier one of the other kind it would jump over: the same pixels; pzopt.HordeBatch)
+   public static final float HORDE_ORDER_BOX_XZ = integer("hordeOrderBoxXZPct", 120) / 100.0F; // hordeBatchOrder=window: a 3D zombie's bounds, half width in model units (x and z; the model is 1.5 tiles a unit)
+   public static final float HORDE_ORDER_BOX_Y0 = integer("hordeOrderBoxY0Pct", -60) / 100.0F; // its bottom (model units, y up)
+   public static final float HORDE_ORDER_BOX_Y1 = integer("hordeOrderBoxY1Pct", 240) / 100.0F; // its top
+   public static final int DEV_HORDE_ORDER_CHECK = integer("devHordeOrderCheck", 0); // dev: every N-th hordeBatchOrder=window window with both groups drawn both ways (groups, then the saved framebuffer put back and every zombie / quad in the stock order) and the framebuffers compared; "horde order:" console line
+   public static final boolean ATLAS_BATCH = bool("atlasBatch", true); // on by default since 2026-10-14 (maintainer); horde round 2: the flat atlas zombies' quads (DeadBodyAtlas$BodyTextureDepthDrawer) of the moving pass drawn in runs, stock order and state per quad (pzopt.AtlasBatch); needs hordeBatch's pass markers (hordeBatch != off), GL 4.3
+   public static final int DEV_ATLAS_CHECK = integer("devAtlasCheck", 0); // dev: every N-th atlasBatch run of two or more quads drawn both ways (batch, then the saved framebuffer put back and the stock draws) and the framebuffers compared; "atlas batch:" console line
+   public static final int DEV_HORDE_CHECK = integer("devHordeCheck", 0); // dev: every N-th frame each hordeBatch run is drawn both ways (batch, then the saved framebuffer put back and the stock draws) and the framebuffers compared; "horde batch:" console line
+   public static final boolean DEV_HORDE_CHECK_VARIANTS = bool("devHordeCheckVariants", false); // dev: devHordeCheck's check frames rotate variants of the batch (0 plain, 1 a run per character, 4 every character from the opening state, 8 no palette sharing) to bisect a mismatch
+   public static final String DEV_HORDE_MODES = string("devHordeModes", ""); // dev: mode digits cycled per frame over the character model draws of the moving pass, GPU section moving.m<d> (pzopt.HordeDraw: 0 stock, 1 no mesh draw call, 2 palette twice, 3 an extra attrib push / pop, 4 no character draw, 5 hordeBatch=exact, 6 hordeBatch=defer)
+   public static final int DEV_HORDE_STATE_DUMP = integer("devHordeStateDump", 0); // dev: at most every N ms per path, the GL state and the Java GL caches read right before and after one hordeBatch flush and one stock zombie draw; the console line "horde state:" lists the keys each path changed (pzopt.HordeStateDump; glGet waits for the driver: never for timing)
+   public static final boolean DEV_HORDE_LOG = bool("devHordeLog", false); // dev: pzopt-horde.out, per frame the character draws of the moving pass (characters, mesh draws, indices, palette floats, render-thread ns)
+   public static final int DEV_MOVING_PROF = integer("devMovingProf", 0); // dev: pzopt-movingprof.out, the moving pass split per command / sprite texture / drawer class on the render thread (CPU every frame, GPU timestamps at each category change every N-th frame; pzopt.MovingProf, harness/movingprof.py)
    public static final int DEV_SSR_ALTERNATE = integer("devSsrAlternate", 0); // dev: the reflections flip on / off every N ms (same-run A/B of their cost)
    public static final boolean DEV_SSR_BARRIER_OFF = bool("devSsrBarrierOff", false); // dev: devSsrAlternate's off frames still issue the texture barrier
    public static final int DEV_SSR_SKIP = integer("devSsrSkip", 0); // dev: cost probes, bits: 1 no moving-object scatter, 2 no water resolve (strength 0), 4 no barriers before the water, 8 no composite scatter
@@ -1421,6 +1848,7 @@ public final class Config {
    public static final boolean DEV_SSR_NO_PATCH = bool("devSsrNoPatch", false); // dev: the shaders stay stock (cost of the patched programs with the reflections off)
    public static final boolean DEV_SSR_TRACE = bool("devSsrTrace", false); // dev: one log line per frame of the reflection scatter (map uploads with their water bits, chunk textures near water, composite draws with the scatter on, water draws, render-thread replays) with epoch ms, to line up with a devCapture
    public static final String DEV_SSR_DUMP_AT = string("devSsrDumpAt", ""); // dev: seconds after the world is up at which the world colour + depth before and after the puddles and the water go to ~/Zomboid/pzopt-ssr/ (pzopt.Ssr)
+   public static final boolean DEV_HDR_WINDOW_FAIL = bool("devHdrWindowFail", false); // dev: the first HDR (Wayland, FP16) window is destroyed as if glfwCreateWindow had failed, to exercise Display's X11 fallback (hybrid NVIDIA laptops, 2026-10-17)
    public static final boolean DEV_HDR_FRAME_LOG = bool("devHdrFrameLog", false); // dev: one line per HDR world composite into ~/Zomboid/pzopt-hdrframe.out (epoch ms, the bloom / light / aux / glint state and the sun keys the composite reads; the flip one-frame-dark hunt, 2026-10-02)
    public static final String DEV_AO_DEFINES = string("devAoDefines", ""); // dev: preprocessor names (comma separated) defined in the chunk AO / sun kernel, e.g. TREE_NO_CLASS, TREE_NO_SKIP, TREE_NO_SUNPATH, TREE_NO_SKY (in-game ablation of the tree terms)
    public static final int DEV_AO_DUMP_TREE = integer("devAoDumpTree", 0); // dev: the first N chunk AO computes with a tree in reach (sunShadowTrees) or in the chunk are dumped like devAoDumpFrame's into ~/Zomboid/pzopt-chunkao/<k>/ (plus raw4: AO, depth, sun, and the source depths + uniforms for harness/trees/tree_rig.py)
@@ -1537,7 +1965,8 @@ public final class Config {
    public static final int DEV_MIRRORS_RECTS_EVERY = integer("devMirrorsRectsEvery", 120); // dev (devMirrorsLog): the composite's reflector rects (window px, with each one's square and epoch_ms) logged 3 frames in every N (1: every frame)
    public static final int DEV_MIRRORS_VIEW_TOGGLE_MS = integer("devMirrorsViewToggleMs", 0); // dev: devMirrorsView only every other N ms (the two --shot-at captures 2 s apart: N = 2000 shows the view in one and the picture in the other)
    public static final String DEV_MIRRORS_CYCLE = string("devMirrorsCycle", ""); // dev: with devMirrorsAlternate, one entry per period in turn: "off" (mirrors off) or a devMirrorsSkip mask, e.g. off,0,1,2,4 (GPU sections tagged .c<index>)
-   public static final int DEV_MIRRORS_SKIP = integer("devMirrorsSkip", 0); // dev: bits 1 no static pass, 2 no model pass, 4 no composite, 8 the composite reads nothing (constant colour), 16 no floor-first shortcut, 32 the static pass stores a constant (no march), 64 the static pass without its texture barrier, 32768 the old no-hit stand-in (the ray end one level under the floor, before 2026-10-04), 65536 a hidden floor landing takes the landing pixel instead of the last floor seen, 131072 no room geometry (mirrorsGeometry off for that moment), 262144 the march starts at the glass (before 2026-10-04 afternoon: the first taps hit the mirror itself, glass-coloured speckle zoomed in), 524288 the room geometry reads its tiles' depth maps the old, wrong way round (far floor halves too near: the reflected player's legs cut), 1048576 people in mirrors placed by the camera's true reflection (mirrorsViewLateralPct / mirrorsViewDropPct 100), 2097152 mirrorsViewDropPct 100 alone, 4194304 people mirrored by every pane in front of them whatever its room (one plane per wall line), 8388608 panes the player never saw reflect, 16777216 the room geometry lit from the per-frame light cache (stale or white for squares not drawn that frame), 33554432 every pane re-marched by age instead of when its room changed (the old ways, before 2026-10-08), 67108864 a mirrored person hidden wherever the static ray hit something nearer (the camera's slanted ray, not the person's own line of sight: before 2026-10-09), 134217728 a full static atlas starts over in the middle of a pass (before 2026-10-10), 268435456 the room geometry's furniture neither wins over a marched hit nor hides the mirrored people (before 2026-10-10), 536870912 a mirrored person drawn for one plane under the union of every plane's panes (a window's copy on the mirror beside it, before 2026-10-12)
+   public static final int DEV_MIRRORS_SKIP = integer("devMirrorsSkip", 0); // dev: bits 1 no static pass, 2 no model pass, 4 no composite, 8 the composite reads nothing (constant colour), 16 no floor-first shortcut, 32 the static pass stores a constant (no march), 64 the static pass without its texture barrier, 32768 the old no-hit stand-in (the ray end one level under the floor, before 2026-10-04), 65536 a hidden floor landing takes the landing pixel instead of the last floor seen, 131072 no room geometry (mirrorsGeometry off for that moment), 262144 the march starts at the glass (before 2026-10-04 afternoon: the first taps hit the mirror itself, glass-coloured speckle zoomed in), 524288 the room geometry reads its tiles' depth maps the old, wrong way round (far floor halves too near: the reflected player's legs cut), 1048576 people in mirrors placed by the camera's true reflection (mirrorsViewLateralPct / mirrorsViewDropPct 100), 2097152 mirrorsViewDropPct 100 alone, 4194304 people mirrored by every pane in front of them whatever its room (one plane per wall line), 8388608 panes the player never saw reflect, 16777216 the room geometry lit from the per-frame light cache (stale or white for squares not drawn that frame), 33554432 every pane re-marched by age instead of when its room changed (the old ways, before 2026-10-08), 67108864 a mirrored person hidden wherever the static ray hit something nearer (the camera's slanted ray, not the person's own line of sight: before 2026-10-09), 134217728 a full static atlas starts over in the middle of a pass (before 2026-10-10), 268435456 the room geometry's furniture neither wins over a marched hit nor hides the mirrored people (before 2026-10-10), 536870912 a mirrored person drawn for one plane under the union of every plane's panes (a window's copy on the mirror beside it, before 2026-10-12), 1073741824 prop mirrors (the gym's panels) are furniture in each other's room geometry and a tile's overlays (trim, wallpaper) sit at its own distance in the room geometry (before 2026-10-16)
+   public static final int DEV_MIRRORS_SKIP2 = integer("devMirrorsSkip2", 0); // dev: more of devMirrorsSkip (its 31 bits are taken): 1 a marched hit nearer than the room geometry by more than its 0.25-square tolerance wins over it (the thickness test's copy of the gym rack beside the geometry's, before 2026-10-16), 2 a full-length mirror places its people at mirrorsViewDropPct too (the head over the glass's top edge, before 2026-10-16), 4 a mirror whose room is closed to the camera (its near walls up: the player left) still lets marched hits that agree with the room geometry win (a see-through glass with a stair-stepped edge, before 2026-10-16), 8 the room geometry leaves a corner wall out entirely (no straight half across the plane: a mirror by the room's corner had no side wall in its room, before 2026-10-16), 16 a prop mirror (the gym's panels) is re-marched on the prop age refresh only, not when its room changes (before 2026-10-16)
    public static final int DEV_MIRRORS_PROP_SKIP = integer("devMirrorsPropSkip", 0); // dev: the reflective props (mirrorsProps): bits 1 props not captured (no prop reflection; still drawn per frame), 2 prop quads not cut to their reflective box, 4 data rows uploaded from client memory (the old upload), 8 no prop composite, 16 mirrored models at full resolution (mirrorsGlassModelScalePct off), 32 mirrorsModelShare off
    public static final int DEV_MIRRORS_TOP_Y_PCT = integer("mirrorsTopModelYPct", 72); // mirrors: a character's mirror in a prop's top, moved down by this /100 model-frame units: the character model's frame stands 0.72 units (its -0.48 x 1.5 offset) off its feet, the image came out 0.31 levels too high without it (layer readback, prop-top9 / -10)
    public static final int DEV_MIRRORS_TOP_Y_VEHICLE_PCT = integer("mirrorsTopModelYVehiclePct", 0); // mirrors: the same for vehicles (their frame has no such offset)
@@ -1625,6 +2054,9 @@ public final class Config {
    public static final int PHYSICS_STEP_HZ = integer("physicsStepHz", 100); // vehicle physics fixed step rate (stock 100 Hz); with physicsStepMode=frame the smallest rate a frame is split at
    public static final String PHYSICS_STEP_MODE = string("physicsStepMode", "fixed"); // fixed (stock: whole steps, remainder carried) | frame (each frame's time in equal steps, nothing carried)
    public static final boolean DEV_DRIVE_JITTER = bool("devDriveJitter", false); // measurement: per-frame vehicle / camera / physics-step log pzopt-drivejitter.out (pzopt.DriveJitter, harness/drivejitter.py)
+   public static final boolean DEV_SWAP_PROBE = bool("devSwapProbe", false); // measurement (f9-present): per-frame segments of Display.update (swap, poll events, focus query...) + /proc samples of the render thread / Xwayland / kwin in long segments -> pzopt-swapprobe.out (pzopt.SwapProbe)
+   public static final int DEV_SWAP_PROBE_SAMPLE_US = integer("devSwapProbeSampleUs", 300); // devSwapProbe: a segment is sampled once it has lasted this long
+   public static final int DEV_SWAP_PROBE_PERIOD_US = integer("devSwapProbePeriodUs", 100); // devSwapProbe: sample period within a long segment
    // Candidate B (2026-09-26, pzopt.Darkness / pzopt.Grade): darkness floor, remembered places, colour grading. The
    // tab keys are live (loadLive); these are the fixed / dev ones.
    public static final boolean COLOR_GRADING_DITHER = bool("colorGradingDither", false); // triangular dither of one 8-bit step after the LUT; off: the world image is already 8-bit before the grade and the looks barely stretch the darks, and the hash cost ~12 us / frame at 5120x2160
@@ -1725,6 +2157,9 @@ public final class Config {
       // the two tabs' master switches (2026-09-28): off, their feature keys read as off (GATED, raw)
       ENHANCEMENTS_ENABLED = bool("enhancementsEnabled", true);
       PROFILER_ENABLED = bool("profilerEnabled", true);
+      for (String master : VISUALS_CATEGORY_MASTERS) {
+         bool(master, true); // live like enhancementsEnabled
+      }
       // The Enhancements tab's keys (2026-09-25): upscaling, the HDR sliders (not hdr / hdrAuto: on Linux they pick the
       // window the game starts with), ambient occlusion; pzopt.Enhancements applies a change (UserOptions.set)
       UPSCALER = string("upscaler", "off").trim().toLowerCase(java.util.Locale.ROOT);
@@ -1866,6 +2301,13 @@ public final class Config {
       GOD_RAYS_LOCAL_METHOD = string("godRaysLocalMethod", "analytic").trim().toLowerCase(java.util.Locale.ROOT);
       GOD_RAYS_HAZE_MODE = string("godRaysHazeMode", "auto").trim().toLowerCase(java.util.Locale.ROOT);
       GOD_RAYS_LOCAL_PCT = Math.max(0, Math.min(400, integer("godRaysLocalPct", 100)));
+      GOD_RAYS_DOOR_LEAF = bool("godRaysDoorLeaf", true);
+      GOD_RAYS_DOOR_SWING_MS = Math.max(0, Math.min(2000, integer("godRaysDoorSwingMs", 350)));
+      GOD_RAYS_SPILL = bool("godRaysSpill", true);
+      GOD_RAYS_SPILL_PCT = Math.max(0, Math.min(400, integer("godRaysSpillPct", 100)));
+      GOD_RAYS_CHAR_SHADOWS = bool("godRaysCharShadows", true);
+      GOD_RAYS_DOOR_DUST_PCT = Math.max(0, Math.min(400, integer("godRaysDoorDustPct", 100)));
+      GOD_RAYS_BOUNCE_PCT = Math.max(0, Math.min(400, integer("godRaysBouncePct", 0)));
       HDR_UI_NITS = integer("hdrUiNits", 0);
       HDR_PAPER_PCT = integer("hdrPaperPct", 100);
       HDR_PEAK_NITS = integer("hdrPeakNits", 0);
@@ -1950,6 +2392,12 @@ public final class Config {
             Log.warn("could not read " + f.getAbsolutePath() + ": " + e);
          }
       }
+      // a built-in benchmark pass pins its settings like pzopt.properties (BenchPlan: stock pass, hidden overlay, ...)
+      for (java.util.Map.Entry<String, String> e : BenchPlan.configPins().entrySet()) {
+         if (p.getProperty(e.getKey()) == null) {
+            p.setProperty(e.getKey(), e.getValue());
+         }
+      }
       return p;
    }
 
@@ -1963,8 +2411,12 @@ public final class Config {
          return v;
       }
       String[] gate = GATED.get(key);
-      if (gate != null && !masterOn(gate[0])) {
-         return gate[1];
+      if (gate != null) {
+         for (int i = 1; i < gate.length; i++) {
+            if (!masterOn(gate[i])) {
+               return gate[0];
+            }
+         }
       }
       v = userProps.getProperty(key);
       return v != null ? v : compatProps.getProperty(key);
@@ -1979,7 +2431,7 @@ public final class Config {
       return v != null ? v : userProps.getProperty(key);
    }
 
-   /** A tab master switch (enhancementsEnabled / profilerEnabled), read through the usual order; on unless "false". */
+   /** A master switch (a group's or a category's), read through the usual order; on unless "false". */
    private static boolean masterOn(String master) {
       String v = raw(master);
       return v == null || !v.trim().equalsIgnoreCase("false");
@@ -1992,30 +2444,113 @@ public final class Config {
          {"enhancementsEnabled", "upscaler", "off", "dynRes", "false", "spriteFilter", "stock", "hdr", "false", "hdrAuto", "false",
             "ambientOcclusion", "false", "sunShadows", "false", "reflections", "false", "ripples", "false", "bloodWet", "false", "occludedZombieOutlines", "false", "darknessFloorPct", "0",
             "memoryTint", "false", "colorGrading", "false", "pixelLight", "false", "godRays", "false", "foliageSway", "false", "relief", "false", "carGlass", "false",
-            "torchSource", "false", "mirrors", "false"},
+            "torchSource", "false", "mirrors", "false", "voxelLight", "false"},
          // everything that makes the overlay measure or show (Overlay.configure; harness runs still measure)
          {"profilerEnabled", "overlaySampling", "false", "overlay", "false", "overlayLog", "false"},
+         // The Visuals categories: the same feature switches, by category (a key is off when either switch is off)
+         {"catImageEnabled", "upscaler", "off", "dynRes", "false", "spriteFilter", "stock", "hdr", "false", "hdrAuto", "false"},
+         {"catLightEnabled", "pixelLight", "false", "torchSource", "false", "sunShadows", "false", "ambientOcclusion", "false", "godRays", "false", "voxelLight", "false"},
+         {"catReflEnabled", "reflections", "false", "ripples", "false", "mirrors", "false", "carGlass", "false", "bloodWet", "false"},
+         {"catAtmosEnabled", "darknessFloorPct", "0", "memoryTint", "false", "colorGrading", "false", "foliageSway", "false", "relief", "false",
+            "occludedZombieOutlines", "false"},
+         // The Performance categories: each key at its stock value (the tab's "off = stock" / "0 = stock" entries). Left
+         // out: tuning numbers of a gated switch (inert once it is off), the worker pools shared across categories
+         // (parallel, workers, loadWorkers, frameThreads, charDrawThreads, fileThreads), guards against races and stock
+         // crashes (guardedCallbacks, modelLockPerInstance, entityUpdateSafeStates, ragdollCorpseGuard, ragdollQuitSweep,
+         // luaWorkerGate), and what is not an optimization (mod compatibility, the multiplayer checksum, updates, the
+         // garbage collector's launcher settings).
+         {"catSmoothEnabled", "presentPacing", "off", "limiterSleep", "false", "frameClockSmooth", "false", "borderlessFullscreen", "false",
+            "vrr", "off", "vrrCap", "false", "macGlCore", "false", "macPresent", "off", "inputLatch", "false", "keyboardFresh", "false",
+            "reflexSleep", "false", "reflexBoost", "false", "reflexCapFps", "0", "vblankLock", "false", "gpuMaxFrames", "0",
+            "frameStartGate", "false", "vsyncAdaptive", "false", "cursorLatch", "false", "aimHoldMs", "150",
+            "frameQueue", "false"},
+         {"catDriveEnabled", "vehicleSmooth", "off", "driveCameraLate", "false", "driveLookSmooth", "false", "cameraScreenPixels", "false",
+            "physicsStepHz", "100", "physicsStepMode", "fixed", "wake", "false", "chunkHandoffDivisor", "0", "hotsaveStaged", "false",
+            "hotsaveIntervalSec", "0", "chunkGridWidth", "0", "driveTreeCutaway", "true", "treeRebakeLazy", "false", "treeCutawayReach", "false",
+            "handoffRecalcFast", "false", "propIdCache", "false", "slackWork", "false"},
+         {"catWorldEnabled", "treesInChunkTexture", "false", "treeBakePass", "false", "treeAppend", "false", "windowsInChunkTexture", "false",
+            "translucentTilesInChunkTexture", "false", "windSpriteSway", "false", "curtainDepthNudgePct", "0", "bakeScheduler", "false",
+            "bakeBudgetAdaptive", "false", "occlusionGrantedOnly", "false", "bakeMipLevels", "0", "renderChunkTopUp", "0", "bakeBudget", "0",
+            "rebakeBudget", "0", "zoomRetain", "false", "zoomEaseMs", "0", "bloodBake", "off", "bloodAppend", "false", "bloodFadeFix", "false",
+            "bloodRebakeCoalesceMs", "0", "fliesToggleFix", "false", "persistentVbo", "false", "persistentVboSlots", "1", "vboBatchKb", "4",
+            "vboFastQuads", "false",
+            "bakeNoSync", "false"},
+         {"catWeatherEnabled", "lightInfoChunkGate", "false", "lightInfoOncePerFrame", "false", "lightSwitchCheckFrames", "0",
+            "visBlurReduce", "false", "lightingBudget", "0", "lightingRebakeMs", "0", "losLightPrefetch", "false", "cutawayFast", "false",
+            "roofHideDebounceFrames", "0", "cutawayRadius", "0", "cutawayVisitPrefilter", "false", "cutawayInvalidateChanged", "false",
+            "gridStackInterval", "0", "occlusionSkipLightingOnly", "false", "visPolyAsync", "false", "translucentOrderCache", "false",
+            "fogPass", "false", "weatherMaskIdleSkip", "false", "weatherFxScalePct", "100", "rainTiles", "false", "puddleCache", "false",
+            "rainSplashesFast", "false", "puddleEarlyZ", "false", "puddleVbo", "false"},
+         {"catZombiesEnabled", "animBonesParallel", "false", "actionEvalParallel", "false", "charDrawPrep", "false", "animatorParallel", "false",
+            "headOnWorker", "false", "animatorPipeline", "false", "animBatchAsync", "false", "lightingReadParallel", "false",
+            "separateParallel", "false", "skinTransformsPrecompute", "false", "skinPalettePrecompute", "false", "shadowPrep", "false",
+            "aoContextParallel", "false", "playerLosFast", "false", "ecsLookupFast", "false", "actionConditionFast", "false",
+            "zombieCullSortFast", "false", "vehicleCull", "false", "zombieSpotFast", "false", "zombieAtlasFast", "false", "separateFast", "false",
+            "edgeTestFast", "false", "sleepCheckMemo", "false", "stateParamMemo", "false", "actionGroupCache", "false", "boneIndexCache", "false",
+            "lazyPose", "false", "poolStatsBatched", "false", "actionSnapshotFilter", "false", "emitterParamSkip", "false",
+            "profilerThreadMemo", "false", "zombieLodDynamic", "false", "zombieSimLodTiles", "0", "zombieCheckSpread", "0",
+            "entityUpdateParallel", "false", "entityUpdatePipeline", "false", "emitterDefer", "false", "physicsDefer", "false",
+            "animalLosFast", "false", "renderPrepParallel", "false", "pplPackParallel", "false", "pplTorchNearChunk", "false",
+            "schedulerClassifyParallel", "false", "zombieStatsFold", "false",
+            "postupdateParallel", "false", "randPerWorker", "false", "playerLosParallel", "false", "schedulerFillParallel", "false",
+            "lookupMemo", "false", "nearVehicleGrid", "false", "renderLastFast", "false", "separateEdgeCache", "false", "luaSilentSkip", "false",
+            "ragdollGate", "false", "bodyModelCache", "false", "hordeBatch", "off", "atlasBatch", "false", "renderPrewarm", "false",
+            "bodyAtlasPrewarm", "false", "zombieLodSpriteLight", "0", "zombieFirstSightSprite", "false", "zombieSpawnSpread", "false",
+            "burstGovernor", "false"},
+         {"catLoadEnabled", "noLoadingScreen", "false", "resumeShot", "false", "centerFirstLoad", "false", "noLoadFade", "false",
+            "noIntroWait", "false", "noClickToStart", "false", "aotCache", "false", "fmodAsync", "false", "preloadAnimSets", "false",
+            "bootPump", "false", "earlyModels", "false", "luaPrecompile", "false", "animClipCache", "false", "packIndex", "false",
+            "scriptParserFast", "false", "itemParamSwitch", "false", "earlyTilePacks", "false", "parallelDepthMaps", "false",
+            "loaderCpuFixes", "false", "shaderCache", "false", "shaderWarmup", "false", "mipmapArrays", "false", "tileDefPreload", "false",
+            "skipIdChecks", "false", "voronoiFast", "false", "texCompress", "driver", "textureBufferMb", "50"},
+         {"catUiEnabled", "uiRetained", "false", "uiRetainedChildren", "false", "uiTickStagger", "false", "uiLuaFast", "false",
+            "hotsaveWarmup", "false", "mapStreetCache", "false", "mapStreetMemo", "false", "mapVisitedFast", "false", "luaIndexCache", "false",
+            "luaInternConstants", "false", "luaSkipEmpty", "false"},
+         {"catSystemEnabled", "corePlacement", "off", "gpuPstate", "off", "jitSteady", "false", "lightingSyncPark", "false",
+            "audioLimiter", "false", "soundTickHz", "0", "emitterIdleSkip", "false", "worldSoundCleanupFast", "false", "hearingHoist", "false",
+            "soundZoneCache", "false", "worldSoundFast", "false",
+            "workerQosMac", "utility"},
       };
+      // key -> {value while a master is off, its masters...}
       for (String[] g : groups) {
          for (int i = 1; i < g.length; i += 2) {
-            m.put(g[i], new String[] {g[0], g[i + 1]});
+            String[] gate = m.get(g[i]);
+            if (gate == null) {
+               m.put(g[i], new String[] {g[i + 1], g[0]});
+            } else if (!gate[0].equals(g[i + 1])) {
+               throw new IllegalStateException("gated key " + g[i] + ": " + gate[0] + " under " + gate[1] + ", " + g[i + 1] + " under " + g[0]);
+            } else {
+               String[] more = java.util.Arrays.copyOf(gate, gate.length + 1);
+               more[gate.length] = g[0];
+               m.put(g[i], more);
+            }
          }
       }
       return m;
    }
 
-   /** The keys a tab master switch turns off, or null when {@code key} is not one. */
+   /** The keys a master switch (a group's or a category's) turns off, or null when {@code key} is not one. */
    static java.util.List<String> gatedBy(String key) {
       java.util.List<String> keys = null;
       for (java.util.Map.Entry<String, String[]> e : GATED.entrySet()) {
-         if (e.getValue()[0].equals(key)) {
-            if (keys == null) {
-               keys = new java.util.ArrayList<>();
+         String[] gate = e.getValue();
+         for (int i = 1; i < gate.length; i++) {
+            if (gate[i].equals(key)) {
+               if (keys == null) {
+                  keys = new java.util.ArrayList<>();
+               }
+               keys.add(e.getKey());
+               break;
             }
-            keys.add(e.getKey());
          }
       }
       return keys;
+   }
+
+   /** The value a gated key reads while one of its masters is off (tests), or null when no master gates it. */
+   static String gatedValue(String key) {
+      String[] gate = GATED.get(key);
+      return gate == null ? null : gate[0];
    }
 
    private static <T> T register(String key, T effective, T def) {
@@ -2063,6 +2598,14 @@ public final class Config {
       return out;
    }
 
+   private static int pow2Clamp(int v, int lo, int hi) {
+      int p = lo;
+      while (p < hi && p < v) {
+         p <<= 1;
+      }
+      return p;
+   }
+
    private static int integer(String key, int def) {
       String v = raw(key);
       if (v == null) {
@@ -2078,9 +2621,30 @@ public final class Config {
 
    // --- options tab (Options > Optimizations; see UserOptions) --------------------------------
 
+   /** Every key whose value in force differs from the build's default, sorted (the benchmark's settings fingerprint). */
+   public static java.util.TreeMap<String, String> nonDefault() {
+      java.util.TreeMap<String, String> m = new java.util.TreeMap<>();
+      synchronized (Config.class) {
+         for (java.util.Map.Entry<String, String[]> e : REGISTRY.entrySet()) {
+            if (!java.util.Objects.equals(e.getValue()[0], e.getValue()[1])) {
+               m.put(e.getKey(), e.getValue()[0]);
+            }
+         }
+      }
+      return m;
+   }
+
    /** Is this one of the keys read at init? */
    public static boolean knows(String key) {
       return key != null && REGISTRY.containsKey(key);
+   }
+
+   /** The build's default of a key read at init, null for an unknown key (the benchmark's run comparison). */
+   public static String defaultOf(String key) {
+      synchronized (Config.class) {
+         String[] v = key == null ? null : REGISTRY.get(key);
+         return v == null ? null : v[1];
+      }
    }
 
    /** Does a change of this key apply while the game runs ({@link #reloadLive}) rather than on the next launch? */
@@ -2151,7 +2715,7 @@ public final class Config {
    public static String describe() {
       return "parallel=" + PARALLEL + " workers=" + WORKERS + " (effective " + effectiveWorkers() + ", cores "
             + Runtime.getRuntime().availableProcessors() + ") wake=" + WAKE + " (effective " + effectiveWake() + ") chunkGridWidth=" + CHUNK_GRID_SETTING + " instrument=" + INSTRUMENT + " dev=" + DEV + " luaChecksumExempt=" + LUA_CHECKSUM_EXEMPT
-            + " translucentCache=" + TRANSLUCENT_CACHE + " hotsaveIntervalSec=" + HOTSAVE_INTERVAL_SEC + " persistentVbo=" + PERSISTENT_VBO + " persistentVboSlots=" + PERSISTENT_VBO_SLOTS + " persistentVboFrameSync=" + PERSISTENT_VBO_FRAME_SYNC + " persistentVboTrustFrames=" + PERSISTENT_VBO_TRUST_FRAMES + " seamSpread=" + SEAM_SPREAD + " fliesToggleFix=" + FLIES_TOGGLE_FIX + " bakeMipLevels=" + BAKE_MIP_LEVELS + " occlusionRetain=" + OCCLUSION_RETAIN + " bakeScheduler=" + BAKE_SCHEDULER + " bakeFrameBudget=" + BAKE_FRAME_BUDGET + " bakeArrivalQuota=" + BAKE_ARRIVAL_QUOTA + " seamDirections=" + SEAM_DIRECTIONS + " chunkHandoffSlack=" + CHUNK_HANDOFF_SLACK + " occlusionGrantedOnly=" + OCCLUSION_GRANTED_ONLY + " occlusionCountParallel=" + OCCLUSION_COUNT_PARALLEL + " kidsRoomMemo=" + KIDS_ROOM_MEMO + " lightingNewChunkBudget=" + LIGHTING_NEW_CHUNK_BUDGET + " bakeBudgetAdaptive=" + BAKE_BUDGET_ADAPTIVE + " bakeFrameBudgetMin=" + BAKE_FRAME_BUDGET_MIN + " bakeBudgetPct=" + BAKE_BUDGET_LOW_PCT + "/" + BAKE_BUDGET_HIGH_PCT + " bakeFrameBudgetHard=" + BAKE_FRAME_BUDGET_HARD + " bakeSmooth=" + BAKE_SMOOTH + "/" + BAKE_SMOOTH_MIN + " bakeDeadlinePct=" + BAKE_DEADLINE_PCT + " bakeMaxWait=" + BAKE_MAX_WAIT_CUTAWAY + "/" + BAKE_MAX_WAIT_ARRIVAL + "/" + BAKE_MAX_WAIT_STRONG + "/" + BAKE_MAX_WAIT_REDRAW + "/" + BAKE_MAX_WAIT_LIGHT + " seamRebakeBudget=" + SEAM_REBAKE_BUDGET + " seamHeavyBakes=" + SEAM_HEAVY_BAKES + " seamMaxFrames=" + SEAM_MAX_FRAMES + " treesInChunkTexture=" + TREES_IN_CHUNK_TEXTURE + " windowsInChunkTexture=" + WINDOWS_IN_CHUNK_TEXTURE + " translucentTilesInChunkTexture=" + TRANSLUCENT_TILES_IN_CHUNK_TEXTURE + " glassTilesPerFrame=" + GLASS_TILES_PER_FRAME + " floorDecalsPerFrame=" + FLOOR_DECALS_PER_FRAME + " treeBakePass=" + TREE_BAKE_PASS + " curtainDepthNudgePct=" + Math.round(CURTAIN_DEPTH_NUDGE * 100.0F) + " bakeBudget=" + BAKE_BUDGET + " lightingBudget=" + LIGHTING_BUDGET + " lightingRebakeMs=" + LIGHTING_REBAKE_MS + " rebakeBudget=" + REBAKE_BUDGET + " rebakeMaxFrames=" + REBAKE_MAX_FRAMES + " lightingRebakeBudget=" + LIGHTING_REBAKE_BUDGET + " lightingRebakeMaxFrames=" + LIGHTING_REBAKE_MAX_FRAMES + " zoomRetain=" + ZOOM_RETAIN + " zoomRebakeBudget=" + ZOOM_REBAKE_BUDGET + " zoomFrameMs=" + Math.round(ZOOM_FRAME_MS) + " zoomPlaceholder=" + ZOOM_PLACEHOLDER + " zoomEaseMs=" + ZOOM_EASE_MS + " zoomEase=" + ZOOM_EASE + " lightingStrongDelta=" + LIGHTING_STRONG_DELTA + " lightingStrongBudget=" + LIGHTING_STRONG_BUDGET + " lightingStrongFrameMs=" + Math.round(LIGHTING_STRONG_FRAME_MS) + " lightingGlobalDeltaPct=" + Math.round(LIGHTING_GLOBAL_DELTA * 100.0F) + " lightingFlush=" + LIGHTING_FLUSH + " lightSwitchCheckFrames=" + LIGHT_SWITCH_CHECK_FRAMES + " cutawayFast=" + CUTAWAY_FAST + " cutawayRadius=" + CUTAWAY_RADIUS + " gridStackInterval=" + GRID_STACK_INTERVAL + " roofHideDebounceFrames=" + ROOF_HIDE_DEBOUNCE_FRAMES + " weatherMaskIdleSkip=" + WEATHER_MASK_IDLE_SKIP + " worldSoundFast=" + WORLD_SOUND_FAST + " keyboardFresh=" + KEYBOARD_FRESH + " inputLatch=" + INPUT_LATCH + " inputLatchWaitUs=" + INPUT_LATCH_WAIT_US + " frameStartGate=" + FRAME_START_GATE + " gpuMaxFrames=" + GPU_MAX_FRAMES + " reflexSleep=" + REFLEX_SLEEP + " reflexBoost=" + REFLEX_BOOST + " reflexQueueUs=" + REFLEX_QUEUE_US + " reflexCapFps=" + REFLEX_CAP_FPS + " vsyncAdaptive=" + VSYNC_ADAPTIVE + " vblankLock=" + VBLANK_LOCK + " vblankLockMarginUs=" + VBLANK_LOCK_MARGIN_US + " aimHoldMs=" + AIM_HOLD_MS + " cursorLatch=" + CURSOR_LATCH + " saveCellAsync=" + SAVE_CELL_ASYNC + " chunkMapFast=" + CHUNK_MAP_FAST + " propertySurfaceNoAlloc=" + PROPERTY_SURFACE_NOALLOC + " weatherNoGlGet=" + WEATHER_NO_GLGET + " glNoSync=" + GL_NO_SYNC + "/" + GL_NAME_POOL + " renderChunkPrewarm=" + RENDER_CHUNK_PREWARM + " renderChunkTopUp=" + RENDER_CHUNK_TOP_UP + " renderChunkTopUpPerFrame=" + RENDER_CHUNK_TOP_UP_PER_FRAME + " lightingVisionParallel=" + LIGHTING_VISION_PARALLEL + " threadNice=" + THREAD_NICE + " profileHandshake=" + PROFILE_HANDSHAKE + " luaProfile=" + LUA_PROFILE + " uiProfile=" + UI_PROFILE + " uiRetained=" + UI_RETAINED + " uiRetainedChildren=" + UI_RETAINED_CHILDREN + " luaIndexCache=" + LUA_INDEX_CACHE + " luaInternConstants=" + LUA_INTERN_CONSTANTS + " luaSkipEmpty=" + LUA_SKIP_EMPTY + " uiLuaFast=" + UI_LUA_FAST + " uiTickStagger=" + UI_TICK_STAGGER + " mapStreetMemo=" + MAP_STREET_MEMO + " mapStreetCache=" + MAP_STREET_CACHE + " uiHoverHz=" + UI_HOVER_HZ + " uiRetainedMaxMs=" + UI_RETAINED_MAX_MS + " uiRetainedCheapUs=" + UI_RETAINED_CHEAP_US + " gcMode=" + GC_MODE + " gcPauseMs=" + GC_PAUSE_MS + " gcHeap=" + GC_HEAP + " gcHeapFixed=" + GC_HEAP_FIXED + " gcPreTouch=" + GC_PRE_TOUCH + " jitMode=" + JIT_MODE + " jitC1Cores=" + JIT_C1_CORES + " vehicleCull=" + VEHICLE_CULL + " playerLosFast=" + PLAYER_LOS_FAST + " zombieSpotFast=" + ZOMBIE_SPOT_FAST + " playerLosNative=" + PLAYER_LOS_NATIVE + " animBonesParallel=" + ANIM_BONES_PARALLEL + " animBatchAsync=" + ANIM_BATCH_ASYNC + " animatorParallel=" + ANIMATOR_PARALLEL + " animatorPipeline=" + ANIMATOR_PIPELINE + " frameSpinUs=" + FRAME_SPIN_US + " frameThreads=" + FRAME_THREADS + " actionEvalParallel=" + ACTION_EVAL_PARALLEL + " actionSnapshotFilter=" + ACTION_SNAPSHOT_FILTER + " emitterParamSkip=" + EMITTER_PARAM_SKIP + " emitterIdleSkip=" + EMITTER_IDLE_SKIP + " worldSoundCleanupFast=" + WORLD_SOUND_CLEANUP_FAST + " hearingHoist=" + HEARING_HOIST + " soundTickHz=" + SOUND_TICK_HZ + " audioLimiter=" + AUDIO_LIMITER + " audioLimiterCeilingDb=" + Math.round(AUDIO_LIMITER_CEILING_DB) + " separateFast=" + SEPARATE_FAST + " separateParallel=" + SEPARATE_PARALLEL + " entityUpdateParallel=" + ENTITY_UPDATE_PARALLEL + " entityUpdateLuaReplay=" + ENTITY_UPDATE_LUA_REPLAY + " animalLosFast=" + ANIMAL_LOS_FAST + " entityUpdatePipeline=" + ENTITY_UPDATE_PIPELINE + " emitterDefer=" + EMITTER_DEFER + " physicsDefer=" + PHYSICS_DEFER + " actionGroupCache=" + ACTION_GROUP_CACHE + " profilerThreadMemo=" + PROFILER_THREAD_MEMO + " sleepCheckMemo=" + SLEEP_CHECK_MEMO + " stateParamMemo=" + STATE_PARAM_MEMO + " zombieSimLodTiles=" + ZOMBIE_SIM_LOD_TILES + " zombieSimLodSteps=" + ZOMBIE_SIM_LOD_STEPS + " zombieCheckSpread=" + ZOMBIE_CHECK_SPREAD + " lightingReadParallel=" + LIGHTING_READ_PARALLEL + " zombieCullSortFast=" + ZOMBIE_CULL_SORT_FAST + " skinTransformsPrecompute=" + SKIN_TRANSFORMS_PRECOMPUTE + " skinPalettePrecompute=" + SKIN_PALETTE_PRECOMPUTE + " shadowPrep=" + SHADOW_PREP + " boneIndexCache=" + BONE_INDEX_CACHE + " ecsLookupFast=" + ECS_LOOKUP_FAST + " actionConditionFast=" + ACTION_CONDITION_FAST + " charDrawPrep=" + CHAR_DRAW_PREP + " zombieAtlasFast=" + ZOMBIE_ATLAS_FAST + " charDrawThreads=" + CHAR_DRAW_THREADS + " vehicleSmooth=" + VEHICLE_SMOOTH + " driveCameraLate=" + DRIVE_CAMERA_LATE + " driveLookSmooth=" + DRIVE_LOOK_SMOOTH + " cameraScreenPixels=" + CAMERA_SCREEN_PIXELS + " frameClockSmooth=" + FRAME_CLOCK_SMOOTH + " vsyncLock=" + VSYNC_LOCK + " physicsStepHz=" + PHYSICS_STEP_HZ + " physicsStepMode=" + PHYSICS_STEP_MODE
+            + " translucentCache=" + TRANSLUCENT_CACHE + " hotsaveIntervalSec=" + HOTSAVE_INTERVAL_SEC + " persistentVbo=" + PERSISTENT_VBO + " persistentVboSlots=" + PERSISTENT_VBO_SLOTS + " persistentVboFrameSync=" + PERSISTENT_VBO_FRAME_SYNC + " persistentVboTrustFrames=" + PERSISTENT_VBO_TRUST_FRAMES + " seamSpread=" + SEAM_SPREAD + " fliesToggleFix=" + FLIES_TOGGLE_FIX + " bakeMipLevels=" + BAKE_MIP_LEVELS + " occlusionRetain=" + OCCLUSION_RETAIN + " bakeScheduler=" + BAKE_SCHEDULER + " bakeFrameBudget=" + BAKE_FRAME_BUDGET + " bakeArrivalQuota=" + BAKE_ARRIVAL_QUOTA + " seamDirections=" + SEAM_DIRECTIONS + " chunkHandoffSlack=" + CHUNK_HANDOFF_SLACK + " propIdCache=" + PROP_ID_CACHE + " handoffRecalcFast=" + HANDOFF_RECALC_FAST + " handoffRecalcMemo=" + HANDOFF_RECALC_MEMO + " handoffRecalcParallel=" + HANDOFF_RECALC_PARALLEL + " occlusionGrantedOnly=" + OCCLUSION_GRANTED_ONLY + " occlusionCountParallel=" + OCCLUSION_COUNT_PARALLEL + " kidsRoomMemo=" + KIDS_ROOM_MEMO + " lightingNewChunkBudget=" + LIGHTING_NEW_CHUNK_BUDGET + " bakeBudgetAdaptive=" + BAKE_BUDGET_ADAPTIVE + " bakeFrameBudgetMin=" + BAKE_FRAME_BUDGET_MIN + " bakeBudgetPct=" + BAKE_BUDGET_LOW_PCT + "/" + BAKE_BUDGET_HIGH_PCT + " bakeFrameBudgetHard=" + BAKE_FRAME_BUDGET_HARD + " bakeSmooth=" + BAKE_SMOOTH + "/" + BAKE_SMOOTH_MIN + " bakeDeadlinePct=" + BAKE_DEADLINE_PCT + " bakeMaxWait=" + BAKE_MAX_WAIT_CUTAWAY + "/" + BAKE_MAX_WAIT_ARRIVAL + "/" + BAKE_MAX_WAIT_STRONG + "/" + BAKE_MAX_WAIT_REDRAW + "/" + BAKE_MAX_WAIT_LIGHT + " seamRebakeBudget=" + SEAM_REBAKE_BUDGET + " seamHeavyBakes=" + SEAM_HEAVY_BAKES + " seamMaxFrames=" + SEAM_MAX_FRAMES + " treesInChunkTexture=" + TREES_IN_CHUNK_TEXTURE + " windowsInChunkTexture=" + WINDOWS_IN_CHUNK_TEXTURE + " translucentTilesInChunkTexture=" + TRANSLUCENT_TILES_IN_CHUNK_TEXTURE + " glassTilesPerFrame=" + GLASS_TILES_PER_FRAME + " floorDecalsPerFrame=" + FLOOR_DECALS_PER_FRAME + " treeBakePass=" + TREE_BAKE_PASS + " curtainDepthNudgePct=" + Math.round(CURTAIN_DEPTH_NUDGE * 100.0F) + " bakeBudget=" + BAKE_BUDGET + " lightingBudget=" + LIGHTING_BUDGET + " lightingRebakeMs=" + LIGHTING_REBAKE_MS + " rebakeBudget=" + REBAKE_BUDGET + " rebakeMaxFrames=" + REBAKE_MAX_FRAMES + " lightingRebakeBudget=" + LIGHTING_REBAKE_BUDGET + " lightingRebakeMaxFrames=" + LIGHTING_REBAKE_MAX_FRAMES + " zoomRetain=" + ZOOM_RETAIN + " zoomRebakeBudget=" + ZOOM_REBAKE_BUDGET + " zoomFrameMs=" + Math.round(ZOOM_FRAME_MS) + " zoomPlaceholder=" + ZOOM_PLACEHOLDER + " zoomEaseMs=" + ZOOM_EASE_MS + " zoomEase=" + ZOOM_EASE + " lightingStrongDelta=" + LIGHTING_STRONG_DELTA + " lightingStrongBudget=" + LIGHTING_STRONG_BUDGET + " lightingStrongFrameMs=" + Math.round(LIGHTING_STRONG_FRAME_MS) + " lightingGlobalDeltaPct=" + Math.round(LIGHTING_GLOBAL_DELTA * 100.0F) + " lightingFlush=" + LIGHTING_FLUSH + " lightSwitchCheckFrames=" + LIGHT_SWITCH_CHECK_FRAMES + " cutawayFast=" + CUTAWAY_FAST + " cutawayRadius=" + CUTAWAY_RADIUS + " gridStackInterval=" + GRID_STACK_INTERVAL + " roofHideDebounceFrames=" + ROOF_HIDE_DEBOUNCE_FRAMES + " weatherMaskIdleSkip=" + WEATHER_MASK_IDLE_SKIP + " worldSoundFast=" + WORLD_SOUND_FAST + " keyboardFresh=" + KEYBOARD_FRESH + " inputLatch=" + INPUT_LATCH + " inputLatchWaitUs=" + INPUT_LATCH_WAIT_US + " frameStartGate=" + FRAME_START_GATE + " gpuMaxFrames=" + GPU_MAX_FRAMES + " reflexSleep=" + REFLEX_SLEEP + " reflexBoost=" + REFLEX_BOOST + " reflexQueueUs=" + REFLEX_QUEUE_US + " reflexCapFps=" + REFLEX_CAP_FPS + " vsyncAdaptive=" + VSYNC_ADAPTIVE + " vblankLock=" + VBLANK_LOCK + " vblankLockMarginUs=" + VBLANK_LOCK_MARGIN_US + " aimHoldMs=" + AIM_HOLD_MS + " cursorLatch=" + CURSOR_LATCH + " saveCellAsync=" + SAVE_CELL_ASYNC + " chunkMapFast=" + CHUNK_MAP_FAST + " propertySurfaceNoAlloc=" + PROPERTY_SURFACE_NOALLOC + " weatherNoGlGet=" + WEATHER_NO_GLGET + " glNoSync=" + GL_NO_SYNC + "/" + GL_NAME_POOL + " renderChunkPrewarm=" + RENDER_CHUNK_PREWARM + " renderChunkTopUp=" + RENDER_CHUNK_TOP_UP + " renderChunkTopUpPerFrame=" + RENDER_CHUNK_TOP_UP_PER_FRAME + " lightingVisionParallel=" + LIGHTING_VISION_PARALLEL + " threadNice=" + THREAD_NICE + " profileHandshake=" + PROFILE_HANDSHAKE + " luaProfile=" + LUA_PROFILE + " uiProfile=" + UI_PROFILE + " uiRetained=" + UI_RETAINED + " uiRetainedChildren=" + UI_RETAINED_CHILDREN + " luaIndexCache=" + LUA_INDEX_CACHE + " luaInternConstants=" + LUA_INTERN_CONSTANTS + " luaSkipEmpty=" + LUA_SKIP_EMPTY + " uiLuaFast=" + UI_LUA_FAST + " uiTickStagger=" + UI_TICK_STAGGER + " mapStreetMemo=" + MAP_STREET_MEMO + " mapStreetCache=" + MAP_STREET_CACHE + " uiHoverHz=" + UI_HOVER_HZ + " uiRetainedMaxMs=" + UI_RETAINED_MAX_MS + " uiRetainedCheapUs=" + UI_RETAINED_CHEAP_US + " gcMode=" + GC_MODE + " gcPauseMs=" + GC_PAUSE_MS + " gcHeap=" + GC_HEAP + " gcHeapFixed=" + GC_HEAP_FIXED + " gcPreTouch=" + GC_PRE_TOUCH + " jitMode=" + JIT_MODE + " jitC1Cores=" + JIT_C1_CORES + " vehicleCull=" + VEHICLE_CULL + " playerLosFast=" + PLAYER_LOS_FAST + " zombieSpotFast=" + ZOMBIE_SPOT_FAST + " playerLosNative=" + PLAYER_LOS_NATIVE + " playerLosParallel=" + PLAYER_LOS_PARALLEL + " schedulerFillParallel=" + SCHEDULER_FILL_PARALLEL + " animBonesParallel=" + ANIM_BONES_PARALLEL + " animBatchAsync=" + ANIM_BATCH_ASYNC + " animatorParallel=" + ANIMATOR_PARALLEL + " animatorPipeline=" + ANIMATOR_PIPELINE + " frameSpinUs=" + FRAME_SPIN_US + " workerQosMac=" + WORKER_QOS_MAC + " joinSpinPark=" + JOIN_SPIN_PARK + " frameThreads=" + FRAME_THREADS + " actionEvalParallel=" + ACTION_EVAL_PARALLEL + " actionSnapshotFilter=" + ACTION_SNAPSHOT_FILTER + " emitterParamSkip=" + EMITTER_PARAM_SKIP + " emitterIdleSkip=" + EMITTER_IDLE_SKIP + " worldSoundCleanupFast=" + WORLD_SOUND_CLEANUP_FAST + " hearingHoist=" + HEARING_HOIST + " soundTickHz=" + SOUND_TICK_HZ + " audioLimiter=" + AUDIO_LIMITER + " audioLimiterCeilingDb=" + Math.round(AUDIO_LIMITER_CEILING_DB) + " separateFast=" + SEPARATE_FAST + " ragdollGate=" + RAGDOLL_GATE + " bodyModelCache=" + BODY_MODEL_CACHE + " separateParallel=" + SEPARATE_PARALLEL + " entityUpdateParallel=" + ENTITY_UPDATE_PARALLEL + " entityUpdateLuaReplay=" + ENTITY_UPDATE_LUA_REPLAY + " animalLosFast=" + ANIMAL_LOS_FAST + " entityUpdatePipeline=" + ENTITY_UPDATE_PIPELINE + " emitterDefer=" + EMITTER_DEFER + " physicsDefer=" + PHYSICS_DEFER + " actionGroupCache=" + ACTION_GROUP_CACHE + " profilerThreadMemo=" + PROFILER_THREAD_MEMO + " sleepCheckMemo=" + SLEEP_CHECK_MEMO + " stateParamMemo=" + STATE_PARAM_MEMO + " zombieSimLodTiles=" + ZOMBIE_SIM_LOD_TILES + " zombieSimLodSteps=" + ZOMBIE_SIM_LOD_STEPS + " zombieCheckSpread=" + ZOMBIE_CHECK_SPREAD + " lightingReadParallel=" + LIGHTING_READ_PARALLEL + " zombieCullSortFast=" + ZOMBIE_CULL_SORT_FAST + " skinTransformsPrecompute=" + SKIN_TRANSFORMS_PRECOMPUTE + " skinPalettePrecompute=" + SKIN_PALETTE_PRECOMPUTE + " shadowPrep=" + SHADOW_PREP + " boneIndexCache=" + BONE_INDEX_CACHE + " ecsLookupFast=" + ECS_LOOKUP_FAST + " actionConditionFast=" + ACTION_CONDITION_FAST + " charDrawPrep=" + CHAR_DRAW_PREP + " zombieAtlasFast=" + ZOMBIE_ATLAS_FAST + " charDrawThreads=" + CHAR_DRAW_THREADS + " vehicleSmooth=" + VEHICLE_SMOOTH + " driveCameraLate=" + DRIVE_CAMERA_LATE + " driveLookSmooth=" + DRIVE_LOOK_SMOOTH + " cameraScreenPixels=" + CAMERA_SCREEN_PIXELS + " frameClockSmooth=" + FRAME_CLOCK_SMOOTH + " vsyncLock=" + VSYNC_LOCK + " physicsStepHz=" + PHYSICS_STEP_HZ + " physicsStepMode=" + PHYSICS_STEP_MODE
             + " fileThreads=" + FILE_THREADS + " fileInflight=" + FILE_INFLIGHT + " textureBufferMb=" + TEXTURE_BUFFER_MB + " parallelDepthMaps=" + PARALLEL_DEPTH_MAPS + " loaderCpuFixes=" + LOADER_CPU_FIXES + " loadWorkers=" + LOAD_WORKERS + " scriptParserFast=" + SCRIPT_PARSER_FAST + " fmodAsync=" + FMOD_ASYNC + " noLoadFade=" + NO_LOAD_FADE + " noIntroWait=" + NO_INTRO_WAIT + " noClickToStart=" + NO_CLICK_TO_START + " noLoadingScreen=" + NO_LOADING_SCREEN + " centerFirstLoad=" + CENTER_FIRST_LOAD + " resumeShot=" + RESUME_SHOT + " resumeShotDetail=" + RESUME_SHOT_DETAIL + " bootPump=" + BOOT_PUMP + " earlyModels=" + EARLY_MODELS + " luaPrecompile=" + LUA_PRECOMPILE + " preloadAnimSets=" + PRELOAD_ANIM_SETS + " tileDefPreload=" + TILE_DEF_PRELOAD + " skipIdChecks=" + SKIP_ID_CHECKS + " voronoiFast=" + VORONOI_FAST + " earlyTilePacks=" + EARLY_TILE_PACKS + " aotCache=" + AOT_CACHE + " animClipCache=" + ANIM_CLIP_CACHE + " packIndex=" + PACK_INDEX + " itemParamSwitch=" + ITEM_PARAM_SWITCH + " bootFileThreads=" + BOOT_FILE_THREADS + " shaderCache=" + SHADER_CACHE + " shaderWarmup=" + SHADER_WARMUP + " tileVertexDepth=" + TILE_VERTEX_DEPTH + " mipmapArrays=" + MIPMAP_ARRAYS + " puddleCache=" + PUDDLE_CACHE + " puddleCacheFrames=" + PUDDLE_CACHE_FRAMES + " puddleVbo=" + PUDDLE_VBO + " treeAppend=" + TREE_APPEND + " treeRebakeLazy=" + TREE_REBAKE_LAZY + " treeRebakeLingerMs=" + TREE_REBAKE_LINGER_MS + " puddleEarlyZ=" + PUDDLE_EARLY_Z + " rainSplashesFast=" + RAIN_SPLASHES_FAST + " rainTiles=" + RAIN_TILES + " vboBatchKb=" + VBO_BATCH_KB + " vboFastQuads=" + VBO_FAST_QUADS + " fogPass=" + FOG_PASS + " fogScalePct=" + FOG_SCALE_PCT + " fogMaskFrames=" + FOG_MASK_FRAMES
             + " uniformCache=" + UNIFORM_CACHE + " windSpriteSway=" + WIND_SPRITE_SWAY + " compositeShaderRun=" + COMPOSITE_SHADER_RUN + " ambientOcclusion=" + AO + " aoMode=" + AO_MODE + " aoScalePct=" + AO_SCALE_PCT + " aoRadiusPct=" + AO_RADIUS_PCT + " aoStrengthFloorPct=" + AO_STRENGTH_FLOOR_PCT + " aoStrengthWallPct=" + AO_STRENGTH_WALL_PCT + " aoStrengthObjectPct=" + AO_STRENGTH_OBJECT_PCT + " aoStrengthVegetationPct=" + AO_STRENGTH_VEGETATION_PCT + " aoStrengthPlantPct=" + AO_STRENGTH_PLANT_PCT + " aoPlantLeafOcclusion=" + AO_PLANT_LEAF_OCCLUSION + " aoThicknessPct=" + AO_THICKNESS_PCT + " sunShadows=" + SUN_SHADOWS + " sunShadowStrengthPct=" + SUN_SHADOW_STRENGTH_PCT + " skyPath=" + SKY_PATH + " moonShadows=" + MOON_SHADOWS + " moonShadowPct=" + MOON_SHADOW_PCT + " cloudShadows=" + CLOUD_SHADOWS + " cloudOpacityPct=" + CLOUD_OPACITY_PCT + " cloudSpeedPct=" + CLOUD_SPEED_PCT + " cloudScalePct=" + CLOUD_SCALE_PCT + " godRays=" + GOD_RAYS + " godRaysMethod=" + GOD_RAYS_METHOD + " godRaysStrengthPct=" + GOD_RAYS_STRENGTH_PCT + " godRaysHazePct=" + GOD_RAYS_HAZE_PCT + " godRaysDustPct=" + GOD_RAYS_DUST_PCT + " sunShadowSoftnessPct=" + SUN_SHADOW_SOFTNESS_PCT
             + " upscaler=" + UPSCALER + " upscaleNoGlGet=" + UPSCALE_NO_GLGET + " upscalerQuality=" + UPSCALER_QUALITY + " upscalerScalePct=" + UPSCALER_SCALE_PCT + " fsrSharpnessPct=" + FSR_SHARPNESS_PCT + " dlssSharpen=" + DLSS_SHARPEN + " upscalerObjectMv=" + UPSCALER_OBJECT_MV + " dynRes=" + DYN_RES + " dynResController=" + DYN_RES_CONTROLLER + " dynResTargetPct=" + DYN_RES_TARGET_PCT + " dynResMinPct=" + DYN_RES_MIN_PCT + " dynResMaxPct=" + DYN_RES_MAX_PCT + " dynResFps=" + DYN_RES_FPS + " dlssPreset=" + DLSS_PRESET + " dlssAutoExposure=" + DLSS_AUTO_EXPOSURE + " dlssPipeline=" + DLSS_PIPELINE + " dlssOutputPct=" + DLSS_OUTPUT_PCT + " dlssOutputFilter=" + DLSS_OUTPUT_FILTER + " dlssFlushAfterWait=" + DLSS_FLUSH_AFTER_WAIT + " dlssFlushAfterComposite=" + DLSS_FLUSH_AFTER_COMPOSITE + " dlssWaitOutputOnly=" + DLSS_WAIT_OUTPUT_ONLY + " dlssDirectColor=" + DLSS_DIRECT_COLOR + " dlssWaterCurrent=" + DLSS_WATER_CURRENT + " dlssWaterHistoryPct=" + DLSS_WATER_HISTORY_PCT;

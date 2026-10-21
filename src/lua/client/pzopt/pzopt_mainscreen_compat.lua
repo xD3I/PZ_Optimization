@@ -2,8 +2,8 @@
 --  What pzopt.ModCompat found at this launch, one block per jar file it read (the -javaagent jars and every jar of the
 --  enabled mods): the mod it belongs to, each place of a class we ship that it patches (a method we edited, an unedited
 --  one, or a class named without a method), and what that changed: the settings switched off (tab label, and the
---  player's own choice where it overrides the check), "tested together", or nothing. The menu item itself is added by
---  pzopt_mainscreen_update.lua (one column of pzopt items between Credits and Exit); this file is the dialog.
+--  player's own choice where it overrides the check), "tested together", or nothing. It opens from the MOD COMPATIBILITY
+--  CHECK card of the PZ Optimization screen (main menu PZ OPTIMIZATION, pzopt_mainscreen_menu.lua); this file is the dialog.
 --  Controller: A / B close, the D-pad scrolls, like the update dialog.
 
 local FONT_HGT_SMALL = getTextManager():getFontHeight(UIFont.Small)
@@ -97,7 +97,8 @@ end
 
 local function jarBlock(jar, mod)
     local where = jarFolder(jar.path, jar.name)
-    local b = " <LINE> <H2> " .. esc(jar.name) .. " <TEXT> <LINE> " .. GREY
+    -- the heading's own blank line under it: the next line is spaced for the small font and touched its descenders
+    local b = " <LINE> <H2> " .. esc(jar.name) .. " <TEXT> <LINE> <LINE> " .. GREY
         .. (mod.agent and ("Java agent (-javaagent)" .. (jar.source ~= jar.name and (" of the mod " .. esc(jar.source)) or ""))
             or ("Mod " .. esc(jar.source)))
         .. (where ~= "" and (", folder " .. esc(where)) or "") .. " <LINE> "
@@ -166,8 +167,7 @@ local function ruleBlock(source, mod, jars)
     return AMBER .. "Also switched off for " .. esc(source) .. " by Zomboid/pzopt/mod-compat.ini: <LINE> " .. b
 end
 
-local function body()
-    local d = parse(perf():getPzoptModCompatDetails())
+local function bodyHead(d)
     local t = ""
     if d.mode == "off" then
         return "The check is off (Options > PZ Optimization > System, sound and mods > Mods and multiplayer > Java mods: off), so no mod was read at this launch. "
@@ -206,6 +206,15 @@ local function body()
                 or "windows a mod draws in are redrawn at the game's own rate (max compatibility). ")
             .. "Mod Lua reached from helper threads runs on the game thread with either choice. <LINE> "
     end
+    return t
+end
+
+local function body()
+    local d = parse(perf():getPzoptModCompatDetails())
+    if d.mode == "off" then return bodyHead(d) end
+    local t = bodyHead(d)
+    local lastOf = {}
+    for i, jar in ipairs(d.jars) do lastOf[jar.source] = i end
     for i, jar in ipairs(d.jars) do
         local mod = d.mods[jar.source] or { status = "none", keys = {} }
         t = t .. jarBlock(jar, mod)
@@ -213,6 +222,32 @@ local function body()
     end
     t = t .. " <LINE> " .. GREY .. "Full report: Zomboid/pzopt/mod-compat.txt and console.txt. Changes to the enabled mods apply on the next launch."
     return t
+end
+
+-- The check in two or three plain sentences, for the MOD COMPATIBILITY CHECK page of the PZ Optimization screen
+-- (pzopt_mainscreen_menu.lua): what was read, whether a setting is switched off, the profile in force.
+function PzoptCompatSummary()
+    local ok, d = pcall(function() return parse(perf():getPzoptModCompatDetails()) end)
+    if not ok or not d then return {} end
+    if d.mode == "off" then return { "The check is off at this launch (Java mods: off): no mod was read." } end
+    local switched, n = {}, 0
+    for _, mod in pairs(d.mods) do
+        if mod.status == "off" then
+            for _, k in ipairs(mod.keys) do
+                if not switched[k] then switched[k] = true n = n + 1 end
+            end
+        end
+    end
+    local out = { "Checked at this launch: " .. d.enabled .. " enabled mod" .. (d.enabled == 1 and "" or "s") .. ", " .. #d.jars
+        .. " Java file" .. (#d.jars == 1 and "" or "s") .. " (.jar) read. "
+        .. (n > 0 and (n .. " setting" .. (n == 1 and " is" or "s are") .. " switched off so a mod meets the code its author tested.")
+            or "No setting is switched off.") }
+    local profile = ""
+    pcall(function() profile = perf():getPzoptOption("modProfile") end)
+    if profile ~= "" then
+        table.insert(out, "In use: " .. (profile == "compatibility" and "Max compatibility" or "Max performance") .. ".")
+    end
+    return out
 end
 
 PzoptCompatDialog = ISPanelJoypad:derive("PzoptCompatDialog")
@@ -422,16 +457,11 @@ function PzoptCompatDialog:close()
     if ms and ms.bottomPanel then
         ms.bottomPanel:setVisible(true)
     end
-    -- the controller's focus goes back to the menu, then onto the item that opened the dialog
+    -- the controller's focus goes back where it came from (the PZ Optimization screen, its cursor still on the card)
     local joypadData = self.joyfocus
     if joypadData and joypadData.focus == self then
         joypadData.focus = self.prevFocus
         updateJoypadFocus(joypadData)
-        if ms and joypadData.focus == ms and ms.joyfocus and ms.pzoptCompatOption then
-            if ms:setJoypadFocus(ms.pzoptCompatOption, joypadData) then
-                ms:updateBottomPanelButtons()
-            end
-        end
     end
 end
 
@@ -458,4 +488,61 @@ function PzoptCompatDialog.show()
         joypadData.focus = dlg
         updateJoypadFocus(joypadData)
     end
+end
+
+-- The MOD COMPATIBILITY CHECK page of the main menu's PZ Optimization screen (pzopt_mainscreen_menu.lua): the scan, its
+-- overview text, one jar's block, and the Max performance / Max compatibility choice.
+PzoptCompatApi = {}
+
+function PzoptCompatApi.data()
+    return parse(perf():getPzoptModCompatDetails())
+end
+
+function PzoptCompatApi.overview(d)
+    return bodyHead(d) .. " <LINE> " .. GREY .. "Full report: Zomboid/pzopt/mod-compat.txt and console.txt. Changes to the enabled mods apply on the next launch."
+end
+
+-- the rich text of jar i: its mod, what it patches, what that switched off (and the mod's off: rules, under its last jar)
+function PzoptCompatApi.jarText(d, i)
+    local jar = d.jars[i]
+    if not jar then return "" end
+    local mod = d.mods[jar.source] or { status = "none", keys = {} }
+    local last = true
+    for k = i + 1, #d.jars do if d.jars[k].source == jar.source then last = false end end
+    return jarBlock(jar, mod) .. (last and ruleBlock(jar.source, mod, d.jars) or "")
+end
+
+-- a short verdict for the list: "tested", "N off", "listed", "nothing patched"
+function PzoptCompatApi.verdict(d, i)
+    local jar = d.jars[i]
+    local mod = jar and d.mods[jar.source] or { status = "none", keys = {} }
+    if not jar or #jar.hits == 0 then return "nothing patched" end
+    if mod.status == "ok" then return "tested" end
+    if mod.status == "report" then return "listed" end
+    if mod.status == "off" then return #mod.keys .. " off" end
+    return "patches"
+end
+
+PzoptCompatApi.names = PROFILE_NAMES
+
+-- now, the next launch's choice, what pins it
+function PzoptCompatApi.profile()
+    return profileState()
+end
+
+function PzoptCompatApi.choose(value)
+    local _, nextValue, pinned = profileState()
+    if pinned ~= "" or value == nextValue then return end
+    local p = perf()
+    p:setPzoptOption(PROFILE_KEY, value == p:getPzoptOptionDefault(PROFILE_KEY) and "" or value)
+    for _, k in ipairs(PROFILE_FOLLOWERS) do
+        if p:getPzoptOptionSaved(k) ~= "" then p:setPzoptOption(k, "") end
+    end
+    PzoptLogInfo("[pzopt] mod compatibility: " .. value .. " chosen for the next launch")
+end
+
+function PzoptCompatApi.restart()
+    local ok, started = pcall(function() return perf():pzoptRestartGame() end)
+    if not ok or not started then print("[pzopt] mod compatibility: could not start the restart helper, quitting only") end
+    MainScreen.instance:quitToDesktop()
 end

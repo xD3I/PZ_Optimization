@@ -298,3 +298,8 @@ volume pass 12.3 -> 14.3 us median; the other god ray passes unchanged.
 Since this release the composite patches went in for everyone, god rays on or off, and AMD players under Windows saw
 the whole world black. Fixed in `3f8f7dc` (patches only with god rays on at launch, the game's samplers back on their
 stock units); causes, fix and triage: `findings-amd-black-world-2026-09-27.md`.
+
+## Doors (2026-10-18)
+
+Open doors, their leaves and swing, people in the shafts, the night spill and the chunk haze patch fix on the stock
+composite: `findings-god-rays-doors-2026-10-18.md`.

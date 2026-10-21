@@ -69,7 +69,11 @@ public class AotCacheTest {
       AotCache.writeLauncher(game, "-XX:AOTCache=" + AotCache.CACHE);
       j = read(game);
       Check.check(has(j, "-XX:AOTCache=" + AotCache.CACHE) && !has(j, "-XX:AOTCacheOutput=" + AotCache.CACHE), "use replaces record");
-      Check.check(j.getJSONArray("vmArgs").length() == 5, "no duplicated options: " + j.getJSONArray("vmArgs"));
+      Check.check(j.getJSONArray("vmArgs").length() == 5 + (pzopt.Config.AOT_NO_INDY ? 2 : 0), "no duplicated options: " + j.getJSONArray("vmArgs"));
+      // aotNoIndy (on by default since 2026-10-15): the unlock + -AOTInvokeDynamicLinking pair, in that order, in the cache form
+      JSONArray va = j.getJSONArray("vmArgs");
+      int ni = va.toList().indexOf(AotCache.OPT_NO_INDY);
+      Check.check(!pzopt.Config.AOT_NO_INDY || ni > 0 && AotCache.OPT_UNLOCK_DIAG.equals(va.getString(ni - 1)), "aotNoIndy pair written: " + va);
       Check.check(j.getJSONArray("classpath").length() == 2, "no duplicated jar");
 
       Check.check(AotCache.resetLauncher(game), "cache form is reset");
@@ -77,6 +81,14 @@ public class AotCacheTest {
       JSONObject stock = new JSONObject(STOCK);
       Check.check(j.getJSONArray("classpath").similar(stock.getJSONArray("classpath")), "loose classpath back: " + j.getJSONArray("classpath"));
       Check.check(j.getJSONArray("vmArgs").similar(stock.getJSONArray("vmArgs")), "stock options back: " + j.getJSONArray("vmArgs"));
+
+      // aotNoIndy (f9-burst): its unlock + -AOTInvokeDynamicLinking pair goes with the reset
+      JSONObject k = new JSONObject(STOCK);
+      k.getJSONArray("vmArgs").put(AotCache.OPT_UNLOCK_DIAG).put(AotCache.OPT_NO_INDY).put("-XX:AOTCache=" + AotCache.CACHE);
+      Files.writeString(game.resolve("ProjectZomboid64.json"), k.toString(), StandardCharsets.UTF_8);
+      Check.check(AotCache.resetLauncher(game), "aotNoIndy form is reset");
+      j = read(game);
+      Check.check(j.getJSONArray("vmArgs").similar(stock.getJSONArray("vmArgs")), "aotNoIndy pair stripped: " + j.getJSONArray("vmArgs"));
       System.out.println("AotCacheTest: jar, record, use, reset ok");
    }
 

@@ -1639,7 +1639,7 @@ public class UIElement implements UIElementInterface {
                if (this.parent != null && pzopt.UiRetained.replayChild(this)) { // pzopt: uiRetainedChildren, its recorded commands instead of its Lua and subtree
                   return; // pzopt: uiRetainedChildren
                } // pzopt: uiRetainedChildren
-               int pzoptFrom = this.parent != null ? pzopt.UiRetained.childBegin() : -1; // pzopt: uiRetainedChildren
+               int pzoptFrom = this.parent != null ? pzopt.UiRetained.childBegin(this) : -1; // pzopt: uiRetainedChildren
                long pzoptStart = pzoptFrom >= 0 ? System.nanoTime() : 0L; // pzopt: uiRetainedChildren
 
                if (this.getTable() != null) {

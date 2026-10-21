@@ -329,7 +329,9 @@ public final class FBORenderCell {
          int maxHeight = playerZ < 0 ? playerZ : IsoCell.getInstance().chunkMap[playerIndex].maxHeight;
          int min = this.cell.chunkMap[playerIndex].minHeight;
          min = Math.max(min, playerZ);
+         long pzoptRtT = pzopt.GtAb.begin(); // pzopt: devGtAlternate section timer
          this.RenderTiles(min, maxHeight);
+         pzopt.GtAb.end(pzopt.GtAb.S_TILES_INTERNAL, pzoptRtT); // pzopt
       } catch (Exception ex) {
          this.cell.rendering = false;
          ExceptionLogger.logException(ex);
@@ -345,6 +347,7 @@ public final class FBORenderCell {
       }
 
       ProfileArea var24 = GameProfiler.getInstance().profile("renderLast");
+      long pzoptRlT = pzopt.GtAb.begin(); // pzopt: devGtAlternate section timer
 
       try {
          for (IsoMovingObject obj : this.cell.getObjectList()) {
@@ -355,6 +358,7 @@ public final class FBORenderCell {
             IsoObject obj = (IsoObject)this.cell.getStaticUpdaterObjectList().get(i);
             obj.renderlast();
          }
+         pzopt.GtAb.end(pzopt.GtAb.S_RENDERLAST, pzoptRlT); // pzopt
       } catch (Throwable var21) {
          if (var24 != null) {
             try {
@@ -557,13 +561,16 @@ public final class FBORenderCell {
             // calls each), a held one included (17 % of the game thread in late frames, run td-prof3). Occlusion counts are
             // last frame's here.
             this.pzoptSchedPlanned = pzopt.BakeScheduler.ON && !this.pzoptZoomFlood && !pzopt.ResumeShot.capturing; // pzopt
+            long pzoptBt = System.nanoTime(); // pzopt: bake timing (instrumented runs)
             if (this.pzoptSchedPlanned) { // pzopt
                this.pzoptSchedulePlan(playerIndex, this.currentTimeMillis); // pzopt
             } // pzopt
+            if (pzopt.BakeLog.ON) { pzopt.BakeLog.preAdd(pzopt.BakeLog.PRE_SCHED, pzoptBt); pzoptBt = System.nanoTime(); } // pzopt: bake timing
             this.prepareChunksForUpdating(playerIndex);
             if (var38) {
                FBORenderCutaways.getInstance().doCutawayVisitSquares(playerIndex, this.pzoptCutawayVisitChunks(perPlayerData1));
             }
+            if (pzopt.BakeLog.ON) pzopt.BakeLog.preAdd(pzopt.BakeLog.PRE_PREPARE, pzoptBt); // pzopt: bake timing
             if (playerIndex == 0) FBORenderCutaways.getInstance().pzoptHoldTick(this.currentTimeMillis); // pzopt: mirrors, a held mirror wall whose hold ran out gets its wall back (mirrorsCutawayHoldMs)
          } catch (Throwable var29) {
             if (var41 != null) {
@@ -582,6 +589,7 @@ public final class FBORenderCell {
          }
 
          perPlayerData1.occlusionChanged = false;
+         long pzoptOccT = System.nanoTime(); // pzopt: bake timing (instrumented runs)
          if (FBORenderOcclusion.getInstance().enabled && this.pzoptHasDirtyChunkTexturesForOcclusion(playerIndex)) {
             perPlayerData1.occlusionChanged = true;
             int sizex = (perPlayerData1.occludedGridX2 - perPlayerData1.occludedGridX1 + 1)
@@ -601,11 +609,14 @@ public final class FBORenderCell {
          } else {
             this.pzoptCountsPrecomputed = false; // pzopt: occlusionCountParallel
          }
+         if (pzopt.BakeLog.ON) pzopt.BakeLog.preAdd(pzopt.BakeLog.PRE_OCCLUSION, pzoptOccT); // pzopt: bake timing
 
          AbstractPerformanceProfileProbe var43 = updateLighting.profile();
 
          try {
+            long pzoptLitT = System.nanoTime(); // pzopt: bake timing (instrumented runs)
             this.updateChunkLighting(playerIndex);
+            if (pzopt.BakeLog.ON) pzopt.BakeLog.preAdd(pzopt.BakeLog.PRE_LIGHTING, pzoptLitT); // pzopt: bake timing
          } catch (Throwable var25) {
             if (var43 != null) {
                try {
@@ -624,6 +635,7 @@ public final class FBORenderCell {
 
          this.checkBlackedOutBuildings(playerIndex);
          this.checkBlackedOutRooms(playerIndex);
+         this.pzoptBakePrePass(playerIndex); // pzopt: bakeRecordParallel, this frame's bakes predicted and handed to the workers (everything their draws read is final here; the characters' pre-pass and the tile render prelude overlap them)
          if (pzopt.CharDraw.enabled()) {
             // pzopt: charDrawPrep. Everything the zombies' draw data reads is final now (cutaways, this frame's lighting,
             // the blacked-out passes): the visibility test and the texture-creator check run here and the draw data
@@ -1812,14 +1824,20 @@ public final class FBORenderCell {
       FBORenderCell.PerPlayerData perPlayerData1 = this.perPlayerData[playerIndex];
       perPlayerData1.chunksWithTranslucentFloor.clear();
       perPlayerData1.chunksWithTranslucentNonFloor.clear();
+      perPlayerData1.pzoptTnfSet.clear(); // pzopt
 
       pzopt.GpuSections.begin(pzopt.Sway.section("chunks")); // pzopt: GPU section (every on-screen chunk: bakes and per-chunk passes); foliage sway's alternation splits it
+      if (pzopt.BakeLog.ON) pzopt.BakeLog.loopBegin(); // pzopt: bake timing
       for (int i = 0; i < perPlayerData1.onScreenChunks.size(); i++) {
          IsoChunk c = perPlayerData1.onScreenChunks.get(i);
          AbstractPerformanceProfileProbe var10 = renderOneChunk.profile();
 
          try {
+            long pzoptCapT0 = pzopt.Config.BAKE_CAP_US > 0 || pzopt.Config.BAKE_SLACK_CAP ? System.nanoTime() : 0L; // pzopt: bakeCapUs / bakeSlackCap (tail6), the measured cost of a grant
+            int pzoptCapG0 = this.pzoptBakesThisFrame; // pzopt
             this.renderOneChunk(c, perPlayerRender, playerIndex, currentTimeMillis, floorRenderShader, wallRenderShader); // pzopt: (a per-chunk GPU section here cost 600 queries a frame; bake + composite cover it)
+            pzopt.BakeRecord.chunkDone(c); // pzopt: bakeRecordParallel, the units that wait for this chunk's levels go on
+            if (pzoptCapT0 != 0L && this.pzoptSchedNow && this.pzoptBakesThisFrame > pzoptCapG0) pzopt.BakeScheduler.get(playerIndex).grantCost(System.nanoTime() - pzoptCapT0, this.pzoptBakesThisFrame - pzoptCapG0); // pzopt: bakeCapUs
          } catch (Throwable var28) {
             if (var10 != null) {
                try {
@@ -1838,6 +1856,8 @@ public final class FBORenderCell {
       }
 
       pzopt.GpuSections.end(pzopt.Sway.section("chunks")); // pzopt: GPU section; foliage sway's alternation splits it
+      pzopt.BakeRecord.endFrame(); // pzopt: bakeRecordParallel, the batch joined, units not taken dropped
+      if (pzopt.BakeLog.ON) pzopt.BakeLog.loopEnd(); // pzopt: bake timing
       if (pzoptZoomRetain) {
          this.pzoptZoomSettle(playerIndex); // pzopt: zoomRetain, a credit nothing consumed is not carried to the next plan
       }
@@ -1849,14 +1869,19 @@ public final class FBORenderCell {
       pzopt.BloodDecals.flush(playerIndex, Core.getInstance().getZoom(playerIndex), this.pzoptBloodRules, this.pzoptBloodPlants); // pzopt: bloodAppend, new splats into their finished textures before the composite
       pzopt.PixelLight.bakeEnd(); pzopt.SpriteFilter.bakeEnd(); // pzopt: pixelLight; sprite filter, the finished texture gets its sharp level 1, no square stays white past the bakes
       long pzoptAoT = pzopt.GtAb.begin(); // pzopt: devGtAlternate section timer
+      long pzoptPostT = System.nanoTime(); // pzopt: bake timing (instrumented runs)
       pzopt.ChunkAo.flush(playerIndex); // pzopt: ambient occlusion, this frame's budget of AO computes, before the textures are composited
       pzopt.GtAb.end(pzopt.GtAb.S_AO_FLUSH, pzoptAoT); // pzopt
+      if (pzopt.BakeLog.ON) { pzopt.BakeLog.postAdd(pzopt.BakeLog.POST_AO, pzoptPostT); pzoptPostT = System.nanoTime(); } // pzopt: bake timing
       pzopt.ReliefAux.flush(playerIndex); // pzopt: relief, the relief codes of this frame's textures on screen, the baked sun relief's light steps
+      if (pzopt.BakeLog.ON) pzopt.BakeLog.postAdd(pzopt.BakeLog.POST_RELIEF, pzoptPostT); // pzopt: bake timing
       pzopt.BloodWet.collect(playerIndex, this.perPlayerData[playerIndex].onScreenChunks); // pzopt: wet blood, this frame's fresh splats (their squares join the reflection map below)
       pzopt.Ssr.beforeComposite(playerIndex, this.perPlayerData[playerIndex].onScreenChunks); // pzopt: reflections, the water square map and the scatter's frame, ahead of the chunk composite
       pzopt.TorchSource.renderFrame(); // pzopt: torchSource, this frame's lens for every per-pixel consumer (and the dev markers) whichever of them is on
       long pzoptPpl = pzopt.GtAb.begin(); // pzopt: devGtAlternate section timer
+      long pzoptPplT = System.nanoTime(); // pzopt: bake timing (instrumented runs)
       pzopt.PixelLight.beforeComposite(playerIndex, this.perPlayerData[playerIndex].onScreenChunks); // pzopt: pixelLight, the lattice uploads and the camera, ahead of the chunk composite that lights each pixel
+      if (pzopt.BakeLog.ON) pzopt.BakeLog.postAdd(pzopt.BakeLog.POST_PPL, pzoptPplT); // pzopt: bake timing
       pzopt.GtAb.end(pzopt.GtAb.S_PPL, pzoptPpl); // pzopt
       pzopt.SpriteFilter.beforeComposite(playerIndex); // pzopt: sprite filter, this frame's composite program for the zoom
       pzopt.CloudShadow.beforeComposite(playerIndex); // pzopt: cloudShadows, the drift and the camera of this frame, ahead of the chunk composite
@@ -1873,7 +1898,7 @@ public final class FBORenderCell {
       pzopt.GpuSections.end(pzopt.Relief.section(pzopt.Sway.section(pzopt.SpriteFilter.section("composite")))); // pzopt: sprite filter, devSpriteFilterAlternate splits the section; foliage sway, devSwayAlternate too
       if (!pzopt.ResumeShot.noTranslucent && DebugOptions.instance.fboRenderChunk.renderTranslucentNonFloor.getValue()) { // pzopt: tileRecordAsync, every level's translucent units to the workers while the frame goes on
          IsoChunkMap pzoptCm = IsoWorld.instance.currentCell.getChunkMap(playerIndex); // pzopt
-         pzopt.TileRecord.startFrame(this, perPlayerData1.chunksWithTranslucentNonFloor, playerIndex, pzoptCm.minHeight, pzoptCm.maxHeight, floorRenderShader, wallRenderShader, currentTimeMillis); // pzopt
+         pzopt.TileRecord.startFrame(this, perPlayerData1.chunksWithTranslucentNonFloor, perPlayerData1.chunksWithTranslucentFloor, playerIndex, pzoptCm.minHeight, pzoptCm.maxHeight, floorRenderShader, wallRenderShader, currentTimeMillis); // pzopt
       } // pzopt
       pzopt.Ssr.afterComposite(); // pzopt: reflections, dev timing of the composite with its scatter
       pzopt.Sway.afterComposite(); // pzopt: foliage sway, the motion-vector attachment off the world framebuffer
@@ -1931,7 +1956,7 @@ public final class FBORenderCell {
       this.renderOpaqueObjectsEvent(playerIndex);
       SpriteRenderer.instance.beginProfile(movingObjectsProbe);
       if (!pzopt.ResumeShot.noMoving) { // pzopt: resumeShot's exit capture (below "full"): no vehicles or characters
-      pzopt.CarGlass.beforeMoving(playerIndex); /* pzopt: car glass, this frame's sky and the cars' snapshots before they draw */ pzopt.EntityShadow.beforeMoving(playerIndex); /* pzopt: entity shadows, the worker's gather joined */ long pzoptMoving = pzopt.GtAb.begin(); pzopt.GpuSections.begin(pzopt.EntityShadow.section(pzopt.CarGlass.section("moving"))); /* pzopt: GPU section */ pzopt.EntityShadow.devStats(true); this.renderMovingObjects(); pzopt.EntityShadow.devStats(false); pzopt.GpuSections.end(pzopt.EntityShadow.section(pzopt.CarGlass.section("moving"))); pzopt.GtAb.end(pzopt.GtAb.S_MOVING, pzoptMoving); // pzopt: devGtAlternate section timer
+      pzopt.CarGlass.beforeMoving(playerIndex); /* pzopt: car glass, this frame's sky and the cars' snapshots before they draw */ pzopt.EntityShadow.beforeMoving(playerIndex); /* pzopt: entity shadows, the worker's gather joined */ long pzoptMoving = pzopt.GtAb.begin(); pzopt.HordeDraw.beginMoving(); /* pzopt: horde model draws, dev mode of this frame */ pzopt.HordeBatch.beginPass(); /* pzopt: hordeBatch, the pass starts */ pzopt.GpuSections.begin(pzopt.HordeDraw.section(pzopt.EntityShadow.section(pzopt.CarGlass.section("moving")))); /* pzopt: GPU section */ pzopt.EntityShadow.devStats(true); this.renderMovingObjects(); pzopt.HordeBatch.endPass(); /* pzopt: hordeBatch, the pass's last batch inside its GPU section */ pzopt.EntityShadow.devStats(false); pzopt.GpuSections.end(pzopt.HordeDraw.section(pzopt.EntityShadow.section(pzopt.CarGlass.section("moving")))); pzopt.HordeDraw.endMoving(); pzopt.GtAb.end(pzopt.GtAb.S_MOVING, pzoptMoving); // pzopt: devGtAlternate section timer
       }
       pzopt.CapsuleShadow.afterMoving(playerIndex); // pzopt: sunShadowSilhouette, the casters' shadows from their drawn shapes (after they are drawn)
       pzopt.Mirrors.afterMoving(); // pzopt: mirrors, the characters / vehicles through the reflectors' planes into the model layer
@@ -2126,6 +2151,229 @@ public final class FBORenderCell {
       FBORenderObjectOutline.getInstance().render(playerIndex);
    }
 
+   // pzopt: bakeRecordParallel (pzopt.BakeRecord): the frame's bakes recorded on the frame workers
+   private final FBORenderCell.PzoptBakeCell pzoptBakeCell = new FBORenderCell.PzoptBakeCell(); // pzopt
+   private final FBORenderCell.PzoptBakeCell pzoptBakeDeferred = this.pzoptBakeCell; // pzopt
+
+   /** pzopt: bakeRecordParallel, the cell's side of a unit (a named class: an anonymous one would renumber the stock FBORenderCell$1). */
+   private final class PzoptBakeCell implements pzopt.BakeRecord.Cell, pzopt.DrawRecorder.Deferred { // pzopt
+      @Override // pzopt
+      public void bakeInfo(pzopt.BakeRecord.Unit u) { // pzopt: the render-info pass on the unit's thread, into its own lists
+         FBORenderCell.this.pzoptBakeInfo(u.chunk, u.level, u.playerIndex, u.chunk.getRenderLevels(u.playerIndex), u.shadow, u.solid, u.shaded, u.veg, u.minus); // pzopt
+      } // pzopt
+
+      @Override // pzopt
+      public void bakeDraw(pzopt.BakeRecord.Unit u) { // pzopt
+         FBORenderCell.this.pzoptBakeFloors(u.chunk, u.level, u.solid); // pzopt
+         FBORenderCell.this.pzoptBakeObjects(u.chunk, u.level, u.playerIndex, u.veg, u.minus); // pzopt
+      } // pzopt
+
+      @Override // pzopt
+      public void bakeDeferred(int kind, Object a, Object b) { // pzopt
+         FBORenderCell.this.pzoptBakeDeferredDraw(kind, a, b); // pzopt
+      } // pzopt
+
+      @Override // pzopt
+      public void run(int kind, Object a, Object b) { // pzopt
+         FBORenderCell.this.pzoptBakeDeferredDraw(kind, a, b); // pzopt
+      } // pzopt
+
+      @Override // pzopt
+      public void flushTrees() { // pzopt: a bake's tree batch has no flush points (drawn once at the end of its object pass)
+      } // pzopt
+   } // pzopt
+
+   /** pzopt: bakeRecordParallel, a draw a recording thread left to the game thread, at its place in the stream. */
+   private void pzoptBakeDeferredDraw(int kind, Object a, Object b) { // pzopt
+      if ((kind == pzopt.BakeRecord.DEFER_FLOOR || kind == pzopt.BakeRecord.DEFER_OBJECT) && ((IsoObject)a).sprite != null && !((IsoObject)a).sprite.pzoptRoofKnown()) { // pzopt
+         ((IsoObject)a).sprite.getRoofProperties(); // pzopt: the sprite's lazy roof init here on the game thread, so its next bake can record it
+      } // pzopt
+      switch (kind) { // pzopt
+         case pzopt.BakeRecord.DEFER_FLOOR: // pzopt
+            this.renderFloor((IsoObject)a); // pzopt
+            break; // pzopt
+         case pzopt.BakeRecord.DEFER_OBJECT: // pzopt
+            this.renderMinusFloor((IsoObject)a); // pzopt
+            break; // pzopt
+         case pzopt.BakeRecord.DEFER_CORPSES: // pzopt
+            this.renderCorpses((IsoGridSquare)a, (IsoGridSquare)b, true); // pzopt
+            break; // pzopt
+         case pzopt.BakeRecord.DEFER_ITEMS: // pzopt
+            this.renderWorldInventoryObjects((IsoGridSquare)a, (IsoGridSquare)b, true); // pzopt
+            break; // pzopt
+         case pzopt.BakeRecord.DEFER_SNOW: // pzopt
+            this.pzoptBakeSnow((IsoChunk)a, (Integer)b); // pzopt
+            break; // pzopt
+         case pzopt.BakeRecord.DEFER_BLOOD: // pzopt
+            this.pzoptBakeBlood((IsoChunk)a, (Integer)b); // pzopt
+            break; // pzopt
+         case pzopt.BakeRecord.DEFER_TREES_BEGIN: // pzopt
+            this.pzoptBakeTreesBegin(); // pzopt
+            break; // pzopt
+         case pzopt.BakeRecord.DEFER_TREES_END: // pzopt
+            this.pzoptBakeTreesEnd(); // pzopt
+            break; // pzopt
+         default: // pzopt
+            break; // pzopt
+      } // pzopt
+   } // pzopt
+
+   /**
+    * pzopt: bakeRecordParallel, game thread right before the chunk loop: the levels that bake this frame, predicted as
+    * renderOneLevel decides them on the scheduler's path (on screen, not occluded, dirty, the group's lowest level granted;
+    * an upper level when its group bakes and it is dirty), their textures as beginRenderChunkLevel would take them, their
+    * render-info pass into the unit's lists, then the units to the workers. A wrong guess costs nothing but the work: a
+    * level baking without a unit takes the stock path, a unit not taken is dropped.
+    */
+   private void pzoptBakePrePass(int playerIndex) { // pzopt
+      // pzopt: made before performRenderTiles: its scheduler / zoom-flood decision and the delayed-loading invalidation as
+      // performRenderTiles is about to take them (same inputs, nothing written here)
+      float pzoptZoomNow = Core.getInstance().getZoom(playerIndex); // pzopt
+      boolean pzoptFlood = pzoptZoomRetain && this.pzoptLastZoom[playerIndex] > 0.0F // pzopt
+         && (pzoptZoomNow != this.pzoptLastZoom[playerIndex] || this.pzoptZoomDeferredThisFrame > 0); // pzopt
+      boolean pzoptSched = this.pzoptSchedPlanned && !pzoptFlood; // pzopt
+      boolean pzoptDelayed = this.delayedLoadingTimerMs != 0L && this.delayedLoadingTimerMs <= this.currentTimeMillis; // pzopt
+      if (!pzopt.BakeRecord.active() || !pzoptSched || pzoptDelayed || pzopt.ResumeShot.capturing || pzopt.ResumeShot.floorOnly // pzopt
+            || DebugOptions.instance.delayObjectRender.getValue() || PerformanceSettings.puddlesQuality == 2 || !pzoptTreePassActive() // pzopt
+            || pzopt.Config.BAKE_TIME_GUARD_PCT > 0) { // pzopt
+         return; // pzopt
+      } // pzopt
+      FBORenderCell.PerPlayerData pd = this.perPlayerData[playerIndex]; // pzopt
+      boolean occl = FBORenderOcclusion.getInstance().enabled; // pzopt
+      if (occl && pd.occlusionChanged && !this.pzoptCountsPrecomputed) { // pzopt
+         return; // pzopt: the loop recounts occlusion level by level: no guess
+      } // pzopt
+      long t0 = System.nanoTime(); // pzopt
+      float zoom = Core.getInstance().getZoom(playerIndex); // pzopt
+      pzopt.BakeScheduler sched = pzopt.BakeScheduler.get(playerIndex); // pzopt
+      // pzopt: the render mode performRenderTiles sets first, set here already: the recording threads start before it, and code
+      // a recording thread runs may read the cell's flags directly (the previous frame's translucent pass left them on)
+      this.renderAnimatedAttachments = false; // pzopt
+      this.renderTranslucentOnly = false; // pzopt
+      this.renderWindowFrameOutline = false; // pzopt
+      pzopt.BakeRecord.begin(this.pzoptBakeCell); // pzopt
+      pzopt.BakeRecord.prewake(); // pzopt: bakeRecordPrewake, the recording lanes wake while the levels are predicted
+      for (int i = 0; i < pd.onScreenChunks.size(); i++) { // pzopt
+         IsoChunk c = pd.onScreenChunks.get(i); // pzopt
+         if (c == null || !c.IsOnScreen(true) || c.lightingNeverDone[playerIndex]) { // pzopt
+            continue; // pzopt
+         } // pzopt
+         FBORenderLevels rl = c.getRenderLevels(playerIndex); // pzopt
+         boolean groupBakes = false; // pzopt
+         for (int z = c.minLevel; z <= c.maxLevel; z++) { // pzopt
+            int min = rl.getMinLevel(z); // pzopt
+            if (z == min) { // pzopt
+               groupBakes = false; // pzopt
+            } // pzopt
+            if (!rl.isOnScreen(z)) { // pzopt
+               continue; // pzopt
+            } // pzopt
+            if (occl && rl.getRenderedSquaresCount(z) == 0) { // pzopt
+               continue; // pzopt
+            } // pzopt
+            if (z == min) { // pzopt
+               if (!rl.isDirty(z, zoom) || !sched.peek(c, z)) { // pzopt
+                  continue; // pzopt
+               } // pzopt
+               groupBakes = true; // pzopt
+            } else if (!groupBakes || !rl.isDirty(z, zoom)) { // pzopt
+               continue; // pzopt
+            } // pzopt
+            FBORenderChunk rc = rl.getOrCreateFBOForLevel(z, zoom); // pzopt: as beginRenderChunkLevel takes it
+            float xoff = rc.w / 2.0F; // pzopt: FBORenderChunkManager.beginRenderChunkLevel's offsets
+            float yoff = (rc.getTopLevel() - rc.getMinLevel() + 1) * FBORenderChunk.PIXELS_PER_LEVEL; // pzopt
+            yoff += rc.getMinLevel() * FBORenderChunk.PIXELS_PER_LEVEL; // pzopt
+            yoff += FBORenderLevels.extraHeightForJumboTrees(rc.getMinLevel(), rc.getTopLevel()); // pzopt
+            pzopt.BakeRecord.add(c, z, rc, xoff, yoff, playerIndex); // pzopt: its render-info pass runs on the unit's thread
+            IsoGridSquare squareNW = c.getGridSquare(0, 0, z); // pzopt: the neighbour squares' light the object pass caches first
+            IsoGridSquare squareN = squareNW == null ? null : squareNW.getAdjacentSquare(IsoDirections.N); // pzopt
+            IsoGridSquare squareW = squareNW == null ? null : squareNW.getAdjacentSquare(IsoDirections.W); // pzopt
+            if (squareN != null) { // pzopt
+               squareN.cacheLightInfo(); // pzopt
+            } // pzopt
+            if (squareW != null) { // pzopt
+               squareW.cacheLightInfo(); // pzopt
+            } // pzopt
+         } // pzopt
+      } // pzopt
+      pzopt.BakeRecord.prepNanos += System.nanoTime() - t0; // pzopt
+      pzopt.BakeRecord.dispatch(); // pzopt
+   } // pzopt
+
+   /** pzopt: bakeRecordParallel, renderOneLevel at the bake of a recorded level: its list spliced (devBakeRecordCheck: the stock draw first, rolled back, compared). */
+   private void pzoptBakeSplice(pzopt.BakeRecord.Unit u) { // pzopt
+      pzopt.BakeRecord.Check check = null; // pzopt
+      if (pzopt.BakeRecord.checkFrame()) { // pzopt
+         this.pzoptBakeInfoCheck(u); // pzopt: the worker's render info against the info pass run here, at the stock time
+         check = pzopt.BakeRecord.Check.begin(u); // pzopt
+         this.pzoptBakeFloors(u.chunk, u.level, u.solid); // pzopt: the stock draw on the game thread
+         this.pzoptBakeObjects(u.chunk, u.level, u.playerIndex, u.veg, u.minus); // pzopt
+         check.rollBack(u); // pzopt
+      } // pzopt
+      pzopt.BakeRecord.splice(u, this.pzoptBakeDeferred); // pzopt
+      if (check != null) { // pzopt
+         check.compare(u); // pzopt
+      } // pzopt
+   } // pzopt
+
+   /**
+    * pzopt: devBakeRecordCheck, the render info a unit's info pass gave its level's objects (on a worker, ahead of the chunk
+    * loop) against calculateObjectRenderInfo at the stock time (here, at the level's bake): layer and target alpha per object,
+    * whether the square rendered. Everything it writes is put back.
+    */
+   private void pzoptBakeInfoCheck(pzopt.BakeRecord.Unit u) { // pzopt
+      int playerIndex = u.playerIndex; // pzopt
+      ChunkLevelData levelData = u.chunk.getCutawayDataForLevel(u.level); // pzopt
+      IsoGridSquare[] squares = u.chunk.squares[u.chunk.squaresIndexOfLevel(u.level)]; // pzopt
+      int bad = 0; // pzopt
+      String first = null; // pzopt
+      for (int i = 0; i < squares.length; i++) { // pzopt
+         IsoGridSquare square = squares[i]; // pzopt
+         if (square == null) { // pzopt
+            continue; // pzopt
+         } // pzopt
+         boolean rendered = levelData.shouldRenderSquare(playerIndex, square) && !pzoptIsOccluded(square.x, square.y, square.z); // pzopt
+         IsoObject[] objects = (IsoObject[])square.getObjects().getElements(); // pzopt
+         int numObjects = square.getObjects().size(); // pzopt
+         for (int j = 0; j < numObjects; j++) { // pzopt
+            IsoObject object = objects[j]; // pzopt
+            ObjectRenderInfo ri = object.getRenderInfo(playerIndex); // pzopt
+            ObjectRenderLayer layer = ri.layer; // pzopt
+            float target = ri.targetAlpha, renderAlpha = ri.renderAlpha, w = ri.renderWidth, h = ri.renderHeight; // pzopt
+            boolean cutaway = ri.cutaway, outline = ri.cutawayOutline; // pzopt
+            float alpha = object.getAlpha(playerIndex), objTarget = object.getTargetAlpha(playerIndex); // pzopt
+            ObjectRenderLayer wantLayer = ObjectRenderLayer.None; // pzopt
+            float wantTarget = 0.0F; // pzopt
+            if (rendered) { // pzopt
+               this.calculateObjectRenderInfo(playerIndex, square, object); // pzopt
+               wantLayer = ri.layer; // pzopt
+               wantTarget = ri.targetAlpha; // pzopt
+            } // pzopt
+            if ((wantLayer != layer || wantTarget != target) && layer == ObjectRenderLayer.MinusFloor && wantLayer == ObjectRenderLayer.Translucent // pzopt
+                  && object.sprite != null && pzopt.FloorDecals.onFloor(object.sprite)) { // pzopt
+               pzopt.BakeRecord.infoPuddleDecals++; // pzopt: the info pass's first shouldRender of the frame said no puddle, this later call yes (stock's own info pass makes that first call)
+            } else // pzopt
+            if (wantLayer != layer || wantTarget != target) { // pzopt
+               bad++; // pzopt
+               if (first == null) { // pzopt
+                  first = object.getClass().getSimpleName() + " " + (object.sprite == null ? "-" : object.sprite.name) + " at " + square.x + "," + square.y + "," + square.z // pzopt
+                     + ": worker " + layer + "/" + target + " stock " + wantLayer + "/" + wantTarget; // pzopt
+               } // pzopt
+            } // pzopt
+            ri.layer = layer; // pzopt
+            ri.targetAlpha = target; // pzopt
+            ri.renderAlpha = renderAlpha; // pzopt
+            ri.renderWidth = w; // pzopt
+            ri.renderHeight = h; // pzopt
+            ri.cutaway = cutaway; // pzopt
+            ri.cutawayOutline = outline; // pzopt
+            object.setAlpha(playerIndex, alpha); // pzopt
+            object.setTargetAlpha(playerIndex, objTarget); // pzopt
+         } // pzopt
+      } // pzopt
+      pzopt.BakeRecord.infoChecked(u, bad, first); // pzopt
+   } // pzopt
+
    private void renderOneChunk(
       IsoChunk c, PerPlayerRender perPlayerRender, int playerIndex, long currentTimeMillis, Shader floorRenderShader, Shader wallRenderShader
    ) {
@@ -2140,7 +2388,9 @@ public final class FBORenderCell {
 
                try {
                   long pzoptBloodT0 = pzopt.BloodProbe.ON ? System.nanoTime() : 0L; // pzopt: blood probe, bake time by dirty flags
+                  if (pzopt.BakeLog.ON) pzopt.BakeLog.levelBegin(); // pzopt: bake timing
                   this.renderOneLevel(c, zza, perPlayerRender, playerIndex, currentTimeMillis, floorRenderShader, wallRenderShader);
+                  if (pzopt.BakeLog.ON) pzopt.BakeLog.levelEnd(c, zza); // pzopt: bake timing
                   if (pzopt.BloodProbe.ON) pzopt.BloodProbe.levelDone(pzoptBloodT0); // pzopt: blood probe
                } catch (Throwable var14) {
                   if (var10 != null) {
@@ -2168,6 +2418,481 @@ public final class FBORenderCell {
          }
       }
    }
+
+   /** pzopt: bakeRecordParallel, stock renderOneLevel's render-info pass of a baking level (moved here unchanged: the game thread
+    * runs it into IsoCell's lists as stock, or ahead of the chunk loop into a recorded unit's own lists). */
+   private void pzoptBakeInfo(IsoChunk c, int level, int playerIndex, FBORenderLevels renderLevels, java.util.ArrayList<IsoGridSquare> shadowSquares, // pzopt
+         java.util.ArrayList<IsoGridSquare> solidFloor, java.util.ArrayList<IsoGridSquare> shadedFloor, java.util.ArrayList<IsoGridSquare> vegetationCorpses, // pzopt
+         java.util.ArrayList<IsoGridSquare> minusFloorCharacters) { // pzopt
+      GameProfiler profiler = GameProfiler.getInstance(); // pzopt
+      shadowSquares.clear();
+      solidFloor.clear();
+      shadedFloor.clear();
+      vegetationCorpses.clear();
+      minusFloorCharacters.clear();
+      AbstractPerformanceProfileProbe var17 = calculateRenderInfo.profile();
+
+      try {
+         if (level == renderLevels.getMinLevel(level)) {
+            renderLevels.clearCachedSquares(level);
+            pzopt.PuddleCache.invalidate(c, level); // pzopt: the puddle square list is rebuilt below
+         } else if (pzoptKeepPerFrameLists()) { // pzopt: an upper level rebuilt without its group's lower level
+            pzoptDropLevelSquares(renderLevels, level); // pzopt: drops its own entries first (see pzoptDropLevelSquares)
+            pzopt.PuddleCache.invalidate(c, level); // pzopt
+         }
+
+         if (level == 0) {
+            renderLevels.treeSquares.clear();
+         }
+
+         ChunkLevelData levelData = c.getCutawayDataForLevel(level);
+         IsoGridSquare[] squares = c.squares[c.squaresIndexOfLevel(level)];
+
+         for (int i = 0; i < squares.length; i++) {
+            IsoGridSquare square = squares[i];
+            if (levelData.shouldRenderSquare(playerIndex, square) && !pzoptIsOccluded(square.x, square.y, square.z)) { // pzopt: bakeRecordParallel, no shared testValue (render-info passes run on several threads)
+               if (!square.getObjects().isEmpty()) {
+                  square.flattenGrassEtc = false;
+                  ProfileArea squarex = profiler.profile("Calculate");
+
+                  try {
+                     this.calculateObjectRenderInfo(square);
+                  } catch (Throwable var47) {
+                     if (squarex != null) {
+                        try {
+                           squarex.close();
+                        } catch (Throwable var44) {
+                           var47.addSuppressed(var44);
+                        }
+                     }
+
+                     throw var47;
+                  }
+
+                  if (squarex != null) {
+                     squarex.close();
+                  }
+
+                  int flags = 0;
+                  boolean bHasTranslucentFloor = false;
+                  boolean bHasTranslucentNonFloor = false;
+                  boolean bHasAttachedSpritesOnWater = false;
+                  boolean bHasAnimatedAttachments = false;
+                  boolean bHasItems = false;
+                  IsoObject[] objects = (IsoObject[])square.getObjects().getElements();
+                  int numObjects = square.getObjects().size();
+
+                  for (int j = 0; j < numObjects; j++) {
+                     IsoObject object = objects[j];
+                     ObjectRenderInfo renderInfo = object.getRenderInfo(playerIndex);
+                     switch (renderInfo.layer) {
+                        case Floor:
+                           flags |= 1;
+                           break;
+                        case Vegetation:
+                           flags |= 2;
+                           break;
+                        case MinusFloor:
+                           flags |= 4;
+                           break;
+                        case MinusFloorSE:
+                           flags |= 4;
+                           break;
+                        case WorldInventoryObject:
+                           flags |= 4;
+                           break;
+                        case Translucent:
+                        case TranslucentSE:
+                           bHasTranslucentNonFloor = true;
+                           break;
+                        case TranslucentFloor:
+                           bHasTranslucentFloor = true;
+                     }
+
+                     if (renderInfo.layer == ObjectRenderLayer.None
+                        && object.sprite != null
+                        && object.sprite.getProperties().has(IsoFlagType.water)
+                        && object.getAttachedAnimSprite() != null
+                        && !object.getAttachedAnimSprite().isEmpty()) {
+                        bHasAttachedSpritesOnWater = true;
+                     }
+
+                     bHasAnimatedAttachments |= object.hasAnimatedAttachments();
+                     bHasAnimatedAttachments |= pzopt.Mirrors.attachedMirror(object) != null; // pzopt: mirrors, a wall's mirror overlay is captured in the animated-attachments pass
+                     if (!DebugOptions.instance.fboRenderChunk.itemsInChunkTexture.getValue()) {
+                        bHasItems |= object instanceof IsoWorldInventoryObject;
+                     }
+                  }
+
+                  if (bHasAnimatedAttachments) {
+                     renderLevels.getCachedSquares_AnimatedAttachments(level).add(square);
+                  }
+
+                  if (!square.getStaticMovingObjects().isEmpty()) {
+                     renderLevels.getCachedSquares_Corpses(level).add(square);
+                  }
+
+                  if (square.hasFlies()) {
+                     renderLevels.getCachedSquares_Flies(level).add(square);
+                  }
+
+                  if (bHasItems) {
+                     renderLevels.getCachedSquares_Items(level).add(square);
+                  }
+
+                  ProfileArea var85 = profiler.profile("Puddles");
+
+                  try {
+                     if (square.getPuddles() != null && square.getPuddles().shouldRender()) {
+                        renderLevels.getCachedSquares_Puddles(level).add(square);
+                     }
+                  } catch (Throwable var54) {
+                     if (var85 != null) {
+                        try {
+                           var85.close();
+                        } catch (Throwable var43) {
+                           var54.addSuppressed(var43);
+                        }
+                     }
+
+                     throw var54;
+                  }
+
+                  if (var85 != null) {
+                     var85.close();
+                  }
+
+                  if (bHasTranslucentFloor) {
+                     renderLevels.getCachedSquares_TranslucentFloor(level).add(square);
+                  }
+
+                  if (bHasTranslucentNonFloor) {
+                     renderLevels.getCachedSquares_TranslucentNonFloor(level).add(square);
+                  }
+
+                  if (!square.getStaticMovingObjects().isEmpty()) {
+                     int var74 = flags | 2;
+                     flags = var74 | 16;
+                     if (square.HasStairs()) {
+                        flags |= 4;
+                     }
+                  }
+
+                  if (!square.getWorldObjects().isEmpty()) {
+                     flags |= 2;
+                  }
+
+                  for (int m = 0; m < square.getMovingObjects().size(); m++) {
+                     IsoMovingObject mov = (IsoMovingObject)square.getMovingObjects().get(m);
+                     boolean bOnFloor = mov.isOnFloor();
+                     if (bOnFloor && mov instanceof IsoZombie zombie) {
+                        bOnFloor = zombie.isProne();
+                        if (!BaseVehicle.renderToTexture) {
+                           bOnFloor = false;
+                        }
+                     }
+
+                     int var75;
+                     if (bOnFloor) {
+                        var75 = flags | 2;
+                     } else {
+                        var75 = flags | 4;
+                     }
+
+                     flags = var75 | 16;
+                  }
+
+                  if (square.hasFlies()) {
+                     flags |= 4;
+                  }
+
+                  if ((flags & 1) != 0) {
+                     solidFloor.add(square);
+                  }
+
+                  if ((flags & 8) != 0) {
+                     shadedFloor.add(square);
+                  }
+
+                  if ((flags & 2) != 0) {
+                     vegetationCorpses.add(square);
+                  }
+
+                  if ((flags & 4) != 0) {
+                     minusFloorCharacters.add(square);
+                  }
+
+                  if ((flags & 16) != 0) {
+                     shadowSquares.add(square);
+                  }
+
+                  if (level == 0 && square.has(IsoObjectType.tree)) {
+                     renderLevels.treeSquares.add(square);
+                  }
+
+                  if (square.getWater() != null && square.getWater().hasWater()) {
+                     renderLevels.getCachedSquares_Water(level).add(square);
+                  }
+
+                  if (square.getWater() != null && square.getWater().isbShore() && IsoWater.getInstance().getShaderEnable()) {
+                     renderLevels.getCachedSquares_WaterShore(level).add(square);
+                  }
+
+                  if (bHasAttachedSpritesOnWater) {
+                     renderLevels.getCachedSquares_WaterAttach(level).add(square);
+                  }
+               }
+            } else {
+               this.setNotRendered(square);
+            }
+         }
+      } catch (Throwable var55) {
+         if (var17 != null) {
+            try {
+               var17.close();
+            } catch (Throwable var42) {
+               var55.addSuppressed(var42);
+            }
+         }
+
+         throw var55;
+      }
+
+      if (var17 != null) {
+         var17.close();
+      }
+   } // pzopt
+
+   /** pzopt: bakeRecordParallel, stock renderOneLevel's floor pass (floors, snow, blood), moved here unchanged; on a thread
+    * recording a bake unit the snow and the blood are drawn by the game thread at their place in the stream. */
+   private void pzoptBakeFloors(IsoChunk c, int level, java.util.ArrayList<IsoGridSquare> solidFloor) { // pzopt
+      GameProfiler profiler = GameProfiler.getInstance(); // pzopt
+               ProfileArea var59 = profiler.profile("Floor");
+
+               try {
+                  for (int i = 0; i < solidFloor.size(); i++) {
+                     IsoGridSquare square = (IsoGridSquare)solidFloor.get(i);
+                     this.renderFloor(square);
+                  }
+               } catch (Throwable var49) {
+                  if (var59 != null) {
+                     try {
+                        var59.close();
+                     } catch (Throwable var41) {
+                        var49.addSuppressed(var41);
+                     }
+                  }
+
+                  throw var49;
+               }
+
+               if (var59 != null) {
+                  var59.close();
+               }
+      if (!pzopt.BakeRecord.deferHere(pzopt.BakeRecord.DEFER_SNOW, c, level)) { // pzopt: snow and blood on the game thread (shared state)
+         this.pzoptBakeSnow(c, level); // pzopt
+      } // pzopt
+      if (!pzopt.BakeRecord.deferHere(pzopt.BakeRecord.DEFER_BLOOD, c, level)) { // pzopt
+         this.pzoptBakeBlood(c, level); // pzopt
+      } // pzopt
+   } // pzopt
+
+   /** pzopt: bakeRecordParallel, stock's snow section of a bake. */
+   void pzoptBakeSnow(IsoChunk c, int level) { // pzopt
+      GameProfiler profiler = GameProfiler.getInstance(); // pzopt
+      ProfileArea var59; // pzopt
+               var59 = profiler.profile("Snow");
+
+               try {
+                  IndieGL.disableDepthTest();
+                  FBORenderSnow.getInstance().RenderSnow(c, level);
+                  IndieGL.enableDepthTest();
+               } catch (Throwable var46) {
+                  if (var59 != null) {
+                     try {
+                        var59.close();
+                     } catch (Throwable var40) {
+                        var46.addSuppressed(var40);
+                     }
+                  }
+
+                  throw var46;
+               }
+
+               if (var59 != null) {
+                  var59.close();
+               }
+   } // pzopt
+
+   /** pzopt: bakeRecordParallel, stock's blood section of a bake. */
+   void pzoptBakeBlood(IsoChunk c, int level) { // pzopt
+      GameProfiler profiler = GameProfiler.getInstance(); // pzopt
+      ProfileArea var59; // pzopt
+               var59 = profiler.profile("Blood");
+
+               try {
+                  if (IsoCamera.frameState.camCharacterZ >= 0.0F || level <= PZMath.fastfloor(IsoCamera.frameState.camCharacterZ)) {
+                     int chunksPerWidth = 8;
+                     long pzoptBloodS0 = pzopt.BloodProbe.ON ? System.nanoTime() : 0L; // pzopt: blood probe
+                     this.renderOneLevel_Blood(c, level, c.wx * 8, c.wy * 8, (c.wx + 1) * 8, (c.wy + 1) * 8);
+                     this.renderOneLevel_Blood(c, -1, -1, level);
+                     this.renderOneLevel_Blood(c, 0, -1, level);
+                     this.renderOneLevel_Blood(c, 1, -1, level);
+                     this.renderOneLevel_Blood(c, -1, 0, level);
+                     this.renderOneLevel_Blood(c, 1, 0, level);
+                     this.renderOneLevel_Blood(c, -1, 1, level);
+                     this.renderOneLevel_Blood(c, 0, 1, level);
+                     this.renderOneLevel_Blood(c, 1, 1, level);
+                     if (pzopt.BloodProbe.ON) pzopt.BloodProbe.section(c, level, System.nanoTime() - pzoptBloodS0); // pzopt: blood probe
+                  }
+               } catch (Throwable var48) {
+                  if (var59 != null) {
+                     try {
+                        var59.close();
+                     } catch (Throwable var39) {
+                        var48.addSuppressed(var39);
+                     }
+                  }
+
+                  throw var48;
+               }
+
+               if (var59 != null) {
+                  var59.close();
+               }
+   } // pzopt
+
+   /** pzopt: bakeRecordParallel, stock renderOneLevel's object pass (plants, corpses, items, walls and objects), moved here unchanged
+    * but for the hooks that hand a recording thread's corpses, items and tree batch to the game thread. */
+   private void pzoptBakeObjects(IsoChunk c, int level, int playerIndex, java.util.ArrayList<IsoGridSquare> vegetationCorpses, // pzopt
+         java.util.ArrayList<IsoGridSquare> minusFloorCharacters) { // pzopt
+      GameProfiler profiler = GameProfiler.getInstance(); // pzopt
+      if (DebugOptions.instance.terrain.renderTiles.vegetationCorpses.getValue()) {
+         ProfileArea var62 = profiler.profile("Vegetation Corpses");
+
+         try {
+            if (DebugOptions.instance.fboRenderChunk.corpsesInChunkTexture.getValue()) {
+               IsoGridSquare squareNW = c.getGridSquare(0, 0, level);
+               IsoGridSquare squareN = squareNW == null ? null : squareNW.getAdjacentSquare(IsoDirections.N);
+               if (squareNW != null && squareN != null) {
+                  if (!pzopt.BakeRecord.onBakeRecorder()) squareN.cacheLightInfo(); // pzopt: a recording thread finds it cached by the unit's preparation
+                  if (!pzopt.BakeRecord.deferHere(pzopt.BakeRecord.DEFER_CORPSES, squareN, squareNW)) this.renderCorpses(squareN, squareNW, true); // pzopt: corpses on the game thread
+               }
+
+               IsoGridSquare squareW = squareNW == null ? null : squareNW.getAdjacentSquare(IsoDirections.W);
+               if (squareNW != null && squareW != null) {
+                  if (!pzopt.BakeRecord.onBakeRecorder()) squareW.cacheLightInfo(); // pzopt
+                  if (!pzopt.BakeRecord.deferHere(pzopt.BakeRecord.DEFER_CORPSES, squareW, squareNW)) this.renderCorpses(squareW, squareNW, true); // pzopt
+               }
+            }
+
+            for (int i = 0; i < vegetationCorpses.size(); i++) {
+               IsoGridSquare square = (IsoGridSquare)vegetationCorpses.get(i);
+               this.renderVegetation(square);
+               if (DebugOptions.instance.fboRenderChunk.corpsesInChunkTexture.getValue()) {
+                  if (!pzopt.BakeRecord.deferHere(pzopt.BakeRecord.DEFER_CORPSES, square, square)) this.renderCorpses(square, square, true); // pzopt
+               }
+            }
+         } catch (Throwable var50) {
+            if (var62 != null) {
+               try {
+                  var62.close();
+               } catch (Throwable var38) {
+                  var50.addSuppressed(var38);
+               }
+            }
+
+            throw var50;
+         }
+
+         if (var62 != null) {
+            var62.close();
+         }
+      }
+
+      if (DebugOptions.instance.terrain.renderTiles.minusFloorCharacters.getValue() && !pzopt.ResumeShot.floorOnly) { // pzopt: resumeShot's floors capture: no walls, objects, items (characters are the moving-objects pass)
+         ProfileArea var63 = profiler.profile("Minus Floor Chars");
+
+         try {
+            if (DebugOptions.instance.fboRenderChunk.itemsInChunkTexture.getValue()) {
+               IsoGridSquare squareNW = c.getGridSquare(0, 0, level);
+               IsoGridSquare squareN = squareNW == null ? null : squareNW.getAdjacentSquare(IsoDirections.N);
+               if (squareNW != null && squareN != null) {
+                  if (!pzopt.BakeRecord.onBakeRecorder()) squareN.cacheLightInfo(); // pzopt
+                  if (!pzopt.BakeRecord.deferHere(pzopt.BakeRecord.DEFER_ITEMS, squareN, squareNW)) this.renderWorldInventoryObjects(squareN, squareNW, true); // pzopt: items on the game thread
+               }
+
+               IsoGridSquare squareW = squareNW == null ? null : squareNW.getAdjacentSquare(IsoDirections.W);
+               if (squareNW != null && squareW != null) {
+                  if (!pzopt.BakeRecord.onBakeRecorder()) squareW.cacheLightInfo(); // pzopt
+                  if (!pzopt.BakeRecord.deferHere(pzopt.BakeRecord.DEFER_ITEMS, squareW, squareNW)) this.renderWorldInventoryObjects(squareW, squareNW, true); // pzopt
+               }
+            }
+
+            if (!pzopt.BakeRecord.deferHere(pzopt.BakeRecord.DEFER_TREES_BEGIN, null, null)) { // pzopt: the tree batch is the game thread's
+            FBORenderTrees.current = FBORenderTrees.alloc();
+            FBORenderTrees.current.init();
+            } // pzopt
+            IsoGridSquare squareNW = c.getGridSquare(0, 0, level);
+            IsoGridSquare squareN = squareNW == null ? null : squareNW.getAdjacentSquare(IsoDirections.N);
+            if (squareNW != null && squareN != null) {
+               if (!pzopt.BakeRecord.onBakeRecorder()) squareN.cacheLightInfo(); // pzopt
+               this.renderMinusFloor(c, squareN);
+            }
+
+            IsoGridSquare squareW = squareNW == null ? null : squareNW.getAdjacentSquare(IsoDirections.W);
+            if (squareNW != null && squareW != null) {
+               if (!pzopt.BakeRecord.onBakeRecorder()) squareW.cacheLightInfo(); // pzopt
+               this.renderMinusFloor(c, squareW);
+            }
+
+            for (int i = 0; i < minusFloorCharacters.size(); i++) {
+               squareN = (IsoGridSquare)minusFloorCharacters.get(i);
+               if (squareN.getLightInfo(playerIndex) != null) {
+                  this.renderMinusFloor(c, squareN);
+                  if (DebugOptions.instance.fboRenderChunk.itemsInChunkTexture.getValue()) {
+                     if (!pzopt.BakeRecord.deferHere(pzopt.BakeRecord.DEFER_ITEMS, squareN, squareN)) this.renderWorldInventoryObjects(squareN, squareN, true); // pzopt
+                  }
+
+                  this.renderMinusFloorSE(squareN);
+               }
+            }
+
+            if (!pzopt.BakeRecord.deferHere(pzopt.BakeRecord.DEFER_TREES_END, null, null)) { // pzopt
+               this.pzoptBakeTreesEnd(); // pzopt: stock's end of the tree batch
+            } // pzopt
+         } catch (Throwable var51) {
+            if (var63 != null) {
+               try {
+                  var63.close();
+               } catch (Throwable var37) {
+                  var51.addSuppressed(var37);
+               }
+            }
+
+            throw var51;
+         }
+
+         if (var63 != null) {
+            var63.close();
+         }
+      }
+   } // pzopt
+
+   /** pzopt: bakeRecordParallel, stock's end of a bake's tree batch (drawn, or back to the pool when empty). */
+   void pzoptBakeTreesEnd() { // pzopt
+      if (FBORenderTrees.current.trees.isEmpty()) {
+         FBORenderTrees.s_pool.release(FBORenderTrees.current);
+      } else {
+         SpriteRenderer.instance.drawGeneric(FBORenderTrees.current);
+      }
+   } // pzopt
+
+   /** pzopt: bakeRecordParallel, stock's start of a bake's tree batch. */
+   void pzoptBakeTreesBegin() { // pzopt
+      FBORenderTrees.current = FBORenderTrees.alloc();
+      FBORenderTrees.current.init();
+   } // pzopt
 
    private void renderOneLevel(
       IsoChunk c, int level, PerPlayerRender perPlayerRender, int playerIndex, long currentTimeMillis, Shader floorRenderShader, Shader wallRenderShader
@@ -2283,6 +3008,9 @@ public final class FBORenderCell {
                      if (pzoptAllowed || !pzoptHoldable) {
                         c.pzoptZoomReturned[playerIndex] &= ~pzoptBit;
                         c.pzoptZoomAllowed[playerIndex] &= ~pzoptBit;
+                        if ((c.pzoptZoomUnprepared[playerIndex] & pzoptBit) != 0L) {
+                           this.pzoptPrepareZoomGranted(playerIndex, c, level); // pzopt: the bake reads the square flags of its preparation
+                        }
                         if (pzoptAllowed) {
                            pzoptZoomAllowedNow = true;
                            this.pzoptZoomRebakesThisFrame++;
@@ -2421,6 +3149,7 @@ public final class FBORenderCell {
          if (isDirty && pzopt.PixelLight.ACTIVE) pzopt.PixelLight.bakeBegin(c, playerIndex); // pzopt: pixelLight, the chunk's squares hand out white light while its texture bakes
          if (isDirty) pzopt.SquareTrace.noteBake(c); // pzopt: devSquareTrace
          if (isDirty && canRender) pzopt.GpuSections.begin("bake"); // pzopt: GPU section
+         if (isDirty && canRender && pzopt.BakeLog.ON) pzopt.BakeLog.rtMark(false, c, level); // pzopt: bake timing, the render thread's submission of this level
          if (isDirty && canRender) pzopt.AmbientOcclusion.changed(); // pzopt: ambient occlusion, a chunk texture changes: recompute
          if (isDirty && canRender && pzopt.BakeMips.ON && FBORenderChunkManager.instance.renderChunk != null) { // pzopt: bakeMipLevels
             pzopt.BakeMips.onBake(FBORenderChunkManager.instance.renderChunk, FBORenderChunkManager.instance.renderChunk.getTexture()); // pzopt
@@ -2461,245 +3190,16 @@ public final class FBORenderCell {
                   if (renderLevels.isDirty(level, 1L << b, zoom)) pzoptBakeFlags[b]++;
                }
             }
+            if (pzopt.BakeLog.ON) pzopt.BakeLog.mark(1); // pzopt: bake timing
             boolean[][] flattenGrassEtc = perPlayerRender.flattenGrassEtc;
-            IsoCell.ShadowSquares.clear();
-            IsoCell.SolidFloor.clear();
-            IsoCell.ShadedFloor.clear();
-            IsoCell.VegetationCorpses.clear();
-            IsoCell.MinusFloorCharacters.clear();
+            pzopt.BakeRecord.Unit pzoptUnit = pzopt.BakeRecord.take(c, level); // pzopt: bakeRecordParallel, this level was prepared and recorded ahead of the chunk loop
             GameProfiler profiler = GameProfiler.getInstance();
-            AbstractPerformanceProfileProbe var17 = calculateRenderInfo.profile();
+            AbstractPerformanceProfileProbe var17 = null; // pzopt: the render-info pass is pzoptBakeInfo (stock body)
+            if (pzoptUnit == null) { // pzopt
+               this.pzoptBakeInfo(c, level, playerIndex, renderLevels, IsoCell.ShadowSquares, IsoCell.SolidFloor, IsoCell.ShadedFloor, IsoCell.VegetationCorpses, IsoCell.MinusFloorCharacters); // pzopt
+            } // pzopt
 
-            try {
-               if (level == renderLevels.getMinLevel(level)) {
-                  renderLevels.clearCachedSquares(level);
-                  pzopt.PuddleCache.invalidate(c, level); // pzopt: the puddle square list is rebuilt below
-               } else if (pzoptKeepPerFrameLists()) { // pzopt: an upper level rebuilt without its group's lower level
-                  pzoptDropLevelSquares(renderLevels, level); // pzopt: drops its own entries first (see pzoptDropLevelSquares)
-                  pzopt.PuddleCache.invalidate(c, level); // pzopt
-               }
-
-               if (level == 0) {
-                  renderLevels.treeSquares.clear();
-               }
-
-               ChunkLevelData levelData = c.getCutawayDataForLevel(level);
-               IsoGridSquare[] squares = c.squares[c.squaresIndexOfLevel(level)];
-
-               for (int i = 0; i < squares.length; i++) {
-                  IsoGridSquare square = squares[i];
-                  if (levelData.shouldRenderSquare(playerIndex, square) && !FBORenderOcclusion.getInstance().isOccluded(square.x, square.y, square.z)) {
-                     if (!square.getObjects().isEmpty()) {
-                        square.flattenGrassEtc = false;
-                        ProfileArea squarex = profiler.profile("Calculate");
-
-                        try {
-                           this.calculateObjectRenderInfo(square);
-                        } catch (Throwable var47) {
-                           if (squarex != null) {
-                              try {
-                                 squarex.close();
-                              } catch (Throwable var44) {
-                                 var47.addSuppressed(var44);
-                              }
-                           }
-
-                           throw var47;
-                        }
-
-                        if (squarex != null) {
-                           squarex.close();
-                        }
-
-                        int flags = 0;
-                        boolean bHasTranslucentFloor = false;
-                        boolean bHasTranslucentNonFloor = false;
-                        boolean bHasAttachedSpritesOnWater = false;
-                        boolean bHasAnimatedAttachments = false;
-                        boolean bHasItems = false;
-                        IsoObject[] objects = (IsoObject[])square.getObjects().getElements();
-                        int numObjects = square.getObjects().size();
-
-                        for (int j = 0; j < numObjects; j++) {
-                           IsoObject object = objects[j];
-                           ObjectRenderInfo renderInfo = object.getRenderInfo(playerIndex);
-                           switch (renderInfo.layer) {
-                              case Floor:
-                                 flags |= 1;
-                                 break;
-                              case Vegetation:
-                                 flags |= 2;
-                                 break;
-                              case MinusFloor:
-                                 flags |= 4;
-                                 break;
-                              case MinusFloorSE:
-                                 flags |= 4;
-                                 break;
-                              case WorldInventoryObject:
-                                 flags |= 4;
-                                 break;
-                              case Translucent:
-                              case TranslucentSE:
-                                 bHasTranslucentNonFloor = true;
-                                 break;
-                              case TranslucentFloor:
-                                 bHasTranslucentFloor = true;
-                           }
-
-                           if (renderInfo.layer == ObjectRenderLayer.None
-                              && object.sprite != null
-                              && object.sprite.getProperties().has(IsoFlagType.water)
-                              && object.getAttachedAnimSprite() != null
-                              && !object.getAttachedAnimSprite().isEmpty()) {
-                              bHasAttachedSpritesOnWater = true;
-                           }
-
-                           bHasAnimatedAttachments |= object.hasAnimatedAttachments();
-                           bHasAnimatedAttachments |= pzopt.Mirrors.attachedMirror(object) != null; // pzopt: mirrors, a wall's mirror overlay is captured in the animated-attachments pass
-                           if (!DebugOptions.instance.fboRenderChunk.itemsInChunkTexture.getValue()) {
-                              bHasItems |= object instanceof IsoWorldInventoryObject;
-                           }
-                        }
-
-                        if (bHasAnimatedAttachments) {
-                           renderLevels.getCachedSquares_AnimatedAttachments(level).add(square);
-                        }
-
-                        if (!square.getStaticMovingObjects().isEmpty()) {
-                           renderLevels.getCachedSquares_Corpses(level).add(square);
-                        }
-
-                        if (square.hasFlies()) {
-                           renderLevels.getCachedSquares_Flies(level).add(square);
-                        }
-
-                        if (bHasItems) {
-                           renderLevels.getCachedSquares_Items(level).add(square);
-                        }
-
-                        ProfileArea var85 = profiler.profile("Puddles");
-
-                        try {
-                           if (square.getPuddles() != null && square.getPuddles().shouldRender()) {
-                              renderLevels.getCachedSquares_Puddles(level).add(square);
-                           }
-                        } catch (Throwable var54) {
-                           if (var85 != null) {
-                              try {
-                                 var85.close();
-                              } catch (Throwable var43) {
-                                 var54.addSuppressed(var43);
-                              }
-                           }
-
-                           throw var54;
-                        }
-
-                        if (var85 != null) {
-                           var85.close();
-                        }
-
-                        if (bHasTranslucentFloor) {
-                           renderLevels.getCachedSquares_TranslucentFloor(level).add(square);
-                        }
-
-                        if (bHasTranslucentNonFloor) {
-                           renderLevels.getCachedSquares_TranslucentNonFloor(level).add(square);
-                        }
-
-                        if (!square.getStaticMovingObjects().isEmpty()) {
-                           int var74 = flags | 2;
-                           flags = var74 | 16;
-                           if (square.HasStairs()) {
-                              flags |= 4;
-                           }
-                        }
-
-                        if (!square.getWorldObjects().isEmpty()) {
-                           flags |= 2;
-                        }
-
-                        for (int m = 0; m < square.getMovingObjects().size(); m++) {
-                           IsoMovingObject mov = (IsoMovingObject)square.getMovingObjects().get(m);
-                           boolean bOnFloor = mov.isOnFloor();
-                           if (bOnFloor && mov instanceof IsoZombie zombie) {
-                              bOnFloor = zombie.isProne();
-                              if (!BaseVehicle.renderToTexture) {
-                                 bOnFloor = false;
-                              }
-                           }
-
-                           int var75;
-                           if (bOnFloor) {
-                              var75 = flags | 2;
-                           } else {
-                              var75 = flags | 4;
-                           }
-
-                           flags = var75 | 16;
-                        }
-
-                        if (square.hasFlies()) {
-                           flags |= 4;
-                        }
-
-                        if ((flags & 1) != 0) {
-                           IsoCell.SolidFloor.add(square);
-                        }
-
-                        if ((flags & 8) != 0) {
-                           IsoCell.ShadedFloor.add(square);
-                        }
-
-                        if ((flags & 2) != 0) {
-                           IsoCell.VegetationCorpses.add(square);
-                        }
-
-                        if ((flags & 4) != 0) {
-                           IsoCell.MinusFloorCharacters.add(square);
-                        }
-
-                        if ((flags & 16) != 0) {
-                           IsoCell.ShadowSquares.add(square);
-                        }
-
-                        if (level == 0 && square.has(IsoObjectType.tree)) {
-                           renderLevels.treeSquares.add(square);
-                        }
-
-                        if (square.getWater() != null && square.getWater().hasWater()) {
-                           renderLevels.getCachedSquares_Water(level).add(square);
-                        }
-
-                        if (square.getWater() != null && square.getWater().isbShore() && IsoWater.getInstance().getShaderEnable()) {
-                           renderLevels.getCachedSquares_WaterShore(level).add(square);
-                        }
-
-                        if (bHasAttachedSpritesOnWater) {
-                           renderLevels.getCachedSquares_WaterAttach(level).add(square);
-                        }
-                     }
-                  } else {
-                     this.setNotRendered(square);
-                  }
-               }
-            } catch (Throwable var55) {
-               if (var17 != null) {
-                  try {
-                     var17.close();
-                  } catch (Throwable var42) {
-                     var55.addSuppressed(var42);
-                  }
-               }
-
-               throw var55;
-            }
-
-            if (var17 != null) {
-               var17.close();
-            }
-
+            if (pzopt.BakeLog.ON) pzopt.BakeLog.mark(2); // pzopt: bake timing
             var17 = renderOneChunkLevel2.profile();
 
             label658: {
@@ -2720,202 +3220,24 @@ public final class FBORenderCell {
                      // nothing): a chunk's levels share one texture, finished and queued for the screen at its top level.
                      renderFloor = false;
                   }
+                  if (pzoptUnit != null) { // pzopt: bakeRecordParallel, the recorded floors, plants and objects at their place
+                     this.pzoptBakeSplice(pzoptUnit); // pzopt
+                  } else // pzopt
                   if (renderFloor) {
-                     ProfileArea var59 = profiler.profile("Floor");
-
-                     try {
-                        for (int i = 0; i < IsoCell.SolidFloor.size(); i++) {
-                           IsoGridSquare square = (IsoGridSquare)IsoCell.SolidFloor.get(i);
-                           this.renderFloor(square);
-                        }
-                     } catch (Throwable var49) {
-                        if (var59 != null) {
-                           try {
-                              var59.close();
-                           } catch (Throwable var41) {
-                              var49.addSuppressed(var41);
-                           }
-                        }
-
-                        throw var49;
-                     }
-
-                     if (var59 != null) {
-                        var59.close();
-                     }
-
-                     var59 = profiler.profile("Snow");
-
-                     try {
-                        IndieGL.disableDepthTest();
-                        FBORenderSnow.getInstance().RenderSnow(c, level);
-                        IndieGL.enableDepthTest();
-                     } catch (Throwable var46) {
-                        if (var59 != null) {
-                           try {
-                              var59.close();
-                           } catch (Throwable var40) {
-                              var46.addSuppressed(var40);
-                           }
-                        }
-
-                        throw var46;
-                     }
-
-                     if (var59 != null) {
-                        var59.close();
-                     }
-
-                     var59 = profiler.profile("Blood");
-
-                     try {
-                        if (IsoCamera.frameState.camCharacterZ >= 0.0F || level <= PZMath.fastfloor(IsoCamera.frameState.camCharacterZ)) {
-                           int chunksPerWidth = 8;
-                           long pzoptBloodS0 = pzopt.BloodProbe.ON ? System.nanoTime() : 0L; // pzopt: blood probe
-                           this.renderOneLevel_Blood(c, level, c.wx * 8, c.wy * 8, (c.wx + 1) * 8, (c.wy + 1) * 8);
-                           this.renderOneLevel_Blood(c, -1, -1, level);
-                           this.renderOneLevel_Blood(c, 0, -1, level);
-                           this.renderOneLevel_Blood(c, 1, -1, level);
-                           this.renderOneLevel_Blood(c, -1, 0, level);
-                           this.renderOneLevel_Blood(c, 1, 0, level);
-                           this.renderOneLevel_Blood(c, -1, 1, level);
-                           this.renderOneLevel_Blood(c, 0, 1, level);
-                           this.renderOneLevel_Blood(c, 1, 1, level);
-                           if (pzopt.BloodProbe.ON) pzopt.BloodProbe.section(c, level, System.nanoTime() - pzoptBloodS0); // pzopt: blood probe
-                        }
-                     } catch (Throwable var48) {
-                        if (var59 != null) {
-                           try {
-                              var59.close();
-                           } catch (Throwable var39) {
-                              var48.addSuppressed(var39);
-                           }
-                        }
-
-                        throw var48;
-                     }
-
-                     if (var59 != null) {
-                        var59.close();
-                     }
+                     this.pzoptBakeFloors(c, level, IsoCell.SolidFloor); // pzopt: stock floor pass (pzoptBakeFloors)
                   }
 
+                  if (pzopt.BakeLog.ON) pzopt.BakeLog.mark(3); // pzopt: bake timing
                   if (!renderObjects) {
                      FBORenderChunkManager.instance.endRenderChunkLevel(c, level, zoom, false); pzopt.PixelLight.bakeEnd(); pzopt.SpriteFilter.bakeEnd(); // pzopt: pixelLight; sprite filter, the finished texture gets its sharp level 1
                      break label658;
                   }
 
-                  if (DebugOptions.instance.terrain.renderTiles.vegetationCorpses.getValue()) {
-                     ProfileArea var62 = profiler.profile("Vegetation Corpses");
+                  if (pzoptUnit == null) { // pzopt
+                     this.pzoptBakeObjects(c, level, playerIndex, IsoCell.VegetationCorpses, IsoCell.MinusFloorCharacters); // pzopt: stock object pass (pzoptBakeObjects)
+                  } // pzopt
 
-                     try {
-                        if (DebugOptions.instance.fboRenderChunk.corpsesInChunkTexture.getValue()) {
-                           IsoGridSquare squareNW = c.getGridSquare(0, 0, level);
-                           IsoGridSquare squareN = squareNW == null ? null : squareNW.getAdjacentSquare(IsoDirections.N);
-                           if (squareNW != null && squareN != null) {
-                              squareN.cacheLightInfo();
-                              this.renderCorpses(squareN, squareNW, true);
-                           }
-
-                           IsoGridSquare squareW = squareNW == null ? null : squareNW.getAdjacentSquare(IsoDirections.W);
-                           if (squareNW != null && squareW != null) {
-                              squareW.cacheLightInfo();
-                              this.renderCorpses(squareW, squareNW, true);
-                           }
-                        }
-
-                        for (int i = 0; i < IsoCell.VegetationCorpses.size(); i++) {
-                           IsoGridSquare square = (IsoGridSquare)IsoCell.VegetationCorpses.get(i);
-                           this.renderVegetation(square);
-                           if (DebugOptions.instance.fboRenderChunk.corpsesInChunkTexture.getValue()) {
-                              this.renderCorpses(square, square, true);
-                           }
-                        }
-                     } catch (Throwable var50) {
-                        if (var62 != null) {
-                           try {
-                              var62.close();
-                           } catch (Throwable var38) {
-                              var50.addSuppressed(var38);
-                           }
-                        }
-
-                        throw var50;
-                     }
-
-                     if (var62 != null) {
-                        var62.close();
-                     }
-                  }
-
-                  if (DebugOptions.instance.terrain.renderTiles.minusFloorCharacters.getValue() && !pzopt.ResumeShot.floorOnly) { // pzopt: resumeShot's floors capture: no walls, objects, items (characters are the moving-objects pass)
-                     ProfileArea var63 = profiler.profile("Minus Floor Chars");
-
-                     try {
-                        if (DebugOptions.instance.fboRenderChunk.itemsInChunkTexture.getValue()) {
-                           IsoGridSquare squareNW = c.getGridSquare(0, 0, level);
-                           IsoGridSquare squareN = squareNW == null ? null : squareNW.getAdjacentSquare(IsoDirections.N);
-                           if (squareNW != null && squareN != null) {
-                              squareN.cacheLightInfo();
-                              this.renderWorldInventoryObjects(squareN, squareNW, true);
-                           }
-
-                           IsoGridSquare squareW = squareNW == null ? null : squareNW.getAdjacentSquare(IsoDirections.W);
-                           if (squareNW != null && squareW != null) {
-                              squareW.cacheLightInfo();
-                              this.renderWorldInventoryObjects(squareW, squareNW, true);
-                           }
-                        }
-
-                        FBORenderTrees.current = FBORenderTrees.alloc();
-                        FBORenderTrees.current.init();
-                        IsoGridSquare squareNW = c.getGridSquare(0, 0, level);
-                        IsoGridSquare squareN = squareNW == null ? null : squareNW.getAdjacentSquare(IsoDirections.N);
-                        if (squareNW != null && squareN != null) {
-                           squareN.cacheLightInfo();
-                           this.renderMinusFloor(c, squareN);
-                        }
-
-                        IsoGridSquare squareW = squareNW == null ? null : squareNW.getAdjacentSquare(IsoDirections.W);
-                        if (squareNW != null && squareW != null) {
-                           squareW.cacheLightInfo();
-                           this.renderMinusFloor(c, squareW);
-                        }
-
-                        for (int i = 0; i < IsoCell.MinusFloorCharacters.size(); i++) {
-                           squareN = (IsoGridSquare)IsoCell.MinusFloorCharacters.get(i);
-                           if (squareN.getLightInfo(playerIndex) != null) {
-                              this.renderMinusFloor(c, squareN);
-                              if (DebugOptions.instance.fboRenderChunk.itemsInChunkTexture.getValue()) {
-                                 this.renderWorldInventoryObjects(squareN, squareN, true);
-                              }
-
-                              this.renderMinusFloorSE(squareN);
-                           }
-                        }
-
-                        if (FBORenderTrees.current.trees.isEmpty()) {
-                           FBORenderTrees.s_pool.release(FBORenderTrees.current);
-                        } else {
-                           SpriteRenderer.instance.drawGeneric(FBORenderTrees.current);
-                        }
-                     } catch (Throwable var51) {
-                        if (var63 != null) {
-                           try {
-                              var63.close();
-                           } catch (Throwable var37) {
-                              var51.addSuppressed(var37);
-                           }
-                        }
-
-                        throw var51;
-                     }
-
-                     if (var63 != null) {
-                        var63.close();
-                     }
-                  }
-
+                  if (pzopt.BakeLog.ON) pzopt.BakeLog.mark(4); // pzopt: bake timing
                   if (PerformanceSettings.puddlesQuality == 2) {
                      ProfileArea var64 = profiler.profile("Low Puddles");
 
@@ -2994,7 +3316,7 @@ public final class FBORenderCell {
                   this.pzoptBakeTrees(c, playerIndex, zoom);
                   pzopt.GpuSections.end("bake.trees"); // pzopt: GPU sub-section
                }
-               if ((pzopt.Config.GOD_RAYS || pzopt.EntityShadow.wantsOccupancy()) && renderLevels.isDirty(level, FBORenderChunk.DIRTY_OBJECT_ADD | FBORenderChunk.DIRTY_OBJECT_REMOVE | FBORenderChunk.DIRTY_OBJECT_MODIFY, zoom)) pzopt.GodRays.chunkChanged(c); // pzopt: god rays, a door / window / wall changed: the chunk's occupancy again
+               if ((pzopt.Config.GOD_RAYS || pzopt.EntityShadow.wantsOccupancy() || pzopt.VoxelLight.wantsOccupancy()) && renderLevels.isDirty(level, FBORenderChunk.DIRTY_OBJECT_ADD | FBORenderChunk.DIRTY_OBJECT_REMOVE | FBORenderChunk.DIRTY_OBJECT_MODIFY, zoom)) pzopt.GodRays.chunkChanged(c); // pzopt: god rays, a door / window / wall changed: the chunk's occupancy again
                if (pzopt.ChunkAo.enabled() && FBORenderChunkManager.instance.renderChunk != null && FBORenderChunkManager.instance.renderChunk.isTopLevel(level)) { // pzopt: ambient occlusion baked into the texture
                   pzopt.ChunkAo.bakeEnd(FBORenderChunkManager.instance.renderChunk, c, playerIndex, zoom, pzopt.ChunkAo.geometryDirty(renderLevels, level, zoom)); // pzopt
                } // pzopt
@@ -3003,6 +3325,7 @@ public final class FBORenderCell {
                FBORenderChunkManager.instance.endRenderChunkLevel(c, level, zoom, true); pzopt.PixelLight.bakeEnd(); pzopt.SpriteFilter.bakeEnd(); // pzopt: pixelLight; sprite filter, the finished texture gets its sharp level 1
                pzopt.GpuSections.end("bake.end"); // pzopt: GPU sub-section
                pzopt.GpuSections.end("bake"); // pzopt: GPU section
+               if (pzopt.BakeLog.ON) pzopt.BakeLog.rtMark(true, c, level); // pzopt: bake timing
                return;
             }
 
@@ -4258,6 +4581,7 @@ public final class FBORenderCell {
    }
 
    public void renderFloor(IsoObject object) { // pzopt
+      if (pzopt.BakeRecord.deferFloor(object)) return; // pzopt: bakeRecordParallel, a floor a recording thread may not draw goes to the game thread
       boolean pzoptFloor = pzopt.Sway.floorBegin(); // pzopt: swayFloorExact, a floor bakes its depth exactly as stock
       try { // pzopt
          this.pzoptRenderFloor(object); // pzopt
@@ -4285,12 +4609,12 @@ public final class FBORenderCell {
 
                sprite.render(object, square.x, square.y, square.z, object.getDir(), object.offsetX, object.offsetY, this.defColorInfo, true);
             } else {
-               FloorShaper attachedFloorShaper = FloorShaperAttachedSprites.instance;
+               FloorShaper attachedFloorShaper = pzopt.RenderScratch.fsAttached(); // pzopt: bakeRecordParallel, the thread's own shaper (pzopt.RenderScratch)
                FloorShaper floorShaper;
                if (!object.getProperties().has(IsoFlagType.diamondFloor) && !object.getProperties().has(IsoFlagType.water)) {
-                  floorShaper = FloorShaperDeDiamond.instance;
+                  floorShaper = pzopt.RenderScratch.fsDeDiamond(); // pzopt: bakeRecordParallel, the thread's own shaper
                } else {
-                  floorShaper = FloorShaperDiamond.instance;
+                  floorShaper = pzopt.RenderScratch.fsDiamond(); // pzopt: bakeRecordParallel, the thread's own shaper
                }
 
                IsoWaterGeometry water = square.z == 0 ? square.getWater() : null;
@@ -4330,8 +4654,10 @@ public final class FBORenderCell {
                IsoGridSquare.setBlendFunc();
                Shader floorShader = null;
                IndieGL.StartShader(floorShader, playerIndex);
-               this.defColorInfo.set(1.0F, 1.0F, 1.0F, 1.0F);
-               object.renderFloorTile(square.x, square.y, square.z, this.defColorInfo, true, false, floorShader, floorShaper, attachedFloorShaper);
+               FBORenderCell.PzoptCellScratch pzoptCs = this.pzoptCellScratch(); // pzopt: a recording thread's own colour (the game thread's ramp path writes defColorInfo meanwhile)
+               ColorInfo pzoptCol = pzoptCs == null ? this.defColorInfo : pzoptCs.floorCol; // pzopt
+               pzoptCol.set(1.0F, 1.0F, 1.0F, 1.0F); // pzopt
+               object.renderFloorTile(square.x, square.y, square.z, pzoptCol, true, false, floorShader, floorShaper, attachedFloorShaper); // pzopt
                IndieGL.EndShader();
             }
          }
@@ -4486,6 +4812,7 @@ public final class FBORenderCell {
    }
 
    private void renderMinusFloor(IsoObject object) {
+      if (pzopt.BakeRecord.deferObject(object)) return; // pzopt: bakeRecordParallel, an object a recording thread may not draw goes to the game thread
       if (pzopt.ResumeShot.floorOnly) {
          return; // pzopt: resumeShot's exit capture: floors only (no walls, doors, objects, trees)
       }
@@ -4616,7 +4943,7 @@ public final class FBORenderCell {
          square.DoWallLightingN(object, 0, cutawaySelf, cutawayN, cutawayS, cutawayW, cutawayE, bHasSeenDoorN, bHasSeenWindowN, wallRenderShader);
       }
 
-      if (renderInfo.cutawayOutline) {
+      if (renderInfo.cutawayOutline && !pzopt.BakeRecord.deferListAdd(square, playerIndex)) { // pzopt: bakeRecordParallel, a recording thread's add runs at its splice (the list may be another unit's)
          FBORenderLevels renderLevels = square.getChunk().getRenderLevels(playerIndex);
          if (!renderLevels.getCachedSquares_CutawayWindowFrames(square.getZ()).contains(square)) {
             renderLevels.getCachedSquares_CutawayWindowFrames(square.getZ()).add(square);
@@ -4757,6 +5084,46 @@ public final class FBORenderCell {
          curtain.offsetY = offsetY;
       }
    }
+
+   /**
+    * pzopt: bakeRecordParallel, whether a W / N neighbour chunk's roof tile may draw a tile of this square joined to it
+    * (renderJoinedRoofTile: same level from the square west / north, the level below from the one above that).
+    */
+   public static boolean pzoptRoofJoinTarget(IsoGridSquare sq) { // pzopt
+      FBORenderCell c = instance; // pzopt
+      IsoCell cell = IsoWorld.instance.currentCell; // pzopt
+      if (PZMath.coordmodulo(sq.x, 8) == 0 && (c.pzoptRoofJoiner(cell.getGridSquare(sq.x - 1, sq.y, sq.z), IsoDirections.E, false) // pzopt
+            || c.pzoptRoofJoiner(cell.getGridSquare(sq.x - 1, sq.y, sq.z + 1), IsoDirections.E, true))) { // pzopt
+         return true; // pzopt
+      } // pzopt
+      return PZMath.coordmodulo(sq.y, 8) == 0 && (c.pzoptRoofJoiner(cell.getGridSquare(sq.x, sq.y - 1, sq.z), IsoDirections.S, false) // pzopt
+         || c.pzoptRoofJoiner(cell.getGridSquare(sq.x, sq.y - 1, sq.z + 1), IsoDirections.S, true)); // pzopt
+   } // pzopt
+
+   private boolean pzoptRoofJoiner(IsoGridSquare j, IsoDirections dir, boolean below) { // pzopt
+      if (j == null) { // pzopt
+         return false; // pzopt
+      } // pzopt
+      IsoObject[] objects = (IsoObject[])j.getObjects().getElements(); // pzopt
+      int k = j.getObjects().size(); // pzopt
+      for (int i = 0; i < k; i++) { // pzopt
+         IsoSprite s = objects[i].sprite; // pzopt
+         if (s == null) { // pzopt
+            continue; // pzopt
+         } // pzopt
+         if (!s.pzoptRoofKnown() || (below ? this.isRoofTileWithPossibleSeamBelow(j, s, dir) : this.isRoofTileWithPossibleSeamSameLevel(j, s, dir))) { // pzopt
+            return true; // pzopt
+         } // pzopt
+      } // pzopt
+      return false; // pzopt
+   } // pzopt
+
+   /** pzopt: bakeRecordParallel, whether renderMinusFloor_NotDoorOrWall may draw a joined roof tile beside this one (pure reads once the sprite's roof properties are known). */
+   public static boolean pzoptRoofJoinPossible(IsoGridSquare square, IsoSprite sprite) { // pzopt
+      FBORenderCell c = instance; // pzopt
+      return c.isRoofTileWithPossibleSeamSameLevel(square, sprite, IsoDirections.E) || c.isRoofTileWithPossibleSeamSameLevel(square, sprite, IsoDirections.S) // pzopt
+         || c.isRoofTileWithPossibleSeamBelow(square, sprite, IsoDirections.E) || c.isRoofTileWithPossibleSeamBelow(square, sprite, IsoDirections.S); // pzopt
+   } // pzopt
 
    private boolean isRoofTileset(IsoSprite sprite) {
       return sprite == null ? false : sprite.getRoofProperties() != null;
@@ -5435,7 +5802,8 @@ public final class FBORenderCell {
             + " treeRebakesSkipped=" + pzoptTreeRebakesSkipped + " treeLingers=" + pzoptTreeLingers + " treeLingerRebakes=" + pzoptTreeLingerRebakes
             + " reachProbes=" + FBORenderTrees.pzoptReachProbes + " reachViolations=" + FBORenderTrees.pzoptReachViolations + " reachViolationSamples=" + FBORenderTrees.pzoptReachViolationSamples + " reachOutsideSamples=" + FBORenderTrees.pzoptReachOutsideSamples
             + " treeReachLeaves=" + pzoptTreeReachLeaves + " treeReachTicks=" + pzoptTreeReachTicks
-            + " perFrameTreeBatches=" + FBORenderTrees.pzoptPerFrameBatches + " perFrameTrees=" + FBORenderTrees.pzoptPerFrameTrees + " perFrameStencilTrees=" + FBORenderTrees.pzoptPerFrameStencilTrees;
+            + " perFrameTreeBatches=" + FBORenderTrees.pzoptPerFrameBatches + " perFrameTrees=" + FBORenderTrees.pzoptPerFrameTrees + " perFrameStencilTrees=" + FBORenderTrees.pzoptPerFrameStencilTrees
+            + pzopt.BakeRecord.totals(); // pzopt: bakeRecordParallel
    }
    private static long pzoptTreeFlipsOn, pzoptTreeFlipsOff, pzoptTreeLevelInvalidations, pzoptStencilRectLeaves; // pzopt: bake counters
    public static long pzoptBakesCumulative; // pzopt: never reset; the harness zoom trace reads the per-frame delta
@@ -5481,7 +5849,7 @@ public final class FBORenderCell {
       if (!pzoptTlSets.isEmpty()) {
          final int frames = pzoptTlFrames;
          sb.append(" | trees waited for texture=").append(pzoptTreesWaited).append(" arrived=").append(pzoptTreesArrived).append(" | bakes in period=").append(pzoptBakesTotal).append(" deferred so far=").append(pzoptDeferredTotal).append(" lighting rebakes held=").append(pzoptLightingRebakesHeld).append(" strong now=").append(pzoptStrongRebakes).append(" strong past budget=").append(pzoptStrongHeld).append(" creations deferred=").append(pzoptCreatesStarved).append(" strong marks=").append(pzopt.LightDirt.strongMarks).append(" global light events=").append(pzopt.LightDirt.globalEvents).append(" flushed=").append(pzoptLightingFlushed).append(" budgeted rebakes=").append(pzoptRebakesTotal).append(" held=").append(pzoptRebakesHeld)
-            .append(" | zoom kept=").append(pzopt.ZoomRetain.kept).append(" returned=").append(pzopt.ZoomRetain.returned).append(" rebakes=").append(pzopt.ZoomRetain.rebakes).append(" creations=").append(pzopt.ZoomRetain.creations).append(" urgent=").append(pzopt.ZoomRetain.urgent).append(" placeholders=").append(pzopt.ZoomRetain.placeholders).append(" dropped=").append(pzopt.ZoomRetain.dropped).append(" flags:"); // pzopt: zoomRetain counters
+            .append(" | zoom kept=").append(pzopt.ZoomRetain.kept).append(" returned=").append(pzopt.ZoomRetain.returned).append(" rebakes=").append(pzopt.ZoomRetain.rebakes).append(" creations=").append(pzopt.ZoomRetain.creations).append(" urgent=").append(pzopt.ZoomRetain.urgent).append(" placeholders=").append(pzopt.ZoomRetain.placeholders).append(" dropped=").append(pzopt.ZoomRetain.dropped).append(" latePrepared=").append(pzopt.ZoomRetain.latePrepared).append(" lateFlagFixes=").append(pzopt.ZoomRetain.lateFlagFixes).append(" flags:"); // pzopt: zoomRetain counters
       for (int b = 0; b < 16; b++) {
          if (pzoptBakeFlags[b] > 0) sb.append(' ').append(PZOPT_FLAG_NAMES[b]).append('=').append(pzoptBakeFlags[b]);
          pzoptBakeFlags[b] = 0;
@@ -5512,7 +5880,9 @@ public final class FBORenderCell {
       sb.append(" | ").append(pzopt.AnimBatch.describe()); // pzopt: the zombies' bone-math batch
       sb.append(" | ").append(pzopt.ActionEval.describe()); // pzopt: the zombies' transition-evaluation batch
       sb.append(" | ").append(pzopt.AnimParallel.describe()); // pzopt: animatorParallel
+      sb.append(" | ").append(pzopt.ZombieLate.describe()); // pzopt: zombieLateApply / zombieDrawLate (f8-zomb3)
       sb.append(" | ").append(pzopt.TileRecord.describe()); // pzopt: tileRecordParallel
+      sb.append(pzopt.BakeRecord.describe()); // pzopt: bakeRecordParallel
       sb.append(" | ").append(pzopt.CharDraw.describe()); // pzopt: charDrawPrep, the characters draw pre-pass
       sb.append(" | ").append(pzopt.LightingBatch.describe()); // pzopt: the lighting reads on the workers
       sb.append(" | ").append(pzopt.SeparateMask.describe()); // pzopt: separateFast, the cached grid answers
@@ -5529,6 +5899,7 @@ public final class FBORenderCell {
       if (pzopt.DrawRecorder.recording && pzopt.TileRecord.deferObject(object)) { // pzopt: tileRecordParallel, an object the recording thread may not draw: the game thread draws it at splice time
          return; // pzopt
       } // pzopt
+      if (pzopt.LightTrace.CHECK && pzopt.LightTrace.on) pzopt.LightTrace.object(object); // pzopt: devDrawListCheck, the square of each stock re-run draw (devDrawListTrace: the light this draw reads)
       if (pzopt.Config.INSTRUMENT && (pzoptTlFrames & 15) == 0 && !pzopt.DrawRecorder.recording) pzoptCountTranslucent(object); // pzopt: dev counter, one frame in 16 (it was 1.7 % of a harness run's game thread); not while units record (its tileset map is not thread-safe)
       boolean pzoptMirror = !pzopt.DrawRecorder.onRecordingThread() && pzopt.Mirrors.beginCapture(object); // pzopt: mirrors, a window / mirror tile: its quad is captured as it draws (on the game thread: a recorder defers those objects)
       boolean pzoptDepth = pzopt.Props.writesDepth(object.getSprite()); // pzopt: an opaque reflective prop drawn per frame writes its depth as its baked self did
@@ -6563,6 +6934,19 @@ public final class FBORenderCell {
       return renderedSquaresCount;
    }
 
+   /**
+    * pzopt: bakeRecordParallel, FBORenderOcclusion.isOccluded without its shared {@code testValue} field (it stores z there
+    * and compares the grid against it: two threads asking at once read each other's level; the frame workers' render-info
+    * passes ask in parallel).
+    */
+   static boolean pzoptIsOccluded(int x, int y, int z) { // pzopt
+      FBORenderOcclusion o = FBORenderOcclusion.getInstance(); // pzopt
+      if (!o.enabled) { // pzopt
+         return false; // pzopt
+      } // pzopt
+      return pzoptOccluded(x, y, z, o.occludedGrid, o.occludedGridX1, o.occludedGridY1, o.occludedGridX2 - o.occludedGridX1 + 1, o.occludedGridY2 - o.occludedGridY1 + 1); // pzopt
+   } // pzopt
+
    /** FBORenderOcclusion.isOccluded (the same ten grid cells behind the square, occluded when every one is higher). */
    private static boolean pzoptOccluded(int x, int y, int z, int[] grid, int gx1, int gy1, int gw, int gh) {
       return pzoptOccAux(x, y, z, grid, gx1, gy1, gw, gh) && pzoptOccAux(x - 1, y - 1, z, grid, gx1, gy1, gw, gh)
@@ -6615,8 +6999,15 @@ public final class FBORenderCell {
 
          for (int z = c.minLevel; z <= c.maxLevel; z++) {
             if (z == renderLevels.getMinLevel(z) && renderLevels.isOnScreen(z) && renderLevels.isDirty(z, zoom)) {
-               if (pzoptZoomRetain && pzopt.ZoomRetain.waiting(c, playerIndex, z)) {
-                  continue; // pzopt: zoomRetain, prepared in the frame the plan bakes it (a zoom-out dirties ~200 levels at once)
+               // pzopt: zoomRetain. A level waiting for the zoom plan is prepared in the frame the plan bakes it (a zoom-out dirties
+               // ~200 levels at once; renderOneLevel prepares the granted ones, pzoptZoomUnprepared). Its bake used to read the
+               // square flags of its last preparation, whatever had changed since: a house whose roof was hidden (collapsed)
+               // then baked roofless after the player left it, and roofs stayed up over a player who walked in while a zoom
+               // was draining (Discord bug report, 2026-10-09, ismaello). A cutaway / collapse change (2048 / 16384) is
+               // prepared at once, as the bakeScheduler's held levels are below: the occlusion grid reads the flags too.
+               if (pzoptZoomRetain && pzopt.ZoomRetain.waiting(c, playerIndex, z) && (pzopt.Config.DEV_ZOOM_STALE_FLAGS || !renderLevels.isDirty(z, 2048L | 16384L, zoom))) {
+                  c.pzoptZoomUnprepared[playerIndex] |= 1L << (z + 32); // pzopt
+                  continue; // pzopt
                }
                if (this.pzoptSchedPlanned && !pzopt.BakeScheduler.get(playerIndex).peek(c, z) && renderLevels.getFBOForLevel(z, zoom) != null
                      && !renderLevels.isDirty(z, 512L, zoom) && !renderLevels.isDirty(z, 2048L | 16384L, zoom)) { // pzopt
@@ -6633,11 +7024,43 @@ public final class FBORenderCell {
                   // below keeps its texture; only the bake itself waits for its grant.
                   continue; // pzopt
                }
+               c.pzoptZoomUnprepared[playerIndex] &= ~(1L << (z + 32)); // pzopt: zoomRetain, prepared now
                this.prepareChunkForUpdating(playerIndex, c, z);
             }
          }
       }
    }
+
+   // pzopt: zoomRetain, a level the zoom plan lets bake whose preparation waited with it (prepareChunksForUpdating): prepared
+   // here, before its bake reads the square flags. ZoomRetain.lateFlagFixes counts the squares whose flag the preparation
+   // changed, i.e. the squares the bake would have drawn or left out wrongly.
+   private final byte[] pzoptFlagsBefore = new byte[128]; // pzopt: new
+
+   private void pzoptPrepareZoomGranted(int playerIndex, IsoChunk c, int level) { // pzopt: new
+      c.pzoptZoomUnprepared[playerIndex] &= ~(1L << (level + 32)); // pzopt: new
+      FBORenderLevels renderLevels = c.getRenderLevels(playerIndex); // pzopt: new
+      int minLevel = renderLevels.getMinLevel(level), maxLevel = renderLevels.getMaxLevel(level); // pzopt: new
+      for (int z2 = minLevel; z2 <= maxLevel && z2 - minLevel < 2; z2++) { // pzopt: new
+         System.arraycopy(c.getCutawayDataForLevel(z2).squareFlags[playerIndex], 0, this.pzoptFlagsBefore, (z2 - minLevel) * 64, 64); // pzopt: new
+      } // pzopt: new
+      this.prepareChunkForUpdating(playerIndex, c, level); // pzopt: new
+      pzopt.ZoomRetain.latePrepared++; // pzopt: new
+      long pzoptFixesBefore = pzopt.ZoomRetain.lateFlagFixes; // pzopt: new
+      for (int z2 = minLevel; z2 <= maxLevel && z2 - minLevel < 2; z2++) { // pzopt: new
+         byte[] now = c.getCutawayDataForLevel(z2).squareFlags[playerIndex]; // pzopt: new
+         for (int i = 0; i < 64; i++) { // pzopt: new
+            if (((now[i] ^ this.pzoptFlagsBefore[(z2 - minLevel) * 64 + i]) & 1) != 0) { // pzopt: new
+               pzopt.ZoomRetain.lateFlagFixes++; // pzopt: new
+            } // pzopt: new
+         } // pzopt: new
+         if (pzopt.Config.DEV_ZOOM_STALE_FLAGS) { // pzopt: new, A/B rig: put the stale flags back
+            System.arraycopy(this.pzoptFlagsBefore, (z2 - minLevel) * 64, now, 0, 64); // pzopt: new
+         } // pzopt: new
+      } // pzopt: new
+      if (pzopt.ZoomRetain.lateFlagFixes != pzoptFixesBefore) { // pzopt: new
+         FBORenderCutaways.pzoptDevCutawayLog("zoom late prepare changed " + (pzopt.ZoomRetain.lateFlagFixes - pzoptFixesBefore) + " square flags, chunk " + c.wx + "," + c.wy + " levels " + minLevel + "-" + maxLevel + (pzopt.Config.DEV_ZOOM_STALE_FLAGS ? " (stale flags kept)" : "")); // pzopt: new
+      } // pzopt: new
+   } // pzopt: new
 
    private void prepareChunkForUpdating(int playerIndex, IsoChunk chunk, int z) {
       if (chunk != null) {
@@ -6692,11 +7115,19 @@ public final class FBORenderCell {
       if (DebugOptions.instance.fboRenderChunk.renderTranslucentFloor.getValue()) {
          this.renderTranslucentOnly = true;
          FBORenderCell.PerPlayerData perPlayerData1 = this.perPlayerData[playerIndex];
+         long pzoptTfT = pzopt.GtAb.begin(); // pzopt: devGtAlternate section timer (tl_floor)
+         try { // pzopt
+         if (pzopt.TileRecord.spliceFloorLevel(this, perPlayerData1.chunksWithTranslucentFloor, playerIndex, z, floorRenderShader, wallRenderShader, currentTimeMillis)) { // pzopt: tileRecordFloors, the level's floor units recorded on the workers, spliced in this order
+            return; // pzopt
+         } // pzopt
 
          for (int i = 0; i < perPlayerData1.chunksWithTranslucentFloor.size(); i++) {
             IsoChunk chunk = perPlayerData1.chunksWithTranslucentFloor.get(i);
             this.renderOneChunk_TranslucentFloor(chunk, playerIndex, z, floorRenderShader, wallRenderShader, currentTimeMillis);
          }
+         } finally { // pzopt
+            pzopt.GtAb.end(pzopt.GtAb.S_TL_FLOOR, pzoptTfT); // pzopt
+         } // pzopt
       }
    }
 
@@ -6756,6 +7187,7 @@ public final class FBORenderCell {
       final TimSort timSort = new TimSort(); // pzopt
       final PZArrayList<IsoGridSquare> tempSquares = new PZArrayList(IsoGridSquare.class, 64); // pzopt
       final ColorInfo light = new ColorInfo(); // pzopt
+      final ColorInfo floorCol = new ColorInfo(); // pzopt: tileRecordFloors / bakeRecordParallel, the floor draw's colour (defColorInfo is the game thread's)
    } // pzopt
 
    private FBORenderCell.PzoptCellScratch pzoptCellScratch() { // pzopt
@@ -6775,7 +7207,18 @@ public final class FBORenderCell {
 
    /** pzopt: tileRecordParallel, renderTranslucentOnly as the calling thread sees it: true on a thread recording a translucent unit (the game thread flips the field for its own passes meanwhile). */
    public static boolean pzoptTranslucentOnly() { // pzopt
-      return pzopt.DrawRecorder.recording && pzopt.DrawRecorder.currentRecorder() != null || instance.renderTranslucentOnly; // pzopt
+      pzopt.DrawRecorder r; // pzopt
+      return pzopt.DrawRecorder.recording && (r = pzopt.DrawRecorder.currentRecorder()) != null ? !r.bakeUnit : instance.renderTranslucentOnly; // pzopt: bakeRecordParallel, a bake unit's recorder sees the bake's mode
+   } // pzopt
+
+   /** pzopt: bakeRecordParallel, IsoSprite.seamFix2 as the calling thread sets it (a recording thread keeps its own). */
+   private static void pzoptSetSeamFix2(Tiles t) { // pzopt
+      pzopt.DrawRecorder r; // pzopt
+      if (pzopt.DrawRecorder.recording && (r = pzopt.DrawRecorder.currentRecorder()) != null) { // pzopt
+         r.seamFix2 = t; // pzopt
+      } else { // pzopt
+         IsoSprite.seamFix2 = t; // pzopt
+      } // pzopt
    } // pzopt
 
    /** pzopt: tileRecordParallel, renderAnimatedAttachments as the calling thread sees it (false while recording a translucent unit). */
@@ -6797,7 +7240,8 @@ public final class FBORenderCell {
    } // pzopt
 
    public static boolean pzoptCaching() { // pzopt
-      return !(pzopt.DrawRecorder.recording && pzopt.DrawRecorder.currentRecorder() != null) && FBORenderChunkManager.instance.isCaching(); // pzopt
+      pzopt.DrawRecorder r; // pzopt
+      return pzopt.DrawRecorder.recording && (r = pzopt.DrawRecorder.currentRecorder()) != null ? r.bakeUnit : FBORenderChunkManager.instance.isCaching(); // pzopt: bakeRecordParallel, a bake unit's recorder bakes
    } // pzopt
 
    /** pzopt: tileRecordParallel, lowestCutawayObjectN / W as the calling thread set them (a recording thread keeps its own). */
@@ -6838,6 +7282,20 @@ public final class FBORenderCell {
    /** pzopt: tileRecordParallel, one unit of the translucent pass (the stock chunk loop's body). */
    public void pzoptRecordChunkTranslucent(IsoChunk c, int playerIndex, int zza, Shader floorRenderShader, Shader wallRenderShader, long currentTimeMillis) { // pzopt
       this.renderOneChunk_Translucent(c, playerIndex, zza, floorRenderShader, wallRenderShader, currentTimeMillis); // pzopt
+   } // pzopt
+
+   /** pzopt: tileRecordFloors, one unit of the translucent floor pass (the stock chunk loop's body). */
+   public void pzoptRecordChunkTranslucentFloor(IsoChunk c, int playerIndex, int zza, Shader floorRenderShader, Shader wallRenderShader, long currentTimeMillis) { // pzopt
+      this.renderOneChunk_TranslucentFloor(c, playerIndex, zza, floorRenderShader, wallRenderShader, currentTimeMillis); // pzopt
+   } // pzopt
+
+   /** pzopt: tileRecordFloors, whether the chunk has translucent floor squares at this level (else the stock call runs at its place in the splice). */
+   public boolean pzoptTranslucentFloorWork(IsoChunk c, int playerIndex, int level) { // pzopt
+      if (c == null || c.lightingNeverDone[playerIndex]) { // pzopt
+         return false; // pzopt
+      } // pzopt
+      FBORenderLevels renderLevels = c.getRenderLevels(playerIndex); // pzopt
+      return renderLevels.isOnScreen(level) && !renderLevels.getCachedSquares_TranslucentFloor(level).isEmpty(); // pzopt
    } // pzopt
 
    /** pzopt: tileRecordParallel, whether the chunk has anything to draw in this level's translucent pass (else the stock call, state entries only, runs at its place in the splice). */
@@ -7779,13 +8237,13 @@ public final class FBORenderCell {
             if (PZMath.coordmodulo(square.y, 8) == 7 || bShoreS) {
                IsoGridSquare s = square.getAdjacentSquare(IsoDirections.S);
                if (s != null && s.getFloor() != null && (bShoreS || !s.has(IsoFlagType.water) || PerformanceSettings.waterQuality == 2)) {
-                  IsoSprite.seamFix2 = Tiles.FloorSouth;
+                  pzoptSetSeamFix2(Tiles.FloorSouth); // pzopt: bakeRecordParallel, the recording thread keeps its own
                   if (sprite.getProperties().has(IsoFlagType.FloorHeightOneThird)) {
-                     IsoSprite.seamFix2 = Tiles.FloorSouthOneThird;
+                     pzoptSetSeamFix2(Tiles.FloorSouthOneThird); // pzopt: bakeRecordParallel, the recording thread keeps its own
                   }
 
                   if (sprite.getProperties().has(IsoFlagType.FloorHeightTwoThirds)) {
-                     IsoSprite.seamFix2 = Tiles.FloorSouthTwoThirds;
+                     pzoptSetSeamFix2(Tiles.FloorSouthTwoThirds); // pzopt: bakeRecordParallel, the recording thread keeps its own
                   }
 
                   object.sx = 0.0F;
@@ -7807,20 +8265,20 @@ public final class FBORenderCell {
                   );
                   object.sx = 0.0F;
                   object.renderDepthAdjust = 0.0F;
-                  IsoSprite.seamFix2 = null;
+                  pzoptSetSeamFix2(null); // pzopt: bakeRecordParallel, the recording thread keeps its own
                }
             }
 
             if (PZMath.coordmodulo(square.x, 8) == 7) {
                IsoGridSquare e = square.getAdjacentSquare(IsoDirections.E);
                if (e != null && e.getFloor() != null && (!e.has(IsoFlagType.water) || PerformanceSettings.waterQuality == 2)) {
-                  IsoSprite.seamFix2 = Tiles.FloorEast;
+                  pzoptSetSeamFix2(Tiles.FloorEast); // pzopt: bakeRecordParallel, the recording thread keeps its own
                   if (sprite.getProperties().has(IsoFlagType.FloorHeightOneThird)) {
-                     IsoSprite.seamFix2 = Tiles.FloorEastOneThird;
+                     pzoptSetSeamFix2(Tiles.FloorEastOneThird); // pzopt: bakeRecordParallel, the recording thread keeps its own
                   }
 
                   if (sprite.getProperties().has(IsoFlagType.FloorHeightTwoThirds)) {
-                     IsoSprite.seamFix2 = Tiles.FloorEastTwoThirds;
+                     pzoptSetSeamFix2(Tiles.FloorEastTwoThirds); // pzopt: bakeRecordParallel, the recording thread keeps its own
                   }
 
                   object.sx = 0.0F;
@@ -7837,14 +8295,14 @@ public final class FBORenderCell {
                      texdModifier
                   );
                   object.sx = 0.0F;
-                  IsoSprite.seamFix2 = null;
+                  pzoptSetSeamFix2(null); // pzopt: bakeRecordParallel, the recording thread keeps its own
                }
             }
 
             IsoGridSquare squareN = square.getAdjacentSquare(IsoDirections.N);
             boolean bShoreN = squareN != null && squareN.getWater() != null && squareN.getWater().isbShore() && IsoWater.getInstance().getShaderEnable();
             if (bShoreN) {
-               IsoSprite.seamFix2 = Tiles.FloorSouth;
+               pzoptSetSeamFix2(Tiles.FloorSouth); // pzopt: bakeRecordParallel, the recording thread keeps its own
                object.sx = 0.0F;
                object.renderSquareOverride2 = squareN;
                object.renderDepthAdjust = -0.001F;
@@ -7863,13 +8321,13 @@ public final class FBORenderCell {
                object.sx = 0.0F;
                object.renderSquareOverride2 = null;
                object.renderDepthAdjust = 0.0F;
-               IsoSprite.seamFix2 = null;
+               pzoptSetSeamFix2(null); // pzopt: bakeRecordParallel, the recording thread keeps its own
             }
 
             IsoGridSquare squareW = square.getAdjacentSquare(IsoDirections.W);
             boolean bShoreW = squareW != null && squareW.getWater() != null && squareW.getWater().isbShore() && IsoWater.getInstance().getShaderEnable();
             if (bShoreW) {
-               IsoSprite.seamFix2 = Tiles.FloorEast;
+               pzoptSetSeamFix2(Tiles.FloorEast); // pzopt: bakeRecordParallel, the recording thread keeps its own
                object.sx = 0.0F;
                object.renderSquareOverride2 = squareW;
                object.renderDepthAdjust = -0.001F;
@@ -7888,13 +8346,13 @@ public final class FBORenderCell {
                object.sx = 0.0F;
                object.renderSquareOverride2 = null;
                object.renderDepthAdjust = 0.0F;
-               IsoSprite.seamFix2 = null;
+               pzoptSetSeamFix2(null); // pzopt: bakeRecordParallel, the recording thread keeps its own
             }
 
             IsoGridSquare squareE = square.getAdjacentSquare(IsoDirections.E);
             boolean bShoreE = squareE != null && squareE.getWater() != null && squareE.getWater().isbShore() && IsoWater.getInstance().getShaderEnable();
             if (bShoreE) {
-               IsoSprite.seamFix2 = Tiles.FloorEast;
+               pzoptSetSeamFix2(Tiles.FloorEast); // pzopt: bakeRecordParallel, the recording thread keeps its own
                object.sx = 0.0F;
                sprite.render(
                   object,
@@ -7909,7 +8367,7 @@ public final class FBORenderCell {
                   texdModifier
                );
                object.sx = 0.0F;
-               IsoSprite.seamFix2 = null;
+               pzoptSetSeamFix2(null); // pzopt: bakeRecordParallel, the recording thread keeps its own
             }
          }
       }
@@ -7972,7 +8430,7 @@ public final class FBORenderCell {
                            && ((s.getWallType() & 4) != 0 || s.getWindowFrame(GridSquareEdgeFacingDirection.EAST_WEST) != null || s.has(IsoFlagType.DoorWallW))
                            )
                          {
-                           IsoSprite.seamFix2 = Tiles.WallSouth;
+                           pzoptSetSeamFix2(Tiles.WallSouth); // pzopt: bakeRecordParallel, the recording thread keeps its own (a wall seam drew with the tile program on a worker)
                            object.sx = 0.0F;
                            sprite.render(
                               object,
@@ -7987,7 +8445,7 @@ public final class FBORenderCell {
                               texdModifier
                            );
                            object.sx = 0.0F;
-                           IsoSprite.seamFix2 = null;
+                           pzoptSetSeamFix2(null); // pzopt: bakeRecordParallel, the recording thread keeps its own (a wall seam drew with the tile program on a worker)
                         }
                      }
 
@@ -7997,7 +8455,7 @@ public final class FBORenderCell {
                            && (
                               (e.getWallType() & 1) != 0 || e.getWindowFrame(GridSquareEdgeFacingDirection.NORTH_SOUTH) != null || e.has(IsoFlagType.DoorWallN)
                            )) {
-                           IsoSprite.seamFix2 = Tiles.WallEast;
+                           pzoptSetSeamFix2(Tiles.WallEast); // pzopt: bakeRecordParallel, the recording thread keeps its own (a wall seam drew with the tile program on a worker)
                            object.sx = 0.0F;
                            sprite.render(
                               object,
@@ -8012,7 +8470,7 @@ public final class FBORenderCell {
                               texdModifier
                            );
                            object.sx = 0.0F;
-                           IsoSprite.seamFix2 = null;
+                           pzoptSetSeamFix2(null); // pzopt: bakeRecordParallel, the recording thread keeps its own (a wall seam drew with the tile program on a worker)
                         }
                      }
 
@@ -8023,7 +8481,7 @@ public final class FBORenderCell {
                            && ((s.getWallType() & 4) != 0 || s.getWindowFrame(GridSquareEdgeFacingDirection.EAST_WEST) != null || s.has(IsoFlagType.DoorWallW))
                            )
                          {
-                           IsoSprite.seamFix2 = Tiles.WallSouth;
+                           pzoptSetSeamFix2(Tiles.WallSouth); // pzopt: bakeRecordParallel, the recording thread keeps its own (a wall seam drew with the tile program on a worker)
                            object.sx = 0.0F;
                            sprite.render(
                               object,
@@ -8038,7 +8496,7 @@ public final class FBORenderCell {
                               texdModifier
                            );
                            object.sx = 0.0F;
-                           IsoSprite.seamFix2 = null;
+                           pzoptSetSeamFix2(null); // pzopt: bakeRecordParallel, the recording thread keeps its own (a wall seam drew with the tile program on a worker)
                         }
                      }
 
@@ -8049,7 +8507,7 @@ public final class FBORenderCell {
                            && (
                               (e.getWallType() & 1) != 0 || e.getWindowFrame(GridSquareEdgeFacingDirection.NORTH_SOUTH) != null || e.has(IsoFlagType.DoorWallN)
                            )) {
-                           IsoSprite.seamFix2 = Tiles.WallEast;
+                           pzoptSetSeamFix2(Tiles.WallEast); // pzopt: bakeRecordParallel, the recording thread keeps its own (a wall seam drew with the tile program on a worker)
                            object.sx = 0.0F;
                            sprite.render(
                               object,
@@ -8064,7 +8522,7 @@ public final class FBORenderCell {
                               texdModifier
                            );
                            object.sx = 0.0F;
-                           IsoSprite.seamFix2 = null;
+                           pzoptSetSeamFix2(null); // pzopt: bakeRecordParallel, the recording thread keeps its own (a wall seam drew with the tile program on a worker)
                         }
                      }
                   }
@@ -8369,6 +8827,7 @@ public final class FBORenderCell {
       private final ArrayList<IsoChunk> chunksWithFlies = new ArrayList<>();
       private final ArrayList<IsoChunk> chunksWithTranslucentFloor = new ArrayList<>();
       private final ArrayList<IsoChunk> chunksWithTranslucentNonFloor = new ArrayList<>();
+      private final java.util.IdentityHashMap<IsoChunk, Boolean> pzoptTnfSet = new java.util.IdentityHashMap<>(); // pzopt: bakeRecordParallel, the list's members (contains was a linear search per baked level)
       private float playerBoundsX;
       private float playerBoundsY;
       private float playerBoundsW;
@@ -8409,6 +8868,12 @@ public final class FBORenderCell {
       }
 
       private void addChunkWith_TranslucentNonFloor(IsoChunk chunk) {
+         if (pzopt.Config.BAKE_RECORD_PARALLEL) { // pzopt: the same list, membership from the identity set (IsoChunk keeps Object's equals)
+            if (this.pzoptTnfSet.put(chunk, Boolean.TRUE) == null) { // pzopt
+               this.chunksWithTranslucentNonFloor.add(chunk); // pzopt
+            } // pzopt
+            return; // pzopt
+         } // pzopt
          if (!this.chunksWithTranslucentNonFloor.contains(chunk)) {
             this.chunksWithTranslucentNonFloor.add(chunk);
          }
@@ -8455,6 +8920,7 @@ public final class FBORenderCell {
          this.chunksWithFlies.clear();
          this.chunksWithTranslucentFloor.clear();
          this.chunksWithTranslucentNonFloor.clear();
+         this.pzoptTnfSet.clear(); // pzopt
          this.fadingInSquares.clear();
          this.lastZ = Integer.MAX_VALUE;
          this.lightingUpdateCounter = 0;

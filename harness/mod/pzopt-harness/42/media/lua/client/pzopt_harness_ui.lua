@@ -48,6 +48,8 @@ local function itemTypes(n, skip)
     return out
 end
 
+local stackTypeName = nil -- ui_stack_items: the full type of the big stack
+
 local function setup(player, flags)
     local inv = player:getInventory()
     local bag = inv:AddItem("Base.Bag_BigHikingBag")
@@ -60,8 +62,18 @@ local function setup(player, flags)
     if sq then
         for _, t in ipairs(itemTypes(nFloor, 400)) do pcall(function() sq:AddWorldInventoryItem(t, 0.5, 0.5, 0) end) end
     end
+    -- ui_stack_items=N (200): one stack of N identical items in the main inventory (a big pile of one thing; the
+    -- inventory pane groups it into one collapsible row of N)
+    local nStack = tonumber(flags.ui_stack_items) or 200
+    local stackType = flags.ui_stack_type or "Base.Nails"
+    local added = 0
+    for _ = 1, nStack do
+        local ok, it = pcall(function() return inv:AddItem(stackType) end)
+        if ok and it then added = added + 1 end
+    end
+    stackTypeName = stackType
     ISInventoryPage.dirtyUI()
-    print("[pzopt-ui] setup: bag=" .. tostring(bag) .. " bag_items=" .. nBag .. " floor_items=" .. nFloor)
+    print("[pzopt-ui] setup: bag=" .. tostring(bag) .. " bag_items=" .. nBag .. " floor_items=" .. nFloor .. " stack=" .. stackType .. " x" .. added)
 end
 
 local function pressKey(id)
@@ -207,6 +219,186 @@ local SCENES = {
     { "scene_end", function() if ISWorldMap_instance and ISWorldMap_instance:isVisible() then ISWorldMap_instance:close() end end },
 }
 
+-- ui_script=latency (2026-10-14, UI latency pass): every kind of UI interaction as a steady scene of ui_scene_ms (5000)
+-- each, driven like a player (the game's mouse through the showcase aim override, the left button and the wheel through
+-- pzoptUiButton / pzoptUiWheel, so UIManager dispatches presses, drags and wheel steps as for real input). Run with
+-- --prop devUiTruth=true for the staleness ground truth (uiprof.py --truth), without it for the cost.
+local function perf() return getPerformance() end
+local function mouse(x, y) perf():pzoptUiMouse(x, y) end
+local function park() mouse(getCore():getScreenWidth() / 2, getCore():getScreenHeight() / 2) end
+local function tri(t, period) local p = (t % period) / period; return p < 0.5 and 2 * p or 2 - 2 * p end
+local function sweepRect(t, x, y, w, h, speed)
+    -- down and up the rect at speed px/s, a little sideways so every frame moves the mouse
+    local period = 2 * math.max(20, h) / speed
+    mouse(x + 0.3 * w + 0.2 * w * tri(t, 1.7), y + h * tri(t, period))
+end
+local function invPane() return getPlayerInventory(0).inventoryPane end
+local function lootPane() return getPlayerLoot(0).inventoryPane end
+local function rectOf(e) return e:getAbsoluteX(), e:getAbsoluteY(), e:getWidth(), e:getHeight() end
+local function statNudge()
+    local stats = getPlayer():getStats()
+    for _, name in ipairs({ "HUNGER", "THIRST", "FATIGUE", "PANIC", "STRESS", "BOREDOM" }) do
+        pcall(function()
+            local st = CharacterStat[name]
+            local v = stats:get(st)
+            stats:set(st, (v + 0.07) % 0.9)
+        end)
+    end
+end
+local function itemNudge(n)
+    local items = getPlayer():getInventory():getItems()
+    for i = 0, math.min(items:size(), 12) - 1 do
+        local it = items:get(i)
+        if not instanceof(it, "InventoryContainer") then
+            pcall(function() it:setName(it:getScriptItem():getDisplayName() .. (n % 2 == 0 and "" or " *")) end)
+            pcall(function() it:setFavorite(n % 2 == 1) end)
+            pcall(function() if it:getConditionMax() > 0 then it:setConditionNoSound(math.max(1, it:getConditionMax() - (n % 5))) end end)
+            pcall(function() if instanceof(it, "DrainableComboItem") then it:setUsedDelta(1.0 - (n % 10) / 10) end end)
+        end
+    end
+end
+
+local LATENCY = {
+    { "lat_hud", function() hideInventory(true); park() end },
+    { "lat_hud_stats", function() S.n = 0 end,
+        tick = function(t) local k = math.floor(t / 0.4); if k ~= S.n then S.n = k; statNudge() end end },
+    { "lat_inv", function() hideInventory(false); park() end },
+    { "lat_inv_passive", function() S.n = 0 end,
+        tick = function(t) local k = math.floor(t / 0.35); if k ~= S.n then S.n = k; itemNudge(k) end end },
+    { "lat_inv_hover", function() end,
+        tick = function(t) local x, y, w, h = rectOf(invPane()); sweepRect(t, x, y + 10, w * 0.6, h - 20, 300) end },
+    { "lat_loot_hover", function() end,
+        tick = function(t) local x, y, w, h = rectOf(lootPane()); sweepRect(t, x, y + 10, w * 0.6, h - 20, 300) end },
+    { "lat_btn_hover", function() end,
+        tick = function(t)
+            local p = getPlayerLoot(0).containerButtonPanel or getPlayerLoot(0)
+            local x, y, w, h = rectOf(p)
+            mouse(x + w / 2, y + 4 + (h - 8) * tri(t, 1.6))
+        end },
+    { "lat_tooltip", function() S.tipT = nil end,
+        tick = function(t)
+            -- rest on one row (the item tooltip opens), then slide sideways along it: the tooltip follows the mouse
+            local x, y, w, h = rectOf(invPane())
+            local px = t < 1.0 and 0.2 or 0.2 + 0.25 * tri(t - 1.0, 1.4)
+            mouse(x + w * px, y + 40)
+        end },
+    { "lat_scroll", function() S.n = 0 end,
+        tick = function(t)
+            local x, y, w, h = rectOf(invPane())
+            mouse(x + w * 0.3, y + h * 0.5)
+            local k = math.floor(t / 0.15)
+            if k ~= S.n then S.n = k; perf():pzoptUiWheel((math.floor(k / 8) % 2 == 0) and 1 or -1) end
+        end },
+    { "lat_drag_item", function() S.phase = nil end,
+        tick = function(t)
+            -- press on a row of the inventory, drag it over the loot window and back, release on the inventory again
+            local ix, iy, iw, ih = rectOf(invPane())
+            local lx, ly, lw, lh = rectOf(lootPane())
+            local c = t % 2.5
+            local sx, sy = ix + iw * 0.3, iy + 40
+            if c < 0.15 then
+                mouse(sx, sy); if S.phase ~= "down" then S.phase = "down"; perf():pzoptUiButton(false) end
+            elseif c < 2.2 then
+                if S.phase ~= "drag" then S.phase = "drag"; perf():pzoptUiButton(true) end
+                local p = tri(c - 0.15, 2.05)
+                mouse(sx + (lx + lw * 0.3 - sx) * p, sy + (ly + lh * 0.4 - sy) * p + 3 * math.sin(c * 20))
+            else
+                mouse(sx + 2, sy + 2); if S.phase ~= "up" then S.phase = "up"; perf():pzoptUiButton(false) end
+            end
+        end,
+        stop = function() perf():pzoptUiButton(false) end },
+    { "lat_window_drag", function() S.phase = nil; local p = getPlayerInventory(0); S.wx, S.wy = p:getX(), p:getY() end,
+        tick = function(t)
+            local p = getPlayerInventory(0)
+            local c = t % 2.5
+            local bx, by = S.wx + p:getWidth() * 0.45, S.wy + 6
+            if c < 0.15 then
+                mouse(bx, by); if S.phase ~= "rest" then S.phase = "rest"; perf():pzoptUiButton(false) end
+            elseif c < 2.2 then
+                if S.phase ~= "drag" then S.phase = "drag"; perf():pzoptUiButton(true) end
+                local a = (c - 0.15) / 2.05 * 2 * math.pi
+                mouse(bx + 120 * math.sin(a), by + 60 * (1 - math.cos(a)))
+            else
+                if S.phase ~= "up" then S.phase = "up"; perf():pzoptUiButton(false) end
+            end
+        end,
+        stop = function() perf():pzoptUiButton(false); local p = getPlayerInventory(0); p:setX(S.wx); p:setY(S.wy) end },
+    { "lat_ctx_hover", function()
+            hideInventory(true)
+            S.menu = ISWorldObjectContextMenu.createMenu(0, worldObjects(getPlayer()), getCore():getScreenWidth() / 2, getCore():getScreenHeight() / 2)
+        end,
+        tick = function(t)
+            if not S.menu then return end
+            local x, y, w, h = rectOf(S.menu)
+            mouse(x + math.min(60, w / 2), y + 4 + (h - 8) * tri(t, 2.0))
+        end,
+        stop = function() if S.menu then S.menu:closeAll(); S.menu = nil end end },
+    { "lat_craft_hover", function() park(); ISEntityUI.OpenHandcraftWindow(getPlayer(), nil) end,
+        tick = function(t)
+            local w = ISEntityUI.GetWindowInstance(0, "HandcraftWindow")
+            if not w then return end
+            local x, y, ww, h = rectOf(w)
+            sweepRect(t, x + 10, y + 60, ww * 0.35, h - 80, 300)
+        end,
+        stop = function() closeCraft() end },
+    { "lat_skills_xp", function() park(); pressKey(KeybindId.TOGGLE_SKILL_PANEL); S.n = 0 end,
+        tick = function(t)
+            local k = math.floor(t / 0.4)
+            if k ~= S.n then S.n = k; pcall(function() getPlayer():getXp():AddXP(Perks.Fitness, 3) end) end
+        end,
+        stop = function() pressKey(KeybindId.TOGGLE_SKILL_PANEL) end },
+    { "lat_map_pan", function() park(); pressKey(KeybindId.MAP); S.phase = nil end,
+        tick = function(t)
+            if not (ISWorldMap_instance and ISWorldMap_instance:isVisible()) or t < 1.6 then return end
+            local cx, cy = getCore():getScreenWidth() / 2, getCore():getScreenHeight() / 2
+            local c = (t - 1.6) % 1.6
+            if c < 0.1 then
+                mouse(cx, cy); if S.phase ~= "rest" then S.phase = "rest"; perf():pzoptUiButton(false) end
+            elseif c < 1.4 then
+                if S.phase ~= "drag" then S.phase = "drag"; perf():pzoptUiButton(true) end
+                local a = (c - 0.1) / 1.3 * 2 * math.pi
+                mouse(cx + 250 * math.sin(a), cy + 150 * (1 - math.cos(a)))
+            else
+                if S.phase ~= "up" then S.phase = "up"; perf():pzoptUiButton(false) end
+            end
+        end,
+        stop = function()
+            perf():pzoptUiButton(false)
+            if ISWorldMap_instance and ISWorldMap_instance:isVisible() then ISWorldMap_instance:close() end
+        end },
+    -- the big stack (ui_stack_items): collapsed, expanded and idle, hovered, scrolled through, items changing
+    { "lat_stack_collapsed", function() hideInventory(false); invPane():collapseAll(); park() end },
+    { "lat_stack", function() invPane():expandAll(); park() end },
+    { "lat_stack_hover", function() end,
+        tick = function(t) local x, y, w, h = rectOf(invPane()); sweepRect(t, x, y + 10, w * 0.6, h - 20, 300) end },
+    { "lat_stack_scroll", function() S.n = 0 end,
+        tick = function(t)
+            local x, y, w, h = rectOf(invPane())
+            mouse(x + w * 0.3, y + h * 0.5)
+            local k = math.floor(t / 0.12)
+            if k ~= S.n then S.n = k; perf():pzoptUiWheel((math.floor(k / 14) % 2 == 0) and 1 or -1) end
+        end },
+    { "lat_stack_passive", function() S.n = 0; park() end,
+        tick = function(t)
+            local k = math.floor(t / 0.35)
+            if k == S.n then return end
+            S.n = k
+            local items = getPlayer():getInventory():getItems()
+            local seen = 0
+            for i = 0, items:size() - 1 do
+                local it = items:get(i)
+                if it:getFullType() == stackTypeName then
+                    seen = seen + 1
+                    if seen % 20 == k % 20 then
+                        pcall(function() it:setName(it:getScriptItem():getDisplayName() .. (k % 2 == 0 and "" or " *")) end)
+                    end
+                end
+            end
+        end,
+        stop = function() invPane():collapseAll() end },
+    { "lat_end", function() perf():pzoptUiMouseOff(); hideInventory(false) end },
+}
+
 local function tick()
     if rig == false then return end
     local player = getPlayer()
@@ -215,9 +407,11 @@ local function tick()
     if rig == nil then
         local flags = readFlags()
         if not flags or (flags.ui_script or "") == "" then rig = false; return end
-        local scenes = flags.ui_script == "scenes"
-        rig = { flags = flags, startMs = now + (tonumber(flags.ui_script_at) or 4) * 1000, steps = scenes and SCENES or STEPS,
-            stepMs = scenes and (tonumber(flags.ui_scene_ms) or 8000) or (tonumber(flags.ui_step_ms) or 1200),
+        local latency = flags.ui_script == "latency"
+        local scenes = flags.ui_script == "scenes" or latency
+        rig = { flags = flags, startMs = now + (tonumber(flags.ui_script_at) or 4) * 1000,
+            steps = latency and LATENCY or (scenes and SCENES or STEPS),
+            stepMs = scenes and (tonumber(flags.ui_scene_ms) or (latency and 5000 or 8000)) or (tonumber(flags.ui_step_ms) or 1200),
             reps = scenes and 1 or (tonumber(flags.ui_reps) or 3), rep = 1, i = 0 }
         print("[pzopt-ui] rig on: script=" .. flags.ui_script .. " reps=" .. rig.reps .. " step_ms=" .. rig.stepMs)
     end
@@ -246,9 +440,19 @@ local function tick()
     end
     if now < rig.nextMs then
         local cur = rig.steps[rig.i]
-        if cur and cur.tick then pcall(cur.tick) end
+        if cur and cur.tick then
+            local ok, err = pcall(cur.tick, (now - (rig.stepStartMs or now)) / 1000)
+            if not ok and not rig.tickErr then rig.tickErr = true; print("[pzopt-ui] tick error " .. tostring(err)) end
+        end
         return
     end
+    local prev = rig.steps[rig.i]
+    if prev and prev.stop then
+        local ok, err = pcall(prev.stop)
+        if not ok then print("[pzopt-ui] stop error " .. tostring(err)) end
+    end
+    rig.tickErr = nil
+    rig.stepStartMs = now
     rig.i = rig.i + 1
     if rig.i > #rig.steps then
         rig.i = 1

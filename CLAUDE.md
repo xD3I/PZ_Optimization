@@ -198,42 +198,50 @@ update) re-run `scripts/decompile.sh` and `scripts/regen-overrides.sh`.
   offer 500/430/400/330/300 fps; the in-game choice is snapshotted before `Core.loadOptions`
   rewrites options.ini and a cap above 244 lives in framecap.ini (`gameFps=`); forced
   `uncappedFps=` runs restore the player's choice on the next boot (`restore=`).
-- Since 2026-10-04 the three tabs below are one "PZ Optimization" tab (home page with presets, master switches and category
-  tiles; sidebar; subcategory tabs; Simple / Advanced / Everything; Visuals as cards; Fix a problem; one search), organised by
-  `src/lua/client/pzopt/pzopt_optimizations_layout.lua`; the groups Performance / Visuals / Tools are the old Optimizations /
-  Enhancements / Profiler tabs. Harness: `options_nav=`, `options_shots=`, `options_joy=` (harness/CLAUDE.md).
-- Options > Optimizations tab (2026-09-20): every Config key as a tick box / combo
-  (`src/lua/client/pzopt/pzopt_optimizations_options.lua`, Java side `pzopt.UserOptions` +
-  `PerformanceSettings` forwards), saved to `~/Zomboid/pzopt/options.ini`, applied on the next
-  launch; `-Dpzopt.*` and the game dir's `pzopt.properties` (harness `--prop`) still win, so runs
-  never depend on menu choices. Since 2026-09-25 upscaling, HDR output and ambient occlusion sit on their own
-  Options > Enhancements tab (between Optimizations and Profiler), each with off / on preview clips (runs `enh-*`), and
-  apply on Apply without a restart (`pzopt.Enhancements`: RenderScale / Dlss / Hdr / ChunkAo reconfigure through
-  render-thread generation counters) except `hdr` / `hdrAuto` (on Linux they pick the window). Rig: `--flag live_set=`.
-  "Export settings" / "Import settings..." on each of the three tabs (2026-10-01): the non-default settings of all three
-  as `key=value` text to the clipboard and `~/Zomboid/pzopt/settings-export.ini`; the import sets the controls (unlisted
-  keys back to the default, pinned ones untouched) and Apply saves them. Rig: `--flag options_io=1`.
-  Profiler tab "Console log" (2026-10-01, a player debugging other mods): `consoleLog=all|warnings|errors|off` filters every
-  `[pzopt]` console line (`pzopt.Log` + the Lua `PzoptLogInfo`), live; `run.sh` pins `consoleLog=all` (the harness reads info lines).
-  Master switch `enabled` (2026-09-20 evening): `enabled=false` folds into `Overrides.enabled()`,
-  i.e. the build-mismatch stock path everywhere; tab buttons "Disable all (stock game)" /
-  "Enable all (recommended defaults)". `--prop enabled=false` is a stock run without a reinstall.
-  The Enhancements and Profiler tabs have their own master switches (2026-09-28, live, default on): `enhancementsEnabled`
-  / `profilerEnabled`; off, Config reads the tab's feature switches (`GATED`: upscaler, spriteFilter, hdr, hdrAuto, AO,
-  sunShadows, reflections, darknessFloorPct, memoryTint, colorGrading, pixelLight, godRays, foliageSway / overlaySampling, overlay, overlayLog)
-  as off, the saved choices stay; a -D / pzopt.properties pin wins, and harness runs measure regardless.
-  Preview panel (2026-09-21 night): the whole page area right of the controls, fixed while the list scrolls, every
-  element in a fixed slot (description slot = the longest description wrapped; the clips take the height left, spare
-  height widens the bar rows) so nothing shifts between rows; for the setting under the mouse:
-  the stock and the optimized clip of the same route side by side (off by default since 2026-09-26: "Before / after clips"
-  tick box in each tab's header, key `previewClips`, saved at once; 28 GIFs: 8 route pairs at 512x216, 24 fps, 4 s, plus 6 overlay-off / overlay-on crop pairs for the overlay keys from runs `ov-off` / `ov-full`; Workshop-preview encode, under
-  `src/media/ui/pzopt/compare/`, made by `harness/menu-gifs.py` from the show-*/bl-*/sbs-* recordings with the
-  live fps burned in; decoded to textures by `pzopt.GifTextures`, at most two clips held, freed on close), the
-  description, the value since boot / next launch, and effect bars per resource (`EFFECTS` in the Lua: game
-  thread, render thread, other cores, GPU, VRAM, RAM, disk, load time, chunk arrival, -3..3, x axis labelled lowest / low / mid / high / ultra / max with mid = stock). Verified in game
-  via a queue `cmd` job driving the menus with `ui-drive.py` (`/tmp/pzopt-menu-check.sh`); new
-  `src/media/` ships through build.sh like the Lua. The paths are `media/ui/...` relative to the game dir:
-  `ZomboidFileSystem`'s "work dir" is already `<game>/media`, strip the prefix before `getMediaFile`.
+- The settings live in the main menu's PZ OPTIMIZATION screen (2026-10-18; `src/lua/client/pzopt/pzopt_mainscreen_menu.lua`,
+  the same item in the pause menu): the game's Options screen has no PZ Optimization tab any more (from 2026-09-20 to
+  2026-10-18 the settings were an Options tab: three tabs, one "PZ Optimization" tab since 2026-10-04). The data and the
+  actions are `src/lua/client/pzopt/pzopt_optimizations_options.lua` (every Config key's entry, `PzoptSettings`: presets,
+  export / import, reset, uninstall, the DLSS files, the search, the clips, the impact chart), organised by
+  `pzopt_optimizations_layout.lua` (groups Optimizations / Enhancements / Profiler = layout Performance / Visuals / Tools,
+  categories, subcategories, tiers, `problems`). The screen: a sidebar with a search box (names, descriptions, keys,
+  resources and the Java classes of every setting; Ctrl+F, L3 = the on-screen keyboard), home (the six entries, the presets
+  Recommended / Stock game / the three low-end sets, Fix a problem, the view Simple / Advanced / Everything, the before /
+  after clips, Export settings / Import settings, Uninstall PZ Optimization), each group's master switch and
+  categories, each category's own switch and subcategories, each subcategory's settings edited in place (tick box,
+  chooser, the zoom curve's four numbers beside its plot, the stock colour picker for the outline colour; DEFAULT; Reset
+  ... to defaults per group and category; the NVIDIA DLSS files row under Upscaling). A setting's detail: its description,
+  when it applies, its values, who pins it, the release it came with and the Java classes that read it, the impact chart
+  ("Effect on your hardware": `EFFECTS` per resource, game thread, render thread, other cores, GPU, VRAM, RAM, disk, load
+  time, chunk arrival, -3..3 on a lowest / low / mid / high / ultra / max axis with mid = stock; `PzoptPreview:drawBars`; only
+the resources the setting moves are drawn, in that order, the controls right under them, and a setting that moves none has
+no chart, maintainer 2026-10-18) and,
+  with the clips on (`previewClips`, off by default, SHOW CLIPS / the home row, saved at once), the stock and the optimized
+  clip of the same route side by side (`PzoptPreview:drawClip`; 28 GIFs under `src/media/ui/pzopt/compare/`, 8 route pairs
+  at 512x216, 24 fps, 4 s, plus 6 overlay-off / overlay-on crop pairs, made by `harness/menu-gifs.py`, decoded by
+  `pzopt.GifTextures`, at most two held, freed when the screen closes). On a settings page the clips and the text keep their place from row to row; the chart and the controls under it follow the rows the setting has. Values go through `pzopt.UserOptions` at once
+  (`~/Zomboid/pzopt/options.ini`): Optimizations at the next launch (then the restart prompt: RESTART NOW / LATER, a reminder
+  in the bar, `pzopt.Restart`), Profiler and most Enhancements live (`pzopt.Enhancements`: RenderScale / Dlss / Hdr / ChunkAo
+  reconfigure through render-thread generation counters), the start-up Enhancements (`hdr`, `hdrAuto`, per-pixel and voxel
+  lighting, reflections, car glass, mirrors, relief) next launch; `-Dpzopt.*` and the game dir's `pzopt.properties` (harness
+  `--prop`) still win, so runs never depend on menu choices. Export settings: the non-default settings of all three groups
+  as `key=value` text to the clipboard and `~/Zomboid/pzopt/settings-export.ini`; Import settings: the pasted text, unlisted
+  keys back to the default, pinned ones untouched, saved at once. Profiler > Console log: `consoleLog=all|warnings|errors|off`
+  filters every `[pzopt]` console line (`pzopt.Log` + the Lua `PzoptLogInfo`), live; `run.sh` pins `consoleLog=all`.
+  Master switch `enabled` (2026-09-20 evening): `enabled=false` folds into `Overrides.enabled()`, i.e. the build-mismatch
+  stock path everywhere (the Stock game preset); `--prop enabled=false` is a stock run without a reinstall. The Enhancements
+  and Profiler masters (2026-09-28, live, default on): `enhancementsEnabled` / `profilerEnabled`; off, Config reads the
+  group's feature switches (`GATED`) as off, the saved choices stay; a -D / pzopt.properties pin wins, and harness runs
+  measure regardless. Every category has its own master switch at the top of its page since 2026-10-16 (`catSmoothEnabled`
+  ... `catAtmosEnabled`, layout field `master`; Tools uses `profilerEnabled`): off, Config reads the keys `GATED` lists for
+  it at their stock value (Performance: next launch; Visuals: live, under `enhancementsEnabled` too); shared worker pools,
+  crash guards, mod / update keys and the tuning numbers of a gated switch are left alone. `tests/pzopt/CategoryMastersTest`
+  fails when a key a Performance category lists is neither gated nor in its `UNGATED` list: a new setting needs one or the
+  other. Harness: the `options_*` rigs drive the screen (`options_tab=`, `options_nav=`, `options_shots=`, `options_joy=`,
+  `options_read=1`, `options_io=1`, `options_profile=`, `options_clips=`; harness/CLAUDE.md), `--flag live_set=` switches
+  live keys mid-run, `benchmark-run.sh ui:read` / `ui:pad` tour and walk the screen. New `src/media/` ships through build.sh
+  like the Lua. The paths are `media/ui/...` relative to the game dir: `ZomboidFileSystem`'s "work dir" is already
+  `<game>/media`, strip the prefix before `getMediaFile`.
 - Game thread (2026-09-20, `docs/archive/2026-09-24/results.md`): new heavy bench route `--flag route=S:450 --flag turn=90
   --route-seconds 25` (south through Rosewood, facing spinning). Adopted: weatherMaskIdleSkip,
   cutawayRadius=6, gridStackInterval=8, lightingRebakeMs=250, rebakeBudget=4/rebakeMaxFrames=3,
@@ -242,14 +250,14 @@ update) re-run `scripts/decompile.sh` and `scripts/regen-overrides.sh`.
   lightingRebakeMs=1000. Game thread now 97 % busy with broad work (bakes 20 %, world update 23 %,
   Lua UI 10 %): 240 locked on that route needs a structural change, not more trims.
 - In-game performance overlay (2026-09-20, `pzopt.Overlay`, F9 or `--prop overlay=true`; since 2026-09-21 its
-  measurement is opt-in, `overlaySampling` tab tick box, default off, F9 shows a notice without it; since 2026-09-24 every Profiler-tab key applies at once, no restart (`Config.reloadLive`, `Overlay.reconfigure`); harness
+  measurement is opt-in, `overlaySampling`, Profiler > Performance overlay, default off; since 2026-10-18 F9, L3 + R3 and the PZ OPTIMIZATION > Profiler > Performance overlay row switch the measuring on (saved) and show the overlay; since 2026-09-24 every Profiler key applies at once, no restart (`Config.reloadLive`, `Overlay.reconfigure`); harness
   runs and `overlay=true` imply it — the Windows 0.5 s stutter was its JMX load sampling on the game thread): presented
   frame time, p99/p99.9/max/1%-low/jitter/spikes over 5 s, GPU busy (GL timer query), game/render
   thread load, verdict line, frame graph; every harness run also writes `pzopt-overlay.out`
   (MangoHud columns + epoch_ms) and `analyze.py` prints it as `overlay:`. Same numbers on
   Windows/Linux without MangoHud or RivaTuner. The stock "Display FPS" graph (K) is debug-only bars.
   Since 2026-09-21 night the overlay also says *what* the game thread does (`pzopt.GameThreadProfile`; every overlay element is a
-  tab dropdown, off + its options: `overlayStats`, `overlayTree`, `overlayVerdict`, `overlayGraph`, `overlayFlame`, plus
+  Profiler chooser, off + its options: `overlayStats`, `overlayTree`, `overlayVerdict`, `overlayGraph`, `overlayFlame`, plus
   `gameThreadProfileHz`, 25 Hz since 2026-09-23): its stack sampled off-thread and folded into phases,
   sub-phases, hot methods and waits (a colour-coded tree in the overlay, biggest first, bars per row; the "game thread bound" verdict names the two biggest);
   `pzopt-gamethread.out` per run, `analyze.py` prints it as `game thread:`; the folded stacks go to `pzopt-stacks.out` and
@@ -475,7 +483,7 @@ update) re-run `scripts/decompile.sh` and `scripts/regen-overrides.sh`.
   60 fps from 4 s, quality above both drivers. `worker` = CPU encode (`pzopt.TexBc`, the macOS GL 4.1 path, untested on
   the Mac); `texCompressCache` (off, ~230 MB). Rigs: `tools/TexCompProbe.java` (+ `harness/texprobe/wrap.sh` via
   `run.sh --wrap`), `harness/texdiff.py`, `harness/pad/menu-idle.txt`, `devTexCompTiming`.
-- Soft sun / contact shadows (2026-09-25, `docs/findings-contact-shadows-2026-09-25.md`, off by default, Enhancements tab
+- Soft sun / contact shadows (2026-09-25, `docs/findings-contact-shadows-2026-09-25.md`, off by default, PZ OPTIMIZATION > Enhancements
   "Sun shadows"): the static world's sun shadows baked by the chunk AO kernel (visibility bitmask over the sun disk, march
   length from the sun height, outdoor squares only, a sun step recomputes a texture a frame); characters, atlas zombies and
   cars as capsules in one instanced pass after the composite (`pzopt.CapsuleShadow`, Quilez capsule shadows on the scene
@@ -503,7 +511,7 @@ update) re-run `scripts/decompile.sh` and `scripts/regen-overrides.sh`.
   devDriveJitter=true` + `harness/drivejitter.py <run> --present` (real display times from pzopt-driveswap.out +
   present.txt). What remains is late frames in town (game-thread bursts at chunk arrival): `docs/plan-drive-game-thread.md`.
 - Darkness floor, remembered places, colour grading (2026-09-26, released `ea05422` + Workshop card 37,
-  `docs/findings-darkness-grading-2026-09-26.md`, candidate B of the graphics plan; off by default, Enhancements tab section
+  `docs/findings-darkness-grading-2026-09-26.md`, candidate B of the graphics plan; off by default, Enhancements section
   "Darkness, remembered places and colour grading", applies at once): `darknessFloorPct` (pzopt.Darkness: seen squares above
   ground keep a soft minimum light, applied to the native's per-square light in LightingJNI, no frame cost; unseen stays
   black), `memoryTint` (out of sight drawn grey / dim / cool by the vision-cone pass itself, remembered rooms keep their
@@ -514,7 +522,7 @@ update) re-run `scripts/decompile.sh` and `scripts/regen-overrides.sh`.
   in-game `devCapture` (the desktop recorder showed a browser window over the game), `harness/stitch-darkness.py`,
   `darkness-card-gif.py`, `menu-gifs.py` kind `pane`. Cost runs need their own `-Dpzopt.userOptionsFile` (the desktop's
   tab file turns on HDR, DLSS and AO).
-- Sprite filtering (2026-09-26, candidate A, `docs/findings-sprite-filter-2026-09-26.md`, off by default, Enhancements tab
+- Sprite filtering (2026-09-26, candidate A, `docs/findings-sprite-filter-2026-09-26.md`, off by default, PZ OPTIMIZATION > Enhancements
   "Sprite filtering", live): `spriteFilter=sharp` (`pzopt.SpriteFilter`): texel-aware anti-aliased point sampling zoomed in at
   non-integer scales (0.75), stock point sampling at whole multiples and 1:1, zoomed out one explicit mip level
   `floor(log2(texels a pixel))` with two adaptive diagonal taps (`spriteFilterMin=rgssa2`) + an empty-area probe, the bake mip
@@ -573,7 +581,7 @@ update) re-run `scripts/decompile.sh` and `scripts/regen-overrides.sh`.
   default): Apple's GL timer queries cost a third of the frame rate. Mac cost runs need an empty
   `-Dpzopt.userOptionsFile` (the Mac's tab file has the Enhancements on). `run-mac.sh install` now ships pzopt's shader files.
 - Car glass (2026-10-01/02, `docs/findings-car-glass-2026-10-01.md`, worktree `~/pzopt-wt/carglass` branch `car-glass`, off by default,
-  Enhancements tab "Car glass", next launch): car windows become glass (Fresnel, the game's sky texture in the world frame, per-car
+  Enhancements > "Car glass", next launch): car windows become glass (Fresnel, the game's sky texture in the world frame, per-car
   octahedral reflection probes marched through the scene depth before the vehicles, GGX sun / moon / lamp glints, an analytic cabin
   with seats and occupants behind the glass, raindrops, stock cracks / blood kept; side mirrors silvered and glass painted outside the window zones, e.g. the CarLuxury coupe's rear
   quarter windows, found per skin from the diffuse). The game's vehicle programs stay stock: a separate
@@ -594,7 +602,7 @@ update) re-run `scripts/decompile.sh` and `scripts/regen-overrides.sh`.
   `devCarOccupantDump`, `harness/carglass/occframes.py` / `occcost.py`. Several people / cars / split screen work (tiles per car and
   view, 4 cars a view, the rest the proxy): split screen driver + passenger 1.2 us, six occupied cars 1.6 us.
 - Mirrors and windows (2026-10-03, `docs/findings-mirrors-2026-10-03.md`, `pzopt.Mirrors`, key `mirrors`, off by default,
-  Enhancements tab "Mirrors and windows", next launch): wall mirrors (`IsMirror` tiles, now drawn per frame) and window panes
+  Enhancements > "Mirrors and windows", next launch): wall mirrors (`IsMirror` tiles, now drawn per frame) and window panes
   reflect the scene in front. The ortho camera makes the reflected ray of a vertical pane a straight screen line (N-wall pane
   down-left, W-wall down-right, iso depth -2/3 a square), reaching the floor after 3 h squares. Static part: marched after the
   chunk composite into a per-pane atlas tile (pan-invariant; refreshed when new / more on screen / every 30 frames, the pass at
@@ -644,6 +652,11 @@ update) re-run `scripts/decompile.sh` and `scripts/regen-overrides.sh`.
   caches), the wake gate per vertex (a per-pixel gate over 11 M pixels cost more than it saved). Mesa needs the flipbook's
   sampler3D bound in the source, NVIDIA's 1.20 refuses layout(): `RipplesLinkTest`. Rigs `devRainModes` / `devWakeModes`
   + `devRipplesAlternate`, `harness/ripples/cost.py --base`, `phaseframes.py`.
+- Mac under outside load (2026-10-16, `docs/findings-mac-outside-load-2026-10-16.md`): the frame workers, CharDraw and
+  VisPolyAsync ran at macOS utility QoS and lost their cores to any default-QoS load (a VM, a build): with 4 busy cores beside
+  the game the optimized build fell to 35 fps while stock lost nothing. `workerQosMac=user-initiated` (default;
+  `CorePlacement.frameCritical()`, no effect off macOS): 55 fps loaded, quiet 55.5 -> 59.5. Rig: four `yes` on the Mac for
+  exactly a queue job's run (bounded, killed after), in-run A/B through ZombAb `workerQosMac`. `joinSpinPark` measured off.
 - Open plans: `docs/plan-drive-game-thread.md` (2026-09-26: late frames while driving through town), `docs/plan-graphics-enhancements.md` (2026-09-25: visual features; items 1, 2, 4 and candidate B shipped by 2026-09-26), `docs/plan-game-load.md`, `docs/plan-vulkan-renderer.md`, `docs/plan-resource-use.md`,
   `docs/plan-zombie-multithread.md` (2026-09-22: the rest of the zombie simulation on all cores, phased).
   The game-thread optimization plans were dropped on 2026-09-21 at the maintainer's request.

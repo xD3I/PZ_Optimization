@@ -173,6 +173,10 @@ public final class BootRepair {
                + " could not be removed" + (left.isEmpty() ? "" : " (first: " + left.get(0) + ")")
                + (aot ? "; launcher back to the loose classes" : "") + (gc ? "; launcher's collector / JIT / heap flags undone" : ""));
          notice(zomboid, action, reason, rev, from, copy != null ? copy.commit : "");
+         String bench = BenchPlan.abandon(zomboid.toFile(), "the install was " + action + " by the boot repair");
+         if (bench != null) {
+            log(base, bench);
+         }
          boolean relaunched = Restart.relaunch();
          log(base, relaunched ? "the game is started again" : "could not start the game again: start it from Steam");
          return true;

@@ -25,6 +25,25 @@ public final class RenderScratch {
    final WallShaperW wsW = new WallShaperW();
    final WallShaperSliceN wsSliceN = new WallShaperSliceN();
    final WallShaperSliceW wsSliceW = new WallShaperSliceW();
+   // bakeRecordParallel: the floor pass's shapers (vertex colours, shore, tint: filled per floor, then handed to its draw)
+   final zombie.iso.sprite.shapers.FloorShaperAttachedSprites fsAttached = new zombie.iso.sprite.shapers.FloorShaperAttachedSprites();
+   final zombie.iso.sprite.shapers.FloorShaperDeDiamond fsDeDiamond = new zombie.iso.sprite.shapers.FloorShaperDeDiamond();
+   final zombie.iso.sprite.shapers.FloorShaperDiamond fsDiamond = new zombie.iso.sprite.shapers.FloorShaperDiamond();
+
+   public static zombie.iso.sprite.shapers.FloorShaperAttachedSprites fsAttached() {
+      RenderScratch s = current();
+      return s == null ? zombie.iso.sprite.shapers.FloorShaperAttachedSprites.instance : s.fsAttached;
+   }
+
+   public static zombie.iso.sprite.shapers.FloorShaperDeDiamond fsDeDiamond() {
+      RenderScratch s = current();
+      return s == null ? zombie.iso.sprite.shapers.FloorShaperDeDiamond.instance : s.fsDeDiamond;
+   }
+
+   public static zombie.iso.sprite.shapers.FloorShaperDiamond fsDiamond() {
+      RenderScratch s = current();
+      return s == null ? zombie.iso.sprite.shapers.FloorShaperDiamond.instance : s.fsDiamond;
+   }
 
    private static RenderScratch current() {
       if (!DrawRecorder.recording) {

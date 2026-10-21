@@ -119,6 +119,18 @@ public final class PerformanceSettings {
    /** Harness UI rig: give the mouse back. */
    public void pzoptUiMouseOff() {
       pzopt.Showcase.aimOverride = false;
+      pzopt.Showcase.uiButtonOverride = false;
+   }
+
+   /** Harness UI rig: one mouse wheel step (zombie.input.Mouse sees it on its next update). */
+   public void pzoptUiWheel(double delta) {
+      pzopt.Showcase.uiWheel = (int)delta;
+   }
+
+   /** Harness UI rig: hold (true) or release (false) the left mouse button (zombie.input.Mouse sees it on its next update). */
+   public void pzoptUiButton(boolean down) {
+      pzopt.Showcase.uiButtonDown = down;
+      pzopt.Showcase.uiButtonOverride = true;
    }
 
    /** The value in force since boot ("" for an unknown key). */
@@ -211,6 +223,12 @@ public final class PerformanceSettings {
 
    public void releasePzoptGifs() {
       pzopt.GifTextures.releaseAll();
+   }
+
+   // pzopt: the built-in benchmark (media/lua/client/pzopt/pzopt_benchmark.lua): one string command in, tab-separated
+   // lines out (pzopt.Benchmark.call: scenarios, menu, start, report, history, open, share, hud, abort, ...).
+   public String pzoptBenchmark(String cmd, String arg) {
+      return pzopt.Benchmark.call(cmd, arg == null ? "" : arg);
    }
 
    // pzopt: the main menu's "PZ Optimization update" item (media/lua/client/pzopt/pzopt_mainscreen_update.lua)

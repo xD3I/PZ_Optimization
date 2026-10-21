@@ -405,7 +405,7 @@ public abstract class IsoGameCharacter
    // thread: the game thread still sees a single buffer reused across calls, exactly as the static gave it, so
    // this is unconditional rather than behind the key. Every user below fills it and reads it inside the one
    // call and nothing carries over between calls, so per-thread is behaviour-identical on one thread.
-   protected static final ThreadLocal<ItemVisuals> pzoptTempItemVisuals = ThreadLocal.withInitial(ItemVisuals::new);
+   protected static final pzopt.Tl<ItemVisuals> pzoptTempItemVisuals = new pzopt.Tl<>(ItemVisuals::new); // pzopt: pzopt.Tl (zombie redesign, f8-zomb2)
    public static final float HUMANOID_WORLD_CHEST_HEIGHT = 0.495F;
    public static final float HUMANOID_SCREEN_CHEST_HEIGHT = 20.0F;
    private final float extraLungeRange = 0.2F;
@@ -499,6 +499,10 @@ public abstract class IsoGameCharacter
    public IsoGameCharacter reanimatedCorpse;
    public int reanimatedCorpseId = -1;
    private AnimationPlayer animPlayer;
+   public Model pzoptBmModel; // pzopt: bodyModelCache, this character's body model (pzopt.BodyModelCache)
+   public SurvivorDesc pzoptBmDesc; // pzopt: bodyModelCache, the descriptor it was computed with
+   public int pzoptBmEpoch; // pzopt: bodyModelCache, the epoch it was computed in (0 = none)
+   public AnimationPlayer pzoptBmPlayer; // pzopt: bodyModelCache, the held player known to carry that model
    private boolean deferredMovementEnabled = true;
    private boolean isCrit;
    private boolean knockedDown;
@@ -1760,6 +1764,9 @@ public abstract class IsoGameCharacter
    /** pzopt: entityUpdateSafeStates, game thread: no ragdoll in this character's animation player (no Bullet on a worker). */
    public boolean pzoptRagdollFree() { // pzopt
       AnimationPlayer ap = this.animPlayer; // pzopt: the field, never getAnimationPlayer() (it can replace the player)
+      if (pzopt.RagdollGate.on() && pzopt.RagdollGate.noneFor(ap)) { // pzopt: ragdollGate, no player holds a controller: both tests below are true
+         return true; // pzopt: ragdollGate
+      } // pzopt: ragdollGate
       return ap == null || !ap.isRagdollSimulationActive() && ap.getRagdollController() == null; // pzopt
    } // pzopt
 
@@ -1769,19 +1776,40 @@ public abstract class IsoGameCharacter
    } // pzopt
 
    /** pzopt: schedulerClassifyParallel, any thread: getAnimationPlayer() would replace the player (the body model changed). */
+   /**
+    * pzopt: ragdollGate. Stock isRagdoll() replaced an animation player whose body model changed as a side effect of the
+    * question; the gated isRagdoll no longer does, so the entity-update filter (IsoZombie.pzoptBatchSafe) makes that
+    * replacement here, where its isRagdoll() call made it before, and the zombie is batched exactly as before. Always false.
+    */
+   public boolean pzoptRenewStalePlayer() { // pzopt: ragdollGate
+      if (pzopt.RagdollGate.on() && this.pzoptAnimPlayerStale()) { // pzopt: ragdollGate
+         this.getAnimationPlayer(); // pzopt: ragdollGate, the replacement stock's isRagdoll() made
+      } // pzopt: ragdollGate
+      return false; // pzopt: ragdollGate
+   } // pzopt: ragdollGate
+
    public boolean pzoptAnimPlayerStale() { // pzopt
+      if (pzopt.BodyModelCache.playerSettled(this, this.animPlayer)) { // pzopt: bodyModelCache, the held player carries the cached body model
+         return false; // pzopt: bodyModelCache
+      } // pzopt: bodyModelCache
       return this.animPlayer != null && this.animPlayer.getModel() != ModelManager.instance.getBodyModel(this); // pzopt
    } // pzopt
 
    public AnimationPlayer getAnimationPlayer() {
+      AnimationPlayer pzoptHeld = this.animPlayer; // pzopt: bodyModelCache
+      if (pzopt.BodyModelCache.playerSettled(this, pzoptHeld)) { // pzopt: bodyModelCache, stock's model comparison is known to be equal
+         return pzoptHeld; // pzopt: bodyModelCache
+      } // pzopt: bodyModelCache
       Model model = ModelManager.instance.getBodyModel(this);
       boolean hasTracks = false;
       if (this.animPlayer != null && this.animPlayer.getModel() != model) {
          hasTracks = this.animPlayer.getMultiTrack().getTrackCount() > 0;
+         this.pzoptBmPlayer = null; // pzopt: bodyModelCache, the player is replaced
          this.animPlayer = (AnimationPlayer)Pool.tryRelease(this.animPlayer);
       }
 
       if (this.animPlayer == null) {
+         this.pzoptBmPlayer = null; // pzopt: bodyModelCache
          this.animPlayer = AnimationPlayer.alloc(model);
          this.onAnimPlayerCreated(this.animPlayer);
          if (hasTracks) {
@@ -1789,10 +1817,12 @@ public abstract class IsoGameCharacter
          }
       }
 
+      pzopt.BodyModelCache.notePlayer(this, this.animPlayer, model); // pzopt: bodyModelCache
       return this.animPlayer;
    }
 
    public void releaseAnimationPlayer() {
+      this.pzoptBmPlayer = null; // pzopt: bodyModelCache
       this.animPlayer = (AnimationPlayer)Pool.tryRelease(this.animPlayer);
    }
 
@@ -4846,10 +4876,16 @@ public abstract class IsoGameCharacter
    }
 
    public boolean isRagdoll() {
+      if (pzopt.RagdollGate.on() && pzopt.RagdollGate.gatedFalse(this, this.animPlayer, 0)) { // pzopt: ragdollGate, stock's false without the player swap check
+         return false; // pzopt: ragdollGate
+      } // pzopt: ragdollGate
       return this.hasAnimationPlayer() && this.getAnimationPlayer().isRagdolling();
    }
 
    public boolean isFullyRagdolling() {
+      if (pzopt.RagdollGate.on() && pzopt.RagdollGate.gatedFalse(this, this.animPlayer, 2)) { // pzopt: ragdollGate
+         return false; // pzopt: ragdollGate
+      } // pzopt: ragdollGate
       return this.hasAnimationPlayer() && this.getAnimationPlayer().isFullyRagdolling();
    }
 
@@ -4894,6 +4930,9 @@ public abstract class IsoGameCharacter
    }
 
    public boolean isRagdollSimulationActive() {
+      if (pzopt.RagdollGate.on() && pzopt.RagdollGate.gatedFalse(this, this.animPlayer, 1)) { // pzopt: ragdollGate
+         return false; // pzopt: ragdollGate
+      } // pzopt: ragdollGate
       return this.hasAnimationPlayer() && this.getAnimationPlayer().isRagdollSimulationActive() && this.canRagdoll();
    }
 
@@ -7415,7 +7454,7 @@ public abstract class IsoGameCharacter
          IsoBulletTracerEffects.getInstance().render();
       }
 
-      if (this.inventory != null) {
+      if (this.inventory != null && !pzopt.RenderLast.skipUpdaters()) { // pzopt: renderLastFast, every vanilla IUpdater's renderlast is empty
          for (int n = 0; n < this.inventory.items.size(); n++) {
             InventoryItem item = (InventoryItem)this.inventory.items.get(n);
             if (item instanceof IUpdater iUpdater) {
@@ -10713,6 +10752,30 @@ public abstract class IsoGameCharacter
    public boolean pzoptHeadPending;
    public boolean pzoptHeadOnGame;
 
+   /**
+    * pzopt: devCleanSkipCheck (f8-cleanfix), game thread: what a zombie's postupdate writes beyond its movement (the head's forward
+    * direction and turning flags, the head / evaluation marks, the action state, the animation tracks' times), as numbers.
+    */
+   public void pzoptSkipPrint(double[] o, int k) { // pzopt
+      o[k] = this.forwardDirection.x; // pzopt
+      o[k + 1] = this.forwardDirection.y; // pzopt
+      o[k + 2] = (this.isTurning() ? 1 : 0) + (this.isTurning90() ? 2 : 0) + (this.isTurningAround() ? 4 : 0); // pzopt
+      o[k + 3] = (this.pzoptHeadPending ? 1 : 0) + (this.pzoptHeadOnGame ? 2 : 0); // pzopt
+      ActionContext pzoptCtx = this.getActionContext(); // pzopt
+      o[k + 4] = pzoptCtx == null ? -1 : pzoptCtx.pzoptEvalDone; // pzopt
+      o[k + 5] = pzoptCtx == null ? -1 : System.identityHashCode(pzoptCtx.getCurrentState()); // pzopt
+      double pzoptT = 0.0; // pzopt
+      int pzoptN = 0; // pzopt
+      if (this.animPlayer != null && this.animPlayer.getMultiTrack() != null) { // pzopt: the field, never the lazy getter
+         for (zombie.core.skinnedmodel.animation.AnimationTrack pzoptTr : this.animPlayer.getMultiTrack().getTracks()) { // pzopt
+            pzoptT += pzoptTr.getCurrentTimeValue(); // pzopt
+            pzoptN++; // pzopt
+         } // pzopt
+      } // pzopt
+      o[k + 6] = pzoptT; // pzopt
+      o[k + 7] = pzoptN; // pzopt
+   } // pzopt
+
    /** pzopt: headOnWorker, the evaluation task of a queued zombie on a frame worker: its head, then its transitions. */
    public void pzoptEvalTask() {
       if (this.pzoptHeadPending) {
@@ -11000,6 +11063,16 @@ public abstract class IsoGameCharacter
    public boolean isAnimationUpdatingThisFrame() {
       return this.animationUpdatingThisFrame;
    }
+
+   /** pzopt: postupdateClean (f8-zomb2), a frame worker: clearHitInfo is a no-op and nothing ballistic is tracked. */
+   public boolean pzoptCleanTailOk() { // pzopt
+      return this.hitInfoList.isEmpty() && pzopt.Config.LAZY_POSE && this.ballisticsController == null; // pzopt
+   } // pzopt
+
+   /** pzopt: postupdateClean, a frame worker: postUpdateInternal's tail after the animating part (clearHitInfo is a no-op here). */
+   public void pzoptCleanTail() { // pzopt
+      this.clearAttackVars(); // pzopt
+   } // pzopt
 
    public void clearHitInfo() {
       if (this.hitInfoList.isEmpty() && pzopt.Config.LAZY_POSE) {
@@ -13489,6 +13562,10 @@ public abstract class IsoGameCharacter
       return this.textureCreator;
    }
 
+   public boolean pzoptUpdateModelTextures() { // pzopt: zombieFirstSightSprite, a texture creator is made at the next render (pzopt.FirstSight)
+      return this.updateModelTextures; // pzopt
+   } // pzopt
+
    public void setTextureCreator(ModelInstanceTextureCreator textureCreator) {
       this.textureCreator = textureCreator;
    }
@@ -14190,6 +14267,10 @@ public abstract class IsoGameCharacter
       int chunkMinY = (PZMath.fastfloor(this.getY()) - 4) / 8 - 1;
       int chunkMaxX = (int)Math.ceil((this.getX() + 4.0F) / 8.0F) + 1;
       int chunkMaxY = (int)Math.ceil((this.getY() + 4.0F) / 8.0F) + 1;
+      boolean pzoptEmpty = pzopt.VehicleNear.none(chunkMinX, chunkMinY, chunkMaxX, chunkMaxY); // pzopt: nearVehicleGrid, no chunk of the window holds a vehicle: the loop below finds none
+      if (pzoptEmpty && !pzopt.VehicleNear.checkThis()) { // pzopt: nearVehicleGrid (devNearVehicleCheck runs the loop for a sample)
+         return null; // pzopt: nearVehicleGrid
+      } // pzopt
 
       for (int cy = chunkMinY; cy < chunkMaxY; cy++) {
          for (int cx = chunkMinX; cx < chunkMaxX; cx++) {
@@ -14201,6 +14282,9 @@ public abstract class IsoGameCharacter
                      && PZMath.fastfloor(this.getZ()) == PZMath.fastfloor(vehicle.getZ())
                      && (!(this instanceof IsoPlayer) || !((IsoPlayer)this).isLocalPlayer() || vehicle.getTargetAlpha(((IsoPlayer)this).playerIndex) != 0.0F)
                      && !(this.DistToSquared(vehicle) >= 16.0F)) {
+                     if (pzoptEmpty) { // pzopt: devNearVehicleCheck, the grid said empty and stock found one
+                        pzopt.VehicleNear.checked(true, chunkMinX, chunkMinY); // pzopt
+                     } // pzopt
                      return vehicle;
                   }
                }
@@ -14208,6 +14292,9 @@ public abstract class IsoGameCharacter
          }
       }
 
+      if (pzoptEmpty) { // pzopt: devNearVehicleCheck, agreed
+         pzopt.VehicleNear.checked(false, chunkMinX, chunkMinY); // pzopt
+      } // pzopt
       return null;
    }
 
@@ -14220,6 +14307,9 @@ public abstract class IsoGameCharacter
       int chunkMinY = (PZMath.fastfloor(this.getY()) - 5) / 8 - 1;
       int chunkMaxX = (int)Math.ceil((this.getX() + 5.0F) / 8.0F) + 1;
       int chunkMaxY = (int)Math.ceil((this.getY() + 5.0F) / 8.0F) + 1;
+      if (pzopt.VehicleNear.none(chunkMinX, chunkMinY, chunkMaxX, chunkMaxY)) { // pzopt: nearVehicleGrid, no vehicle in the window: no siren either
+         return false; // pzopt: nearVehicleGrid
+      } // pzopt
 
       for (int cy = chunkMinY; cy < chunkMaxY; cy++) {
          for (int cx = chunkMinX; cx < chunkMaxX; cx++) {
@@ -14836,6 +14926,9 @@ public abstract class IsoGameCharacter
    }
 
    public final boolean isLocal() {
+      if (pzopt.Config.IS_LOCAL_FAST && !GameClient.client && !GameServer.server) { // pzopt: isLocalFast (zombie redesign, f8-zomb2): NetworkComponent.isLocal() is
+         return true; // pzopt: "!client && !server || !remote" and an absent component answers true: true off the network either way (6.5 % of the entity flight was the component lookup)
+      } // pzopt
       return (Boolean)PZOptional.ifPresent((NetworkComponent)this.tryGetECSComponent(NetworkComponent.class), true, NetworkComponent::isLocal);
    }
 
@@ -17182,7 +17275,7 @@ public abstract class IsoGameCharacter
       private static final Vector2 v2 = new Vector2();
    }
 
-   private static final ThreadLocal<MoveDeltaModifiers> PZOPT_MOVE_DELTAS = ThreadLocal.withInitial(MoveDeltaModifiers::new); // pzopt: animatorParallel
+   private static final pzopt.Tl<MoveDeltaModifiers> PZOPT_MOVE_DELTAS = new pzopt.Tl<>(MoveDeltaModifiers::new); // pzopt: animatorParallel
 
    private static class L_postUpdate {
       static final MoveDeltaModifiers moveDeltas = new MoveDeltaModifiers();

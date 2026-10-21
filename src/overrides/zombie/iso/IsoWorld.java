@@ -1366,6 +1366,7 @@ public final class IsoWorld {
 
    private void GenerateTilePropertyLookupTables() {
       TilePropertyAliasMap.instance.Generate(PropertyValueMap);
+      pzopt.PropIds.generated(); // pzopt: propIdCache, the property ids may have changed
       PropertyValueMap.clear();
    }
 
@@ -2669,11 +2670,19 @@ public final class IsoWorld {
       // pzopt: zombieLodDynamic, the model / blend counts follow the frame cap (pzopt.ZombieLod). Stock never read
       // tcountMax; both 510 literals stay so a mod that rewrites them (ZBBetterFPS' cull cap) still caps below ours.
       int pzoptBlended = PerformanceSettings.numberZombiesBlended; // pzopt
+      int pzoptLodKeep = 0; // pzopt: zombieLodHysteresis (places past the cap a zombie already in 3D keeps its model in)
       if (pzopt.ZombieLod.active()) { // pzopt
          pzopt.ZombieLod.update(); // pzopt
+         pzopt.FirstSight.beginCull(); // pzopt: zombieFirstSightSprite, this frame's composite grants
          tcountMax = Math.min(tcountMax, pzopt.ZombieLod.max3d()); // pzopt
+         pzoptLodKeep = pzopt.Config.ZOMBIE_LOD_HYSTERESIS; // pzopt
          pzoptBlended = pzopt.ZombieLod.blended(pzoptBlended); // pzopt
+      } else if (pzopt.FirstSight.active()) { // pzopt: zombieFirstSightSprite without zombieLodDynamic (round 11): stock counts, only the crossfade clock
+         pzopt.ZombieLod.clock(); // pzopt
+         pzopt.FirstSight.beginCull(); // pzopt: this frame's composite grants
       } // pzopt
+      boolean pzoptSight = pzopt.FirstSight.active(); // pzopt: zombieFirstSightSprite (with or without the LOD)
+      boolean pzoptSightOnly = pzoptSight && !pzopt.ZombieLod.active(); // pzopt: ... without zombieLodDynamic
       PerformanceSettings.animationSkip = 0;
       // pzopt: zombieModelAddBudgetUs (2026-10-05, Louisville 120 fps pass). A zombie getting a 3D model builds its model
       // instance and every clothing model in ModelManager.Add; when many win a slot at once (a turn, a crowd coming into
@@ -2684,9 +2693,10 @@ public final class IsoWorld {
 
       for (int n = 0; n < this.zombieWithModel.size(); n++) {
          IsoZombie z = (IsoZombie)this.zombieWithModel.get(n);
-         if (tcount < 510 && tcount < tcountMax) { // pzopt: zombieLodDynamic's cap (510 without it)
+         if (tcount < 510 && (tcount < tcountMax || pzoptLodKeep > 0 && tcount < tcountMax + pzoptLodKeep && pzopt.ZombieLod.drawnIn3d(z))) { // pzopt: zombieLodDynamic's cap (510 without it); zombieLodHysteresis, a zombie drawn in 3D keeps its model within that many places past the cap
             if (pzoptAddBudget && !z.ghost && !z.hasActiveModel()) { // pzopt: zombieModelAddBudgetUs, a zombie that would get its model now
-               if (pzoptAdds > 0 && System.nanoTime() - pzoptAddT0 > pzopt.Config.ZOMBIE_MODEL_ADD_BUDGET_US * 1000L) { // pzopt: past the frame's budget
+               if (pzoptAdds > 0 && System.nanoTime() - pzoptAddT0 > (pzopt.Pacing.heavyStep() ? Math.min(pzopt.Config.ZOMBIE_MODEL_ADD_BUDGET_US, pzopt.Config.ZOMBIE_MODEL_ADD_BURST_US) : pzopt.Config.ZOMBIE_MODEL_ADD_BUDGET_US) * 1000L // pzopt: past the frame's budget (burstGovernor: a heavy step's smaller one)
+                     || pzoptAdds == 0 && pzopt.Pacing.heavyAddHold()) { // pzopt: zombieModelAddHeavyEvery (f9-burst), a heavy step that adds none
                   z.setSceneCulled(true); // pzopt: stays a flat sprite this frame, as past the cap below
                   if (z.hasAnimationPlayer()) { // pzopt
                      z.getAnimationPlayer().doBlending = false; // pzopt
@@ -2702,7 +2712,10 @@ public final class IsoWorld {
             if (!z.ghost) {
                count++;
                tcount++;
+               if (pzopt.ZombieLod.active()) pzopt.ZombieLod.won(z); // pzopt: zombieLodFadeMs, a zombie getting its model back fades it in
+               else if (pzoptSightOnly) pzopt.ZombieLod.sightFade(z); // pzopt: zombieFirstSightSprite without the LOD, its model's fade-in over the sprite
                z.setSceneCulled(false);
+               if (pzoptSight) pzopt.FirstSight.won(z, tcount); // pzopt: zombieFirstSightSprite, its place in the nearest-first order of first composites
                if (z.legsSprite != null && z.legsSprite.modelSlot != null) {
                   if (count > PerformanceSettings.zombieAnimationSpeedFalloffCount) {
                      c++;
@@ -2728,7 +2741,14 @@ public final class IsoWorld {
                   }
                }
             }
+         } else if (pzopt.ZombieLod.active() && !pzopt.FirstSight.waiting(z) && pzopt.ZombieLod.keepFading(z)) { // pzopt: zombieLodFadeMs, the model stays while it fades out over the sprite (zombieFirstSightSprite: not a model that never drew, it is the sprite already)
+            z.setSceneCulled(false); // pzopt
+            if (z.hasAnimationPlayer()) { // pzopt
+               z.getAnimationPlayer().doBlending = false; // pzopt
+            } // pzopt
          } else {
+            if (pzopt.ZombieLod.active()) pzopt.ZombieLod.lost(z); // pzopt: zombieLodFadeMs, no fade (or done)
+            else if (pzoptSightOnly) pzopt.ZombieLod.endFade(z); // pzopt: zombieFirstSightSprite without the LOD, no fade-out (stock pops past the 510 nearest)
             z.setSceneCulled(true);
             if (z.hasAnimationPlayer()) {
                z.getAnimationPlayer().doBlending = false;
@@ -2741,6 +2761,8 @@ public final class IsoWorld {
          if (z.hasActiveModel()) {
             z.setSceneCulled(true);
          }
+
+         if (pzoptSightOnly) pzopt.ZombieLod.endFade(z); // pzopt: zombieFirstSightSprite without the LOD, a zombie off the model list drops its crossfade
 
          if (z.hasAnimationPlayer()) {
             z.getAnimationPlayer().doBlending = false;
@@ -2870,6 +2892,7 @@ public final class IsoWorld {
                WeatherFxMask.initMask();
                pzopt.GpuSections.begin("atlas"); // pzopt: GPU section
                long pzoptAtlasT = pzopt.GtAb.begin(); // pzopt: devGtAlternate section timer
+               pzopt.BodyAtlasPrewarm.tick(); // pzopt: bodyAtlasPrewarm, the generic zombie bodies requested before the horde's first sight
                DeadBodyAtlas.instance.render();
                WorldItemAtlas.instance.render();
                pzopt.GtAb.end(pzopt.GtAb.S_ATLAS, pzoptAtlasT); // pzopt
@@ -2929,7 +2952,9 @@ public final class IsoWorld {
                var18 = profiler.profile("renderWeatherFX");
 
                try {
+                  long pzoptWfxT = pzopt.GtAb.begin(); // pzopt: devGtAlternate section timer
                   this.renderWeatherFX();
+                  pzopt.GtAb.end(pzopt.GtAb.S_WEATHER, pzoptWfxT); // pzopt
                } catch (Throwable var12) {
                   if (var18 != null) {
                      try {
@@ -3185,7 +3210,7 @@ public final class IsoWorld {
    }
 
    public void FinishAnimation() {
-      pzopt.AnimBatch.join(); // pzopt: animBatchAsync, the zombies' bone batch started at the end of the postupdate loop
+      pzopt.ZombieLate.finishAnimation(); // pzopt: animBatchAsync's join of the bone batch; zombieLateApply's held apply first, zombieDrawLate leaves the bones in flight (f8-zomb3)
       if (animationThread != null) {
          ProfileArea var1 = GameProfiler.getInstance().profile("Wait Animation");
 

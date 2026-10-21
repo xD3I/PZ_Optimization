@@ -280,6 +280,7 @@ public final class UIManager {
             uiRenderTimeMS = currentTimeMS;
             UIElement.stencilLevel = 0;
             pzopt.UiProfile.renderBegin(); // pzopt: uiProfile, UI frame timing
+            pzopt.UiRetained.uiRenderBegin(); // pzopt: uiSlack, the UI frame's own time
             IndieGL.enableBlend();
             if (useUiFbo) {
                SpriteRenderer.instance.setDefaultStyle(UIFBOStyle.instance);
@@ -362,7 +363,7 @@ public final class UIManager {
                            if (pzopt.UiRetained.replay(element)) { // pzopt: uiRetained
                               pzopt.UiProfile.elementReplayed(element, System.nanoTime() - pzoptT0); // pzopt: uiProfile
                            } else { // pzopt: uiRetained
-                              int pzoptFrom = pzopt.UiRetained.freshBegin(); // pzopt: uiRetained
+                              int pzoptFrom = pzopt.UiRetained.freshBegin(element); // pzopt: uiRetained
                               pzopt.UiProfile.elementBegin(); // pzopt: uiProfile, per top-level element
                               long pzoptT1 = System.nanoTime(); // pzopt: uiRetained
                               element.render();
@@ -428,6 +429,7 @@ public final class UIManager {
             }
 
             pzopt.UiProfile.renderEnd(); // pzopt: uiProfile
+            pzopt.UiRetained.uiRenderEnd(); // pzopt: uiSlack
          }
       }
    }

@@ -48,8 +48,8 @@ public class ModelInstance extends ReferencedObject {
    // game thread, so its two static scratch colours become thread-local, and the stamp of the frame and player it last
    // ran for lets the game thread's own call in renderActiveModel skip the second run (the smoothing steps would
    // otherwise advance twice per frame).
-   private static final ThreadLocal<ColorInfo[]> pzoptScratch = ThreadLocal.withInitial(() -> new ColorInfo[]{new ColorInfo(), new ColorInfo()});
-   private static final ThreadLocal<zombie.core.Color[]> pzoptColorScratch = ThreadLocal.withInitial(() -> {
+   private static final pzopt.Tl<ColorInfo[]> pzoptScratch = new pzopt.Tl<>(() -> new ColorInfo[]{new ColorInfo(), new ColorInfo()}); // pzopt: pzopt.Tl (zombie redesign, f8-zomb2)
+   private static final pzopt.Tl<zombie.core.Color[]> pzoptColorScratch = new pzopt.Tl<>(() -> { // pzopt: pzopt.Tl (zombie redesign, f8-zomb2)
       zombie.core.Color[] c = new zombie.core.Color[7];
       for (int i = 0; i < c.length; i++) {
          c[i] = new zombie.core.Color();

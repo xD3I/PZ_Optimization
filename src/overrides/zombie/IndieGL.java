@@ -83,13 +83,13 @@ public final class IndieGL {
    } // pzopt
 
    public static void glBlendFunc(int a, int b) {
-      if (SpriteRenderer.glBlendfuncEnabled) {
+      if (pzopt.DrawRecorder.blendEnabled()) { // pzopt: tileRecordWeather, a weather-mask recorder keeps its own flag
          GLState.BlendFuncSeparate.set((pzoptT() == null ? temp4Ints : pzoptT().temp4Ints).set(a, b, a, b)); // pzopt: tileRecordParallel, a recording thread uses its own temps
       }
    }
 
    public static void glBlendFuncSeparate(int a, int b, int c, int d) {
-      if (SpriteRenderer.glBlendfuncEnabled) {
+      if (pzopt.DrawRecorder.blendEnabled()) { // pzopt: tileRecordWeather, a weather-mask recorder keeps its own flag
          GLState.BlendFuncSeparate.set((pzoptT() == null ? temp4Ints : pzoptT().temp4Ints).set(a, b, c, d)); // pzopt: tileRecordParallel, a recording thread uses its own temps
       }
    }
@@ -360,7 +360,7 @@ public final class IndieGL {
    }
 
    public static void glAlphaFunc(int a, float b) {
-      if (SpriteRenderer.glBlendfuncEnabled) {
+      if (pzopt.DrawRecorder.blendEnabled()) { // pzopt: tileRecordWeather, a weather-mask recorder keeps its own flag
          GLState.AlphaFunc.set((pzoptT() == null ? tempIntFloat : pzoptT().tempIntFloat).set(a, b)); // pzopt: tileRecordParallel, a recording thread uses its own temps
       }
    }

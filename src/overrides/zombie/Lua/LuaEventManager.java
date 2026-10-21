@@ -224,6 +224,14 @@ public final class LuaEventManager implements JavaFunction {
       qe.a.clear();
    }
 
+   /** pzopt: luaSilentSkip (zombie redesign, f8-zomb2), game thread: whether any Lua function listens to this event now. */
+   public static boolean pzoptHasListeners(String event) { // pzopt
+      synchronized (EventMap) { // pzopt
+         Event e = EventMap.get(event); // pzopt
+         return e != null && !e.callbacks.isEmpty(); // pzopt
+      } // pzopt
+   } // pzopt
+
    private static Event checkEvent(String event) {
       Event e = EventMap.get(event);
       if (e == null) {

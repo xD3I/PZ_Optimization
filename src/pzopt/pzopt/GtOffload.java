@@ -6,6 +6,6 @@ public final class GtOffload {
    }
 
    public static String describe() {
-      return RenderPrep.describe() + " | " + PixelLight.packDescribe() + " | " + SchedulerClassify.describe() + " | " + ZombieStats.describe() + " | " + LosPrefetch.describe() + " | " + VisPolyAsync.describe() + " | aoMasks batches=" + ChunkAo.maskBatches + " jobs=" + ChunkAo.maskJobs + " | " + TranslucentOrder.describe();
+      return RenderPrep.describe() + " | " + PixelLight.packDescribe() + " | " + SchedulerClassify.describe() + " | " + PlayerLosBatch.describe() + " | " + ZombieStats.describe() + " | " + LosPrefetch.describe() + " | " + VisPolyAsync.describe() + " | aoMasks batches=" + ChunkAo.maskBatches + " jobs=" + ChunkAo.maskJobs + " | " + TranslucentOrder.describe();
    }
 }

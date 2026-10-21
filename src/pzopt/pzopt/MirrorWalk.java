@@ -144,6 +144,14 @@ final class MirrorWalk {
                         info = Mirrors.mirrorTileInfo(spr);
                      }
                   }
+                  if (info == null && o.getSprite() != null) {
+                     // a prop mirror (the gym's recreational_sports_01_76..79, 2026-10-16): no IsMirror, reflects through pzopt.Props
+                     float[] pi = Props.info(o.getSprite());
+                     if (pi != null && (int)pi[0] == Props.MIRROR && pi[3] >= 0F) {
+                        spr = o.getSprite();
+                        info = new float[] {pi[3], pi[4], pi[1]};
+                     }
+                  }
                   if (info == null) {
                      // a mirror the camera sees the back of (Facing N / W) or without a glass mask: listed, not walked to
                      if (spr != null && spr.getProperties() != null && spr.getProperties().has("IsMirror")) {
@@ -195,6 +203,27 @@ final class MirrorWalk {
          M keep = mirrors.get(only - 1);
          mirrors.clear();
          mirrors.add(keep);
+      }
+      // mirror_pick=a,b,... (2026-10-16, the gym mirror on leaving its room): these mirrors of the walking order (1-based,
+      // repeats allowed) in this order, each visit with fresh stations; 1,4,1 leaves a room for the next one and comes back
+      String pick = HarnessFlags.get("mirror_pick", "").trim();
+      if (!pick.isEmpty() && only <= 0) {
+         ArrayList<M> order = new ArrayList<>(mirrors), seq = new ArrayList<>();
+         for (String s : pick.split(",")) {
+            int k = Integer.parseInt(s.trim());
+            if (k < 1 || k > order.size()) continue;
+            M o = order.get(k - 1), m = new M();
+            m.x = o.x;
+            m.y = o.y;
+            m.z = o.z;
+            m.north = o.north;
+            m.off = o.off;
+            m.name = o.name;
+            stations(cell, m);
+            seq.add(m);
+         }
+         mirrors.clear();
+         mirrors.addAll(seq);
       }
       // mirror_laps=N (2026-10-08, the four-corner room): the mirrors walked N times, every other pass in the reverse order
       // (back and forth across the room), each pass with fresh stations and checks

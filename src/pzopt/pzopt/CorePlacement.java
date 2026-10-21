@@ -48,6 +48,15 @@ public final class CorePlacement {
    private static final boolean MAC = System.getProperty("os.name", "").toLowerCase(Locale.ROOT).contains("mac");
 
    private static final int CLASS_CRITICAL = 0, CLASS_PAUSE = 1, CLASS_BACKGROUND = 2;
+   private static final int CLASS_GAME = 3, CLASS_FRAME = 4; // coreGameCpus / coreFrameCpus (f8-flip): only used when those keys are set
+
+   // f8-flip: coreFrameCpus (the frame workers' own mask), coreGameCpus (the game thread's own mask) and coreGameExclusive
+   // (exclMask = the game CPUs and their SMT siblings, removed from every other class's mask); null = not set
+   private static long[] frameMask, gameMask, exclMask;
+   /** coreFrameCpus listed in a devGtAlternate group: the frame workers alternate between coreFrameCpus and the background class. */
+   private static final boolean FRAME_ALT = !Config.CORE_FRAME_CPUS.isBlank() && ZombAb.listed(ZombAb.CORE_FRAME);
+   private static volatile boolean frameOn = true; // the alternation's half (game thread writes, at a flip)
+   private static volatile int frameGen; // bumped at each flip; a frame worker re-applies its own mask when it sees a new one
 
    /** CPU masks (bit per logical CPU, up to 1024). */
    private static long[] fastMask, slowMask, allMask, backgroundMask, criticalFastMask;
@@ -123,6 +132,13 @@ public final class CorePlacement {
       stepCount = n + 1;
       loading = !inWorld;
       uncapped = isUncapped;
+      if (FRAME_ALT) { // f8-flip: coreFrameCpus within-run A/B, flipped with the alternation's phase
+         boolean on = ZombAb.on(ZombAb.CORE_FRAME);
+         if (on != frameOn) {
+            frameOn = on;
+            frameGen++;
+         }
+      }
       budgetNs = 1_000_000_000L / Math.max(1, capFps);
    }
 
@@ -143,6 +159,40 @@ public final class CorePlacement {
       }
    }
 
+   /**
+    * f11-mac (2026-10-16): QoS class of the frame-critical pools (frame workers, CharDraw, VisPolyAsync), whose batches the
+    * game thread joins every frame. Utility (the old background() class) loses its cores to any default-QoS load on macOS
+    * (a VM, a build, Spotlight): with ~3.7 cores of outside load the game thread waited at the joins and the optimized
+    * build fell ~25 % while stock lost nothing (35 fps vs 55 at user-initiated, the quiet level).
+    */
+   private static final int WORKER_QOS = switch (Config.WORKER_QOS_MAC.toLowerCase(Locale.ROOT)) {
+      case "user-interactive", "interactive" -> 0x21; // QOS_CLASS_USER_INTERACTIVE
+      case "utility" -> 0x11; // QOS_CLASS_UTILITY
+      case "default" -> 0x15; // QOS_CLASS_DEFAULT
+      default -> 0x19; // QOS_CLASS_USER_INITIATED
+   };
+   private static final boolean WORKER_QOS_ALT = MAC && ZombAb.listed(ZombAb.WORKER_QOS);
+   private static final ThreadLocal<int[]> workerQos = ThreadLocal.withInitial(() -> new int[] {-1});
+
+   /**
+    * A frame-critical pool thread, at its start and before each batch it runs: its macOS QoS class ({@code workerQosMac}; the
+    * off half of a {@code workerQosMac} alternation uses utility). One thread-local read when nothing changed; no-op elsewhere.
+    */
+   public static void frameCritical() {
+      if (!MAC) {
+         return;
+      }
+      int cls = WORKER_QOS_ALT && !ZombAb.on(ZombAb.WORKER_QOS) ? 0x11 : WORKER_QOS;
+      int[] cur = workerQos.get();
+      if (cur[0] != cls) {
+         cur[0] = cls;
+         qos(cls);
+      }
+   }
+
+   private static final java.util.concurrent.atomic.AtomicInteger qosOk = new java.util.concurrent.atomic.AtomicInteger();
+   private static final java.util.concurrent.atomic.AtomicInteger qosFailed = new java.util.concurrent.atomic.AtomicInteger();
+
    private static boolean qos(int cls) {
       if (!MAC || MODE.equals("off") || !Overrides.enabled()) {
          return false;
@@ -153,8 +203,11 @@ public final class CorePlacement {
             qosSelf = l.downcallHandle(l.defaultLookup().find("pthread_set_qos_class_self_np").orElseThrow(),
                   FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.JAVA_INT, ValueLayout.JAVA_INT));
          }
-         return (int) qosSelf.invokeExact(cls, 0) == 0;
+         boolean ok = (int) qosSelf.invokeExact(cls, 0) == 0;
+         (ok ? qosOk : qosFailed).incrementAndGet(); // f11-mac: describe() shows whether macOS took the classes
+         return ok;
       } catch (Throwable t) {
+         qosFailed.incrementAndGet();
          return false;
       }
    }
@@ -178,7 +231,7 @@ public final class CorePlacement {
             Log.warn("corePlacement: render thread QoS not set (" + t + ")");
          }
          broken = true; // nothing else to run on macOS: the pools call background() themselves
-         Log.info("corePlacement: macOS QoS classes (game / render threads user-interactive, pools utility)");
+         Log.info("corePlacement: macOS QoS classes (game / render threads user-interactive, frame-critical pools " + Config.WORKER_QOS_MAC + ", other pools utility)");
          return;
       }
       if (!LINUX) {
@@ -318,6 +371,59 @@ public final class CorePlacement {
          backgroundMask = m;
          slowList = slowList + " (background on " + Config.CORE_BACKGROUND_CPUS + ")";
       }
+      if (!Config.CORE_FRAME_CPUS.isBlank()) { // f8-flip
+         frameMask = parseMask(Config.CORE_FRAME_CPUS, words, rank, max);
+         slowList = slowList + " (frame workers on " + Config.CORE_FRAME_CPUS + (FRAME_ALT ? ", alternating" : "") + ")";
+      }
+      if (!Config.CORE_GAME_CPUS.isBlank()) { // f8-flip
+         gameMask = parseMask(Config.CORE_GAME_CPUS, words, rank, max);
+         fastList = fastList + " (game thread on " + Config.CORE_GAME_CPUS + ")";
+         if (Config.CORE_GAME_EXCLUSIVE) {
+            long[] x = gameMask.clone();
+            for (int i = 0; i <= max; i++) {
+               if ((gameMask[i >> 6] & 1L << (i & 63)) != 0L) {
+                  for (int sib : readList("/sys/devices/system/cpu/cpu" + i + "/topology/thread_siblings_list")) {
+                     if (sib <= max) {
+                        x[sib >> 6] |= 1L << (sib & 63);
+                     }
+                  }
+               }
+            }
+            exclMask = x;
+            fastList = fastList + " (exclusive with its siblings)";
+         }
+      }
+   }
+
+   /** f8-flip: {@code m} without the game thread's reserved CPUs (coreGameExclusive), unless that leaves nothing. */
+   private static long[] excl(long[] m) {
+      long[] x = exclMask;
+      if (x == null || m == null) {
+         return m;
+      }
+      long[] r = new long[m.length];
+      boolean any = false;
+      for (int i = 0; i < m.length; i++) {
+         r[i] = m[i] & ~x[i];
+         any |= r[i] != 0L;
+      }
+      return any ? r : m;
+   }
+
+   /**
+    * f8-flip: a frame worker, before it runs a batch: re-applies its own CPU mask after an alternation flip of coreFrameCpus (the
+    * placement thread's 0.5 s scan would land up to two flips late). One volatile read per wake otherwise.
+    */
+   static void frameWorker(FrameBatch.Worker self) {
+      if (!FRAME_ALT || self.coreGen == frameGen || !active() || loading) {
+         return;
+      }
+      self.coreGen = frameGen;
+      try {
+         setAffinity(0, maskFor(CLASS_FRAME)); // tid 0 = the calling thread
+      } catch (Throwable t) {
+         // the scan applies it within half a second
+      }
    }
 
    /**
@@ -368,12 +474,31 @@ public final class CorePlacement {
       slowList = compact(s);
       criticalFastMask = fastMask;
       backgroundMask = slowMask;
+      isoCritical = fastMask; // f8-resid: the isolated masks, kept for the in-run A/B (GtAb coreIsolate)
+      isoBackground = slowMask;
       ratio = 1.0F;
       isolate = true;
       hybrid = true;
    }
 
    private static boolean isolate;
+   /** f8-resid: coreIsolate's own masks; with GtAb's coreIsolate listed the off phase puts every thread on every CPU. */
+   private static long[] isoCritical, isoBackground;
+   private static boolean isoAbOn = true;
+   public static long isoAbSwitches;
+
+   /** f8-resid: in-run A/B of coreIsolate (devGtAlternateKeys=coreIsolate): poll the phase, swap the masks on a change. */
+   private static void isoAbPoll() throws Throwable {
+      boolean on = GtAb.on(GtAb.CORE_ISOLATE) || loading;
+      if (on == isoAbOn) {
+         return;
+      }
+      isoAbOn = on;
+      criticalFastMask = on ? isoCritical : allMask;
+      backgroundMask = on ? isoBackground : allMask;
+      isoAbSwitches++;
+      scan(true);
+   }
 
    private static long[] parseMask(String spec, int words, long[] rank, int max) {
       long[] m = new long[words];
@@ -462,7 +587,15 @@ public final class CorePlacement {
       boolean wasFast = criticalFast;
       while (true) {
          try {
-            Thread.sleep(250);
+            if (isolate && isoCritical != null && GtAb.listed(GtAb.CORE_ISOLATE)) { // f8-resid: poll the A/B phase every 5 ms
+               long until = System.nanoTime() + 250_000_000L;
+               while (System.nanoTime() < until) {
+                  Thread.sleep(5);
+                  isoAbPoll();
+               }
+            } else {
+               Thread.sleep(250);
+            }
             long now = System.nanoTime();
             long wall = now - lastWall;
             lastWall = now;
@@ -621,8 +754,14 @@ public final class CorePlacement {
    }
 
    private static int classify(int tid, String comm) {
+      if (tid == gameTid && gameMask != null) {
+         return CLASS_GAME; // f8-flip: coreGameCpus
+      }
       if (tid == gameTid || tid == renderTid) {
          return CLASS_CRITICAL;
+      }
+      if (frameMask != null && comm.startsWith("pzopt-frame-")) {
+         return CLASS_FRAME; // f8-flip: coreFrameCpus
       }
       // Mesa's threads that carry the render thread's GL commands: <process>:gl0 (glthread), :gdrv0, :cs0
       int colon = comm.lastIndexOf(':');
@@ -643,9 +782,11 @@ public final class CorePlacement {
          return allMask;
       }
       return switch (cls) {
-         case CLASS_CRITICAL -> criticalFast ? criticalFastMask : slowMask;
+         case CLASS_GAME -> criticalFast ? gameMask : slowMask; // f8-flip: coreGameCpus
+         case CLASS_CRITICAL -> excl(criticalFast ? criticalFastMask : slowMask);
          case CLASS_PAUSE -> allMask;
-         default -> wide ? allMask : backgroundMask;
+         case CLASS_FRAME -> excl(!FRAME_ALT || frameOn ? frameMask : wide ? allMask : backgroundMask); // f8-flip: coreFrameCpus
+         default -> excl(wide ? allMask : backgroundMask);
       };
    }
 
@@ -661,10 +802,14 @@ public final class CorePlacement {
 
    /** One line for the periodic FBORenderCell log and the harness summary. */
    public static String describe() {
+      if (MAC) {
+         return "cores=" + MODE + " macos_qos worker=" + Config.WORKER_QOS_MAC + (WORKER_QOS_ALT ? "/utility-alternating" : "")
+               + " qos_ok=" + qosOk.get() + " qos_failed=" + qosFailed.get();
+      }
       if (!active()) {
          return "cores=" + MODE + " (inactive)";
       }
       return "cores=" + MODE + " critical=" + (criticalFast ? "fast" : "efficient") + " fast_ms=" + fastMs + " slow_ms=" + slowMs
-            + " promotions=" + promotions + " demotions=" + demotions + " wide_ms=" + wideMs + String.format(Locale.ROOT, " ratio=%.2f", ratio);
+            + " promotions=" + promotions + " demotions=" + demotions + " wide_ms=" + wideMs + " iso_ab_switches=" + isoAbSwitches + String.format(Locale.ROOT, " ratio=%.2f", ratio);
    }
 }

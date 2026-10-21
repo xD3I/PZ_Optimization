@@ -75,6 +75,9 @@ public final class Uninstall {
          boolean aot = AotCache.resetLauncher(dir);
          boolean gc = GcChoice.undo(dir);
          Plan plan = plan(dir);
+         // a benchmark mid-run would resume at the next install (its plan lives in Zomboid/pzopt, not in the game folder) and no
+         // pzopt process follows an uninstall to put the player's files back: end it here (Workshop 2026-10-18)
+         BenchPlan.abortRunning("PZ Optimization uninstalled");
          Path base = Updater.cacheFile().getParent();
          Files.createDirectories(base);
          Path files = base.resolve(FILES_NAME);

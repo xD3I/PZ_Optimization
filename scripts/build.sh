@@ -25,7 +25,7 @@ RELEASE="${RELEASE:-25}"   # java.class.version 69 in the shipped jar
 # The edited decompiled copies live in src/overrides/ (not committed); the two org.lwjglx classes are
 # The Indie Stone's LWJGL 2 compatibility shim (HiDPI/Wayland fix, see docs/override-edits.md);
 # TISLogoState is a from-scratch replacement in src/shims/ (committed).
-OVERRIDES=(zombie/network/statistics/data/PerformanceStatistic zombie/core/skinnedmodel/animation/AnimationMultiTrack zombie/core/skinnedmodel/animation/AnimationTrack zombie/iso/IsoChunk zombie/iso/WorldStreamer zombie/iso/ChunkSaveWorker zombie/core/VBO/GLVertexBufferObject zombie/iso/fboRenderChunk/FBORenderCell zombie/GameWindow zombie/gameStates/TISLogoState org/lwjglx/opengl/Display org/lwjglx/input/Mouse zombie/fileSystem/FileSystemImpl zombie/tileDepth/TileDepthTextures zombie/core/textures/TextureIDAssetManager zombie/MapCollisionData zombie/iso/IsoMetaGrid zombie/scripting/ScriptParser zombie/iso/IsoMetaCell zombie/buildingRooms/BuildingRoomsEditor zombie/gameStates/GameLoadingState se/krka/kahlua/luaj/compiler/LuaCompiler zombie/core/skinnedmodel/advancedanimation/AnimationSet zombie/core/skinnedmodel/model/AnimationAssetManager zombie/fileSystem/TexturePackDevice zombie/scripting/objects/Item zombie/core/PerformanceSettings zombie/core/skinnedmodel/model/Model zombie/core/textures/ImageData zombie/iso/weather/fx/WeatherFxMask zombie/iso/objects/IsoLightSwitch se/krka/kahlua/j2se/KahluaTableImpl zombie/core/opengl/RenderThread zombie/iso/fboRenderChunk/FBORenderCutaways zombie/audio/parameters/ParameterZone zombie/iso/IsoChunkMap zombie/core/opengl/VBORenderer zombie/iso/IsoPuddles zombie/iso/weather/fx/ParticleRectangle zombie/iso/weather/fx/WeatherParticleDrawer zombie/iso/LightingJNI zombie/iso/weather/fog/ImprovedFog zombie/iso/weather/fog/ImprovedFogDrawer zombie/core/textures/MultiTextureFBO2 zombie/network/NetChecksum zombie/WorldSoundManager zombie/iso/FishSchoolManager zombie/characters/IsoZombie zombie/ai/State zombie/GameProfiler zombie/core/skinnedmodel/animation/AnimationPlayer zombie/MovingObjectUpdateScheduler zombie/characters/IsoPlayer zombie/characters/ecs/ECSComponent zombie/characters/ecs/ECSEntity zombie/characters/action/conditions/CharacterVariableCondition zombie/core/skinnedmodel/advancedanimation/AnimatedModel zombie/characters/IsoGameCharacter zombie/characters/action/ActionContext zombie/iso/IsoWorld zombie/core/textures/TextureDraw zombie/core/skinnedmodel/model/ModelInstance zombie/iso/IsoCamera zombie/iso/weather/WeatherShader zombie/iso/WaterShader zombie/iso/PuddlesShader zombie/core/skinnedmodel/ModelManager zombie/savefile/SavefileThumbnail zombie/gameStates/MainScreenState zombie/popman/ZombiePopulationManager zombie/core/properties/PropertyContainer zombie/core/textures/PNGDecoder zombie/tileDepth/TileDepthTexture zombie/iso/zones/Zone zombie/AmbientStreamManager zombie/Lua/Event zombie/vispoly/VisibilityPolygon2 zombie/iso/sprite/IsoCursor zombie/input/GameKeyboard zombie/input/KeyboardStateCache zombie/input/KeyboardState zombie/input/MouseStateCache zombie/input/MouseState zombie/input/ControllerStateCache zombie/input/Mouse zombie/pathfind/PolygonalMap2 zombie/core/opengl/ShaderUnit fmod/fmod/FMODSoundEmitter zombie/audio/ObjectAmbientEmitters zombie/audio/FMODAmbientWalls zombie/FliesSound zombie/core/opengl/ShaderUniformSetter zombie/core/skinnedmodel/DeadBodyAtlas zombie/core/textures/TextureID zombie/core/textures/TextureFBO zombie/iso/RoomDef zombie/randomizedWorld/randomizedBuilding/RBTrashed zombie/viewCone/ChunkRenderShader zombie/iso/fboRenderChunk/FBORenderTrees zombie/core/physics/WorldSimulation zombie/iso/PlayerCamera zombie/characters/animals/IsoAnimal zombie/audio/parameters/ParameterShoeType zombie/MovingObjectUpdateSchedulerUpdateBucket zombie/iso/IsoMovingObject zombie/ai/ZombieGroupManager zombie/Lua/LuaEventManager zombie/characters/AttachedItems/AttachedItems zombie/pathfind/PathFindBehavior2 zombie/GameTime zombie/util/FrameDelay zombie/ai/states/WalkTowardState zombie/statistics/StatisticsManager zombie/iso/fboRenderChunk/FBORenderShadows zombie/ui/UIManager zombie/worldMap/streets/WorldMapStreet zombie/worldMap/streets/WorldMapStreets zombie/worldMap/streets/StreetRenderData zombie/ui/UIElement zombie/worldMap/WorldMapVisited zombie/characters/Stats zombie/ai/StateMachine zombie/LoadGridsquarePerformanceWorkaround zombie/iso/worldgen/WorldGenUtils se/krka/kahlua/integration/LuaCaller zombie/VirtualZombieManager zombie/core/sprite/SpriteRendererStates zombie/core/opengl/IOpenGLState zombie/IndieGL zombie/iso/IsoObject zombie/iso/sprite/IsoSprite zombie/iso/IsoGridSquare zombie/core/SpriteRenderer)
+OVERRIDES=(zombie/network/statistics/data/PerformanceStatistic zombie/core/skinnedmodel/animation/AnimationMultiTrack zombie/core/skinnedmodel/animation/AnimationTrack zombie/iso/IsoChunk zombie/iso/WorldStreamer zombie/iso/ChunkSaveWorker zombie/core/VBO/GLVertexBufferObject zombie/iso/fboRenderChunk/FBORenderCell zombie/GameWindow zombie/gameStates/TISLogoState org/lwjglx/opengl/Display org/lwjglx/input/Mouse zombie/fileSystem/FileSystemImpl zombie/tileDepth/TileDepthTextures zombie/core/textures/TextureIDAssetManager zombie/MapCollisionData zombie/iso/IsoMetaGrid zombie/scripting/ScriptParser zombie/iso/IsoMetaCell zombie/buildingRooms/BuildingRoomsEditor zombie/gameStates/GameLoadingState se/krka/kahlua/luaj/compiler/LuaCompiler zombie/core/skinnedmodel/advancedanimation/AnimationSet zombie/core/skinnedmodel/model/AnimationAssetManager zombie/fileSystem/TexturePackDevice zombie/scripting/objects/Item zombie/core/PerformanceSettings zombie/core/skinnedmodel/model/Model zombie/core/textures/ImageData zombie/iso/weather/fx/WeatherFxMask zombie/iso/objects/IsoLightSwitch se/krka/kahlua/j2se/KahluaTableImpl zombie/core/opengl/RenderThread zombie/iso/fboRenderChunk/FBORenderCutaways zombie/audio/parameters/ParameterZone zombie/iso/IsoChunkMap zombie/core/opengl/VBORenderer zombie/iso/IsoPuddles zombie/iso/weather/fx/ParticleRectangle zombie/iso/weather/fx/WeatherParticleDrawer zombie/iso/LightingJNI zombie/iso/weather/fog/ImprovedFog zombie/iso/weather/fog/ImprovedFogDrawer zombie/core/textures/MultiTextureFBO2 zombie/network/NetChecksum zombie/WorldSoundManager zombie/iso/FishSchoolManager zombie/characters/IsoZombie zombie/ai/State zombie/GameProfiler zombie/core/skinnedmodel/animation/AnimationPlayer zombie/MovingObjectUpdateScheduler zombie/characters/IsoPlayer zombie/characters/ecs/ECSComponent zombie/characters/ecs/ECSEntity zombie/characters/action/conditions/CharacterVariableCondition zombie/core/skinnedmodel/advancedanimation/AnimatedModel zombie/characters/IsoGameCharacter zombie/characters/action/ActionContext zombie/iso/IsoWorld zombie/core/textures/TextureDraw zombie/core/skinnedmodel/model/ModelInstance zombie/iso/IsoCamera zombie/iso/weather/WeatherShader zombie/iso/WaterShader zombie/iso/PuddlesShader zombie/core/skinnedmodel/ModelManager zombie/savefile/SavefileThumbnail zombie/gameStates/MainScreenState zombie/popman/ZombiePopulationManager zombie/core/properties/PropertyContainer zombie/core/textures/PNGDecoder zombie/tileDepth/TileDepthTexture zombie/iso/zones/Zone zombie/AmbientStreamManager zombie/Lua/Event zombie/vispoly/VisibilityPolygon2 zombie/iso/sprite/IsoCursor zombie/input/GameKeyboard zombie/input/KeyboardStateCache zombie/input/KeyboardState zombie/input/MouseStateCache zombie/input/MouseState zombie/input/ControllerStateCache zombie/input/Mouse zombie/pathfind/PolygonalMap2 zombie/core/opengl/ShaderUnit fmod/fmod/FMODSoundEmitter zombie/audio/ObjectAmbientEmitters zombie/audio/FMODAmbientWalls zombie/FliesSound zombie/core/opengl/ShaderUniformSetter zombie/core/skinnedmodel/DeadBodyAtlas zombie/core/textures/TextureID zombie/core/textures/TextureFBO zombie/iso/RoomDef zombie/randomizedWorld/randomizedBuilding/RBTrashed zombie/viewCone/ChunkRenderShader zombie/iso/fboRenderChunk/FBORenderTrees zombie/core/physics/WorldSimulation zombie/iso/PlayerCamera zombie/characters/animals/IsoAnimal zombie/audio/parameters/ParameterShoeType zombie/MovingObjectUpdateSchedulerUpdateBucket zombie/iso/IsoMovingObject zombie/ai/ZombieGroupManager zombie/Lua/LuaEventManager zombie/characters/AttachedItems/AttachedItems zombie/pathfind/PathFindBehavior2 zombie/GameTime zombie/util/FrameDelay zombie/ai/states/WalkTowardState zombie/statistics/StatisticsManager zombie/iso/fboRenderChunk/FBORenderShadows zombie/ui/UIManager zombie/worldMap/streets/WorldMapStreet zombie/worldMap/streets/WorldMapStreets zombie/worldMap/streets/StreetRenderData zombie/ui/UIElement zombie/worldMap/WorldMapVisited zombie/characters/Stats zombie/ai/StateMachine zombie/LoadGridsquarePerformanceWorkaround zombie/iso/worldgen/WorldGenUtils se/krka/kahlua/integration/LuaCaller zombie/VirtualZombieManager zombie/core/sprite/SpriteRendererStates zombie/core/opengl/IOpenGLState zombie/IndieGL zombie/iso/IsoObject zombie/iso/sprite/IsoSprite zombie/iso/IsoGridSquare zombie/core/SpriteRenderer zombie/characters/SurvivorDesc se/krka/kahlua/integration/expose/caller/MethodCaller zombie/core/skinnedmodel/model/IsoObjectModelDrawer zombie/core/textures/TextureCombiner zombie/core/skinnedmodel/model/ModelSlotRenderData zombie/FileGuidTable zombie/core/skinnedmodel/advancedanimation/AnimationVariableHandlePool)
 
 [[ -f "$JAR" ]] || { echo "jar not found: $JAR" >&2; exit 1; }
 command -v javac >/dev/null || { echo "javac not on PATH" >&2; exit 1; }
@@ -75,7 +75,7 @@ fi
 # Loose Lua under src/lua/ ships next to the classes: install copies build/classes/ onto the
 # game dir, so build/classes/media/lua/client/pzopt/*.lua lands in media/lua/client/pzopt/.
 if [[ -d "$SRC/lua" ]]; then
-  # the Optimizations tab's search index of which Java classes read each Config key
+  # the PZ OPTIMIZATION screen's search index of which Java classes read each Config key
   python3 "$REPO/scripts/option-classes.py"
   # ...and the release date of each key (the "Release date" sort), from the release tags
   python3 "$REPO/scripts/option-dates.py"
@@ -87,7 +87,7 @@ if [[ -d "$SRC/lua" ]]; then
   java -cp "$JAR" "$REPO/scripts/LuaDebugCompile.java" "${lua_files[@]}" \
     || { echo "LUA DEBUG COMPILE FAILED: split the function named above (scripts/LuaDebugCompile.java)" >&2; exit 1; }
 fi
-# Other loose media (src/media/ui/pzopt/compare/*.gif: the Optimizations tab's stock-vs-optimized clips,
+# Other loose media (src/media/ui/pzopt/compare/*.gif: the PZ OPTIMIZATION screen's stock-vs-optimized clips,
 # harness/menu-gifs.py) lands under the game dir's media/ the same way.
 if [[ -d "$SRC/media" ]]; then
   mkdir -p "$OUT/media"
@@ -179,6 +179,98 @@ open(out + "/pzopt_visibilityBlur.frag", "w").write(screen)
 PY
   cp "$sh/visibilityBlur.vert" "$osh/pzopt_visBlurReduce.vert"
   cp "$sh/visibilityBlur.vert" "$osh/pzopt_visibilityBlur.vert"
+fi
+# Horde model draws for Config.hordeBatch (media/shaders/pzopt_horde.*, 2026-10-13): the installed game's basicEffect
+# character program with every per-draw uniform turned into a global filled from a draw record in a shader storage
+# buffer (and the bone palette read from a second one), so a run of character draws needs one integer uniform each
+# instead of ~25 uniforms and a 60-matrix palette. The main() bodies are the game's, verbatim; the build fails if a
+# uniform appears that the loader does not fill.
+if [[ -f "$sh/basicEffect.vert" && -f "$sh/basicEffect.frag" && -f "$sh/basicEffect_static.vert" ]]; then
+  osh="$OUT/media/shaders"
+  mkdir -p "$osh"
+  python3 - "$sh/basicEffect.vert" "$sh/basicEffect.frag" "$osh" "$sh/basicEffect_static.vert" <<'PY' || { echo "basicEffect shader changed shape; hordeBatch shaders not generated" >&2; exit 1; }
+import re, sys
+vsrc, fsrc, out = open(sys.argv[1]).read(), open(sys.argv[2]).read(), sys.argv[3]
+ssrc = open(sys.argv[4]).read()
+STRUCT = """struct PzoptHordeDraw {
+	mat4 mvp;
+	vec4 tintAlpha;
+	vec4 ambientHue;
+	vec4 uvDepthScale;
+	vec4 misc;
+	ivec4 ibase;
+	vec4 lightDir[5];
+	vec4 lightCol[5];
+};
+layout(std430, binding = 12) readonly buffer PzoptHordeDraws { PzoptHordeDraw pzoptDraws[]; };
+"""
+VFILL = {"ModelViewProjection": "d.mvp", "targetDepth": "d.uvDepthScale.z", "DepthBias": "d.misc.x", "UVScale": "d.uvDepthScale.xy",
+         "HighResDepthMultiplier": "d.misc.y", "FinalScale": "d.uvDepthScale.w"}
+FFILL = {"Alpha": "d.tintAlpha.w", "LightingAmount": "d.misc.z", "TintColour": "d.tintAlpha.xyz", "AmbientColour": "d.ambientHue.xyz",
+         "HueChange": "d.ambientHue.w"}
+for i in range(5):
+    FFILL["Light%dDirection" % i] = "d.lightDir[%d].xyz" % i
+    FFILL["Light%dColour" % i] = "d.lightCol[%d].xyz" % i
+UNI = re.compile(r"^[ \t]*uniform[ \t]+(\w+)[ \t]+(\w+)(\[\d+\])?[ \t]*(=[^;]*)?;.*$", re.M)
+def convert(src, fill, keep, version, header, loadhead):
+    if not src.lstrip().startswith(version[0]):
+        raise SystemExit("version line changed: " + src.splitlines()[0])
+    seen = set()
+    def rep(m):
+        name = m.group(2)
+        if name in keep:
+            return m.group(0)
+        if name == "MatrixPalette":
+            seen.add(name); return "// pzopt: hordeBatch, MatrixPalette from the palette buffer"
+        if name not in fill or m.group(3):
+            raise SystemExit("unexpected uniform " + name)
+        seen.add(name)
+        return "%s %s; // pzopt: hordeBatch, from the draw record" % (m.group(1), name)
+    body = UNI.sub(rep, src)
+    missing = set(fill) - seen
+    if missing:
+        raise SystemExit("uniforms no longer declared: " + ", ".join(sorted(missing)))
+    body = body.replace(version[0], version[1] + "\n" + header, 1)
+    load = "void pzoptLoad()\n{\n\tPzoptHordeDraw d = pzoptDraws[" + loadhead[0] + "];\n" + "".join("\t%s = %s;\n" % (k, v) for k, v in fill.items()) + loadhead[1] + "}\n\n"
+    m = re.search(r"void main\(\)\s*\{", body)
+    if not m:
+        raise SystemExit("no main()")
+    return body[:m.start()] + load + body[m.start():m.end()] + "\n\tpzoptLoad(); // pzopt: hordeBatch" + body[m.end():]
+vhead = STRUCT + "layout(std430, binding = 13) readonly buffer PzoptHordePalette { layout(row_major) mat4 pzoptPalette[]; };\nlayout (location = 15) in int pzoptDrawIndex; // the draw's record: an instanced attribute over 0, 1, 2..., the draw's base instance picks it\nflat out int pzoptDraw;\nint pzoptPaletteBase;\n"
+v = convert(vsrc, VFILL, set(), ("#version 330", "#version 430"), vhead, ("pzoptDrawIndex", "\tpzoptPaletteBase = d.ibase.x;\n\tpzoptDraw = pzoptDrawIndex;\n"))
+if v.count("MatrixPalette[") != 4:
+    raise SystemExit("MatrixPalette indexing changed")
+v = v.replace("MatrixPalette[", "pzoptPalette[pzoptPaletteBase + ")
+fhead = STRUCT + "flat in int pzoptDraw;\n"
+f = convert(fsrc, FFILL, {"Texture"}, ("#version 110", "#version 430 compatibility"), fhead, ("pzoptDraw", ""))
+# the fixed-function alpha test (GREATER 0.01, DrawChar's) as a discard: the driver leaves a 4.30 program's output to it
+# alone (devHordeCheck: fading zombies wrote depth where the stock program's fragments were dropped)
+end = f.rstrip().rfind("}")
+if "gl_FragColor" not in f[f.index("void main()"):]:
+    raise SystemExit("basicEffect.frag no longer writes gl_FragColor")
+f = f[:end] + "\tif (!(gl_FragColor.a > 0.01))\n\t\tdiscard; // pzopt: hordeBatch, the stock draw's alpha test (GL_GREATER 0.01)\n" + f[end:]
+# the static variant (an attached item: one transform instead of the palette; the record's palette base points at it)
+SFILL = dict(VFILL)
+SFILL["transform"] = "pzoptPalette[d.ibase.x]"
+sv = convert(ssrc, SFILL, set(), ("#version 330", "#version 430"), vhead, ("pzoptDrawIndex", "\tpzoptPaletteBase = d.ibase.x;\n\tpzoptDraw = pzoptDrawIndex;\n"))
+open(out + "/pzopt_horde_static.vert", "w").write(sv)
+open(out + "/pzopt_horde.vert", "w").write(v)
+open(out + "/pzopt_horde.frag", "w").write(f)
+# hordeBatchUnits (horde round 2, 2026-10-14): the same programs with the character texture taken from a sampler array,
+# the draw record's unit (ibase.y) picking the element: a batch run binds its textures in chunks of up to 16 units
+# instead of one bind before every draw (the index is dynamically uniform: one record a draw)
+if f.count("uniform sampler2D Texture;") != 1:
+    raise SystemExit("basicEffect.frag's Texture sampler changed")
+fu = f.replace("uniform sampler2D Texture;", "uniform sampler2D pzoptTex[16]; // pzopt: hordeBatchUnits, the run's textures by unit\nint pzoptUnit; // pzopt: hordeBatchUnits, from the draw record\n#define Texture pzoptTex[pzoptUnit]")
+fu = fu.replace("\tPzoptHordeDraw d = pzoptDraws[pzoptDraw];\n", "\tPzoptHordeDraw d = pzoptDraws[pzoptDraw];\n\tpzoptUnit = d.ibase.y;\n", 1)
+if "pzoptUnit = d.ibase.y" not in fu:
+    raise SystemExit("hordeBatchUnits: pzoptLoad not found")
+open(out + "/pzopt_hordeu_static.vert", "w").write(sv)
+open(out + "/pzopt_hordeu.vert", "w").write(v)
+open(out + "/pzopt_hordeu.frag", "w").write(fu)
+PY
+else
+  echo "basicEffect shaders not found next to the jar; the hordeBatch shaders are not generated" >&2
 fi
 
 # Extract the stock copies of the overridden classes for comparison.

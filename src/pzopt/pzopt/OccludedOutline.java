@@ -63,6 +63,11 @@ public final class OccludedOutline {
    private static boolean glChecked, glOk;
    // render thread, between begin and finish of one player's world pass
    private static boolean active;
+
+   /** Whether the outline stencil pass is on this frame (pzopt.HordeBatch keeps such model draws on the stock path). */
+   public static boolean isActive() {
+      return active;
+   }
    private static boolean marked; // an eligible zombie drew a hidden-part pass (or queued its quad) this frame
    private static int drawCode, drawMask, hiddenCode;
    private static float hiddenUnits;

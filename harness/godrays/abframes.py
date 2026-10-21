@@ -3,7 +3,8 @@
 god ray pass on and off every N ms; this splits the in-game overlay's frames (pzopt-overlay.out: frametime, gpu_ms,
 epoch_ms) by phase and compares them (frames within 150 ms of a switch skipped: the render thread lags the game thread).
 
-    abframes.py [--skip S] <run dir> [<run dir>...]   (S: seconds skipped after the alternation starts, default 5)
+    abframes.py [--skip S] [--door] <run dir> [<run dir>...]   (S: seconds skipped after the alternation starts, default 5;
+                --door: the door features' alternation, devGodRaysDoorAlternate, instead of devGodRaysAlternate)
 
 Run-to-run drift (the scene, the clocks, other load) cancels: both halves share the run. The cost is also given as
 the mean of paired differences (each on period against the mean of the off periods on either side of it) with its
@@ -19,13 +20,19 @@ import sys
 def main():
     args = sys.argv[1:]
     skip = 5.0
-    if args and args[0] == "--skip":
-        skip = float(args[1])
-        args = args[2:]
+    door = False
+    while args and args[0] in ("--skip", "--door"):
+        if args[0] == "--skip":
+            skip = float(args[1])
+            args = args[2:]
+        else:
+            door = True
+            args = args[1:]
+    pat = r"god rays: door features alternating every (\d+) ms from epoch_ms (\d+)" if door else r"god rays: alternating every (\d+) ms from epoch_ms (\d+)"
     for run in args:
         per = t0 = None
         for line in open(os.path.join(run, "console.txt"), errors="replace"):
-            m = re.search(r"god rays: alternating every (\d+) ms from epoch_ms (\d+)", line)
+            m = re.search(pat, line)
             if m:
                 per, t0 = int(m.group(1)), int(m.group(2))
         if per is None:

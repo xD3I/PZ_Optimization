@@ -25,6 +25,15 @@ public final class KahluaTableImpl implements KahluaTable {
    private boolean pzoptMeta; // pzopt: luaIndexCache, some table uses this one as its metatable (a class)
    /** pzopt: uiRetained, bumped by every rawset that changes a value (a UI element whose Lua table changed renders fresh). */
    public int pzoptWrites;
+   /** pzopt: uiVerify, the id of the last UiDeps log that recorded a read of this table (one entry per log). */
+   public int pzoptDepMark;
+   /** pzopt: uiVerify, UiDeps.epoch when created during a recorded UI render (a local of that render, not tracked). */
+   public int pzoptDepBorn;
+   /** pzopt: uiVerify, this table's slot in the log pzoptDepMark names. */
+   public int pzoptDepSlot;
+   /** pzopt: uiVerify, the summed write counts of its class chain, valid while pzoptMetaVersion equals pzoptChainVer. */
+   public long pzoptChainSum;
+   public long pzoptChainVer = -1L;
    private java.util.HashMap<Object, KahluaTableImpl.PzoptChain> pzoptChain; // pzopt: luaIndexCache, key -> what rawget's metatable walk finds from here
    /** pzopt: luaIndexCache, bumped by every write to a table that is some table's metatable (any class change drops every cached walk). */
    public static long pzoptMetaVersion = 1L;
@@ -37,6 +46,9 @@ public final class KahluaTableImpl implements KahluaTable {
 
    public KahluaTableImpl(Map<Object, Object> delegate) {
       this.delegate = delegate;
+      if (pzopt.UiDeps.on) { // pzopt: uiVerify, a table created inside a recorded UI render
+         pzopt.UiDeps.created(this); // pzopt: uiVerify
+      } // pzopt: uiVerify
    }
 
    public void setMetatable(KahluaTable metatable) {
@@ -75,6 +87,9 @@ public final class KahluaTableImpl implements KahluaTable {
 
          if (this.delegate.remove(key) != null) { // pzopt: uiRetained, a value removed
             this.pzoptWrites++; // pzopt: uiRetained
+            if (pzopt.UiDeps.on) { // pzopt: uiVerify
+               pzopt.UiDeps.write(this); // pzopt: uiVerify
+            } // pzopt: uiVerify
          } // pzopt: uiRetained
       } else {
          if (Core.debug && LuaManager.thread != null && LuaManager.thread.hasDataBreakpoint(this, key) && !value.equals(lastVal)) {
@@ -89,11 +104,23 @@ public final class KahluaTableImpl implements KahluaTable {
          Object pzoptPrev = this.delegate.put(key, value); // pzopt: uiRetained, the previous value comes back for free
          if (pzoptPrev != value && (pzoptPrev == null || !pzoptPrev.equals(value))) { // pzopt: uiRetained
             this.pzoptWrites++; // pzopt: uiRetained
+            if (pzopt.UiDeps.on) { // pzopt: uiVerify
+               pzopt.UiDeps.write(this); // pzopt: uiVerify
+            } // pzopt: uiVerify
          } // pzopt: uiRetained
       }
    }
 
    public Object rawget(Object key) {
+      Object pzoptV = this.pzoptRawget(key); // pzopt: uiVerify, the stock lookup below; a recorded UI render's read is logged with its answer
+      if (pzopt.UiDeps.on) { // pzopt: uiVerify
+         pzopt.UiDeps.read(this, key, pzoptV); // pzopt: uiVerify
+      } // pzopt: uiVerify
+      return pzoptV; // pzopt: uiVerify
+   } // pzopt: uiVerify
+
+   /** pzopt: uiVerify, stock rawget(Object) (its body unchanged). */
+   private Object pzoptRawget(Object key) {
       if (this.reloadReplace != null) {
          return this.reloadReplace.rawget(key);
       }
@@ -197,10 +224,17 @@ public final class KahluaTableImpl implements KahluaTable {
    }
 
    public int len() {
-      return KahluaUtil.len(this, 0, 2 * this.delegate.size());
+      int pzoptLen = KahluaUtil.len(this, 0, 2 * this.delegate.size()); // pzopt: uiVerify
+      if (pzopt.UiDeps.on) { // pzopt: uiVerify, a recorded UI render read the length
+         pzopt.UiDeps.read(this, pzopt.UiDeps.LEN, pzoptLen); // pzopt: uiVerify
+      } // pzopt: uiVerify
+      return pzoptLen; // pzopt: uiVerify
    }
 
    public KahluaTableIterator iterator() {
+      if (pzopt.UiDeps.on) { // pzopt: uiVerify, a recorded UI render walks the table
+         pzopt.UiDeps.read(this, pzopt.UiDeps.ITER, null); // pzopt: uiVerify
+      } // pzopt: uiVerify
       final Object[] keys = this.delegate.isEmpty() ? null : this.delegate.keySet().toArray();
       return new KahluaTableIterator() {
          private Object curKey;
@@ -243,6 +277,9 @@ public final class KahluaTableImpl implements KahluaTable {
          pzoptMetaVersion++; // pzopt: luaIndexCache
       } // pzopt: luaIndexCache
       this.pzoptWrites++; // pzopt: uiRetained
+      if (pzopt.UiDeps.on) { // pzopt: uiVerify
+         pzopt.UiDeps.write(this); // pzopt: uiVerify
+      } // pzopt: uiVerify
       this.delegate.clear();
    }
 

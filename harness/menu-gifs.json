@@ -100,6 +100,51 @@
   },
   "title": "Rosewood house, 1:1 crop: native vs FSR 1.0 quality"
  },
+ "godrays": {
+  "opt": {
+   "bytes": 182648,
+   "file": "godrays-opt.gif",
+   "pane_t0": 4.895,
+   "run": "grmenu2-fire-on-20261018-235954"
+  },
+  "stock": {
+   "bytes": 184506,
+   "file": "godrays-stock.gif",
+   "pane_t0": 4.217,
+   "run": "grmenu2-fire-off-20261018-235812"
+  },
+  "title": "Riverside fire station at 15:00, the garage doors opening: god rays off vs on"
+ },
+ "godraysdoor": {
+  "opt": {
+   "bytes": 279408,
+   "file": "godraysdoor-opt.gif",
+   "pane_t0": 4.506,
+   "run": "grmenu3-hinge-on-20261019-001012"
+  },
+  "stock": {
+   "bytes": 271444,
+   "file": "godraysdoor-stock.gif",
+   "pane_t0": 4.555,
+   "run": "grmenu3-hinge-off-20261019-000824"
+  },
+  "title": "A shop door at 17:00, the player in the doorway: the door settings off vs on"
+ },
+ "godraysspill": {
+  "opt": {
+   "bytes": 252400,
+   "file": "godraysspill-opt.gif",
+   "pane_t0": 4.199,
+   "run": "grmenu3-spill-on-20261019-001601"
+  },
+  "stock": {
+   "bytes": 377923,
+   "file": "godraysspill-stock.gif",
+   "pane_t0": 4.344,
+   "run": "grmenu3-spill-off-20261019-001431"
+  },
+  "title": "Rosewood house at 23:00 in dark fog, lamps on: spill off vs on"
+ },
  "grade": {
   "opt": {
    "bytes": 761897,
@@ -362,6 +407,21 @@
    "video_t0": 19.92
   },
   "title": "Rosewood spin, uncapped: native vs FSR 1.0 quality"
+ },
+ "voxel": {
+  "opt": {
+   "bytes": 373165,
+   "file": "voxel-opt.gif",
+   "route_t0": 1.0,
+   "run": "vxmenu-lot-enh-20261019-001227"
+  },
+  "stock": {
+   "bytes": 314589,
+   "file": "voxel-stock.gif",
+   "route_t0": 1.0,
+   "run": "vxcard-lot2-stock-20261018-223157"
+  },
+  "title": "Night lot at 01:00, lamps and room lights, camera panning: stock vs voxel lighting"
  },
  "zgt": {
   "opt": {

@@ -31,7 +31,7 @@ inner = W - 2 * X0
 GAP = 24
 
 LINES = [
-    (BODY, INK2, "PZ OPTIMIZATION UPDATE sits in the main menu between CREDITS and QUIT, greyed out while your build is current."),
+    (BODY, INK2, "UPDATE sits on the main menu's PZ OPTIMIZATION screen, greyed out while your build is current."),
     (BODY, INK2, "Once per boot it asks the GitHub releases for a newer build of your game revision; when one is out the item lights up,"),
     (BODY, INK2, "and Update now downloads it, replaces the installed files and asks to restart. No script after the first install."),
     (NOTE, MUTED, "Only the files the installer wrote are replaced (pzopt-installed.txt); the game's own files, saves and options stay. Off in"),
