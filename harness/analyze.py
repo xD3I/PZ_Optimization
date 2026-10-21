@@ -143,6 +143,11 @@ def summarize(run, skip_seconds=20):
             pw = sysmon_summary(run / fname, bench)
             if pw:
                 out[key] = pw
+    luaprof = run / "pzopt-luaprof.out"
+    if luaprof.exists():
+        ml = modlua_summary(luaprof)
+        if ml:
+            out["modlua"] = ml
     threads = run / "pzopt-threads.out"
     if threads.exists():
         out["threads"] = thread_summary(threads)
@@ -386,6 +391,59 @@ def thread_summary(path):
     return out
 
 
+def read_properties(path):
+    """A java.util.Properties file as pzopt writes them (key=value, backslashes doubled, a leading blank escaped)."""
+    d = {}
+    for line in Path(path).read_text(errors="replace").splitlines():
+        if not line or line[0] in "#!" or "=" not in line:
+            continue
+        k, v = line.split("=", 1)
+        d[k.strip()] = re.sub(r"\\(.)", r"\1", v)
+    return d
+
+
+def prop_rows(d, prefix):
+    """prefix.0, prefix.1, ... split on tabs, until the first missing index (ModLuaDash.rows)."""
+    out = []
+    while f"{prefix}{len(out)}" in d:
+        out.append(d[f"{prefix}{len(out)}"].split("\t"))
+    return out
+
+
+def fnum(v):
+    try:
+        x = float(v)
+    except (TypeError, ValueError):
+        return None
+    return None if x != x else x
+
+
+def modlua_summary(path):
+    """pzopt-luaprof.out (pzopt.HarnessModLua -> ModLuaProfile): each mod's Lua per game frame over the route window."""
+    d = read_properties(path)
+    if not d.get("frames"):
+        return None
+    origins = [{"id": o[0], "kind": o[1], "name": o[2], "ms": fnum(o[3]), "pct": fnum(o[4]), "calls": fnum(o[5]), "p99_ms": fnum(o[6]),
+                "files": int(o[7]) if len(o) > 7 and o[7].isdigit() else None} for o in prop_rows(d, "origin.") if len(o) >= 7]
+    keys = ("frames", "seconds", "sample_hz", "samples", "lua_ms", "lua_pct", "game_lua_ms", "mods_ms", "mods_pct", "worst_mod_ms",
+            "worst_mod_pct", "p99_frame_ms", "hook_calls", "hook_ns", "overhead_us", "sampler_cpu_pct")
+    out = {k: fnum(d.get(k)) for k in keys}
+    out.update(worst_mod=d.get("worst_mod", ""), worst_mod_name=d.get("worst_mod_name", ""), counting=d.get("counting", ""),
+               mods=sum(1 for o in origins if o["kind"] == "mod"), origins=origins)
+    return out
+
+
+def modlua_line(m):
+    f = lambda v, n=3: "?" if v is None else f"{v:.{n}f}"  # noqa: E731
+    mods = [o for o in m["origins"] if o["kind"] == "mod"]
+    top = ", ".join(f"{o['name']} {f(o['ms'])}" for o in mods[:3])
+    cpu = m.get("sampler_cpu_pct")
+    return (f"mod lua (route window, {m['frames']:.0f} frames): all Lua {f(m['lua_ms'])} ms/frame = game {f(m['game_lua_ms'])} + "
+            f"{m['mods']} mods {f(m['mods_ms'])} ({f(m['mods_pct'], 2)} % of the frame)" + (f"; top: {top}" if top else "")
+            + f"; profiler {f(m['sample_hz'], 0)} Hz" + (f", sampler {f(cpu, 2)} % of a core" if cpu is not None else "")
+            + f", hooks {f(m['overhead_us'], 2)} us/frame" + ("" if m.get("counting") == "on" else " (calls not counted)"))
+
+
 def environment(console):
     """Renderer / JVM / display facts from console.txt that make runs comparable or not."""
     env = {}
@@ -526,6 +584,9 @@ def print_summary(s):
                 print(f"      {sub['share'] * 100:3.0f}%    {sub['name']}{w}" + (f"    {hot}" if hot else ""))
         hot = "  ".join(f"{h['name'].split('/')[-1]} {h['share'] * 100:.0f}%" for h in g["hot"][:8] if h["share"] >= 0.01)
         print(f"  hottest methods: {hot}")
+    ml = s.get("modlua")
+    if ml:
+        print(modlua_line(ml))
     t = s.get("threads")
     if t and t["threads"]:
         cores = int(t.get("cores", 0))

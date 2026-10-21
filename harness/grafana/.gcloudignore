@@ -7,3 +7,5 @@
 !cloud/**
 !dashboards/
 !dashboards/**
+# the live view stays local: its 1 s refresh kept a Cloud Run instance busy for every open tab (2026-10-21)
+dashboards/pzopt-live.json

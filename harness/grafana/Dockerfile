@@ -16,7 +16,8 @@ ENV GF_AUTH_ANONYMOUS_ENABLED=true \
     GF_SERVER_ENABLE_GZIP=true \
     GF_LOG_LEVEL=warn \
     GF_EXPLORE_ENABLED=false \
-    GF_SNAPSHOTS_ENABLED=false
+    GF_SNAPSHOTS_ENABLED=false \
+    GF_LIVE_MAX_CONNECTIONS=0
 COPY provisioning/dashboards/pzopt.yaml /etc/grafana/provisioning/dashboards/pzopt.yaml
 COPY cloud/datasource.yaml /etc/grafana/provisioning/datasources/pzopt.yaml
 COPY dashboards/ /etc/grafana/dashboards/

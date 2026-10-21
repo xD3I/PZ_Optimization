@@ -2,7 +2,7 @@
 """Write the provisioned Grafana dashboards (harness/grafana/dashboards/*.json); stack.sh up runs it.
 
   pzopt-runs     every run in the time range: table (links to Run / Compare), trends, headroom findings
-  pzopt-run      one run on the route-time axis: tails, fps, GPU time, utilization, game-thread phases,
+  pzopt-run      one run on the route-time axis: tails, fps, GPU time, utilization, game-thread phases, each mod's Lua,
                  chunks, GC, flips, drive, profiler flame graphs (in-game / Lua / JFR / async-profiler), schedmon,
                  PSI, memory, pacing, every input the game saw + the harness configuration, console, counters
   pzopt-compare  several runs on one route-time axis, deltas against a base run, diff flame graph
@@ -18,6 +18,7 @@ import re
 from pathlib import Path
 
 import workshop_sql
+from derived import HERO_HEADLINE
 
 OUT = Path(__file__).resolve().parent / "dashboards"
 DS = {"type": "grafana-postgresql-datasource", "uid": "pzopt-pg"}
@@ -45,21 +46,23 @@ class Layout:
     def __init__(self):
         self.panels, self.x, self.y, self.row_h, self.id = [], 0, 0, 0, 1
 
-    def add(self, p, w, h):
+    def add(self, p, w, h, pid=None):
+        """pid: a fixed panel id outside the running count (the Mods (Lua) row keeps the in-game report's ids 60-69)."""
         if self.x + w > 24:
             self.x, self.y, self.row_h = 0, self.y + self.row_h, 0
-        p["id"] = self.id
+        p["id"] = self.id if pid is None else pid
         p["gridPos"] = {"x": self.x, "y": self.y, "w": w, "h": h}
-        self.id += 1
+        if pid is None:
+            self.id += 1
         self.x += w
         self.row_h = max(self.row_h, h)
         self.panels.append(p)
         return p
 
-    def row(self, title):
+    def row(self, title, pid=None):
         self.x, self.y = 0, self.y + self.row_h
         self.row_h = 0
-        self.add({"type": "row", "title": title, "collapsed": False, "panels": []}, 24, 1)
+        self.add({"type": "row", "title": title, "collapsed": False, "panels": []}, 24, 1, pid)
 
 
 def ts_panel(title, targets, unit="ms", desc="", stack=False, points=False, bars=False, thresholds=None, overrides=(),
@@ -278,72 +281,7 @@ BOUND = """CASE
 
 # ------------------------------------------------------------------ Hero (top of the home dashboard)
 
-# Stock vs optimized on the desktop, for public visitors. A run counts when it is a valid measurement (analyze.py and
-# Jev's card; not Jev's verdict, whose "invalid" also means "below the cap with hardware idle"), path drives clean, no profiler (vmargs,
-# JFR) and no pzopt key beyond the measurement ones below (so A/B runs with a key switched off never count as
-# "optimized"); a stock run is enabled=false. Only exact scenes (mode, preset, flags, cap, game options, resolution,
-# renderer) run both ways enter, then they pool under a readable scene name; each side is the median of its newest 10.
-HERO_SCENES = r"""
-WITH r0 AS (
-  SELECT r.*, NOT enabled AS stock,
-    coalesce(substring(props from 'frameCapFps=(\d+)'), substring(opts->>'game_options' from 'frameRate=(\d+)'))::int AS cap_fps,
-    trim(regexp_replace(coalesce(opts->>'game_options', ''), '(frameRate|uncappedFPS)=\S*', '', 'g')) AS other_options
-  FROM runs r
-  WHERE machine = 'desktop' AND valid AND fps_mean IS NOT NULL
-    AND coalesce(judge #>> '{state,run,facts,valid_measurement}', 'true') = 'true'
-    AND coalesce(judge #>> '{state,run,drive,verdict}', 'valid') = 'valid'
-    -- no profiler attached (run.sh's own launch options, such as the released -Dpzopt.jit=steady, are fine)
-    AND coalesce(opts->>'vmargs', '') !~ '(agentpath|agentlib|javaagent|StartFlightRecording|NativeMemoryTracking)'
-    AND coalesce(opts->>'jfr', '0') = '0'
-    AND NOT EXISTS (SELECT 1 FROM regexp_split_to_table(coalesce(props, ''), '\s+') t
-                    WHERE t <> '' AND t !~ '^(instrument|overlay|uncappedFps|hdrAuto|frameCapFps|enabled)='
-                      AND t NOT IN ('upscaler=off', 'hotsaveStaged=false'))
-    -- the Optimizations tab file applies too and is not in props: an upscaler renders the world smaller, not a default
-    AND (NOT enabled OR coalesce(substring(scenario->>'settings' from 'upscaler=([a-z0-9]+)'), 'off') = 'off')
-    -- the daily re-measures of older builds (<bench>-<MMDD>-<n>, DAILY_BENCHES) are history: only the newest day's build is "current"
-    AND (label !~ '^(daily|dstorm|dspin|dlou|dhorde)-[0-9]{4}-' OR substring(label from '^[a-z]+-([0-9]{4})-')
-         = (SELECT max(substring(label from '^[a-z]+-([0-9]{4})-')) FROM runs WHERE label ~ '^(daily|dstorm|dspin|dlou|dhorde)-[0-9]{4}-'))
-),
-r1 AS (SELECT *, CASE WHEN props ~ 'uncappedFps=true' OR fps_mean < 0.9 * cap_fps THEN 'uncapped'  -- below its cap = uncapped
-                      WHEN cap_fps IS NOT NULL THEN cap_fps || ' fps cap' ELSE 'capped' END AS cap_label FROM r0),
-c AS (
-  SELECT r1.*,
-    concat_ws('|', mode, preset, flags, cap_label, other_options, resolution, opts->>'renderer') AS exact,
-    concat_ws(' · ',
-      -- the daily re-measures pass the scene flags instead of the preset: name those scenes by their start square
-      CASE WHEN flags ~ 'start=12450,1280' THEN 'Louisville horde' WHEN flags ~ 'showcase=horde' THEN 'Horde shooting, riverside'
-      ELSE CASE coalesce(nullif(preset, 'none'), mode)
-        WHEN 'louisville' THEN 'Louisville horde' WHEN 'storm' THEN 'Thunderstorm' WHEN 'storm-fog' THEN 'Storm + fog'
-        WHEN 'fog' THEN 'Heavy fog' WHEN 'night-torch' THEN 'Night, torch' WHEN 'night-dark' THEN 'Night'
-        WHEN 'helicopter' THEN 'Helicopter event' WHEN 'bench' THEN 'Rosewood'
-        -- kmh=193 is flat out: the car tops out near 122 km/h
-        WHEN 'drive' THEN 'Driving' || coalesce(' ' || least(substring(flags from 'kmh=(\d+)')::int, 120) || ' km/h', '')
-        ELSE preset END END,
-      CASE WHEN flags ~ 'weather=storm' AND coalesce(preset, '') NOT LIKE 'storm%' THEN 'thunderstorm' END,
-      CASE WHEN flags ~ 'fog=heavy' AND coalesce(preset, '') NOT IN ('fog', 'storm-fog') THEN 'heavy fog' END,
-      CASE WHEN flags ~ 'turn=' AND flags !~ 'start=12450,1280' AND mode = 'bench' AND coalesce(preset, '') IN ('', 'none') THEN 'spinning walk' END,
-      CASE WHEN flags ~ '(house|car)_alarm=' THEN 'alarms' END,
-      CASE WHEN flags ~ 'gunshots=[1-9]' THEN 'gunfire' END,
-      CASE WHEN flags ~ 'helicopter=true' AND coalesce(preset, '') <> 'helicopter' THEN 'helicopter' END,
-      cap_label) AS scene
-  FROM r1
-),
-m AS (SELECT *, row_number() OVER (PARTITION BY scene, stock ORDER BY started DESC) AS n FROM c
-      WHERE exact IN (SELECT exact FROM c GROUP BY 1 HAVING bool_or(stock) AND bool_or(NOT stock))),
-side AS (SELECT scene, stock, count(*) AS runs, max(started) AS newest,
-           percentile_cont(0.5) WITHIN GROUP (ORDER BY fps_mean) AS fps,
-           percentile_cont(0.5) WITHIN GROUP (ORDER BY fps_1pct_low) AS low,
-           percentile_cont(0.5) WITHIN GROUP (ORDER BY p99_ms) AS p99,
-           percentile_cont(0.5) WITHIN GROUP (ORDER BY p99_9_ms) AS p999,
-           percentile_cont(0.5) WITHIN GROUP (ORDER BY gpu_pct) AS gpu,
-           percentile_cont(0.5) WITHIN GROUP (ORDER BY busiest_core_pct) AS core
-         FROM m WHERE n <= 10 GROUP BY 1, 2),
-s AS (SELECT o.scene, st.runs AS st_runs, o.runs AS o_runs, greatest(st.newest, o.newest) AS newest,
-        st.fps AS st_fps, o.fps AS o_fps, st.low AS st_low, o.low AS o_low, st.p99 AS st_p99, o.p99 AS o_p99,
-        st.p999 AS st_p999, o.p999 AS o_p999, st.gpu AS st_gpu, o.gpu AS o_gpu, st.core AS st_core, o.core AS o_core
-      FROM side o JOIN side st ON st.scene = o.scene AND st.stock AND NOT o.stock),
--- the headline: the clear 120 km/h drive (the daily chart's main line) when it was run both ways, else the scene with most pairs
-h AS (SELECT * FROM s ORDER BY scene = 'Driving 120 km/h · uncapped' DESC, least(st_runs, o_runs) DESC, newest DESC LIMIT 1)"""
+# The hero's scenes (stock vs optimized, every scene run both ways) are precomputed: derived.py, table hero_scenes.
 STOCK_C, OURS_C = "#8e8e8e", "#56a64b"
 # the daily chart's benches: label prefix, line name, colour (runs <prefix>-<MMDD>-<n>, stock <prefix>-stock<game>-<n>)
 DAILY_BENCHES = [("daily", "120 km/h drive", OURS_C), ("dstorm", "120 km/h drive, fog + storm", "#5794F2"),
@@ -380,7 +318,7 @@ def hero(L):
         "[Steam Workshop](https://steamcommunity.com/sharedfiles/filedetails/?id=3805285544) · every run below this section")}}, 24, 3)
     metrics = (("fps", "average fps ↑"), ("low", "1 % low fps ↑"), ("p99", "p99 frame time ↓"), ("p999", "p99.9 frame time ↓"))
     side = lambda title, pre, color: stat_panel(  # noqa: E731
-        title, f"{HERO_SCENES}\nSELECT " + ", ".join(f'{pre}_{c} AS "{n}"' for c, n in metrics) + " FROM h",
+        title, "SELECT " + ", ".join(f'{pre}_{c} AS "{n}"' for c, n in metrics) + f" FROM {HERO_HEADLINE}",
         decimals=1, color_mode="value", value_size=44, thr=[(color, None)],
         desc="Medians over the newest 10 runs of the headline scene (named in the middle). Average fps: route mean; 1 % low: "
              "the fps of the slowest 1 % of frames; p99 / p99.9: 99 % / 99.9 % of the frames are faster than this (stutter).",
@@ -390,7 +328,7 @@ def hero(L):
                        thr=[(OURS_C, None)], text_mode="value_and_name",
                        desc="Average fps with the mod / average fps of the stock game, in the scene with the most runs both ways "
                             "(its name above the number). Every scene measured both ways is in the table below.")
-    speed["targets"] = [q(f"{HERO_SCENES}\nSELECT now() AS time, scene AS metric, o_fps / st_fps AS value FROM h")]
+    speed["targets"] = [q(f"SELECT now() AS time, scene AS metric, o_fps / st_fps AS value FROM {HERO_HEADLINE}")]
     speed["options"]["reduceOptions"]["fields"] = ""  # the numeric field only, named after the scene
     speed["options"].update(orientation="vertical", text={"titleSize": 16, "valueSize": 64})
     L.add(speed, 4, 7)
@@ -413,7 +351,7 @@ def hero(L):
     game = "CASE " + " ".join(f"WHEN o.day >= '{since}' THEN '{g}'" for since, g in sorted(DAILY_GAMES, reverse=True)) + " ELSE '' END"
     ctes = f"""
 WITH d AS (SELECT substring(label from '({pat})-') AS b, substring(label from '(?:{pat})-([0-9]{{4}}|stock[0-9]*)-') AS k,
-             to_char(started, 'YYYY') AS y, run, fps_mean FROM runs
+             to_char(started, 'YYYY') AS y, run, fps_mean, boot_s, load_s FROM runs
            -- laptop runs come back from the queue as <machine>-<label>
            WHERE label ~ '^((flip|dell|mac)-)?({pat})-([0-9]{{4}}|stock[0-9]*)-[0-9]+$' AND machine = ${{hmachine:sqlstring}}
              AND valid AND fps_mean IS NOT NULL AND run NOT IN ({excluded})),"""
@@ -448,13 +386,9 @@ FROM o GROUP BY o.day ORDER BY o.day""",
         "whose harness could run it. Dashed: the stock game the day's build ran on (42.20.4 until 09-27: those builds were "
         "re-measured on a 42.20.4 copy of the game; 42.21 from 09-28, ~10 % slower than 42.20.4 by itself).",
         [o for k, n, c in benches for o in (ov(n, color=c, min=0), ov(f"stock · {n}", color=c, min=0, dash=True))], "none", 0), 24, 11)
-    # boot and load of every run above (its load trace: pzopt-loadtrace.out lines in events)
+    # boot and load of every run above (runs.boot_s / load_s: ingest.py reads them from the run's pzopt-loadtrace.out)
     L.add(daily_chart("Each day's build on the ${hmachine}: boot and load time", f"""{ctes}
-e AS (SELECT run, min(t) AS t0, min(t) FILTER (WHERE text ~ 'continuing latest save') AS tc FROM events
-      WHERE run IN (SELECT run FROM d) GROUP BY run),
-lt AS (SELECT d.k, d.y, extract(epoch FROM e.tc - e.t0) AS boot,
-         extract(epoch FROM (SELECT min(x.t) FROM events x WHERE x.run = e.run AND x.t > e.tc AND x.text ~ 'world ready') - e.tc) AS load
-       FROM e JOIN d USING (run)),
+lt AS (SELECT k, y, boot_s AS boot, load_s AS load FROM d),
 o AS (SELECT to_date(y || k, 'YYYYMMDD') AS day, {med.format('boot')} AS boot, {med.format('load')} AS load FROM lt
       WHERE k !~ '^stock' GROUP BY 1),
 ls AS (SELECT substring(k from 'stock(.*)') AS g, {med.format('boot')} AS boot, {med.format('load')} AS load FROM lt
@@ -495,12 +429,12 @@ FROM workshop_stats WHERE comments IS NOT NULL ORDER BY t DESC LIMIT 1""",
                    "Favorites, comments and award reactions on the item page, and the share of unique visitors who are subscribed now.",
                    "#66c0f4", fmt="table", overrides=[ov("visitors who subscribed %", unit="percent")]), 6, 5)
     L.add(table_panel(
-        "Every scene measured both ways (desktop)", f"""{HERO_SCENES}
+        "Every scene measured both ways (desktop)", f"""
 SELECT scene, round((o_fps / st_fps)::numeric, 2) AS "×", st_fps AS "fps stock", o_fps AS "fps ours", st_low AS "1% low stock", o_low AS "1% low ours",
   st_p99 AS "p99 stock", o_p99 AS "p99 ours", st_p999 AS "p99.9 stock", o_p999 AS "p99.9 ours",
   st_gpu AS "GPU % stock", o_gpu AS "GPU % ours", st_core AS "busiest core % stock", o_core AS "busiest core % ours",
   st_runs AS "runs stock", o_runs AS "runs ours", newest
-FROM s ORDER BY least(st_runs, o_runs) DESC, newest DESC""",
+FROM hero_scenes WHERE machine = 'desktop' ORDER BY least(st_runs, o_runs) DESC, newest DESC""",
         desc="Medians of the newest 10 valid runs per side. Utilization: GPU busy and the busiest CPU core (sysmon) over the route; "
              "a side below its cap with neither near 100 % still has hardware left over.",
         overrides=[ov("×", unit="suffix:×", decimals=2, color=OURS_C, color_text=True), ov("newest", unit="dateTimeAsIso", width=160),
@@ -524,11 +458,10 @@ SELECT started AS time, CASE WHEN (SELECT count(DISTINCT label) FROM t) <= {TREN
 
 
 def run_hours(L):
-    """Cumulative harness run hours, all machines and each one: a step per run at its exit (run.opts run_seconds = launch
-    to exit, boot / load / settle included), held flat to now. All time, whatever the dashboard's range."""
-    sql = """WITH r AS (SELECT started + make_interval(secs => s) AS t, machine, s / 3600.0 AS h
-           FROM (SELECT started, machine, nullif(opts->>'run_seconds', '')::double precision AS s FROM runs) x
-           WHERE s IS NOT NULL)
+    """Cumulative harness run hours, all machines and each one: a step per run at its exit (runs.run_s = run.opts
+    run_seconds = launch to exit, boot / load / settle included), held flat to now. All time, whatever the dashboard's range."""
+    sql = """WITH r AS (SELECT started + make_interval(secs => run_s) AS t, machine, run_s / 3600.0 AS h
+           FROM runs WHERE run_s IS NOT NULL)
 SELECT t AS time, machine AS metric, sum(h) OVER (PARTITION BY machine ORDER BY t) AS value FROM r
 UNION ALL SELECT t, 'total', sum(h) OVER (ORDER BY t) FROM r
 UNION ALL SELECT now(), machine, sum(h) FROM r GROUP BY machine
@@ -550,6 +483,10 @@ ORDER BY 1"""
     L.add(ts, 24, 8)
 
 
+# the Runs table sent every run in range (8,188 rows, 4.6 MB) to each visitor of the public dashboard
+RUNS_TABLE_MAX = 500
+
+
 def runs_dashboard():
     L = Layout()
     hero(L)
@@ -567,8 +504,9 @@ SELECT started, run, CASE WHEN v.url IS NOT NULL THEN 'video' END AS video, v.ur
   game_thread_pct AS "game thread %", total_w AS "W", j_per_frame AS "J/frame", {BOUND} AS bound, verdict, round(verdict_confidence::numeric, 2) AS conf, valid,
   variant, machine, mode, preset, chunk_p99_ms AS "chunk p99", gc_events AS gc, zoom, resolution, label,
   lag(run) OVER (PARTITION BY label ORDER BY started) AS previous
-FROM runs LEFT JOIN run_videos v USING (run) LEFT JOIN run_data rd USING (run) WHERE {where} ORDER BY started DESC""",
-        desc="Frame times in ms over the route window (pzopt-frames.out); CPU / GPU from sysmon, game thread from pzopt-threads.out. "
+FROM runs LEFT JOIN run_videos v USING (run) LEFT JOIN run_data rd USING (run) WHERE {where} ORDER BY started DESC LIMIT {RUNS_TABLE_MAX}""",
+        desc=f"The newest {RUNS_TABLE_MAX} runs in the time range (narrow with the label regex or the time picker). "
+             "Frame times in ms over the route window (pzopt-frames.out); CPU / GPU from sysmon, game thread from pzopt-threads.out. "
              "Click a run for its dashboard, 'previous' to compare with the last run of the same label, 'video' for its recording, "
              "'data' for its run folder: frame logs and every other file (the cold-storage bucket gs://diegov-videos-coldline; "
              "harness/cold-store.py uploads and links them).",
@@ -624,6 +562,73 @@ FROM runs WHERE {where} AND {BOUND} = 'headroom left' ORDER BY started DESC""",
 
 
 # ------------------------------------------------------------------ Run
+
+# the Mods (Lua) row's colours = src/lua/client/pzopt/pzopt_mainscreen_report_mods.lua's MS_THR / PCT_THR / SPIKE_THR
+LUA_MS_STEPS = [("#73BF69", None), ("#EAB839", 0.1), ("#FF9830", 0.5), ("#F2495C", 1)]
+LUA_PCT_STEPS = [("#73BF69", None), ("#EAB839", 2), ("#FF9830", 5), ("#F2495C", 10)]
+LUA_SPIKE_STEPS = [("#73BF69", None), ("#EAB839", 0.5), ("#FF9830", 2), ("#F2495C", 4)]
+
+
+def mods_lua_row(L):
+    """The "Mods (Lua)" row (2026-10-21): the in-game benchmark report's row 60-69 (pzopt_mainscreen_report_mods.lua, answered by
+    pzopt.ModLuaDash) panel for panel: same ids, titles, units, thresholds, sizes and order, from the luaprof tables ingest.py
+    loads from pzopt-luaprof.out / pzopt-luaprof-frames.out (pzopt.HarnessModLua: ModLuaProfile over the route window)."""
+    lp = f"FROM luaprof WHERE run = {RUN}"
+    src = ("pzopt-luaprof.out (pzopt.ModLuaProfile over the route window: the main Lua thread's stack sampled at 2 kHz off the game "
+           "thread, self time charged to the innermost Lua function and its mod by file; every event handler and UI call counted). "
+           "No data: a run without the profiler (--prop modLuaProfile=false, or a build before 2026-10-21).")
+    L.row("Mods (Lua): each mod's Lua on the game thread (ModLuaProfile, sampled at 2 kHz)", pid=60)
+    L.add(stat_panel("Lua per frame (route mean)", f"SELECT lua_ms AS \"all Lua\", game_lua_ms AS \"game's Lua\", mods_ms AS mods {lp}",
+                     unit="ms", decimals=3, color_mode="none", desc="Lua time per game frame over the route: all of it, the game's own "
+                     "(media/lua), every mod's. " + src), 7, 4, pid=61)
+    L.add(stat_panel("Mods' share of the frame", f"SELECT mods_pct AS mods, lua_pct AS \"all Lua\" {lp}", unit="percent", decimals=1,
+                     thr=LUA_PCT_STEPS, desc="The mods' Lua (and all Lua) as a share of the route's frame time."), 5, 4, pid=62)
+    L.add(stat_panel("Worst mod", f"""
+SELECT CASE WHEN coalesce(worst_mod, '') = '' THEN 'none' ELSE coalesce(nullif(worst_mod_name, ''), worst_mod) END AS mod,
+  CASE WHEN coalesce(worst_mod, '') = '' THEN NULL ELSE worst_mod_ms END AS "ms/frame" {lp}""", unit="ms", decimals=3,
+                     thr=LUA_MS_STEPS, color_mode="none", value_size=20, desc="The mod whose own Lua took the most time per frame."), 7, 4, pid=63)
+    L.add(stat_panel("Profiler", f"SELECT samples, sample_hz AS \"Hz\", overhead_us AS \"cost us/frame\" {lp}", color_mode="none",
+                     value_size=18, desc="Stack samples over the route, the sampling rate reached, and the counting hooks' cost on the "
+                     "game thread per frame (the sampler runs on its own thread: ~1-1.5 % of one core)."), 5, 4, pid=69)
+    L.add(table_panel("Mods (route): Lua time per frame, calls, the slowest 1 % of frames", f"""
+SELECT name AS mod, kind, ms AS "ms/frame", pct AS "% of frame", calls_per_frame AS "calls/frame", p99_ms AS "p99 spike ms", files
+FROM luaprof_origins WHERE run = {RUN} ORDER BY ord""",
+        desc="Each origin of Lua: the mods by cost, then the game's, ours and the unknown. p99 spike ms = its mean in the slowest 1 % "
+             "of frames; files = its Lua files seen. calls/frame is empty when a Java mod patches the hooked methods.",
+        overrides=[ov("mod", width=300), ov("kind", width=120),
+                   ov("ms/frame", unit="ms", decimals=3, gauge=True, min=0, max=2, thresholds=LUA_MS_STEPS),
+                   ov("% of frame", unit="percent", decimals=1, gauge=True, min=0, max=20, thresholds=LUA_PCT_STEPS),
+                   ov("calls/frame", unit="none", decimals=1),
+                   ov("p99 spike ms", unit="ms", decimals=2, gauge=True, min=0, max=5, thresholds=LUA_SPIKE_STEPS),
+                   ov("files", unit="none", decimals=0, width=70)]), 24, 10, pid=64)
+    # Grafana orders long-format series by name: the stacking order (ord) goes into the name and a rename takes it out again
+    p65 = ts_panel("Lua per mod (ms per frame, 0.5 s means)", [q(f"""
+SELECT rt AS time, lpad(ord::text, 3, '0') || ' ' || name AS metric, ms AS value FROM luaprof_series WHERE run = {RUN} AND $__timeFilter(rt) ORDER BY rt, ord""")],
+        stack=True, minv=0, legend="right", desc="The 8 costliest mods, the rest as other mods, the game's Lua and ours, stacked: "
+        "each 0.5 s bucket's mean per frame (ModLuaDash.series).", overrides=[ov("game's Lua", color="#8AB8FF")])
+    p65["transformations"] = [{"id": "renameByRegex", "options": {"regex": "^\\d{3} (.*)$", "renamePattern": "$1"}}]
+    L.add(p65, 24, 9, pid=65)
+    L.add(table_panel("Top Lua functions (route): self = own code and the Java it calls, total = with every function it calls", f"""
+SELECT mod, file || ':' || function || ' (' || coalesce(line::text, '') || ')' AS "function", event, self_ms AS "self ms/frame",
+  total_ms AS "total ms/frame", calls_per_frame AS "calls/frame"
+FROM luaprof_functions WHERE run = {RUN} ORDER BY ord LIMIT 60""",
+        desc="Per (function, event): the event or UI call it ran under.",
+        overrides=[ov("mod", width=220), ov("function", width=420), ov("event", width=170),
+                   ov("self ms/frame", unit="ms", decimals=3, gauge=True, min=0, max=1, thresholds=LUA_MS_STEPS),
+                   ov("total ms/frame", unit="ms", decimals=3), ov("calls/frame", unit="none", decimals=1)]), 24, 12, pid=66)
+    L.add(table_panel("Lua by event (route)", f"""
+SELECT event, lua_ms AS "Lua ms/frame", mods_ms AS "mods ms/frame", calls_per_frame AS "calls/frame", top_mod AS "most Lua"
+FROM luaprof_events WHERE run = {RUN} ORDER BY ord""",
+        overrides=[ov("event", width=170), ov("Lua ms/frame", unit="ms", decimals=3, gauge=True, min=0, max=2, thresholds=LUA_MS_STEPS),
+                   ov("mods ms/frame", unit="ms", decimals=3), ov("calls/frame", unit="none", decimals=1)]), 12, 10, pid=67)
+    L.add(table_panel("Slowest frames: whose Lua ran in them", f"""
+SELECT to_char(make_interval(secs => floor(t_s + 0.5)), 'HH24:MI:SS') AS "at s", frame_ms AS "frame ms", lua_ms AS "Lua ms",
+  mods_ms AS "mods ms", top_mod AS "most Lua", top_ms AS "its ms"
+FROM luaprof_spikes WHERE run = {RUN} ORDER BY ord""", unit="ms",
+        desc="The 12 longest frames: at = route time of the frame's end.",
+        overrides=[ov("at s", unit="none", decimals=2, width=80), ov("frame ms", unit="ms", decimals=2), ov("Lua ms", unit="ms", decimals=2),
+                   ov("mods ms", unit="ms", decimals=2), ov("its ms", unit="ms", decimals=2)]), 12, 10, pid=68)
+
 
 def run_dashboard():
     L = Layout()
@@ -764,6 +769,8 @@ SELECT rt AS time, name AS metric, share * 100 AS value FROM gamethread WHERE ru
 SELECT name, sum(samples) AS samples, 100.0 * sum(samples) / nullif((SELECT sum(samples) FROM gamethread x WHERE run = {RUN} AND kind = 'total' AND {IN_ROUTE}), 0) AS share
 FROM gamethread x WHERE run = {RUN} AND kind = '{kind}' AND {IN_ROUTE} GROUP BY name ORDER BY 2 DESC LIMIT {n}""",
                           overrides=[ov("share", unit="percent", decimals=1, gauge=True, min=0, max=100 if kind != "l" else 25), ov("samples", width=80)]), 8, 12)
+
+    mods_lua_row(L)
 
     L.row("Chunks, GC, flips")
     L.add(ts_panel("Chunk latency (enqueue → publish, one point per chunk)", [

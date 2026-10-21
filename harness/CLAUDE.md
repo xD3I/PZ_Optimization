@@ -509,6 +509,7 @@ same window with `harness/mp/window.py <run>:27 ...`; results in `docs/archive/2
 | `uiprof.py <run> [--all] [--top N] [--calls N] [--json f]` | pzopt-ui.out (`pzopt.UiProfile`, key `uiProfile`, on in instrumented runs) | the UI's cost exactly (nanoTime): UI time per game frame and its share of the frame, `UIManager.update` by section, render per UI frame, per top-level element fresh renders / replays (uiRetained) / µs / draw commands / identical-output share, the retained counters (UI frames, input-triggered frames, fresh / replayed, stale replays of `devUiRetainedCheck`); with the UI rig: per interaction the handler's ms and the delay until the UI shows it, per scene the same table plus `--calls` Lua call time by element type (2026-09-30, `docs/findings-ui-snappy-2026-09-30.md`); with `devUiTruth` runs the stale episodes (X lines) and stale-frame share (Y lines) per scene, and with uiVerify the V lines (read-set validations and their µs, opaque reasons, why elements re-rendered, `trig=` UI frames off the stock beat, slack) (2026-10-14) |
 | `uiprof-compare.py --cost name=RUN ... --truth name=RUN ... [--md]` | uiprof.py of several runs | per scene the UI's share of the frame, UI frames/s and fps of each cost run beside the stale-frame share of each truth run and stock's simulated 60 Hz (2026-10-14, `docs/findings-ui-latency-2026-10-14.md`) |
 | `luaprof.py <run> [--by fn\|file\|chain]` | pzopt-lua.out (`pzopt.LuaProfile`, key `luaProfile`, on in instrumented runs) | which Lua functions the game thread runs over the route, as shares of all game-thread samples (2026-09-23: the Dell's Lua was 8.6 %, spread over vanilla UI: inventory page prerender / loadWeight 0.6 %, hotbar, buttons) |
+| `analyze.py` line `mod lua:` | pzopt-luaprof.out / pzopt-luaprof-frames.out (2026-10-21, `pzopt.HarnessModLua`: the in-game benchmark's per-mod profiler `pzopt.ModLuaProfile` over the route window of every harness run; key `modLuaProfile`, default on, `--prop modLuaProfile=false` leaves it out; sampler ~0.5-1.5 % of one core at 2 kHz, the counting hooks ~2-5 us a frame) | each mod's Lua per frame: all Lua = the game's + the mods', the costliest mods, the profiler's own cost. Same files as the benchmark's `<base>-luaprof.properties` / `.csv`; Grafana's PZ run row "Mods (Lua)" (tables `luaprof*`) = the in-game report's row 60-69 |
 | `pzopt-nmt.out` | a run with `--vmarg -XX:NativeMemoryTracking=summary` | the JVM's native memory summary at route end (heap, class, thread, code, GC, other = direct buffers), written by the harness through the DiagnosticCommand MBean; `schedmon.txt` MEM lines give the process's resident memory by mapping kind every 10 s |
 | `gc-spikes.py <run> [ms]`, `badseconds.py <run> [ms] [key prefix]`, `long-windows.py <run> [s]` | gc.log / pzopt-gamethread.out / overlay + schedmon | spike frames overlapping a GC pause; game-thread phases (or `w:` waits) in the worst vs calmest route seconds; a long run in windows |
 | `gc-sweep.py PREFIX...` | runs whose label starts with PREFIX, reps (`-rN`) averaged | a heap / collector sweep as one table: fps, p99 / p99.9 / max, spikes, 1%-low, collector pauses in the route (n / ms / max; ZGC allocation stalls), heap used / committed peaks, CPU %, world-ready s (`docs/findings-gc-heap-2026-10-05.md`) |
@@ -720,7 +721,7 @@ with the variables filled in: the test after editing `dashboards.py` (0 errors e
   `sched` (`schedmon.txt`: per OS thread per second CPU % / run-queue % / major faults; PSI and memory lines into `series`),
   `series` source `pacing` (`pzopt-pacing.out`), `events` (every console line of `pzopt-loadtrace.out` with level /
   category), `inputs` (`pzopt-input.out`, `pzopt.InputRecorder`: every key / mouse / pad change the game thread saw) and
-  `run_inputs` (what the harness configured: flag file, `pzopt.properties`, options, env, vmargs, mods, run.opts), and one
+  `run_inputs` (what the harness configured: flag file, `pzopt.properties`, options, env, vmargs, mods, run.opts), `luaprof` + `luaprof_origins` / `_functions` / `_events` / `_spikes` / `_frames` / `_series` (2026-10-21, pzopt-luaprof.out: the mod Lua profile, panel 65's 0.5 s series computed as ModLuaDash does; the public DB gets them only once `cloud.sh` has applied schema.sql there: `Remote.has_tables`, so a script never spools on a missing table), and one
   `runs` row with analyze.py's route-window summary + chunk latency + Jev's verdict. Each sample has `t` (wall clock), `rel_s` (seconds since route start) and `rt` (route time = 2000-01-01 UTC +
   rel_s: the x axis of the Run / Compare dashboards, 00:00:00 = route start).
 - **Follower**: imports every run dir under `harness/runs/` of this checkout and all its git worktrees ~20 s after its
@@ -796,10 +797,20 @@ EUR 5 budget alert (20 / 50 / 100 %) on that label; `harness/grafana/cloud.sh de
   Same SQL for dashboards and ingest; `stacks` stays plain (the stack_defs prune looks up `stack_id`). To keep the
   follower out of a long remote operation: `ALTER ROLE pzopt CONNECTION LIMIT 0` + terminate its backends (its writes
   spool), never NOLOGIN (Timescale refuses policies of an owner without LOGIN); `CONNECTION LIMIT -1` after.
+  `conf.d/pzopt.conf` also sets `timescaledb.max_background_workers = 4` (with 2 the compression policies never ran from
+  10-12 on: the DB grew 7 → 24 GB and the disk filled on 10-20) and `client_connection_check_interval = '10s'` (a replay
+  whose IAP tunnel dropped kept running server-side for 1.5 h and blocked its own retry, 10-21).
 - **Sync**: the desktop reaches it through IAP TCP forwarding (user unit `pzopt-grafana-tunnel`, localhost:15433; firewall
   rule `pzopt-db-allow-iap-pg`). `ingest.py` applies every run import and every live batch to both databases; a remote
   failure goes to `~/.local/state/pzopt-grafana/spool/` and replays in order (`cloud.sh status` counts it). `--no-remote`
   keeps a write local. After a schema change: apply `schema.sql` on both (`stack.sh up` locally, `cloud.sh seed` copies all).
+  One `Remote` (and its lock) per follower: the Workshop snapshot thread shares it, so the spool never replays twice at once.
+- **Precomputed for the public page** (2026-10-21; the e2-micro took 90-190 s, or timed out at 30 s, for what the desktop
+  computes in 0.2 s): `hero_scenes` (`derived.py`: HERO_SCENES per machine; the hero stats, "Faster than stock", "Every scene
+  measured both ways") is recomputed on the local DB after each import and its rows copied to the cloud DB
+  (`ingest.refresh_derived`); `runs.boot_s` / `load_s` (from the run's load trace, the daily boot-and-load chart) and
+  `runs.run_s` (opts run_seconds, the run-hours chart) are filled at import. The Runs tables show the newest 500 in range.
+  A new panel over many runs reads plain `runs` columns or a derived table, never the jsonb columns or a sample table.
 - **Grafana** on Cloud Run `pzopt-dashboard`: the image from `harness/grafana/Dockerfile` (dashboards + `cloud/datasource.yaml`
   baked in, Grafana's own DB migrated at build time for fast cold starts, no login form / basic auth / explore / snapshots /
   plugin downloads, min refresh 5 s), built by Cloud Build's free default pool into Artifact Registry `pzopt` (the 2 newest

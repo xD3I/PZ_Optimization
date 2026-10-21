@@ -2600,13 +2600,1215 @@
   },
   {
    "type": "row",
+   "title": "Mods (Lua): each mod's Lua on the game thread (ModLuaProfile, sampled at 2 kHz)",
+   "collapsed": false,
+   "panels": [],
+   "id": 60,
+   "gridPos": {
+    "x": 0,
+    "y": 129,
+    "w": 24,
+    "h": 1
+   }
+  },
+  {
+   "type": "stat",
+   "title": "Lua per frame (route mean)",
+   "description": "Lua time per game frame over the route: all of it, the game's own (media/lua), every mod's. pzopt-luaprof.out (pzopt.ModLuaProfile over the route window: the main Lua thread's stack sampled at 2 kHz off the game thread, self time charged to the innermost Lua function and its mod by file; every event handler and UI call counted). No data: a run without the profiler (--prop modLuaProfile=false, or a build before 2026-10-21).",
+   "datasource": {
+    "type": "grafana-postgresql-datasource",
+    "uid": "pzopt-pg"
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "grafana-postgresql-datasource",
+      "uid": "pzopt-pg"
+     },
+     "rawQuery": true,
+     "editorMode": "code",
+     "format": "table",
+     "rawSql": "SELECT lua_ms AS \"all Lua\", game_lua_ms AS \"game's Lua\", mods_ms AS mods FROM luaprof WHERE run = ${run:sqlstring}",
+     "hide": false
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "ms",
+     "color": {
+      "mode": "thresholds"
+     },
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "text",
+        "value": null
+       }
+      ]
+     },
+     "noValue": "\u2013",
+     "decimals": 3
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "values": false,
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "/.*/"
+    },
+    "colorMode": "none",
+    "graphMode": "none",
+    "textMode": "value_and_name",
+    "justifyMode": "center",
+    "orientation": "auto",
+    "wideLayout": true,
+    "text": {
+     "titleSize": 12,
+     "valueSize": 26
+    }
+   },
+   "id": 61,
+   "gridPos": {
+    "x": 0,
+    "y": 130,
+    "w": 7,
+    "h": 4
+   }
+  },
+  {
+   "type": "stat",
+   "title": "Mods' share of the frame",
+   "description": "The mods' Lua (and all Lua) as a share of the route's frame time.",
+   "datasource": {
+    "type": "grafana-postgresql-datasource",
+    "uid": "pzopt-pg"
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "grafana-postgresql-datasource",
+      "uid": "pzopt-pg"
+     },
+     "rawQuery": true,
+     "editorMode": "code",
+     "format": "table",
+     "rawSql": "SELECT mods_pct AS mods, lua_pct AS \"all Lua\" FROM luaprof WHERE run = ${run:sqlstring}",
+     "hide": false
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "percent",
+     "color": {
+      "mode": "thresholds"
+     },
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "#73BF69",
+        "value": null
+       },
+       {
+        "color": "#EAB839",
+        "value": 2
+       },
+       {
+        "color": "#FF9830",
+        "value": 5
+       },
+       {
+        "color": "#F2495C",
+        "value": 10
+       }
+      ]
+     },
+     "noValue": "\u2013",
+     "decimals": 1
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "values": false,
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "/.*/"
+    },
+    "colorMode": "background",
+    "graphMode": "none",
+    "textMode": "value_and_name",
+    "justifyMode": "center",
+    "orientation": "auto",
+    "wideLayout": true,
+    "text": {
+     "titleSize": 12,
+     "valueSize": 26
+    }
+   },
+   "id": 62,
+   "gridPos": {
+    "x": 7,
+    "y": 130,
+    "w": 5,
+    "h": 4
+   }
+  },
+  {
+   "type": "stat",
+   "title": "Worst mod",
+   "description": "The mod whose own Lua took the most time per frame.",
+   "datasource": {
+    "type": "grafana-postgresql-datasource",
+    "uid": "pzopt-pg"
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "grafana-postgresql-datasource",
+      "uid": "pzopt-pg"
+     },
+     "rawQuery": true,
+     "editorMode": "code",
+     "format": "table",
+     "rawSql": "SELECT CASE WHEN coalesce(worst_mod, '') = '' THEN 'none' ELSE coalesce(nullif(worst_mod_name, ''), worst_mod) END AS mod,\n  CASE WHEN coalesce(worst_mod, '') = '' THEN NULL ELSE worst_mod_ms END AS \"ms/frame\" FROM luaprof WHERE run = ${run:sqlstring}",
+     "hide": false
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "ms",
+     "color": {
+      "mode": "thresholds"
+     },
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "#73BF69",
+        "value": null
+       },
+       {
+        "color": "#EAB839",
+        "value": 0.1
+       },
+       {
+        "color": "#FF9830",
+        "value": 0.5
+       },
+       {
+        "color": "#F2495C",
+        "value": 1
+       }
+      ]
+     },
+     "noValue": "\u2013",
+     "decimals": 3
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "values": false,
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "/.*/"
+    },
+    "colorMode": "none",
+    "graphMode": "none",
+    "textMode": "value_and_name",
+    "justifyMode": "center",
+    "orientation": "auto",
+    "wideLayout": true,
+    "text": {
+     "titleSize": 12,
+     "valueSize": 20
+    }
+   },
+   "id": 63,
+   "gridPos": {
+    "x": 12,
+    "y": 130,
+    "w": 7,
+    "h": 4
+   }
+  },
+  {
+   "type": "stat",
+   "title": "Profiler",
+   "description": "Stack samples over the route, the sampling rate reached, and the counting hooks' cost on the game thread per frame (the sampler runs on its own thread: ~1-1.5 % of one core).",
+   "datasource": {
+    "type": "grafana-postgresql-datasource",
+    "uid": "pzopt-pg"
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "grafana-postgresql-datasource",
+      "uid": "pzopt-pg"
+     },
+     "rawQuery": true,
+     "editorMode": "code",
+     "format": "table",
+     "rawSql": "SELECT samples, sample_hz AS \"Hz\", overhead_us AS \"cost us/frame\" FROM luaprof WHERE run = ${run:sqlstring}",
+     "hide": false
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "none",
+     "color": {
+      "mode": "thresholds"
+     },
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "text",
+        "value": null
+       }
+      ]
+     },
+     "noValue": "\u2013"
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "values": false,
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "/.*/"
+    },
+    "colorMode": "none",
+    "graphMode": "none",
+    "textMode": "value_and_name",
+    "justifyMode": "center",
+    "orientation": "auto",
+    "wideLayout": true,
+    "text": {
+     "titleSize": 12,
+     "valueSize": 18
+    }
+   },
+   "id": 69,
+   "gridPos": {
+    "x": 19,
+    "y": 130,
+    "w": 5,
+    "h": 4
+   }
+  },
+  {
+   "type": "table",
+   "title": "Mods (route): Lua time per frame, calls, the slowest 1 % of frames",
+   "description": "Each origin of Lua: the mods by cost, then the game's, ours and the unknown. p99 spike ms = its mean in the slowest 1 % of frames; files = its Lua files seen. calls/frame is empty when a Java mod patches the hooked methods.",
+   "datasource": {
+    "type": "grafana-postgresql-datasource",
+    "uid": "pzopt-pg"
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "grafana-postgresql-datasource",
+      "uid": "pzopt-pg"
+     },
+     "rawQuery": true,
+     "editorMode": "code",
+     "format": "table",
+     "rawSql": "SELECT name AS mod, kind, ms AS \"ms/frame\", pct AS \"% of frame\", calls_per_frame AS \"calls/frame\", p99_ms AS \"p99 spike ms\", files\nFROM luaprof_origins WHERE run = ${run:sqlstring} ORDER BY ord",
+     "hide": false
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "custom": {
+      "align": "auto",
+      "cellOptions": {
+       "type": "auto"
+      },
+      "filterable": false,
+      "inspect": true,
+      "wrapHeaderText": true
+     }
+    },
+    "overrides": [
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "mod"
+      },
+      "properties": [
+       {
+        "id": "custom.width",
+        "value": 300
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "kind"
+      },
+      "properties": [
+       {
+        "id": "custom.width",
+        "value": 120
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "ms/frame"
+      },
+      "properties": [
+       {
+        "id": "unit",
+        "value": "ms"
+       },
+       {
+        "id": "decimals",
+        "value": 3
+       },
+       {
+        "id": "thresholds",
+        "value": {
+         "mode": "absolute",
+         "steps": [
+          {
+           "color": "#73BF69",
+           "value": null
+          },
+          {
+           "color": "#EAB839",
+           "value": 0.1
+          },
+          {
+           "color": "#FF9830",
+           "value": 0.5
+          },
+          {
+           "color": "#F2495C",
+           "value": 1
+          }
+         ]
+        }
+       },
+       {
+        "id": "color",
+        "value": {
+         "mode": "thresholds"
+        }
+       },
+       {
+        "id": "custom.cellOptions",
+        "value": {
+         "type": "gauge",
+         "mode": "basic",
+         "valueDisplayMode": "text"
+        }
+       },
+       {
+        "id": "max",
+        "value": 2
+       },
+       {
+        "id": "min",
+        "value": 0
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "% of frame"
+      },
+      "properties": [
+       {
+        "id": "unit",
+        "value": "percent"
+       },
+       {
+        "id": "decimals",
+        "value": 1
+       },
+       {
+        "id": "thresholds",
+        "value": {
+         "mode": "absolute",
+         "steps": [
+          {
+           "color": "#73BF69",
+           "value": null
+          },
+          {
+           "color": "#EAB839",
+           "value": 2
+          },
+          {
+           "color": "#FF9830",
+           "value": 5
+          },
+          {
+           "color": "#F2495C",
+           "value": 10
+          }
+         ]
+        }
+       },
+       {
+        "id": "color",
+        "value": {
+         "mode": "thresholds"
+        }
+       },
+       {
+        "id": "custom.cellOptions",
+        "value": {
+         "type": "gauge",
+         "mode": "basic",
+         "valueDisplayMode": "text"
+        }
+       },
+       {
+        "id": "max",
+        "value": 20
+       },
+       {
+        "id": "min",
+        "value": 0
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "calls/frame"
+      },
+      "properties": [
+       {
+        "id": "unit",
+        "value": "none"
+       },
+       {
+        "id": "decimals",
+        "value": 1
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "p99 spike ms"
+      },
+      "properties": [
+       {
+        "id": "unit",
+        "value": "ms"
+       },
+       {
+        "id": "decimals",
+        "value": 2
+       },
+       {
+        "id": "thresholds",
+        "value": {
+         "mode": "absolute",
+         "steps": [
+          {
+           "color": "#73BF69",
+           "value": null
+          },
+          {
+           "color": "#EAB839",
+           "value": 0.5
+          },
+          {
+           "color": "#FF9830",
+           "value": 2
+          },
+          {
+           "color": "#F2495C",
+           "value": 4
+          }
+         ]
+        }
+       },
+       {
+        "id": "color",
+        "value": {
+         "mode": "thresholds"
+        }
+       },
+       {
+        "id": "custom.cellOptions",
+        "value": {
+         "type": "gauge",
+         "mode": "basic",
+         "valueDisplayMode": "text"
+        }
+       },
+       {
+        "id": "max",
+        "value": 5
+       },
+       {
+        "id": "min",
+        "value": 0
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "files"
+      },
+      "properties": [
+       {
+        "id": "unit",
+        "value": "none"
+       },
+       {
+        "id": "decimals",
+        "value": 0
+       },
+       {
+        "id": "custom.width",
+        "value": 70
+       }
+      ]
+     }
+    ]
+   },
+   "transformations": [],
+   "options": {
+    "showHeader": true,
+    "cellHeight": "sm",
+    "footer": {
+     "show": false,
+     "reducer": [
+      "sum"
+     ],
+     "fields": ""
+    },
+    "sortBy": []
+   },
+   "id": 64,
+   "gridPos": {
+    "x": 0,
+    "y": 134,
+    "w": 24,
+    "h": 10
+   }
+  },
+  {
+   "type": "timeseries",
+   "title": "Lua per mod (ms per frame, 0.5 s means)",
+   "description": "The 8 costliest mods, the rest as other mods, the game's Lua and ours, stacked: each 0.5 s bucket's mean per frame (ModLuaDash.series).",
+   "datasource": {
+    "type": "grafana-postgresql-datasource",
+    "uid": "pzopt-pg"
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "grafana-postgresql-datasource",
+      "uid": "pzopt-pg"
+     },
+     "rawQuery": true,
+     "editorMode": "code",
+     "format": "time_series",
+     "rawSql": "SELECT rt AS time, lpad(ord::text, 3, '0') || ' ' || name AS metric, ms AS value FROM luaprof_series WHERE run = ${run:sqlstring} AND $__timeFilter(rt) ORDER BY rt, ord",
+     "hide": false
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "ms",
+     "custom": {
+      "drawStyle": "line",
+      "lineWidth": 1,
+      "pointSize": 4,
+      "showPoints": "never",
+      "fillOpacity": 60,
+      "spanNulls": false,
+      "stacking": {
+       "mode": "normal",
+       "group": "A"
+      },
+      "gradientMode": "none",
+      "axisSoftMin": 0,
+      "insertNulls": 3000
+     },
+     "color": {
+      "mode": "palette-classic"
+     },
+     "min": 0
+    },
+    "overrides": [
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "game's Lua"
+      },
+      "properties": [
+       {
+        "id": "color",
+        "value": {
+         "mode": "fixed",
+         "fixedColor": "#8AB8FF"
+        }
+       }
+      ]
+     }
+    ]
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "right",
+     "showLegend": true
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "transformations": [
+    {
+     "id": "renameByRegex",
+     "options": {
+      "regex": "^\\d{3} (.*)$",
+      "renamePattern": "$1"
+     }
+    }
+   ],
+   "id": 65,
+   "gridPos": {
+    "x": 0,
+    "y": 144,
+    "w": 24,
+    "h": 9
+   }
+  },
+  {
+   "type": "table",
+   "title": "Top Lua functions (route): self = own code and the Java it calls, total = with every function it calls",
+   "description": "Per (function, event): the event or UI call it ran under.",
+   "datasource": {
+    "type": "grafana-postgresql-datasource",
+    "uid": "pzopt-pg"
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "grafana-postgresql-datasource",
+      "uid": "pzopt-pg"
+     },
+     "rawQuery": true,
+     "editorMode": "code",
+     "format": "table",
+     "rawSql": "SELECT mod, file || ':' || function || ' (' || coalesce(line::text, '') || ')' AS \"function\", event, self_ms AS \"self ms/frame\",\n  total_ms AS \"total ms/frame\", calls_per_frame AS \"calls/frame\"\nFROM luaprof_functions WHERE run = ${run:sqlstring} ORDER BY ord LIMIT 60",
+     "hide": false
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "custom": {
+      "align": "auto",
+      "cellOptions": {
+       "type": "auto"
+      },
+      "filterable": false,
+      "inspect": true,
+      "wrapHeaderText": true
+     }
+    },
+    "overrides": [
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "mod"
+      },
+      "properties": [
+       {
+        "id": "custom.width",
+        "value": 220
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "function"
+      },
+      "properties": [
+       {
+        "id": "custom.width",
+        "value": 420
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "event"
+      },
+      "properties": [
+       {
+        "id": "custom.width",
+        "value": 170
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "self ms/frame"
+      },
+      "properties": [
+       {
+        "id": "unit",
+        "value": "ms"
+       },
+       {
+        "id": "decimals",
+        "value": 3
+       },
+       {
+        "id": "thresholds",
+        "value": {
+         "mode": "absolute",
+         "steps": [
+          {
+           "color": "#73BF69",
+           "value": null
+          },
+          {
+           "color": "#EAB839",
+           "value": 0.1
+          },
+          {
+           "color": "#FF9830",
+           "value": 0.5
+          },
+          {
+           "color": "#F2495C",
+           "value": 1
+          }
+         ]
+        }
+       },
+       {
+        "id": "color",
+        "value": {
+         "mode": "thresholds"
+        }
+       },
+       {
+        "id": "custom.cellOptions",
+        "value": {
+         "type": "gauge",
+         "mode": "basic",
+         "valueDisplayMode": "text"
+        }
+       },
+       {
+        "id": "max",
+        "value": 1
+       },
+       {
+        "id": "min",
+        "value": 0
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "total ms/frame"
+      },
+      "properties": [
+       {
+        "id": "unit",
+        "value": "ms"
+       },
+       {
+        "id": "decimals",
+        "value": 3
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "calls/frame"
+      },
+      "properties": [
+       {
+        "id": "unit",
+        "value": "none"
+       },
+       {
+        "id": "decimals",
+        "value": 1
+       }
+      ]
+     }
+    ]
+   },
+   "transformations": [],
+   "options": {
+    "showHeader": true,
+    "cellHeight": "sm",
+    "footer": {
+     "show": false,
+     "reducer": [
+      "sum"
+     ],
+     "fields": ""
+    },
+    "sortBy": []
+   },
+   "id": 66,
+   "gridPos": {
+    "x": 0,
+    "y": 153,
+    "w": 24,
+    "h": 12
+   }
+  },
+  {
+   "type": "table",
+   "title": "Lua by event (route)",
+   "description": "",
+   "datasource": {
+    "type": "grafana-postgresql-datasource",
+    "uid": "pzopt-pg"
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "grafana-postgresql-datasource",
+      "uid": "pzopt-pg"
+     },
+     "rawQuery": true,
+     "editorMode": "code",
+     "format": "table",
+     "rawSql": "SELECT event, lua_ms AS \"Lua ms/frame\", mods_ms AS \"mods ms/frame\", calls_per_frame AS \"calls/frame\", top_mod AS \"most Lua\"\nFROM luaprof_events WHERE run = ${run:sqlstring} ORDER BY ord",
+     "hide": false
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "custom": {
+      "align": "auto",
+      "cellOptions": {
+       "type": "auto"
+      },
+      "filterable": false,
+      "inspect": true,
+      "wrapHeaderText": true
+     }
+    },
+    "overrides": [
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "event"
+      },
+      "properties": [
+       {
+        "id": "custom.width",
+        "value": 170
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "Lua ms/frame"
+      },
+      "properties": [
+       {
+        "id": "unit",
+        "value": "ms"
+       },
+       {
+        "id": "decimals",
+        "value": 3
+       },
+       {
+        "id": "thresholds",
+        "value": {
+         "mode": "absolute",
+         "steps": [
+          {
+           "color": "#73BF69",
+           "value": null
+          },
+          {
+           "color": "#EAB839",
+           "value": 0.1
+          },
+          {
+           "color": "#FF9830",
+           "value": 0.5
+          },
+          {
+           "color": "#F2495C",
+           "value": 1
+          }
+         ]
+        }
+       },
+       {
+        "id": "color",
+        "value": {
+         "mode": "thresholds"
+        }
+       },
+       {
+        "id": "custom.cellOptions",
+        "value": {
+         "type": "gauge",
+         "mode": "basic",
+         "valueDisplayMode": "text"
+        }
+       },
+       {
+        "id": "max",
+        "value": 2
+       },
+       {
+        "id": "min",
+        "value": 0
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "mods ms/frame"
+      },
+      "properties": [
+       {
+        "id": "unit",
+        "value": "ms"
+       },
+       {
+        "id": "decimals",
+        "value": 3
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "calls/frame"
+      },
+      "properties": [
+       {
+        "id": "unit",
+        "value": "none"
+       },
+       {
+        "id": "decimals",
+        "value": 1
+       }
+      ]
+     }
+    ]
+   },
+   "transformations": [],
+   "options": {
+    "showHeader": true,
+    "cellHeight": "sm",
+    "footer": {
+     "show": false,
+     "reducer": [
+      "sum"
+     ],
+     "fields": ""
+    },
+    "sortBy": []
+   },
+   "id": 67,
+   "gridPos": {
+    "x": 0,
+    "y": 165,
+    "w": 12,
+    "h": 10
+   }
+  },
+  {
+   "type": "table",
+   "title": "Slowest frames: whose Lua ran in them",
+   "description": "The 12 longest frames: at = route time of the frame's end.",
+   "datasource": {
+    "type": "grafana-postgresql-datasource",
+    "uid": "pzopt-pg"
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "grafana-postgresql-datasource",
+      "uid": "pzopt-pg"
+     },
+     "rawQuery": true,
+     "editorMode": "code",
+     "format": "table",
+     "rawSql": "SELECT to_char(make_interval(secs => floor(t_s + 0.5)), 'HH24:MI:SS') AS \"at s\", frame_ms AS \"frame ms\", lua_ms AS \"Lua ms\",\n  mods_ms AS \"mods ms\", top_mod AS \"most Lua\", top_ms AS \"its ms\"\nFROM luaprof_spikes WHERE run = ${run:sqlstring} ORDER BY ord",
+     "hide": false
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "custom": {
+      "align": "auto",
+      "cellOptions": {
+       "type": "auto"
+      },
+      "filterable": false,
+      "inspect": true,
+      "wrapHeaderText": true
+     },
+     "unit": "ms"
+    },
+    "overrides": [
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "at s"
+      },
+      "properties": [
+       {
+        "id": "unit",
+        "value": "none"
+       },
+       {
+        "id": "decimals",
+        "value": 2
+       },
+       {
+        "id": "custom.width",
+        "value": 80
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "frame ms"
+      },
+      "properties": [
+       {
+        "id": "unit",
+        "value": "ms"
+       },
+       {
+        "id": "decimals",
+        "value": 2
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "Lua ms"
+      },
+      "properties": [
+       {
+        "id": "unit",
+        "value": "ms"
+       },
+       {
+        "id": "decimals",
+        "value": 2
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "mods ms"
+      },
+      "properties": [
+       {
+        "id": "unit",
+        "value": "ms"
+       },
+       {
+        "id": "decimals",
+        "value": 2
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "its ms"
+      },
+      "properties": [
+       {
+        "id": "unit",
+        "value": "ms"
+       },
+       {
+        "id": "decimals",
+        "value": 2
+       }
+      ]
+     }
+    ]
+   },
+   "transformations": [],
+   "options": {
+    "showHeader": true,
+    "cellHeight": "sm",
+    "footer": {
+     "show": false,
+     "reducer": [
+      "sum"
+     ],
+     "fields": ""
+    },
+    "sortBy": []
+   },
+   "id": 68,
+   "gridPos": {
+    "x": 12,
+    "y": 165,
+    "w": 12,
+    "h": 10
+   }
+  },
+  {
+   "type": "row",
    "title": "Chunks, GC, flips",
    "collapsed": false,
    "panels": [],
    "id": 33,
    "gridPos": {
     "x": 0,
-    "y": 129,
+    "y": 175,
     "w": 24,
     "h": 1
    }
@@ -2675,7 +3877,7 @@
    "id": 34,
    "gridPos": {
     "x": 0,
-    "y": 130,
+    "y": 176,
     "w": 12,
     "h": 8
    }
@@ -2764,7 +3966,7 @@
    "id": 35,
    "gridPos": {
     "x": 12,
-    "y": 130,
+    "y": 176,
     "w": 12,
     "h": 8
    }
@@ -2829,7 +4031,7 @@
    "id": 36,
    "gridPos": {
     "x": 0,
-    "y": 138,
+    "y": 184,
     "w": 12,
     "h": 8
    }
@@ -2898,7 +4100,7 @@
    "id": 37,
    "gridPos": {
     "x": 12,
-    "y": 138,
+    "y": 184,
     "w": 12,
     "h": 8
    }
@@ -2911,7 +4113,7 @@
    "id": 38,
    "gridPos": {
     "x": 0,
-    "y": 146,
+    "y": 192,
     "w": 24,
     "h": 1
    }
@@ -2976,7 +4178,7 @@
    "id": 39,
    "gridPos": {
     "x": 0,
-    "y": 147,
+    "y": 193,
     "w": 12,
     "h": 8
    }
@@ -3041,7 +4243,7 @@
    "id": 40,
    "gridPos": {
     "x": 12,
-    "y": 147,
+    "y": 193,
     "w": 12,
     "h": 8
    }
@@ -3054,7 +4256,7 @@
    "id": 41,
    "gridPos": {
     "x": 0,
-    "y": 155,
+    "y": 201,
     "w": 24,
     "h": 1
    }
@@ -3091,7 +4293,7 @@
    "id": 42,
    "gridPos": {
     "x": 0,
-    "y": 156,
+    "y": 202,
     "w": 24,
     "h": 22
    }
@@ -3156,7 +4358,7 @@
    "id": 43,
    "gridPos": {
     "x": 0,
-    "y": 178,
+    "y": 224,
     "w": 24,
     "h": 8
    }
@@ -3169,7 +4371,7 @@
    "id": 44,
    "gridPos": {
     "x": 0,
-    "y": 186,
+    "y": 232,
     "w": 24,
     "h": 1
    }
@@ -3234,7 +4436,7 @@
    "id": 45,
    "gridPos": {
     "x": 0,
-    "y": 187,
+    "y": 233,
     "w": 12,
     "h": 9
    }
@@ -3299,7 +4501,7 @@
    "id": 46,
    "gridPos": {
     "x": 12,
-    "y": 187,
+    "y": 233,
     "w": 12,
     "h": 9
    }
@@ -3377,7 +4579,7 @@
    "id": 47,
    "gridPos": {
     "x": 0,
-    "y": 196,
+    "y": 242,
     "w": 12,
     "h": 8
    }
@@ -3442,7 +4644,7 @@
    "id": 48,
    "gridPos": {
     "x": 12,
-    "y": 196,
+    "y": 242,
     "w": 12,
     "h": 8
    }
@@ -3511,7 +4713,7 @@
    "id": 49,
    "gridPos": {
     "x": 0,
-    "y": 204,
+    "y": 250,
     "w": 24,
     "h": 9
    }
@@ -3524,7 +4726,7 @@
    "id": 50,
    "gridPos": {
     "x": 0,
-    "y": 213,
+    "y": 259,
     "w": 24,
     "h": 1
    }
@@ -3605,7 +4807,7 @@
    "id": 51,
    "gridPos": {
     "x": 0,
-    "y": 214,
+    "y": 260,
     "w": 24,
     "h": 10
    }
@@ -3687,7 +4889,7 @@
    "id": 52,
    "gridPos": {
     "x": 0,
-    "y": 224,
+    "y": 270,
     "w": 12,
     "h": 8
    }
@@ -3752,7 +4954,7 @@
    "id": 53,
    "gridPos": {
     "x": 12,
-    "y": 224,
+    "y": 270,
     "w": 12,
     "h": 8
    }
@@ -3809,7 +5011,7 @@
    "id": 54,
    "gridPos": {
     "x": 0,
-    "y": 232,
+    "y": 278,
     "w": 12,
     "h": 12
    }
@@ -3891,7 +5093,7 @@
    "id": 55,
    "gridPos": {
     "x": 12,
-    "y": 232,
+    "y": 278,
     "w": 12,
     "h": 12
    }
@@ -3904,7 +5106,7 @@
    "id": 56,
    "gridPos": {
     "x": 0,
-    "y": 244,
+    "y": 290,
     "w": 24,
     "h": 1
    }
@@ -3944,7 +5146,7 @@
    "id": 57,
    "gridPos": {
     "x": 0,
-    "y": 245,
+    "y": 291,
     "w": 24,
     "h": 14
    }
@@ -3957,7 +5159,7 @@
    "id": 58,
    "gridPos": {
     "x": 0,
-    "y": 259,
+    "y": 305,
     "w": 24,
     "h": 1
    }
@@ -4027,7 +5229,7 @@
    "id": 59,
    "gridPos": {
     "x": 0,
-    "y": 260,
+    "y": 306,
     "w": 24,
     "h": 12
    }

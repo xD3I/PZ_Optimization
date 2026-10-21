@@ -9,7 +9,8 @@ Every sample of a run goes in, not only its summary: each game frame (pzopt-fram
 frame with GPU time and thread loads (pzopt-overlay.out), sysmon.csv, the game thread's per-second phase /
 sub-phase / hot-method / wait shares (pzopt-gamethread.out), every streamed chunk (pzopt-chunks.out), GC
 pauses (gc.log), flip intervals (present.txt), VRR state (vrr.txt), the path pilot's telemetry
-(pzopt-drive.out), per-thread CPU (pzopt-threads.out), the numeric facts and counters of pzopt-bench.out,
+(pzopt-drive.out), per-thread CPU (pzopt-threads.out), each mod's Lua (pzopt-luaprof.out / pzopt-luaprof-frames.out:
+the luaprof* tables, the Run dashboard's Mods (Lua) row), the numeric facts and counters of pzopt-bench.out,
 and one `runs` row with analyze.py's route-window summary (the numbers compare.py and judge.py use), the
 chunk latency and Jev's verdict from judge.json. Re-importing a run replaces its rows.
 
@@ -39,6 +40,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
 from analyze import power_watts, summarize  # noqa: E402
 from compare import latency  # noqa: E402
+from derived import HERO_COLS, hero_refresh_sql  # noqa: E402
 
 REPO = HERE.parents[1]
 ZOMBOID = Path(os.environ.get("ZOMBOID", Path.home() / "Zomboid"))
@@ -153,12 +155,18 @@ class Remote:
                             PGDATABASE=cfg.get("PZ_REMOTE_PGDATABASE", "pzopt"), PGCONNECT_TIMEOUT="15",
                             PGSSLMODE="disable")  # the IAP tunnel is already encrypted
         self.live = None
+        # the Workshop snapshot thread writes too: two replays at once ran each spooled import twice on the VM
+        self.lock = threading.RLock()
 
     def spooled(self):
         return sorted(SPOOL.glob("*.sql")) if SPOOL.exists() else []
 
     def flush(self):
         """Replay the spool in order; False when something is still waiting."""
+        with self.lock:
+            return self._flush()
+
+    def _flush(self):
         for f in self.spooled():
             try:
                 psql_run(f.read_text(), self.env)
@@ -171,14 +179,33 @@ class Remote:
     def apply(self, script, what):
         if self.env is None:
             return
-        if self.flush():
-            try:
-                psql_run(script, self.env)
-                return
-            except RuntimeError as e:
-                print(f"remote: {what} spooled: {str(e)[:200]}", file=sys.stderr, flush=True)
-        SPOOL.mkdir(parents=True, exist_ok=True)
-        (SPOOL / f"{time.time_ns()}.sql").write_text(script)
+        with self.lock:
+            if self._flush():
+                try:
+                    psql_run(script, self.env)
+                    return
+                except RuntimeError as e:
+                    print(f"remote: {what} spooled: {str(e)[:200]}", file=sys.stderr, flush=True)
+            SPOOL.mkdir(parents=True, exist_ok=True)
+            (SPOOL / f"{time.time_ns()}.sql").write_text(script)
+
+    def has_tables(self, table, ttl=600):
+        """Whether the public DB has `table` yet (it gets new tables when cloud.sh applies schema.sql: seed / deploy).
+        Cached for ttl seconds; an unreachable DB counts as no, so a script that would fail there never blocks the spool."""
+        if self.env is None:
+            return False
+        now = time.time()
+        hit = getattr(self, "_tables", {}).get(table)
+        if hit and now - hit[1] < ttl:
+            return hit[0]
+        try:
+            p = subprocess.run(["psql", "-X", "-At", "-c", f"SELECT to_regclass('public.{table}') IS NOT NULL"], text=True,
+                               capture_output=True, env=self.env, timeout=30)
+            ok = p.returncode == 0 and p.stdout.strip() == "t"
+        except (subprocess.SubprocessError, OSError):
+            ok = False
+        self._tables = {**getattr(self, "_tables", {}), table: (ok, now)}
+        return ok
 
     def send_live(self, script):
         """Live samples: one persistent connection, best effort (a dropped batch only costs the live view seconds)."""
@@ -331,6 +358,149 @@ def parse_gamethread_lines(lines):
             kind, name = k.split(":", 1)
             rows.append((t, kind, name, int(v), int(v) / n if n else None))
     return rows
+
+
+LUAPROF_TABLES = ("luaprof", "luaprof_origins", "luaprof_functions", "luaprof_events", "luaprof_spikes", "luaprof_frames", "luaprof_series")
+LUAPROF_SCALARS = [("frames", int), ("seconds", float), ("sample_hz", float), ("sample_interval_us", float), ("samples", int),
+                   ("samples_in_lua", int), ("lua_ms", float), ("lua_pct", float), ("game_lua_ms", float), ("mods_ms", float),
+                   ("mods_pct", float), ("worst_mod", str), ("worst_mod_name", str), ("worst_mod_ms", float), ("worst_mod_pct", float),
+                   ("p99_frame_ms", float), ("spike_frames", int), ("counting", str), ("counting_off_reason", str), ("hook_calls", int),
+                   ("hook_ns", float), ("overhead_us", float), ("sampler_cpu_pct", float), ("start_epoch_ms", int)]
+LUAPROF_BUCKET_S = 0.5  # ModLuaDash.BUCKET_S
+LUAPROF_SERIES_MODS = 8  # ModLuaDash.SERIES_MODS
+
+
+def luaprof_display(oid):
+    """ModLuaProfile.displayName for an origin that is not in the mods table (a mod's own name needs the game)."""
+    if oid.startswith("mod:"):
+        return oid[4:]
+    return {"game": "Project Zomboid (game Lua)", "pzopt": "PZ Optimization"}.get(oid, "unknown origin")
+
+
+def parse_luaprof(run):
+    """pzopt-luaprof.out + pzopt-luaprof-frames.out (pzopt.HarnessModLua; the in-game benchmark's <base>-luaprof.properties /
+    .csv): the summary, the table rows and panel 65's series exactly as pzopt.ModLuaDash answers the in-game report."""
+    from analyze import prop_rows, read_properties
+    d = read_properties(run / "pzopt-luaprof.out")
+    if not d.get("frames"):
+        return None
+
+    def conv(v, f):
+        if v is None or v == "" or v == "nan":
+            return None
+        try:
+            return f(float(v)) if f is int else f(v)
+        except ValueError:
+            return None
+
+    counted = d.get("counting", "on") == "on"
+    out = {"summary": {k: conv(d.get(k), f) for k, f in LUAPROF_SCALARS}}
+    cellf = lambda r, i: r[i] if i < len(r) else ""  # noqa: E731
+    origins = prop_rows(d, "origin.")  # id, kind, name, ms, pct, calls, p99, files
+    names = {cellf(o, 0): cellf(o, 2) for o in origins}
+
+    def short(oid):  # ModLuaDash.shortName
+        if not oid:
+            return ""
+        return names.get(oid) or luaprof_display(oid)
+
+    out["origins"] = [(i, cellf(o, 0), cellf(o, 1), cellf(o, 2), num(cellf(o, 3)), num(cellf(o, 4)), num(cellf(o, 5)) if counted else None,
+                       num(cellf(o, 6)), conv(cellf(o, 7), int)) for i, o in enumerate(origins)]
+    out["functions"] = [(i, cellf(f, 0), short(cellf(f, 0)), cellf(f, 1), cellf(f, 2), conv(cellf(f, 3), int), cellf(f, 4), num(cellf(f, 5)),
+                         num(cellf(f, 6)), num(cellf(f, 7)) if counted else None) for i, f in enumerate(prop_rows(d, "fn."))]
+    out["events"] = [(i, cellf(e, 0), num(cellf(e, 1)), num(cellf(e, 2)), num(cellf(e, 3)) if counted else None, cellf(e, 4),
+                      short(cellf(e, 4)), num(cellf(e, 5))) for i, e in enumerate(prop_rows(d, "event."))]
+    out["spikes"] = [(i, num(cellf(x, 0)), num(cellf(x, 1)), num(cellf(x, 2)), num(cellf(x, 3)), cellf(x, 4), short(cellf(x, 4)),
+                      num(cellf(x, 5))) for i, x in enumerate(prop_rows(d, "spike."))]
+    out["frames"], out["series"] = [], []
+    csvp = run / "pzopt-luaprof-frames.out"
+    if not csvp.exists():
+        return out
+    lines = csvp.read_text(errors="replace").splitlines()
+    if not lines:
+        return out
+    head = lines[0].split(",")
+    rows = []
+    for line in lines[1:]:
+        c = line.split(",")
+        rows.append([num(c[i]) if i < len(c) else None for i in range(len(head))])
+    if "t_s" not in head or not rows:
+        return out
+    col = {h: i for i, h in enumerate(head)}
+    tcol = col["t_s"]
+    mod_cols = [h for h in head if h.startswith("mod:")]
+    for r in rows:
+        mods = sum(r[col[h]] or 0.0 for h in mod_cols)
+        out["frames"].append((r[col["frame"]], r[tcol], r[col["frame_ms"]], r[col["lua_ms"]], mods,
+                              r[col["game"]] if "game" in col else 0.0))
+    # panel 65 (ModLuaDash.series): bucket means per frame, mods in the mods table's order, the first 8 own series
+    end = rows[-1][tcol] or 0.0
+    nb = max(1, int(end // LUAPROF_BUCKET_S) + 1)
+    frames_in = [0] * nb
+    bucket = []
+    for r in rows:
+        x = r[tcol]
+        b = -1 if x is None else min(nb - 1, max(0, int(x // LUAPROF_BUCKET_S)))
+        bucket.append(b)
+        if b >= 0:
+            frames_in[b] += 1
+
+    def sums(h):
+        s = [0.0] * nb
+        i = col.get(h)
+        if i is None:
+            return s
+        for r, b in zip(rows, bucket):
+            if b >= 0 and r[i] is not None:
+                s[b] += r[i]
+        return s
+
+    order = [cellf(o, 0) for o in origins if cellf(o, 0) in mod_cols]
+    order += [h for h in mod_cols if h not in order]
+    series, rest = [], None
+    for k, h in enumerate(order):
+        s = sums(h)
+        if k < LUAPROF_SERIES_MODS:
+            series.append((short(h), s))
+        else:
+            rest = s if rest is None else [a + b for a, b in zip(rest, s)]
+    if rest is not None:
+        series.append(("other mods", rest))
+    for h, label in (("game", "game's Lua"), ("pzopt", "PZ Optimization"), ("other", "unknown origin")):
+        if h in col:
+            series.append((label, sums(h)))
+    for k, (label, s) in enumerate(series):
+        for i in range(nb):
+            if frames_in[i]:
+                out["series"].append(((i + 0.5) * LUAPROF_BUCKET_S, k, label, s[i] / frames_in[i]))
+    return out
+
+
+def luaprof_blocks(run, q, times, origin):
+    """DELETE + COPY of the luaprof tables (the DELETEs also when the run has no profile: a re-import clears it)."""
+    out = [f"DELETE FROM {tbl} WHERE run = '{q}';\n" for tbl in LUAPROF_TABLES]
+    name = run.name
+    lp = parse_luaprof(run) if (run / "pzopt-luaprof.out").exists() else None
+    if not lp:
+        return "".join(out)
+    sm = lp["summary"]
+    out.append(copy_block("luaprof", ["run"] + [k for k, _ in LUAPROF_SCALARS], [[name] + [sm[k] for k, _ in LUAPROF_SCALARS]]))
+    out.append(copy_block("luaprof_origins", ["run", "ord", "id", "kind", "name", "ms", "pct", "calls_per_frame", "p99_ms", "files"],
+                          ((name, *r) for r in lp["origins"])))
+    out.append(copy_block("luaprof_functions", ["run", "ord", "origin", "mod", "file", "function", "line", "event", "self_ms", "total_ms",
+                                                "calls_per_frame"], ((name, *r) for r in lp["functions"])))
+    out.append(copy_block("luaprof_events", ["run", "ord", "event", "lua_ms", "mods_ms", "calls_per_frame", "top_origin", "top_mod", "top_ms"],
+                          ((name, *r) for r in lp["events"])))
+    out.append(copy_block("luaprof_spikes", ["run", "ord", "t_s", "frame_ms", "lua_ms", "mods_ms", "top_origin", "top_mod", "top_ms"],
+                          ((name, *r) for r in lp["spikes"])))
+    # t_s 0 = the route start (HarnessModLua starts the profile on the route's first frame, a few ms after run.sh's stamp), so
+    # the route-time axis shows the in-game report's x values exactly; without a route stamp, the profile's own start
+    t0 = origin if origin else (sm["start_epoch_ms"] / 1e3 if sm.get("start_epoch_ms") else 0.0)
+    out.append(copy_block("luaprof_frames", ["run", "t", "rel_s", "rt", "frame", "frame_ms", "lua_ms", "mods_ms", "game_ms"],
+                          ((name, *times(t0 + f[1]), int(f[0]) if f[0] is not None else None, *f[2:]) for f in lp["frames"] if f[1] is not None)))
+    out.append(copy_block("luaprof_series", ["run", "t", "rel_s", "rt", "ord", "name", "ms"],
+                          ((name, *times(t0 + x[0]), *x[1:]) for x in lp["series"])))
+    return "".join(out)
 
 
 GC_TS = re.compile(r"^\[(\d{4}-\d\d-\d\dT[\d:.]+[+-]\d{4})\]")
@@ -636,6 +806,17 @@ def parse_loadtrace(p):
     return rows
 
 
+def boot_load(rows):
+    """(boot_s, load_s) from parse_loadtrace rows: launch (the first line) to "continuing latest save", then to the first
+    "world ready" after it; None where the trace lacks the line."""
+    t0 = min((r[0] for r in rows), default=None)
+    tc = min((r[0] for r in rows if "continuing latest save" in r[3]), default=None)
+    if tc is None:
+        return None, None
+    tw = min((r[0] for r in rows if r[0] > tc and "world ready" in r[3]), default=None)
+    return tc - t0, (tw - tc if tw is not None else None)
+
+
 def parse_inputs_lines(lines):
     rows = []
     for line in lines:
@@ -779,6 +960,7 @@ def run_row(run, s, lat, judge, t_route):
         "gc_wall_ms": gc.get("wall_ms_in_route"),
         "gc_max_ms": gc.get("max_event_ms"),
         "zombies_loaded": int(num(sc["zombies_loaded"])) if num(sc.get("zombies_loaded")) is not None else None,
+        "run_s": num(opts.get("run_seconds")),
         "scenario": sc,
         "opts": opts,
         "summary": s,
@@ -798,7 +980,7 @@ def is_run(run):
     return run.is_dir() and any((run / f).exists() for f in ("pzopt-frames.out", "pzopt-overlay.out", "mangohud.csv"))
 
 
-def build_script(run):
+def build_script(run, with_luaprof=True, parts=None):
     run = Path(run).resolve()
     name = run.name
     s = summarize(run)
@@ -829,6 +1011,8 @@ def build_script(run):
         return ts(t), rel, ts(ROUTE_ORIGIN + rel)
 
     row = run_row(run, s, lat, judge, (origin if r0 else None, end))
+    loadtrace = parse_loadtrace(run / "pzopt-loadtrace.out") if (run / "pzopt-loadtrace.out").exists() else []
+    row["boot_s"], row["load_s"] = boot_load(loadtrace)
     q = name.replace("'", "''")
     out = ["BEGIN;\n"]
     for tbl in ("runs", "frames", "overlay", "sysmon", "power", "gamethread", "chunks", "gc", "present", "series", "threads", "counters",
@@ -895,22 +1079,39 @@ def build_script(run):
                                          "shown_after_swap_ms"], ((name, *times(r[0]), *r[1:]) for r in parse_pacing(run / "pzopt-pacing.out"))))
     if series_extra:
         out.append(copy_block("series", ["run", "t", "rel_s", "rt", "source", "key", "value"], ((name, *times(r[0]), *r[1:]) for r in series_extra)))
-    if (run / "pzopt-loadtrace.out").exists():
+    if loadtrace:
         out.append(copy_block("events", ["run", "t", "rel_s", "rt", "source", "level", "category", "text"],
-                              ((name, *times(r[0]), "console", *r[1:]) for r in parse_loadtrace(run / "pzopt-loadtrace.out"))))
+                              ((name, *times(r[0]), "console", *r[1:]) for r in loadtrace)))
     if (run / "pzopt-input.out").exists():
         out.append(copy_block("inputs", ["run", "t", "rel_s", "rt", "device", "control", "value"],
                               ((name, *times(r[0]), *r[1:]) for r in parse_inputs_lines((run / "pzopt-input.out").read_text(errors="replace").splitlines()))))
     out.append(copy_block("run_inputs", ["run", "kind", "key", "value"], ((name, *r) for r in run_inputs(run, s.get("opts", {})))))
-    out.append("COMMIT;\n")
-    return "".join(out), row
+    lua = luaprof_blocks(run, q, times, origin)
+    base = "".join(out)
+    if not with_luaprof:
+        return base + "COMMIT;\n", row
+    if parts is not None:
+        parts["plain"] = base + "COMMIT;\n"
+    return base + lua + "COMMIT;\n", row
 
 
 def ingest(run):
-    script, row = build_script(run)
+    parts = {}
+    script, row = build_script(run, parts=parts)
     psql_run(script)
-    remote().apply(script, Path(run).name)
+    # the luaprof tables only where they exist: the public DB gets them when cloud.sh next applies schema.sql
+    remote().apply(script if remote().has_tables("luaprof_series") else parts["plain"], Path(run).name)
     return row
+
+
+def refresh_derived():
+    """The dashboards' precomputed tables (derived.py) from the local DB, then the same rows to the public dashboard's DB
+    (its e2-micro would need minutes for what the desktop computes in a second)."""
+    machines = [r[0] for r in psql_query("SELECT DISTINCT machine FROM runs WHERE machine IS NOT NULL ORDER BY 1")]
+    psql_run(hero_refresh_sql(machines))
+    rows = json.loads(psql_query("SELECT coalesce(jsonb_agg(h), '[]') FROM hero_scenes h")[0][0])
+    remote().apply("BEGIN;\nDELETE FROM hero_scenes;\n" + copy_block("hero_scenes", HERO_COLS, ([r[c] for c in HERO_COLS] for r in rows))
+                   + "COMMIT;\n", "hero_scenes")
 
 
 def summary_line(row):
@@ -1096,6 +1297,8 @@ class Live:
 
 def workshop_snapshot():
     try:
+        # workshop_stats imports ingest: give it this module (run as __main__), so both write through one Remote and its lock
+        sys.modules.setdefault("ingest", sys.modules[__name__])
         import workshop_stats
         workshop_stats.snapshot()
     except Exception as e:  # Steam down or rate-limiting: the next try is in 30 min
@@ -1117,16 +1320,23 @@ def follow():
         now = time.time()
         if now - last_scan > 10:
             last_scan = now
+            imported = False
             for d, m in list(pending_runs(known, since)):
                 if failed.get(d.name) == m:
                     continue
                 try:
                     row = ingest(d)
                     known[d.name] = m
+                    imported = True
                     print("imported " + summary_line(row), flush=True)
                 except Exception as e:
                     failed[d.name] = m
                     print(f"import {d.name} failed: {e}", file=sys.stderr, flush=True)
+            if imported:
+                try:
+                    refresh_derived()
+                except Exception as e:
+                    print(f"derived tables: {e}", file=sys.stderr, flush=True)
         if now - last_workshop > 1800:  # the Workshop item's public numbers (hero row of the home dashboard)
             last_workshop = now
             threading.Thread(target=workshop_snapshot, daemon=True).start()
@@ -1171,6 +1381,8 @@ def main(argv):
         except Exception as e:
             rc = 1
             print(f"{d.name}: {e}", file=sys.stderr)
+    if not a.dry_run:
+        refresh_derived()
     return rc
 
 
