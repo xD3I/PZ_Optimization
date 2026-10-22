@@ -35,12 +35,24 @@ public final class HarnessFlags {
       return p;
    }
 
+   /** A save's scene file (pzopt.HordeScene): its keys win over the flag file's; null when no scene is loaded. */
+   private static volatile Properties overlay;
+
+   /** pzopt.HordeScene, game thread: the loaded save's scene keys (null clears them). */
+   static void overlay(Properties p) {
+      overlay = p;
+   }
+
    public static String get(String key) {
-      return props.getProperty(key);
+      Properties o = overlay;
+      String v = o == null ? null : o.getProperty(key);
+      return v != null ? v : props.getProperty(key);
    }
 
    public static String get(String key, String def) {
-      return props.getProperty(key, def);
+      Properties o = overlay;
+      String v = o == null ? null : o.getProperty(key);
+      return v != null ? v : props.getProperty(key, def);
    }
 
    /** Append started=1 to the flag file: the Lua mod quits the process on the next return to the main menu. */

@@ -2,7 +2,7 @@
 """Write the provisioned Grafana dashboards (harness/grafana/dashboards/*.json); stack.sh up runs it.
 
   pzopt-runs     every run in the time range: table (links to Run / Compare), trends, headroom findings
-  pzopt-run      one run on the route-time axis: tails, fps, GPU time, utilization, game-thread phases,
+  pzopt-run      one run on the route-time axis: tails, fps, GPU time, utilization, game-thread phases, each mod's Lua,
                  chunks, GC, flips, drive, profiler flame graphs (in-game / Lua / JFR / async-profiler), schedmon,
                  PSI, memory, pacing, every input the game saw + the harness configuration, console, counters
   pzopt-compare  several runs on one route-time axis, deltas against a base run, diff flame graph
@@ -45,21 +45,23 @@ class Layout:
     def __init__(self):
         self.panels, self.x, self.y, self.row_h, self.id = [], 0, 0, 0, 1
 
-    def add(self, p, w, h):
+    def add(self, p, w, h, pid=None):
+        """pid: a fixed panel id outside the running count (the Mods (Lua) row keeps the in-game report's ids 60-69)."""
         if self.x + w > 24:
             self.x, self.y, self.row_h = 0, self.y + self.row_h, 0
-        p["id"] = self.id
+        p["id"] = self.id if pid is None else pid
         p["gridPos"] = {"x": self.x, "y": self.y, "w": w, "h": h}
-        self.id += 1
+        if pid is None:
+            self.id += 1
         self.x += w
         self.row_h = max(self.row_h, h)
         self.panels.append(p)
         return p
 
-    def row(self, title):
+    def row(self, title, pid=None):
         self.x, self.y = 0, self.y + self.row_h
         self.row_h = 0
-        self.add({"type": "row", "title": title, "collapsed": False, "panels": []}, 24, 1)
+        self.add({"type": "row", "title": title, "collapsed": False, "panels": []}, 24, 1, pid)
 
 
 def ts_panel(title, targets, unit="ms", desc="", stack=False, points=False, bars=False, thresholds=None, overrides=(),
@@ -625,6 +627,73 @@ FROM runs WHERE {where} AND {BOUND} = 'headroom left' ORDER BY started DESC""",
 
 # ------------------------------------------------------------------ Run
 
+# the Mods (Lua) row's colours = src/lua/client/pzopt/pzopt_mainscreen_report_mods.lua's MS_THR / PCT_THR / SPIKE_THR
+LUA_MS_STEPS = [("#73BF69", None), ("#EAB839", 0.1), ("#FF9830", 0.5), ("#F2495C", 1)]
+LUA_PCT_STEPS = [("#73BF69", None), ("#EAB839", 2), ("#FF9830", 5), ("#F2495C", 10)]
+LUA_SPIKE_STEPS = [("#73BF69", None), ("#EAB839", 0.5), ("#FF9830", 2), ("#F2495C", 4)]
+
+
+def mods_lua_row(L):
+    """The "Mods (Lua)" row (2026-10-21): the in-game benchmark report's row 60-69 (pzopt_mainscreen_report_mods.lua, answered by
+    pzopt.ModLuaDash) panel for panel: same ids, titles, units, thresholds, sizes and order, from the luaprof tables ingest.py
+    loads from pzopt-luaprof.out / pzopt-luaprof-frames.out (pzopt.HarnessModLua: ModLuaProfile over the route window)."""
+    lp = f"FROM luaprof WHERE run = {RUN}"
+    src = ("pzopt-luaprof.out (pzopt.ModLuaProfile over the route window: the main Lua thread's stack sampled at 2 kHz off the game "
+           "thread, self time charged to the innermost Lua function and its mod by file; every event handler and UI call counted). "
+           "No data: a run without the profiler (--prop modLuaProfile=false, or a build before 2026-10-21).")
+    L.row("Mods (Lua): each mod's Lua on the game thread (ModLuaProfile, sampled at 2 kHz)", pid=60)
+    L.add(stat_panel("Lua per frame (route mean)", f"SELECT lua_ms AS \"all Lua\", game_lua_ms AS \"game's Lua\", mods_ms AS mods {lp}",
+                     unit="ms", decimals=3, color_mode="none", desc="Lua time per game frame over the route: all of it, the game's own "
+                     "(media/lua), every mod's. " + src), 7, 4, pid=61)
+    L.add(stat_panel("Mods' share of the frame", f"SELECT mods_pct AS mods, lua_pct AS \"all Lua\" {lp}", unit="percent", decimals=1,
+                     thr=LUA_PCT_STEPS, desc="The mods' Lua (and all Lua) as a share of the route's frame time."), 5, 4, pid=62)
+    L.add(stat_panel("Worst mod", f"""
+SELECT CASE WHEN coalesce(worst_mod, '') = '' THEN 'none' ELSE coalesce(nullif(worst_mod_name, ''), worst_mod) END AS mod,
+  CASE WHEN coalesce(worst_mod, '') = '' THEN NULL ELSE worst_mod_ms END AS "ms/frame" {lp}""", unit="ms", decimals=3,
+                     thr=LUA_MS_STEPS, color_mode="none", value_size=20, desc="The mod whose own Lua took the most time per frame."), 7, 4, pid=63)
+    L.add(stat_panel("Profiler", f"SELECT samples, sample_hz AS \"Hz\", overhead_us AS \"cost us/frame\" {lp}", color_mode="none",
+                     value_size=18, desc="Stack samples over the route, the sampling rate reached, and the counting hooks' cost on the "
+                     "game thread per frame (the sampler runs on its own thread: ~1-1.5 % of one core)."), 5, 4, pid=69)
+    L.add(table_panel("Mods (route): Lua time per frame, calls, the slowest 1 % of frames", f"""
+SELECT name AS mod, kind, ms AS "ms/frame", pct AS "% of frame", calls_per_frame AS "calls/frame", p99_ms AS "p99 spike ms", files
+FROM luaprof_origins WHERE run = {RUN} ORDER BY ord""",
+        desc="Each origin of Lua: the mods by cost, then the game's, ours and the unknown. p99 spike ms = its mean in the slowest 1 % "
+             "of frames; files = its Lua files seen. calls/frame is empty when a Java mod patches the hooked methods.",
+        overrides=[ov("mod", width=300), ov("kind", width=120),
+                   ov("ms/frame", unit="ms", decimals=3, gauge=True, min=0, max=2, thresholds=LUA_MS_STEPS),
+                   ov("% of frame", unit="percent", decimals=1, gauge=True, min=0, max=20, thresholds=LUA_PCT_STEPS),
+                   ov("calls/frame", unit="none", decimals=1),
+                   ov("p99 spike ms", unit="ms", decimals=2, gauge=True, min=0, max=5, thresholds=LUA_SPIKE_STEPS),
+                   ov("files", unit="none", decimals=0, width=70)]), 24, 10, pid=64)
+    # Grafana orders long-format series by name: the stacking order (ord) goes into the name and a rename takes it out again
+    p65 = ts_panel("Lua per mod (ms per frame, 0.5 s means)", [q(f"""
+SELECT rt AS time, lpad(ord::text, 3, '0') || ' ' || name AS metric, ms AS value FROM luaprof_series WHERE run = {RUN} AND $__timeFilter(rt) ORDER BY rt, ord""")],
+        stack=True, minv=0, legend="right", desc="The 8 costliest mods, the rest as other mods, the game's Lua and ours, stacked: "
+        "each 0.5 s bucket's mean per frame (ModLuaDash.series).", overrides=[ov("game's Lua", color="#8AB8FF")])
+    p65["transformations"] = [{"id": "renameByRegex", "options": {"regex": "^\\d{3} (.*)$", "renamePattern": "$1"}}]
+    L.add(p65, 24, 9, pid=65)
+    L.add(table_panel("Top Lua functions (route): self = own code and the Java it calls, total = with every function it calls", f"""
+SELECT mod, file || ':' || function || ' (' || coalesce(line::text, '') || ')' AS "function", event, self_ms AS "self ms/frame",
+  total_ms AS "total ms/frame", calls_per_frame AS "calls/frame"
+FROM luaprof_functions WHERE run = {RUN} ORDER BY ord LIMIT 60""",
+        desc="Per (function, event): the event or UI call it ran under.",
+        overrides=[ov("mod", width=220), ov("function", width=420), ov("event", width=170),
+                   ov("self ms/frame", unit="ms", decimals=3, gauge=True, min=0, max=1, thresholds=LUA_MS_STEPS),
+                   ov("total ms/frame", unit="ms", decimals=3), ov("calls/frame", unit="none", decimals=1)]), 24, 12, pid=66)
+    L.add(table_panel("Lua by event (route)", f"""
+SELECT event, lua_ms AS "Lua ms/frame", mods_ms AS "mods ms/frame", calls_per_frame AS "calls/frame", top_mod AS "most Lua"
+FROM luaprof_events WHERE run = {RUN} ORDER BY ord""",
+        overrides=[ov("event", width=170), ov("Lua ms/frame", unit="ms", decimals=3, gauge=True, min=0, max=2, thresholds=LUA_MS_STEPS),
+                   ov("mods ms/frame", unit="ms", decimals=3), ov("calls/frame", unit="none", decimals=1)]), 12, 10, pid=67)
+    L.add(table_panel("Slowest frames: whose Lua ran in them", f"""
+SELECT to_char(make_interval(secs => floor(t_s + 0.5)), 'HH24:MI:SS') AS "at s", frame_ms AS "frame ms", lua_ms AS "Lua ms",
+  mods_ms AS "mods ms", top_mod AS "most Lua", top_ms AS "its ms"
+FROM luaprof_spikes WHERE run = {RUN} ORDER BY ord""", unit="ms",
+        desc="The 12 longest frames: at = route time of the frame's end.",
+        overrides=[ov("at s", unit="none", decimals=2, width=80), ov("frame ms", unit="ms", decimals=2), ov("Lua ms", unit="ms", decimals=2),
+                   ov("mods ms", unit="ms", decimals=2), ov("its ms", unit="ms", decimals=2)]), 12, 10, pid=68)
+
+
 def run_dashboard():
     L = Layout()
     one = f"FROM runs WHERE run = {RUN}"
@@ -764,6 +833,8 @@ SELECT rt AS time, name AS metric, share * 100 AS value FROM gamethread WHERE ru
 SELECT name, sum(samples) AS samples, 100.0 * sum(samples) / nullif((SELECT sum(samples) FROM gamethread x WHERE run = {RUN} AND kind = 'total' AND {IN_ROUTE}), 0) AS share
 FROM gamethread x WHERE run = {RUN} AND kind = '{kind}' AND {IN_ROUTE} GROUP BY name ORDER BY 2 DESC LIMIT {n}""",
                           overrides=[ov("share", unit="percent", decimals=1, gauge=True, min=0, max=100 if kind != "l" else 25), ov("samples", width=80)]), 8, 12)
+
+    mods_lua_row(L)
 
     L.row("Chunks, GC, flips")
     L.add(ts_panel("Chunk latency (enqueue → publish, one point per chunk)", [

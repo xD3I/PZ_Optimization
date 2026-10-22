@@ -1,0 +1,8 @@
+# The horde scene's timer test (pzopt.HordeScene, 2026-10-22): one ordinary key (w, not a trigger) shows the keys reach
+# the game (the scene logs every press while armed); scene_release_after then releases the horde; 30 s watched.
+activate
+sleep 1
+mark w
+key w 0.1
+sleep 30
+done

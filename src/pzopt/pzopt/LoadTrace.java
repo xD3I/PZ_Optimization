@@ -24,6 +24,8 @@ import zombie.debug.DebugLog;
  */
 public final class LoadTrace {
    private static volatile boolean installed;
+   private static volatile BufferedWriter writer;
+   private static volatile PrintStream tee;
 
    private LoadTrace() {
    }
@@ -39,8 +41,11 @@ public final class LoadTrace {
       try {
          File f = new File(ZomboidFileSystem.instance.getCacheDir(), "pzopt-loadtrace.out");
          BufferedWriter w = new BufferedWriter(new FileWriter(f, false), 1 << 14);
+         writer = w;
          PrintStream previous = DebugLog.getInstance().getRecordingOut();
-         DebugLog.getInstance().setRecordingOut(new Tee(w, previous));
+         Tee t = new Tee(w, previous);
+         tee = t;
+         DebugLog.getInstance().setRecordingOut(t);
          Runtime.getRuntime().addShutdownHook(new Thread(() -> {
             synchronized (w) {
                try {
@@ -51,6 +56,36 @@ public final class LoadTrace {
          }, "pzopt-loadtrace-flush"));
       } catch (Throwable t) {
          Log.warn("load trace not installed: " + t);
+      }
+   }
+
+   /**
+    * Every frame (Stats.frameTick): puts the trace back when the game dropped it. Every character removed from the world
+    * closes its animation recorder, and AnimationPlayerRecorder.closeLogRecording sets DebugLog's recording stream to null
+    * whoever opened it, so the trace (and the benchmark's per-pass console window) ended with the first zombie unloaded
+    * after world-ready (2026-10-21: every pass's console.out stopped 0-2 s into the route).
+    */
+   public static void rearm() {
+      PrintStream t = tee;
+      if (t != null) {
+         DebugLog d = DebugLog.getInstance();
+         if (d.getRecordingOut() == null) {
+            d.setRecordingOut(t);
+         }
+      }
+   }
+
+   /** Writes the buffered lines out (a reader of the file mid-run, BenchCapture's console window: up to 16 KB and the last second sat in the buffer). */
+   public static void flush() {
+      BufferedWriter w = writer;
+      if (w == null) {
+         return;
+      }
+      synchronized (w) {
+         try {
+            w.flush();
+         } catch (IOException ignored) {
+         }
       }
    }
 

@@ -1002,7 +1002,10 @@ public final class Scene {
                clothing.setChanceToFall(0);
                pinned++;
             }
-            pinnedWorn.put(clothing.getBodyLocation(), clothing);
+            // the slot it is worn in, not the item script's own location: a mod's clothing can name a location the
+            // character's body-location group does not hold (a 650-mod collection, 2026-10-21: setWornItem then threw
+            // a NullPointerException every frame from BodyLocationGroup.isMultiItem and the pass never started)
+            pinnedWorn.put(worn.get(i).getLocation(), clothing);
          }
       }
       return pinned;
@@ -1017,6 +1020,11 @@ public final class Scene {
     * {@code Clothing.setCondition} unwear and drop it) is worn again and the vision effects are recomputed at once,
     * so the blur target never flips. The dropped copy on the floor of the bench save is left alone.
     */
+   /** An item the scene takes off on purpose (HordeTactics.buffs: the glasses) is no longer put back by keepWornItems. */
+   static void unpinWorn(zombie.inventory.InventoryItem item) {
+      pinnedWorn.values().removeIf(c -> c == item);
+   }
+
    static void keepWornItems(IsoPlayer p) {
       if (pinnedWorn.isEmpty()) {
          return;
@@ -1026,6 +1034,10 @@ public final class Scene {
          zombie.inventory.types.Clothing item = e.getValue();
          if (p.getWornItem(e.getKey()) == item) {
             continue;
+         }
+         zombie.characters.WornItems.WornItems worn = p.getWornItems();
+         if (worn == null || worn.getBodyLocationGroup().getLocation(e.getKey()) == null) {
+            continue; // (a location the group does not know: the game's setWornItem would throw)
          }
          if (!p.getInventory().contains(item)) {
             p.getInventory().AddItem(item);
@@ -1114,6 +1126,6 @@ public final class Scene {
             + "\nsee_all=" + seeAll
             + (carSpawn > 0 ? "\ncar_spawn=" + carSpawn + "\nvehicles_loaded=" + zombie.iso.IsoWorld.instance.currentCell.getVehicles().size() : "")
             + (soundRadius > 0 ? "\nsound_radius=" + soundRadius + "\nsound_every=" + soundEvery + "\nsound_stats=" + soundStats() : "")
-            + (helicopter ? "\nhelicopter=" + helicopterState() : "") + ThumpRig.summary() + CarSiege.summary() + BrawlRig.summary() + MeleeRig.summary() + SoundProbe.summary();
+            + (helicopter ? "\nhelicopter=" + helicopterState() : "") + ThumpRig.summary() + CarSiege.summary() + BrawlRig.summary() + MeleeRig.summary() + SoundProbe.summary() + Showcase.summary();
    }
 }

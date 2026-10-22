@@ -50,20 +50,38 @@ final class BenchSetup {
    static final String[][] RUN_KEYS = {
       {"mode", "Stock comparison (ab) or PZ Optimization only (standard)"}, {"passes", "Passes per scenario"}, {"scenarios", "Scenarios"},
       {"uncapped", "Uncapped frame rate during the run"}, {"timedemo", "Timedemo"}, {"warmup", "Warm-up pass"}, {"seed", "Same random seed every pass"},
-      {"cooldown", "Cool-down between passes (s)"},
+      {"cooldown", "Cool-down between passes (s)"}, {"modlua", "Measure each mod's Lua"},
+      {"weather", "Weather per scenario"}, {"fog", "Fog per scenario"}, {"time_of_day", "Hour per scenario"},
+      {"profiler", "Full performance overlay during the passes"},
    };
 
    private BenchSetup() {
    }
 
+   /** A plan value per scenario ("spin 2, horde 1"), or the one value when every scenario has the same. */
+   static String perScenario(Properties plan, String prefix, java.util.List<String> ids, String def) {
+      java.util.Set<String> seen = new java.util.LinkedHashSet<>();
+      StringBuilder b = new StringBuilder();
+      for (String id : ids) {
+         String v = plan.getProperty(prefix + id, def);
+         seen.add(v);
+         b.append(b.length() > 0 ? ", " : "").append(id).append(' ').append(v);
+      }
+      return seen.size() == 1 ? seen.iterator().next() : b.toString();
+   }
+
    /** Writes the run's setup.txt from this process's settings (the main menu's, i.e. the player's). */
-   static void capture(String run, Properties plan, String scenarios, int passes) {
+   static void capture(String run, Properties plan, java.util.List<String> ids) {
       StringBuilder b = new StringBuilder();
       Map<String, String> runOpts = new LinkedHashMap<>();
       runOpts.put("mode", plan.getProperty("mode", ""));
-      runOpts.put("passes", Integer.toString(passes));
-      runOpts.put("scenarios", scenarios);
-      for (String k : new String[] {"uncapped", "timedemo", "warmup", "seed", "cooldown"}) {
+      // (2026-10-21) each scenario's own passes, weather and hour: "spin 2, horde 1"; one value when every scenario has it
+      runOpts.put("passes", perScenario(plan, "passes.", ids, "1"));
+      runOpts.put("scenarios", String.join(",", ids));
+      runOpts.put("weather", perScenario(plan, "weather.", ids, "clear"));
+      runOpts.put("fog", perScenario(plan, "fog.", ids, "off"));
+      runOpts.put("time_of_day", perScenario(plan, "time.", ids, "12"));
+      for (String k : new String[] {"uncapped", "timedemo", "warmup", "seed", "cooldown", "modlua", "profiler"}) { // (modlua: the Mods row's profiler, 2026-10-21)
          runOpts.put(k, plan.getProperty(k, ""));
       }
       for (Map.Entry<String, String> e : runOpts.entrySet()) {
@@ -129,6 +147,17 @@ final class BenchSetup {
       return p;
    }
 
+   /** A benchmark option the run recorded (an R line's value), "" when it has none. */
+   static String runOption(String run, String key) {
+      List<String[]> rows = read(run);
+      for (String[] r : rows == null ? List.<String[]>of() : rows) {
+         if ("R".equals(r[0]) && key.equals(r[1]) && r.length > 2) {
+            return r[2];
+         }
+      }
+      return "";
+   }
+
    /** A run's setup lines, null when the run has none (a run from before setups were recorded). */
    static List<String[]> read(String run) {
       File f = new File(BenchPlan.runDir(run), FILE);
@@ -147,6 +176,25 @@ final class BenchSetup {
          return null;
       }
       return out;
+   }
+
+   /**
+    * The PZ Optimization settings a run had away from the defaults, "key=value" sorted and joined by ';' (the menu names
+    * the preset they match); "-" for a run without a recorded setup.
+    */
+   static String optText(String run) {
+      List<String[]> s = read(run);
+      if (s == null) {
+         return "-";
+      }
+      List<String> out = new ArrayList<>();
+      for (String[] c : s) {
+         if ("O".equals(c[0]) && c.length > 2) {
+            out.add(c[1] + "=" + c[2]);
+         }
+      }
+      java.util.Collections.sort(out);
+      return String.join(";", out);
    }
 
    /** The history row's summary: "N settings changed, M mods" ("" for a run without a setup). */

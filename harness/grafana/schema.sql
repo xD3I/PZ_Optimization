@@ -99,6 +99,39 @@ CREATE TABLE IF NOT EXISTS threads (run text, thread text, cpu_ms double precisi
 -- numeric facts of pzopt-bench.out, its bake_counters= / zombie_batches= lines and the summary
 CREATE TABLE IF NOT EXISTS counters (run text, grp text, key text, value double precision);
 
+-- the mod Lua profile (2026-10-21): pzopt-luaprof.out / pzopt-luaprof-frames.out (pzopt.HarnessModLua -> ModLuaProfile, the
+-- Lua stack sampled at 2 kHz off the game thread, every event handler / UI call counted), the PZ run dashboard's "Mods (Lua)"
+-- row = the in-game benchmark report's (pzopt.ModLuaDash, pzopt_mainscreen_report_mods.lua). ms are per game frame; ord keeps
+-- the file's order (mods by cost, then the game's, ours, the unknown; functions / events by time); mod = the origin's name
+-- as the mods table writes it (ModLuaDash.shortName)
+CREATE TABLE IF NOT EXISTS luaprof (run text PRIMARY KEY, frames integer, seconds double precision, sample_hz double precision,
+  sample_interval_us double precision, samples bigint, samples_in_lua bigint, lua_ms double precision, lua_pct double precision,
+  game_lua_ms double precision, mods_ms double precision, mods_pct double precision, worst_mod text, worst_mod_name text,
+  worst_mod_ms double precision, worst_mod_pct double precision, p99_frame_ms double precision, spike_frames integer, counting text,
+  counting_off_reason text, hook_calls bigint, hook_ns double precision, overhead_us double precision, sampler_cpu_pct double precision,
+  start_epoch_ms bigint);
+CREATE TABLE IF NOT EXISTS luaprof_origins (run text, ord integer, id text, kind text, name text, ms double precision, pct double precision,
+  calls_per_frame double precision, p99_ms double precision, files integer);
+CREATE TABLE IF NOT EXISTS luaprof_functions (run text, ord integer, origin text, mod text, file text, function text, line integer, event text,
+  self_ms double precision, total_ms double precision, calls_per_frame double precision);
+CREATE TABLE IF NOT EXISTS luaprof_events (run text, ord integer, event text, lua_ms double precision, mods_ms double precision,
+  calls_per_frame double precision, top_origin text, top_mod text, top_ms double precision);
+CREATE TABLE IF NOT EXISTS luaprof_spikes (run text, ord integer, t_s double precision, frame_ms double precision, lua_ms double precision,
+  mods_ms double precision, top_origin text, top_mod text, top_ms double precision);
+-- every game frame of the profile (t_s from the profile's start = the route start): its length, all Lua, the mods', the game's
+CREATE TABLE IF NOT EXISTS luaprof_frames (run text, t timestamptz, rel_s double precision, rt timestamptz, frame integer, frame_ms real,
+  lua_ms real, mods_ms real, game_ms real);
+-- panel 65's series as ModLuaDash.series makes them: 0.5 s buckets, the 8 costliest mods, "other mods", the game's Lua, ours,
+-- the unknown origin (ord = the stacking order); ms = the bucket's mean per frame
+CREATE TABLE IF NOT EXISTS luaprof_series (run text, t timestamptz, rel_s double precision, rt timestamptz, ord integer, name text,
+  ms double precision);
+CREATE INDEX IF NOT EXISTS luaprof_origins_run ON luaprof_origins (run);
+CREATE INDEX IF NOT EXISTS luaprof_functions_run ON luaprof_functions (run);
+CREATE INDEX IF NOT EXISTS luaprof_events_run ON luaprof_events (run);
+CREATE INDEX IF NOT EXISTS luaprof_spikes_run ON luaprof_spikes (run);
+CREATE INDEX IF NOT EXISTS luaprof_frames_run_rt ON luaprof_frames (run, rt);
+CREATE INDEX IF NOT EXISTS luaprof_series_run_rt ON luaprof_series (run, rt);
+
 DO $$
 DECLARE tbl text;
 BEGIN

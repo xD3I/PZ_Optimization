@@ -170,7 +170,7 @@ end
 local function bodyHead(d)
     local t = ""
     if d.mode == "off" then
-        return "The check is off (Options > PZ Optimization > System, sound and mods > Mods and multiplayer > Java mods: off), so no mod was read at this launch. "
+        return "The check is off (PZ OPTIMIZATION > Optimizations > System, memory, sound and mods > Mods and multiplayer > Java mods: off), so no mod was read at this launch. "
             .. "Set it to auto and restart the game to see what your mods change."
     end
     local switched = {}

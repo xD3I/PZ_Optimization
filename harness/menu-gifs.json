@@ -1,18 +1,166 @@
 {
  "ao": {
   "opt": {
-   "bytes": 495686,
+   "avif_bytes": 81237,
+   "bytes": 231053,
    "file": "ao-opt.gif",
-   "run": "enh-ao-on-20260925-003700",
-   "video_t0": 15.57
+   "route_t0": 1.0,
+   "run": "mc-ao-on-20261020-033336"
   },
   "stock": {
-   "bytes": 431952,
+   "avif_bytes": 88941,
+   "bytes": 128213,
    "file": "ao-stock.gif",
-   "run": "enh-ao-off-20260925-003550",
-   "video_t0": 16.25
+   "route_t0": 1.0,
+   "run": "mc-ao-off-20261020-033210"
   },
-  "title": "Rosewood houses at noon, zoom 1, walking: ambient occlusion off vs on"
+  "title": "A Rosewood living room at noon, zoom 1: ambient occlusion off vs on"
+ },
+ "bench-drive120": {
+  "opt": {
+   "avif_bytes": 2175537,
+   "avif_q": 86,
+   "avif_size": "1024x432",
+   "avif_target": 2513463,
+   "bytes": 2513463,
+   "file": "bench-drive120-opt.gif",
+   "route_t0": 5.0,
+   "run": "bc-drive120-20261020-091713"
+  },
+  "title": "benchmark scene drive120"
+ },
+ "bench-drive120south": {
+  "opt": {
+   "avif_bytes": 2836358,
+   "avif_q": 91,
+   "avif_size": "1024x432",
+   "avif_target": 3087104,
+   "bytes": 3087104,
+   "file": "bench-drive120south-opt.gif",
+   "route_t0": 12.0,
+   "run": "bc-drive120south-20261020-092057"
+  },
+  "title": "benchmark scene drive120south"
+ },
+ "bench-horde": {
+  "opt": {
+   "avif_bytes": 624444,
+   "avif_q": 53,
+   "avif_size": "1024x432",
+   "avif_target": 633680,
+   "bytes": 633680,
+   "file": "bench-horde-opt.gif",
+   "route_t0": 14.0,
+   "run": "bc-horde-20261020-092239"
+  },
+  "title": "benchmark scene horde"
+ },
+ "bench-louisville": {
+  "opt": {
+   "avif_bytes": 398154,
+   "avif_q": 92,
+   "avif_size": "1024x432",
+   "avif_target": 475007,
+   "bytes": 475007,
+   "file": "bench-louisville-opt.gif",
+   "route_t0": 7.4,
+   "run": "bc-louisville-20261020-091900"
+  },
+  "title": "benchmark scene louisville"
+ },
+ "bench-spin": {
+  "opt": {
+   "avif_bytes": 2452095,
+   "avif_q": 89,
+   "avif_size": "1024x432",
+   "avif_target": 2501101,
+   "bytes": 2501101,
+   "file": "bench-spin-opt.gif",
+   "route_t0": 3.0,
+   "run": "bc-spin-20261020-091534"
+  },
+  "title": "benchmark scene spin"
+ },
+ "bench-sweep": {
+  "opt": {
+   "avif_bytes": 230786,
+   "avif_q": 59,
+   "avif_size": "1024x432",
+   "avif_target": 231446,
+   "bytes": 231446,
+   "file": "bench-sweep-opt.gif",
+   "route_t0": 4.0,
+   "run": "bc-sweep-20261020-092431"
+  },
+  "title": "benchmark scene sweep"
+ },
+ "blood": {
+  "opt": {
+   "avif_bytes": 314916,
+   "bytes": 1407565,
+   "file": "blood-opt.gif",
+   "route_t0": 1.0,
+   "run": "mc-blood3-on-20261020-042917"
+  },
+  "stock": {
+   "avif_bytes": 229354,
+   "bytes": 1146915,
+   "file": "blood-stock.gif",
+   "route_t0": 1.0,
+   "run": "mc-blood3-off-20261020-042757"
+  },
+  "title": "A Rosewood living room at 15:00, 800 fresh splats, turning, zoom 0.5, 1:1 pixels: wet blood off vs on (reflections on)"
+ },
+ "carglass": {
+  "opt": {
+   "avif_bytes": 68950,
+   "bytes": 173374,
+   "file": "carglass-opt.gif",
+   "phase": 2,
+   "run": "mc-glass2-alt-20261020-040526"
+  },
+  "stock": {
+   "avif_bytes": 69121,
+   "bytes": 172166,
+   "file": "carglass-stock.gif",
+   "phase": 1,
+   "run": "mc-glass2-alt-20261020-040526"
+  },
+  "title": "Three parked cars at 10:30, zoom 0.5: car glass off vs on (one run switching every 4 s)"
+ },
+ "clouds": {
+  "opt": {
+   "avif_bytes": 230848,
+   "bytes": 921965,
+   "file": "clouds-opt.gif",
+   "route_t0": 1.0,
+   "run": "mc-clouds-on-20261020-024605"
+  },
+  "stock": {
+   "avif_bytes": 84202,
+   "bytes": 185952,
+   "file": "clouds-stock.gif",
+   "route_t0": 1.0,
+   "run": "mc-clouds-off-20261020-024244"
+  },
+  "title": "Rosewood at 16:00, max zoom, clouds at 8x speed: cloud shadows off vs on (sun shadows on)"
+ },
+ "darkfloor": {
+  "opt": {
+   "avif_bytes": 72210,
+   "bytes": 399495,
+   "file": "darkfloor-opt.gif",
+   "route_t0": 1.0,
+   "run": "mc-dark-on-20261020-034158"
+  },
+  "stock": {
+   "avif_bytes": 48809,
+   "bytes": 290672,
+   "file": "darkfloor-stock.gif",
+   "route_t0": 1.0,
+   "run": "mc-dark-off-20261020-034032"
+  },
+  "title": "A Rosewood house at 01:00, zoom 1: darkness floor 0 % vs 20 %"
  },
  "darkness": {
   "opt": {
@@ -58,32 +206,6 @@
    "video_t0": 18.02
   },
   "title": "Rosewood house, 1:1 crop: native vs DLSS defaults"
- },
- "drive": {
-  "opt": {
-   "bytes": 2118044,
-   "run": "show-drive120-opt-1-20260920-181054",
-   "video_t0": 16.31
-  },
-  "stock": {
-   "bytes": 2107632,
-   "run": "show-drive120-stock-1-20260920-180929",
-   "video_t0": 23.86
-  },
-  "title": "120 km/h highway drive, clear day"
- },
- "fog": {
-  "opt": {
-   "bytes": 2377117,
-   "run": "show-fog120-opt-1-20260920-181556",
-   "video_t0": 16.27
-  },
-  "stock": {
-   "bytes": 2243113,
-   "run": "show-fog120-stock-1-20260920-181436",
-   "video_t0": 23.73
-  },
-  "title": "120 km/h drive in heavy fog"
  },
  "fsrzoom": {
   "opt": {
@@ -147,42 +269,31 @@
  },
  "grade": {
   "opt": {
-   "bytes": 761897,
+   "avif_bytes": 163920,
+   "bytes": 254965,
    "file": "grade-opt.gif",
-   "pane_t0": 2.0,
-   "run": "cap-rain-on-20260926-121434"
+   "route_t0": 1.0,
+   "run": "mc-grade2-on-20261020-041933"
   },
   "stock": {
-   "bytes": 903194,
+   "avif_bytes": 153146,
+   "bytes": 312291,
    "file": "grade-stock.gif",
-   "pane_t0": 2.0,
-   "run": "cap-rain-off-20260926-115950"
+   "route_t0": 1.0,
+   "run": "mc-grade2-off-20261020-041803"
   },
-  "title": "Rosewood house in the rain at 14:00: stock vs colour grading"
- },
- "grid": {
-  "opt": {
-   "bytes": 1324328,
-   "file": "grid-opt.gif",
-   "run": "prev-gridspin3-15-20260922-234953",
-   "video_t0": 18.23
-  },
-  "stock": {
-   "bytes": 1583474,
-   "file": "grid-stock.gif",
-   "run": "prev-gridspin3-vanilla-20260922-234849",
-   "video_t0": 16.98
-  },
-  "title": "Rosewood, camera spinning, uncapped: vanilla 19x19 chunk grid vs 15x15"
+  "title": "A Rosewood house at 20:30, clear, zoom 1: colour grading off vs on"
  },
  "hdr": {
   "opt": {
+   "avif_bytes": 44323,
    "bytes": 308572,
    "file": "hdr-opt.gif",
    "run": "enh-hdr-night-20260925-003235",
    "video_t0": 22.31
   },
   "stock": {
+   "avif_bytes": 50740,
    "bytes": 200118,
    "file": "hdr-stock.gif",
    "run": "enh-sdr-night-20260925-003116",
@@ -192,12 +303,14 @@
  },
  "hdrday": {
   "opt": {
+   "avif_bytes": 230104,
    "bytes": 2788809,
    "file": "hdrday-opt.gif",
    "run": "enh-hdr-day-20260925-003444",
    "video_t0": 18.91
   },
   "stock": {
+   "avif_bytes": 119589,
    "bytes": 1587248,
    "file": "hdrday-stock.gif",
    "run": "enh-sdr-day-20260925-003340",
@@ -205,61 +318,90 @@
   },
   "title": "River shore at 15:00, the pier and the water: SDR vs HDR"
  },
- "horde": {
-  "opt": {
-   "bytes": 1068135,
-   "run": "show-louisville-opt-3-20260920-233855",
-   "video_t0": 35.2
-  },
-  "stock": {
-   "bytes": 960376,
-   "run": "show-louisville-stock-3-20260920-234028",
-   "video_t0": 42.34
-  },
-  "title": "Louisville, zombie population maxed"
- },
- "load": {
-  "opt": {
-   "bytes": 94864,
-   "run": "sbs-opt120-uncap-1-20260919-230229",
-   "seconds": 9.69,
-   "video_t0": 2.06
-  },
-  "stock": {
-   "bytes": 118610,
-   "run": "sbs-stock120-1-20260919-230045",
-   "seconds": 16.06,
-   "video_t0": 2.16
-  },
-  "title": "Launch to main menu, Continue to world"
- },
  "memory": {
   "opt": {
-   "bytes": 226310,
+   "avif_bytes": 173518,
+   "bytes": 418516,
    "file": "memory-opt.gif",
-   "pane_t0": 2.0,
-   "run": "cap-day-on-20260926-115623"
+   "route_t0": 1.0,
+   "run": "mc-memory-on-20261020-033907"
   },
   "stock": {
-   "bytes": 328013,
+   "avif_bytes": 176044,
+   "bytes": 405596,
    "file": "memory-stock.gif",
-   "pane_t0": 2.0,
-   "run": "cap-day-off-20260926-115514"
+   "route_t0": 1.0,
+   "run": "mc-memory-off-20261020-033740"
   },
-  "title": "Rosewood house at 13:00, turning in place: stock vs remembered places"
+  "title": "A Rosewood house at 13:00, zoom 1: remembered places off vs on (colour grading off)"
  },
- "nightdrive": {
+ "mirrors": {
   "opt": {
-   "bytes": 405723,
-   "run": "bl-drive-fix4-20260921-183031",
-   "video_t0": 19.3
+   "avif_bytes": 313601,
+   "bytes": 1406725,
+   "file": "mirrors-opt.gif",
+   "route_t0": 1.0,
+   "run": "mc-mirror2-on-20261020-040819"
   },
   "stock": {
-   "bytes": 401752,
-   "run": "bl-drive-stock-20260921-183202",
-   "video_t0": 31.0
+   "avif_bytes": 278473,
+   "bytes": 986719,
+   "file": "mirrors-stock.gif",
+   "route_t0": 1.0,
+   "run": "mc-mirror2-off-20261020-040652"
   },
-  "title": "Night drive with headlights"
+  "title": "A Rosewood bedroom at noon, zoom 0.5, 1:1 pixels: mirrors and windows off vs on"
+ },
+ "moon": {
+  "opt": {
+   "avif_bytes": 61314,
+   "bytes": 249366,
+   "file": "moon-opt.gif",
+   "route_t0": 1.0,
+   "run": "mc-moon-on-20261020-024852"
+  },
+  "stock": {
+   "avif_bytes": 66031,
+   "bytes": 161439,
+   "file": "moon-stock.gif",
+   "route_t0": 1.0,
+   "run": "mc-moon-off-20261020-024732"
+  },
+  "title": "A full moon at 23:00, zoom 1: moon shadows off vs on (sun shadows on)"
+ },
+ "occupant": {
+  "opt": {
+   "avif_bytes": 455061,
+   "bytes": 1154700,
+   "file": "occupant-opt.gif",
+   "route_t0": 1.0,
+   "run": "mc-occ-on-20261020-031524"
+  },
+  "stock": {
+   "avif_bytes": 324240,
+   "bytes": 588603,
+   "file": "occupant-stock.gif",
+   "route_t0": 1.0,
+   "run": "mc-occ-off-20261020-031229"
+  },
+  "title": "Driving at 60 km/h, zoom 0.5, car glass on: the people inside off vs on"
+ },
+ "outlines": {
+  "opt": {
+   "avif_bytes": 172856,
+   "bytes": 378030,
+   "file": "outlines-opt.gif",
+   "route_t0": 1.0,
+   "run": "mc-outl-on-20261020-035524"
+  },
+  "stock": {
+   "avif_bytes": 129873,
+   "bytes": 245829,
+   "file": "outlines-stock.gif",
+   "route_t0": 1.0,
+   "run": "mc-outl-off-20261020-035357"
+  },
+  "title": "A crowd round the church at noon, zoom 1: outlines of hidden zombies off vs on"
  },
  "overlay": {
   "opt": {
@@ -339,59 +481,158 @@
   },
   "title": "Verdict line: what holds the frame rate below the cap"
  },
- "player": {
+ "ppl": {
   "opt": {
-   "bytes": 818170,
-   "file": "player-opt.gif",
-   "run": "prev-lou-player-20260922-192956",
-   "video_t0": 38.8
+   "avif_bytes": 86421,
+   "bytes": 518365,
+   "file": "ppl-opt.gif",
+   "route_t0": 1.0,
+   "run": "mc-ppl2-on-20261020-022634"
   },
   "stock": {
-   "bytes": 860417,
-   "file": "lou-stock.gif",
-   "run": "tri-lou-stock-20260922-105001",
-   "video_t0": 38.3
+   "avif_bytes": 90777,
+   "bytes": 428602,
+   "file": "ppl-stock.gif",
+   "route_t0": 1.0,
+   "run": "mc-ppl2-off-20261020-022512"
   },
-  "title": "Louisville horde: stock vs stock + the player line-of-sight keys"
+  "title": "The night lot at 23:00, torch on, turning in place, zoom 1: per-pixel lighting off vs on"
  },
- "spin": {
+ "props": {
   "opt": {
-   "bytes": 1991505,
-   "run": "show-spin-opt-1-20260920-181314",
-   "video_t0": 17.24
+   "avif_bytes": 142354,
+   "bytes": 687354,
+   "file": "props-opt.gif",
+   "route_t0": 1.0,
+   "run": "mc-props2-on-20261020-041102"
   },
   "stock": {
-   "bytes": 2032857,
-   "run": "show-spin-stock-1-20260920-181210",
-   "video_t0": 23.4
+   "avif_bytes": 136011,
+   "bytes": 492889,
+   "file": "props-stock.gif",
+   "route_t0": 1.0,
+   "run": "mc-props2-off-20261020-040937"
   },
-  "title": "Rosewood, camera spinning"
+  "title": "A glass case, a TV, a glass door and a fridge by the road, zoom 0.5: reflective props off vs on"
  },
- "storm": {
+ "reflections": {
   "opt": {
-   "bytes": 1477231,
-   "run": "show-storm120-opt-1-20260920-181831",
-   "video_t0": 16.0
+   "avif_bytes": 268788,
+   "bytes": 1280263,
+   "file": "reflections-opt.gif",
+   "route_t0": 1.0,
+   "run": "mc-refl-on-20261020-025141"
   },
   "stock": {
-   "bytes": 1458297,
-   "run": "show-storm120-stock-1-20260920-181712",
-   "video_t0": 22.45
+   "avif_bytes": 195634,
+   "bytes": 1189260,
+   "file": "reflections-stock.gif",
+   "route_t0": 1.0,
+   "run": "mc-refl-off-20261020-025018"
   },
-  "title": "120 km/h drive in a thunderstorm"
+  "title": "The Riverside pier at 15:00, zoom 1: reflections off vs on"
  },
- "torch": {
+ "relief": {
   "opt": {
-   "bytes": 375411,
-   "run": "bl-torch-fix4-20260921-183357",
-   "video_t0": 20.48
+   "avif_bytes": 116619,
+   "bytes": 399797,
+   "file": "relief-opt.gif",
+   "route_t0": 1.0,
+   "run": "mc-relief-on-20261020-033051"
   },
   "stock": {
-   "bytes": 364948,
-   "run": "bl-torch-stock-20260921-174650",
-   "video_t0": 31.74
+   "avif_bytes": 110315,
+   "bytes": 303476,
+   "file": "relief-stock.gif",
+   "route_t0": 1.0,
+   "run": "mc-relief-off-20261020-032924"
   },
-  "title": "Night, hand torch, turning in place"
+  "title": "A brick facade at 11:00, zoom 1, 1:1 pixels: relief off vs on (per-pixel light and sun shadows on)"
+ },
+ "ripples": {
+  "opt": {
+   "avif_bytes": 622526,
+   "bytes": 1239303,
+   "file": "ripples-opt.gif",
+   "route_t0": 1.0,
+   "run": "mc-ripples-on-20261020-030502"
+  },
+  "stock": {
+   "avif_bytes": 664851,
+   "bytes": 1086039,
+   "file": "ripples-stock.gif",
+   "route_t0": 1.0,
+   "run": "mc-ripples-off-20261020-030343"
+  },
+  "title": "Walking in the rain through puddles, zoom 0.5: puddle ripples off vs on"
+ },
+ "sunshadows": {
+  "opt": {
+   "avif_bytes": 77525,
+   "bytes": 174336,
+   "file": "sunshadows-opt.gif",
+   "route_t0": 1.0,
+   "run": "mc-sun-on-20261020-024118"
+  },
+  "stock": {
+   "avif_bytes": 85335,
+   "bytes": 111219,
+   "file": "sunshadows-stock.gif",
+   "route_t0": 1.0,
+   "run": "mc-sun-off-20261020-023604"
+  },
+  "title": "Rosewood house at 16:30, zoom 1: sun shadows off vs on"
+ },
+ "sway": {
+  "opt": {
+   "avif_bytes": 370028,
+   "bytes": 840144,
+   "file": "sway-opt.gif",
+   "route_t0": 1.0,
+   "run": "mc-sway-on-20261020-025859"
+  },
+  "stock": {
+   "avif_bytes": 88301,
+   "bytes": 199256,
+   "file": "sway-stock.gif",
+   "route_t0": 1.0,
+   "run": "mc-sway-off-20261020-025731"
+  },
+  "title": "A Rosewood yard at noon in the wind, zoom 1: foliage sway off vs on"
+ },
+ "torchsource": {
+  "opt": {
+   "avif_bytes": 129570,
+   "bytes": 485996,
+   "file": "torchsource-opt.gif",
+   "route_t0": 1.0,
+   "run": "mc-tsrc2-on-20261020-041641"
+  },
+  "stock": {
+   "avif_bytes": 120527,
+   "bytes": 692717,
+   "file": "torchsource-stock.gif",
+   "route_t0": 1.0,
+   "run": "mc-tsrc2-off-20261020-041515"
+  },
+  "title": "The night lot at 01:00, a torch and a lantern, zoom 0.5: torch source off vs on (per-pixel light on)"
+ },
+ "treecut": {
+  "opt": {
+   "avif_bytes": 280655,
+   "bytes": 1027283,
+   "file": "treecut-opt.gif",
+   "route_t0": 1.0,
+   "run": "mc-treecut-on-20261020-034829"
+  },
+  "stock": {
+   "avif_bytes": 297955,
+   "bytes": 954920,
+   "file": "treecut-stock.gif",
+   "route_t0": 1.0,
+   "run": "mc-treecut-off-20261020-034602"
+  },
+  "title": "Driving at 60 km/h past trees, zoom 1: the game's 42.21 tree cutaway vs trees kept"
  },
  "upscale": {
   "opt": {
@@ -408,6 +649,21 @@
   },
   "title": "Rosewood spin, uncapped: native vs FSR 1.0 quality"
  },
+ "visuals": {
+  "opt": {
+   "bytes": 65514,
+   "file": "visuals-opt.gif",
+   "pane_t0": 2.0,
+   "run": "ge-clear-on-20260927-082119"
+  },
+  "stock": {
+   "bytes": 181902,
+   "file": "visuals-stock.gif",
+   "pane_t0": 2.0,
+   "run": "ge-clear-off-20260927-082014"
+  },
+  "title": "Rosewood at 08:00: every Visuals feature off vs on"
+ },
  "voxel": {
   "opt": {
    "bytes": 373165,
@@ -423,34 +679,21 @@
   },
   "title": "Night lot at 01:00, lamps and room lights, camera panning: stock vs voxel lighting"
  },
- "zgt": {
+ "wakes": {
   "opt": {
-   "bytes": 936611,
-   "file": "zgt-opt.gif",
-   "run": "zt15-rec-plain-20260922-145657",
-   "video_t0": 35.7
+   "avif_bytes": 138921,
+   "bytes": 926180,
+   "file": "wakes-opt.gif",
+   "route_t0": 1.0,
+   "run": "mc-wakes2-on-20261020-040358"
   },
   "stock": {
-   "bytes": 926148,
-   "file": "zgt-stock.gif",
-   "run": "zt1-rec-off-20260922-134400",
-   "video_t0": 36.63
+   "avif_bytes": 128901,
+   "bytes": 825277,
+   "file": "wakes-stock.gif",
+   "route_t0": 1.0,
+   "run": "mc-wakes2-off-20261020-040222"
   },
-  "title": "Louisville horde: everything on without vs with the zombie game-thread keys"
- },
- "zombies": {
-  "opt": {
-   "bytes": 836416,
-   "file": "zombies-opt.gif",
-   "run": "prev-lou-zombies-20260922-193507",
-   "video_t0": 38.84
-  },
-  "stock": {
-   "bytes": 860417,
-   "file": "lou-stock.gif",
-   "run": "tri-lou-stock-20260922-105001",
-   "video_t0": 38.3
-  },
-  "title": "Louisville horde: stock vs stock + the zombie simulation keys"
+  "title": "Driving at 30 km/h through puddles, zoom 0.75: car wakes off vs on"
  }
 }

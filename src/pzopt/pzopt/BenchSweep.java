@@ -5,8 +5,10 @@ import java.util.List;
 import java.util.Locale;
 
 /**
- * Technique 24: what each Visuals feature costs on this PC, in one pass. The camera stands still at the Rosewood spot and
- * turns 120 degrees a second (one full turn per measured window, so every window sees the same views); every feature
+ * Technique 24: what each Visuals feature costs on this PC, in one pass. The player walks a small square in front of the
+ * Rosewood church's east doors and turns once round at every corner (pzopt.SquareWalk), one lap per window on a fixed
+ * clock, so every measured window sees the same part of the same lap (until 2026-10-21 the camera stood still by the gas
+ * station and turned 120 degrees a second, one turn per measured window); every feature
  * that applies live (Config.isLive) is switched to its other state for a window between windows in the player's own
  * state, through Harness's live_set (what the PZ OPTIMIZATION screen does on a change). Each window: {@link #SETTLE_S} s unmeasured
  * (shader compiles, re-bakes), then {@link #MEASURE_S} s measured. The cost of a feature = its window's mean frame time
@@ -15,7 +17,12 @@ import java.util.Locale;
  * back (and the pass sets every key back at its end).
  */
 final class BenchSweep {
-   static final float SETTLE_S = 1f, MEASURE_S = 3f;
+   /**
+    * A window is one lap of the square walk ({@link #flags}): the walk's period, so each window sees the same views. 10 s:
+    * a 2-square side is ~1.45 s of walking, so a quarter of 2.5 s leaves ~1 s for the turn round at the corner (a lap of
+    * 6 s left none: run sq-church1, 15 of 20 sides still walking at their successor's time).
+    */
+   static final float SETTLE_S = 1f, MEASURE_S = 9f;
    static final float WINDOW_S = SETTLE_S + MEASURE_S;
    /**
     * Unmeasured time after the route start's full re-bake ({@link #rebakeAll}). The first sweep (bench-fsweep, both
@@ -127,14 +134,20 @@ final class BenchSweep {
       Log.info("benchmark: sweep pre-roll, " + chunks + " chunks bake again");
    }
 
-   /** Harness flags of the sweep pass: the still, turning camera and the live_set schedule. */
+   /**
+    * Harness flags of the sweep pass: the square walk's clock (a lap per window from the pre-roll's end, as many laps as
+    * windows: the walk ends the route then; the route's own time is only the cap behind it) and the live_set schedule. The
+    * walk itself (explore=square, the square) is the scenario's.
+    */
    static void flags(java.util.Map<String, String> m) {
       List<String[]> p = plan();
       int windows = 2 * p.size() + 1;
       float secs = PREROLL_S + windows * WINDOW_S;
       m.put("route", "S:1");
-      m.put("speed", String.format(Locale.ROOT, "%.5f", 1f / secs));
-      m.put("turn", "120");
+      m.put("speed", String.format(Locale.ROOT, "%.5f", 1f / (secs + 20f)));
+      m.put("square_period", String.format(Locale.ROOT, "%.2f", WINDOW_S));
+      m.put("square_start", String.format(Locale.ROOT, "%.2f", PREROLL_S));
+      m.put("square_laps", Integer.toString(windows));
       StringBuilder b = new StringBuilder();
       for (int i = 0; i < p.size(); i++) {
          float on = PREROLL_S + (1 + 2 * i) * WINDOW_S, off = on + WINDOW_S;
@@ -196,7 +209,7 @@ final class BenchSweep {
          }
       }
       if (!dv.isEmpty()) {
-         out.append(out.length() > 0 ? ";" : "").append(NOISE).append("|Noise between turns|")
+         out.append(out.length() > 0 ? ";" : "").append(NOISE).append("|Noise between laps|")
                .append(String.format(Locale.ROOT, "nan|nan|%.4f|%.4f|nan", 1.4826 * median(dv), 1.4826 * median(dg)));
       }
       return out.toString();

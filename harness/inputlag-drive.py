@@ -5,7 +5,7 @@
 
 Both devices exist before the launch (GLFW scans pads at start-up; the pad is pad.py's xpad layout and GUID). Script
 commands, one per line (harness/inputlag/*.txt):
-  key <w|s|a|d> <hold s>        press a key, hold, release
+  key <w|s|a|d|home|end> <hold s>  press a key, hold, release
   mouse <left|right> <hold s>   press a mouse button, hold, release
   mdown <left|right> / mup <left|right>
   mmove <dx> <dy>               one relative pointer move (libinput accelerates it; +-8000 clamps at the screen edge)
@@ -34,7 +34,7 @@ from evdev import UInput, ecodes as e
 sys.path.insert(0, __file__.rsplit("/", 1)[0])
 from pad import make_pad  # noqa: E402
 
-KEYS = {"w": e.KEY_W, "s": e.KEY_S, "a": e.KEY_A, "d": e.KEY_D}
+KEYS = {"w": e.KEY_W, "s": e.KEY_S, "a": e.KEY_A, "d": e.KEY_D, "home": e.KEY_HOME, "end": e.KEY_END}  # home / end: the horde scene (pzopt.HordeScene)
 MBTN = {"left": e.BTN_LEFT, "right": e.BTN_RIGHT}
 PAD_BTN = {"a": e.BTN_A, "b": e.BTN_B, "x": e.BTN_X, "y": e.BTN_Y, "lb": e.BTN_TL, "rb": e.BTN_TR}
 STICK = {"l": (e.ABS_X, e.ABS_Y), "r": (e.ABS_RX, e.ABS_RY)}

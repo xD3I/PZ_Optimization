@@ -108,6 +108,7 @@ public final class GameKeyboard {
    }
 
    public static boolean isKeyDownRaw(int key) {
+      if (pzopt.Showcase.keyHeld(key)) return true; // pzopt: harness showcase=horde, a held Shift (Run) passes Core.invalidBindingShiftCtrl's raw check
       return down == null ? false : down[key];
    }
 

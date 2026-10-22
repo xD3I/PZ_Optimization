@@ -300,6 +300,7 @@ local function menuTick(self)
             elseif dev == "history" then menu.devHistory = true
             elseif dev == "compare" then menu.devCompare = true
             elseif dev == "runs" then menu.devRuns = true
+            elseif dev == "report" then menu.devReport = true
             elseif dev == "read" then menu.devRead = true
             elseif dev == "restart" then menu.devRestart = { step = 0 }
             elseif dev == "pad" then read.padOn = true end
@@ -371,6 +372,74 @@ local function menuTick(self)
             menu.uiShot = { at = now + 2000, name = "compare" }
         else
             print("[pzopt] benchmark: dev: no two runs to compare")
+        end
+    end
+    -- the report tour (devBenchmarkUi=report, benchmark-run.sh ui:report): the newest run's report page, scrolled a page at a
+    -- time to its bottom with the game's own screenshot at each stop, then the Mods row folded; uiProfile=true times it
+    if menu.devReport and self.bottomPanel and self.bottomPanel:isVisible() then
+        menu.devReport = nil
+        local run = call("devNewest")
+        if run ~= "" then
+            PzoptBenchmarkReport.show(run)
+            print("[pzopt] benchmark: report tour of run " .. run)
+            menu.devTour = { at = now + 3000, i = 0 }
+        else
+            print("[pzopt] benchmark: report tour done (no run)")
+        end
+    end
+    if menu.devTour and now >= menu.devTour.at then
+        local t = menu.devTour
+        local p = PzoptReportDash and PzoptReportDash.lastPanel
+        t.i = t.i + 1
+        t.at = now + 2500
+        if not p or not p.contentH then
+            print("[pzopt] benchmark: report tour done (no report panel)")
+            menu.devTour = nil
+        else
+            if not t.stops then -- a page at a time to the bottom, then the Mods row from its top (two screens if taller), then folded
+                t.stops = {}
+                local H, maxY = p.height, math.max(0, p.contentH - p.height)
+                local y = 0
+                while true do
+                    table.insert(t.stops, { y = math.min(y, maxY), name = "page" })
+                    if y >= maxY then break end
+                    y = y + math.floor(H * 0.9)
+                end
+                local rowY, rowEnd = nil, nil
+                for _, it in ipairs(p.items or {}) do
+                    if it.spec.id == 60 then rowY = it.y end
+                    if it.spec.id >= 61 and it.spec.id <= 69 then rowEnd = math.max(rowEnd or 0, it.y + it.h) end
+                end
+                if rowY then
+                    table.insert(t.stops, { y = math.min(rowY, maxY), name = "mods" })
+                    if rowEnd and rowEnd - rowY > H then table.insert(t.stops, { y = math.min(rowY + math.floor(H * 0.9), maxY), name = "mods" }) end
+                    table.insert(t.stops, { y = math.max(0, math.min(rowY - math.floor(H / 3), maxY)), name = "folded", fold = true })
+                end
+            end
+            if t.folded then
+                PzoptReportDash.collapsed[60] = nil
+                PzoptReportDash.layout(p)
+                t.folded = nil
+            end
+            local st = t.stops[t.i]
+            if not st then
+                print("[pzopt] benchmark: report tour done (" .. (t.i - 1) .. " stops)")
+                menu.devTour = nil
+            else
+                if st.fold then
+                    PzoptReportDash.collapsed[60] = true
+                    PzoptReportDash.layout(p)
+                    t.folded = true
+                end
+                p:setYScroll(-st.y)
+                local rows = {}
+                for _, it in ipairs(p.items or {}) do
+                    local y = it.y - (p.yOff or 0)
+                    if it.spec.t ~= "row" and y < p.height and y + it.h > 0 then table.insert(rows, tostring(it.spec.id)) end
+                end
+                print(string.format("[pzopt] benchmark: report tour stop %d %s y=%d of %d, panel %dx%d, panels %s", t.i, st.name, math.floor(p.yOff or 0), math.floor(p.contentH), math.floor(p.width), math.floor(p.height), table.concat(rows, ",")))
+                call("shot", string.format("report-%02d-%s", t.i, st.name))
+            end
         end
     end
     if menu.report and self.bottomPanel and self.bottomPanel:isVisible() then
@@ -835,6 +904,15 @@ local SETUP_OPTIONS = {
       desc = "The game's own screenshot when a pass ends, kept with the run's results: a check that the scene looked right." },
     { id = "hud", title = "Show the benchmark line during passes", default = true,
       desc = "A small line at the top of the screen during a pass: the scene, the pass, its progress and the time left." },
+    { id = "modlua", title = "Measure each mod's Lua (the report's Mods row)", default = true,
+      desc = "While a pass runs, how much of every frame each enabled mod's Lua takes, by mod, file, function and event, so you "
+          .. "can see which mod costs frames. Sampled off the game thread: a few microseconds a frame." },
+    -- (2026-10-21, maintainer) BenchPlan.configPins: the overlay with every element at its fullest during the passes
+    { id = "profiler", title = "Show the full performance overlay during passes", default = false,
+      desc = "The Profiler's performance overlay on screen while the scenes run, every part of it: frame statistics, the "
+          .. "game-thread tree, the verdict, the frame-time graph and the flame graph. To watch what the game does as it "
+          .. "happens; it costs frames itself, so the scores come out a little lower (the setup records it). The stock "
+          .. "game's passes run without PZ Optimization and so without it." },
 }
 
 local function parseHistoryItem(it)
@@ -848,9 +926,16 @@ local function parseHistoryItem(it)
                 local x = tonumber(v)
                 if x then sum, n = sum + x, n + 1 end
             end
-            if n > 0 then table.insert(parts, string.format("%s %.0f fps%s", kv[1], sum / n, n > 1 and (" (" .. n .. " passes)") or "")) end
+            if n > 0 then
+                table.insert(parts, string.format("%s %.0f fps%s", kv[1], sum / n, n > 1 and (" (" .. n .. " passes)") or ""))
+                it.fpsSum, it.fpsN = (it.fpsSum or 0) + sum / n, (it.fpsN or 0) + 1
+            end
         end
     end
+    -- the menu's report list: the scenes' mean fps, the mean p99 frame time (it[8]), the settings away from the defaults (it[9])
+    it.fpsAvg = it.fpsN and (it.fpsSum / it.fpsN) or nil
+    it.p99 = tonumber(it[8] or "")
+    it.opts = it[9]
     return parts
 end
 
@@ -954,44 +1039,106 @@ function PzoptBench.scenarios()
     return out
 end
 
+-- (2026-10-21) the weather and the hour a scene can run in (BenchSuite.WEATHERS; Scene's weather= / fog= and time_of_day=)
+local WEATHERS = {
+    { id = "clear", label = "Clear" }, { id = "rain", label = "Rain" }, { id = "storm", label = "Thunderstorm" },
+}
+-- the fog, on its own beside the weather (Scene's fog=: off, an intensity, heavy = 1)
+local FOGS = {
+    { id = "off", label = "No fog" }, { id = "0.3", label = "Light fog" }, { id = "0.6", label = "Thick fog" },
+    { id = "heavy", label = "Heavy fog" },
+}
+local TIMES = {
+    { h = 8, label = "Morning (08:00)" }, { h = 12, label = "Noon (12:00)" }, { h = 20, label = "Evening (20:00)" },
+    { h = 1, label = "Night (01:00)" },
+}
+
 PzoptBench.options = SETUP_OPTIONS
 PzoptBench.passes = PASSES
 PzoptBench.cooldown = COOLDOWN
+PzoptBench.weathers = WEATHERS
+PzoptBench.fogs = FOGS
+PzoptBench.times = TIMES
 
--- a setup: { scen = { [id] = true }, opt = { [id] = bool }, passes = index, cool = index, label = text }
+-- a setup: { scen = { [id] = bool }, per = { [id] = { passes, weather, fog, time } (indexes) }, opt = { [id] = bool },
+-- cool = index, label = text }
+-- (2026-10-21, maintainer) every scene off to start with; each scene its own passes (one), weather (clear) and hour (noon),
+-- the benches' own conditions
 function PzoptBench.newSetup(scenarios)
-    local s = { scen = {}, opt = {}, passes = 3, cool = 1, label = "" }
-    for _, sc in ipairs(scenarios) do s.scen[sc.id] = sc.id ~= "sweep" end
+    local s = { scen = {}, per = {}, opt = {}, cool = 1, label = "" }
+    for _, sc in ipairs(scenarios) do
+        s.scen[sc.id] = false
+        s.per[sc.id] = { passes = 1, weather = 1, fog = 1, time = 2 }
+    end
     for _, o in ipairs(SETUP_OPTIONS) do s.opt[o.id] = o.default end
     return s
 end
 
--- the selected scenes, passes, A/B, and the estimate in seconds
+-- a scene's passes (the number), weather id, hour and fog id
+function PzoptBench.sceneSetup(setup, id)
+    local per = setup.per[id] or { passes = 1, weather = 1, fog = 1, time = 2 }
+    return PASSES[per.passes] or 1, (WEATHERS[per.weather] or WEATHERS[1]).id, (TIMES[per.time] or TIMES[2]).h,
+        (FOGS[per.fog] or FOGS[1]).id
+end
+
+-- the name a run without one gets: its start's date and minute, as the reports list shows it (BenchResults.dateOf)
+function PzoptBench.autoName()
+    local ok, t = pcall(function()
+        return SimpleDateFormat.new("yyyy-MM-dd HH:mm", Locale.ENGLISH):format(Calendar.getInstance():getTime())
+    end)
+    return ok and tostring(t) or ""
+end
+
+-- the selected scenes, their passes ({ [id] = n }), A/B, the estimate in seconds and the number of passes the run makes
 function PzoptBench.estimate(setup, scenarios)
-    local ids, secs = {}, 0
+    local ids, per, ab = {}, {}, setup.opt.ab
+    local total, steps, warm = 0, 0, 0
+    local cool = COOLDOWN[setup.cool] or 0
     for _, s in ipairs(scenarios) do
         if setup.scen[s.id] then
             table.insert(ids, s.id)
-            secs = secs + s.seconds + 16 -- + boot and world load of the pass's own process (Benchmark.PROCESS_S)
+            local n = PzoptBench.sceneSetup(setup, s.id)
+            per[s.id] = n
+            local secs = s.seconds + 16 -- + boot and world load of the pass's own process (Benchmark.PROCESS_S)
+            local k = (ab and s.id ~= "sweep") and 2 or 1 -- (the sweep has no stock pass: BenchOrder)
+            total = total + (secs + cool) * n * k + ((ab and s.id ~= "sweep") and 36 * n or 0)
+            steps = steps + n * k
+            warm = warm + secs
         end
     end
-    local passes = PASSES[setup.passes] or 1
-    local ab = setup.opt.ab
-    local total = secs * passes * (ab and 2 or 1) + (ab and 36 * #ids * passes or 0) + (setup.opt.warmup and secs or 0)
-    local cool = COOLDOWN[setup.cool] or 0
-    total = total + cool * #ids * passes * (ab and 2 or 1)
-    return ids, passes, ab, total, #ids * passes * (ab and 2 or 1)
+    if setup.opt.warmup or (setup.opt.timedemo and not ab) then -- (timedemo runs a warm-up pass too: Benchmark.start)
+        total, steps = total + warm, steps + #ids
+    end
+    return ids, per, ab, total, steps
+end
+
+-- the estimate as words: "about 9 min" (nil without a scene)
+function PzoptBench.estimateText(setup, scenarios)
+    local ids, _, _, total = PzoptBench.estimate(setup, scenarios)
+    if #ids == 0 then return nil end
+    return "about " .. math.max(1, math.floor(total / 60 + 0.5)) .. " min"
 end
 
 -- plans the run and quits (the next process starts it); returns nil or the error
 function PzoptBench.start(setup, scenarios)
-    local ids, passes, ab = PzoptBench.estimate(setup, scenarios)
+    local ids, _, ab = PzoptBench.estimate(setup, scenarios)
     if #ids == 0 then return "no scene chosen" end
     local o = setup.opt
-    local arg = "scenarios=" .. table.concat(ids, ",") .. ";passes=" .. passes .. ";mode=" .. (ab and "ab" or "standard")
+    local passes, weather, hours, fogs = {}, {}, {}, {} -- (each scene its own: "spin:2,horde:1", Benchmark.start)
+    for _, id in ipairs(ids) do
+        local n, w, h, f = PzoptBench.sceneSetup(setup, id)
+        table.insert(passes, id .. ":" .. n)
+        table.insert(weather, id .. ":" .. w)
+        table.insert(hours, id .. ":" .. h)
+        table.insert(fogs, id .. ":" .. f)
+    end
+    local arg = "scenarios=" .. table.concat(ids, ",") .. ";passes=" .. table.concat(passes, ",") .. ";mode=" .. (ab and "ab" or "standard")
+        .. ";weather=" .. table.concat(weather, ",") .. ";time=" .. table.concat(hours, ",") .. ";fog=" .. table.concat(fogs, ",")
+        .. ";profiler=" .. (o.profiler and "1" or "0")
         .. ";uncapped=" .. (o.uncapped and "1" or "0") .. ";warmup=" .. (o.warmup and "1" or "0")
         .. ";timedemo=" .. (o.timedemo and "1" or "0") .. ";screenshot=" .. (o.screenshot and "1" or "0")
         .. ";hud=" .. (o.hud and "1" or "0") .. ";cooldown=" .. (COOLDOWN[setup.cool] or 0)
+        .. ";modlua=" .. (o.modlua == false and "0" or "1")
         .. ";label=" .. string.gsub(setup.label or "", "[;=\t\n]", " ")
     local c = split(call("start", arg), "\t")
     if c[1] == "ok" then
@@ -1089,6 +1236,7 @@ function PzoptBench.report(run)
         elseif t == "CMP" then d.cmp[c[2]] = c
         elseif t == "PREV" then d.prev = c
         elseif t == "REC" then table.insert(d.rec, c)
+        elseif t == "PROFILER" then d.profiler = true -- (the full performance overlay was on: BenchResults.buildReport)
         elseif t == "FILE" then d.file = c[2]
         end
     end

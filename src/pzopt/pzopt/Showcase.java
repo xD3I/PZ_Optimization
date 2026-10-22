@@ -99,6 +99,26 @@ public final class Showcase {
    private static int woken;
    private static long heldOff;
    private static IsoZombie lastTarget;
+   /** tactics=kite: targets set aside until (ns), after starve_s (1.5) of settled aim without a round at them. */
+   private static final java.util.Map<IsoZombie, Long> skipUntil = new java.util.IdentityHashMap<>();
+   private static IsoZombie starveZ;
+   private static float starveS, starveLimit = 1.5F;
+   private static int targetSkips;
+   /**
+    * tactics=kite: the revolver may be drawn for an empty rifle (sidearm_draw, true). h80-p23 (2026-10-22): the draw, its
+    * 6 rounds and the equip back to the rifle took 7.7 s against 2.5 s for a magazine swap.
+    */
+   private static boolean sidearmDraw = true;
+   /**
+    * tactics=kite: no round with the facing more than facing_gate degrees off the target (25), and a round with nothing
+    * under the reticle after blind_ms (400). The maintainer (2026-10-22): "you don't have to wait until the character
+    * turns, you can shoot precisely the moment you start aiming"; facing_gate=180 blind_ms=0 body_shot_ms=0 do that.
+    */
+   private static float facingGate = 25F;
+   private static long blindNs = 400_000_000L;
+   private static boolean headOnly;
+   /** tactics=kite: the live zombies within 15 tiles that are not the horde's (targets and headshots too). */
+   private static final ArrayList<IsoZombie> others = new ArrayList<>();
    private static long lastShotNs, lastTurnNs;
    private static boolean turnToTarget;
    private static String targetInfo = "-";
@@ -121,17 +141,19 @@ public final class Showcase {
    private static boolean endWhenDead;
    private static float endCap, endTail;
    private static long clearedNs, spawnNs;
-   private static int hordeTotal, vanished, repaths;
+   private static int hordeTotal, vanished, repaths, adopted;
    private static String endReason = "";
    private static HandWeapon lastAmmoGun;
    private static InventoryItem lastInHand;
    private static int horde, hordeGap, hordeFires, lightbar, fireMs, mags;
    private static float backOffMax, hordeAfterS, hordeMin;
+   private static long readyIdleNs;
    private static float pierX, pierY;
    private static String gunType, ambulanceType, hordeDir;
    private static HandWeapon gun;
    private static InventoryItem angleLight;
    private static BaseVehicle ambulance;
+   private static int siren = 1;
    private static final ArrayList<IsoZombie> zombies = new ArrayList<>();
    private static final java.util.Set<IsoZombie> hordeSet = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
    private static final ArrayList<IsoGridSquare> fireSquares = new ArrayList<>();
@@ -142,19 +164,30 @@ public final class Showcase {
    private static int shots, reloads, strangersRemoved, reattached, lastAmmo = -1;
    private static boolean started, firesLit;
    private static String lastPath = "-";
+   /**
+    * body_shot_ms (150): a standing target without its head under the reticle this long takes a body round. A body round
+    * mostly knocks the zombie down instead of killing it (h80-p7, 2026-10-22: 149 head / 132 body rounds for 150 kills),
+    * and a zombie on the ground takes more rounds and a walk later.
+    */
+   private static long bodyShotNs = 150_000_000L;
    private static long lastTickNs, lastRepathNs, holdSinceNs, readySinceNs;
    private static int repress;
 
    static void apply() {
+      HordeTactics.apply(); // tactics=kite (the horde bench fought like a player), arena_scan=
       on = "horde".equalsIgnoreCase(HarnessFlags.get("showcase", "").trim());
       if (!on) {
          return;
       }
+      // tactics=kite: nothing holds the horde off or pins the player; the player keeps the range (HordeTactics)
+      boolean tac = HordeTactics.on;
       horde = Integer.parseInt(HarnessFlags.get("horde", "80").trim());
       hordeGap = Integer.parseInt(HarnessFlags.get("horde_gap", "12").trim());
       hordeFires = Integer.parseInt(HarnessFlags.get("horde_fires", "9").trim());
       lightbar = Integer.parseInt(HarnessFlags.get("lightbar", "2").trim());
+      siren = Integer.parseInt(HarnessFlags.get("siren", "1").trim());
       fireMs = Integer.parseInt(HarnessFlags.get("fire_ms", "110").trim());
+      bodyShotNs = Long.parseLong(HarnessFlags.get("body_shot_ms", "150").trim()) * 1_000_000L;
       mags = Integer.parseInt(HarnessFlags.get("mags", "6").trim());
       gunType = HarnessFlags.get("gun", "Base.AssaultRifle").trim();
       ambulanceType = HarnessFlags.get("ambulance", "Base.VanAmbulance").trim();
@@ -175,10 +208,13 @@ public final class Showcase {
       // tiles: horde zombies are kept this far from the player (0 = off; the horde bench 0.9, see tick)
       noJamFlag = "true".equalsIgnoreCase(HarnessFlags.get("no_jam", Boolean.toString(hordeWhenReadyFlag())).trim());
       aimedFire = "true".equalsIgnoreCase(HarnessFlags.get("aimed", Boolean.toString(hordeWhenReadyFlag())).trim());
-      stepBack = "true".equalsIgnoreCase(HarnessFlags.get("step_back", Boolean.toString(hordeWhenReadyFlag())).trim());
+      headBone = "true".equalsIgnoreCase(HarnessFlags.get("head_bone", "true").trim());
+      fireTiles = Float.parseFloat(HarnessFlags.get("fire_tiles", "30").trim());
+      headBoneAims = 0;
+      stepBack = "true".equalsIgnoreCase(HarnessFlags.get("step_back", Boolean.toString(hordeWhenReadyFlag() && !tac)).trim());
       turnToTarget = "true".equalsIgnoreCase(HarnessFlags.get("turn_to_target", Boolean.toString(hordeWhenReadyFlag())).trim());
-      bubble = Float.parseFloat(HarnessFlags.get("bubble", hordeWhenReadyFlag() ? "0.9" : "0").trim());
-      pinPier = "true".equalsIgnoreCase(HarnessFlags.get("pin_pier", Boolean.toString(hordeWhenReadyFlag())).trim()); // the horde bench: the player stays on the spot
+      bubble = Float.parseFloat(HarnessFlags.get("bubble", hordeWhenReadyFlag() && !tac ? "0.9" : "0").trim());
+      pinPier = "true".equalsIgnoreCase(HarnessFlags.get("pin_pier", Boolean.toString(hordeWhenReadyFlag() && !tac)).trim()); // the horde bench: the player stays on the spot
       // pier: the horde spawns once the player stands at the pier spot (the Workshop headline shot), not at the route start
       hordeAtPier = "pier".equalsIgnoreCase(HarnessFlags.get("horde_when", "start").trim());
       // ready: once the player stands at the pier, turned to the horde side, aiming a loaded gun (the horde bench)
@@ -186,6 +222,18 @@ public final class Showcase {
       sidearmType = HarnessFlags.get("sidearm", "").trim();
       sidearmRounds = Integer.parseInt(HarnessFlags.get("sidearm_rounds", "60").trim());
       sidearmAt = Integer.parseInt(HarnessFlags.get("sidearm_at", "2").trim());
+      starveLimit = Float.parseFloat(HarnessFlags.get("starve_s", "1.5").trim());
+      sidearmDraw = !"false".equalsIgnoreCase(HarnessFlags.get("sidearm_draw", "true").trim());
+      facingGate = Float.parseFloat(HarnessFlags.get("facing_gate", "25").trim());
+      blindNs = (long)(Float.parseFloat(HarnessFlags.get("blind_ms", "400").trim()) * 1_000_000L);
+      headOnly = "true".equalsIgnoreCase(HarnessFlags.get("head_only", "false").trim());
+      adoptTiles = Float.parseFloat(HarnessFlags.get("adopt_tiles", "15").trim());
+      noAlarms = "true".equalsIgnoreCase(HarnessFlags.get("no_alarms", Boolean.toString(HordeTactics.on)).trim());
+      alarmsDisarmed = false;
+      alarmsStopped = 0;
+      racksIssued = 0;
+      racking = false;
+      unchamberedSinceNs = 0L;
       // horde_dead: the route ends once the horde is dead (end_tail s later, the last bodies down), at end_cap s of route
       // time at the latest (the horde bench, 2026-10-18); the route's own legs and hold no longer end it
       endWhenDead = "horde_dead".equalsIgnoreCase(HarnessFlags.get("end", "").trim());
@@ -224,6 +272,11 @@ public final class Showcase {
       if (!on || !endWhenDead || !started) return -1;
       if (!endReason.isEmpty()) return 1;
       float t = (nowNs - startNs) / 1e9F;
+      if (!HordeTactics.failReason.isEmpty()) { // tactics=kite: the kill switch (the player was hit, or died)
+         endReason = HordeTactics.failReason;
+         Log.info(String.format(java.util.Locale.ROOT, "harness: showcase: %s at +%.1f s with %d of %d horde zombies alive; the route ends now", endReason, t, zombies.size(), hordeTotal));
+         return 1;
+      }
       if (hordeSpawned && hordeTotal > 0 && zombies.isEmpty()) {
          if (clearedNs == 0L) {
             clearedNs = nowNs;
@@ -236,6 +289,37 @@ public final class Showcase {
          Log.info(String.format(java.util.Locale.ROOT, "harness: showcase: end_cap %.0f s reached with %d of %d horde zombies alive", endCap, zombies.size(), hordeTotal));
       }
       return endReason.isEmpty() ? 0 : 1;
+   }
+
+   /** The scene ended its route as a failed pass (the kill switch): Harness writes route_status=failed. */
+   public static boolean routeFailed() {
+      return on && endReason.startsWith("failed");
+   }
+
+   public static String endReason() {
+      return endReason;
+   }
+
+   /**
+    * The hard timeout (2026-10-21): a daemon thread ends the route as failed {@code hard_timeout} s (end_cap + 20) after
+    * the route start whatever the frames do: a dead player stops the chunk updates that drive Harness.onFrame, so
+    * routeEnd's own end_cap never comes (hk-fight1 ran on for minutes after the death).
+    */
+   private static void startWatchdog() {
+      if (!endWhenDead) return;
+      final float hard = Float.parseFloat(HarnessFlags.get("hard_timeout", Float.toString(endCap + 20F)).trim());
+      Thread t = new Thread(() -> {
+         try {
+            Thread.sleep((long)(hard * 1000F));
+         } catch (InterruptedException e) {
+            return;
+         }
+         Harness.hardStop(String.format(java.util.Locale.ROOT, "failed: hard timeout at %.0f s (end_cap %.0f s did not end the route; %d of %d horde zombies alive%s)", hard, endCap,
+               zombies.size(), hordeTotal, HordeTactics.failReason.isEmpty() ? "" : ", " + HordeTactics.failReason));
+      }, "pzopt-horde-watchdog");
+      t.setDaemon(true);
+      t.start();
+      Log.info(String.format(java.util.Locale.ROOT, "harness: showcase: hard timeout armed at %.0f s", hard));
    }
 
    /** How far the scene is toward its end (the benchmark's progress bar), -1 without an end rule. */
@@ -253,6 +337,10 @@ public final class Showcase {
       java.util.Map<String, String> m = new java.util.LinkedHashMap<>();
       if (!on) return m;
       m.put("horde_total", Integer.toString(hordeTotal));
+      m.put("horde_adopted", Integer.toString(adopted));
+      m.put("horde_alarms_stopped", Integer.toString(alarmsStopped));
+      m.put("horde_racks_issued", Integer.toString(racksIssued));
+      m.put("horde_head_bone_aims", Integer.toString(headBoneAims));
       m.put("horde_left", Integer.toString(zombies.size()));
       m.put("horde_killed", Integer.toString(kills()));
       m.put("horde_vanished", Integer.toString(vanished));
@@ -269,12 +357,34 @@ public final class Showcase {
       m.put("horde_body_shots", Integer.toString(bodyShots));
       m.put("horde_blind_shots", Integer.toString(blindShots));
       m.put("horde_jams", Integer.toString(jams));
+      HordeTactics.fields(m); // tactics=kite: hits, wounds, stuck, reflexes, the load
       return m;
+   }
+
+   /** Lines for pzopt-bench.out: the horde's end and, with tactics=kite, the fight's damage / stuck / load facts. */
+   static String summary() {
+      if (!on) return "";
+      StringBuilder b = new StringBuilder();
+      for (java.util.Map.Entry<String, String> e : benchFields().entrySet()) b.append('\n').append(e.getKey()).append('=').append(e.getValue());
+      if (HordeTactics.on) {
+         shotLogTick(System.nanoTime(), true);
+         try {
+            java.nio.file.Files.writeString(new java.io.File(zombie.ZomboidFileSystem.instance.getCacheDir(), "pzopt-shots.out").toPath(), shotLog);
+         } catch (Exception e) {
+            Log.warn("harness: showcase: pzopt-shots.out write failed: " + e);
+         }
+      }
+      try { // pzopt-horde.out: the same facts for harness/horde-judge.py (run.sh copies every pzopt-*.out)
+         java.nio.file.Files.writeString(new java.io.File(zombie.ZomboidFileSystem.instance.getCacheDir(), "pzopt-horde.out").toPath(), b.substring(Math.min(1, b.length())) + "\n");
+      } catch (Exception e) {
+         Log.warn("harness: showcase: pzopt-horde.out write failed: " + e);
+      }
+      return b.toString();
    }
 
    /** The route must not teleport the player: the scene runs them to the pier. */
    public static boolean active() {
-      return on;
+      return on || HordeTactics.scanning();
    }
 
    /** World-ready (game thread): out of harm's way until the scene starts. */
@@ -293,11 +403,13 @@ public final class Showcase {
 
    /** Route start (game thread): kit, ambulance, horde; then the run. */
    static void routeStart(IsoPlayer p) {
+      HordeTactics.scanStart(p); // arena_scan=: the scan moves the player itself
       if (!on || started) {
          return;
       }
       started = true;
       startNs = System.nanoTime();
+      startWatchdog();
       try {
          p.getCheats().set(zombie.characters.CheatType.GOD_MODE, true);
          p.setInvisible(false, true); // the horde sees and chases the player
@@ -307,6 +419,8 @@ public final class Showcase {
                + p.getPerkLevel(zombie.characters.skills.PerkFactory.Perks.Reloading));
          clearStrangers(p, 30F);
          equip(p);
+         HordeTactics.defaultArena(pierX, pierY);
+         HordeTactics.routeStart(p);
          replaceVehicle();
          if (!"none".equalsIgnoreCase(ambulanceType)) parkAmbulance();
          if (!hordeAtPier && !hordeWhenReady) spawnHorde(p);
@@ -341,6 +455,7 @@ public final class Showcase {
       }
       p.setPrimaryHandItem(null);
       p.setSecondaryHandItem(null);
+      if (HordeTactics.on) HordeTactics.travelLight(p); // tactics=kite: the save character's bags and loose items stay home
       InventoryItem item = p.getInventory().AddItem(gunType);
       if (!(item instanceof HandWeapon w)) {
          Log.warn("harness: showcase: " + gunType + " is not a weapon: " + item);
@@ -357,21 +472,35 @@ public final class Showcase {
       }
       String magType = gun.getMagazineType();
       int filled = 0;
-      for (int i = 0; magType != null && i < mags; i++) {
-         InventoryItem mag = p.getInventory().AddItem(magType);
-         if (mag != null) {
-            mag.setCurrentAmmoCount(mag.getMaxAmmo());
-            filled++;
-         }
-      }
-      InventoryItem belt = p.getInventory().AddItem("Base.Bag_ALICE_BeltSus_Green"); // provides the webbing slots
+      // webbing=false (the default with tactics=kite, a daylight fight): no webbing belt and no angle-head light; their
+      // 3.5 of weight carry seven more magazines
+      boolean webbing = "true".equalsIgnoreCase(HarnessFlags.get("webbing", Boolean.toString(!HordeTactics.on)).trim());
+      InventoryItem belt = webbing ? p.getInventory().AddItem("Base.Bag_ALICE_BeltSus_Green") : null; // provides the webbing slots
       if (belt != null && belt.canBeEquipped() != null) {
          p.setWornItem(belt.canBeEquipped(), belt);
       }
-      angleLight = p.getInventory().AddItem("Base.FlashLight_AngleHead");
+      angleLight = webbing ? p.getInventory().AddItem("Base.FlashLight_AngleHead") : null;
       if (angleLight != null) {
          angleLight.setActivated(true);
          p.setAttachedItem("Webbing Left Walkie", angleLight);
+      }
+      // tactics=kite: the rifle's parts (rifle_parts, Base.Laser;Base.RedDot; the maintainer, 2026-10-22: "the best attachments
+      // for range and accuracy"). Of the M16's mounts (media/scripts weaponpart.txt) the Laser gives +5 hit chance and -10
+      // aiming time, the Red Dot -10 aiming time with the iron sights' 2-10 range; the aiming time is the ceiling of the
+      // aiming-delay penalty every round pays (CombatManager.setAimingDelay), 40 -> 20. A scope only adds range
+      // (CombatManager takes the better of the sightless and the sight modifier) at +5 (x2, 4-12) / +10 (x4, 8-16) aiming time
+      String parts = HarnessFlags.get("rifle_parts", HordeTactics.on ? "Base.Laser;Base.RedDot" : "").trim();
+      for (String part : parts.isEmpty() ? new String[0] : parts.split(";")) {
+         InventoryItem it = zombie.inventory.InventoryItemFactory.CreateItem(part.trim());
+         if (it instanceof zombie.inventory.types.WeaponPart wp) {
+            gun.attachWeaponPart(p, wp);
+         } else {
+            Log.warn("harness: showcase: rifle part " + part + " is not a weapon part: " + it);
+         }
+      }
+      if (!parts.isEmpty()) {
+         Log.info(String.format(java.util.Locale.ROOT, "harness: showcase: rifle parts %s: aiming time %d, hit chance %d, sight %.1f-%.1f tiles, active sight %s, weight %.2f",
+               parts, gun.getAimingTime(), gun.getHitChance(), gun.getMinSightRange(p), gun.getMaxSightRange(p), gun.getActiveSight() == null ? "-" : gun.getActiveSight().getType(), gun.getActualWeight()));
       }
       primary = gun;
       wanted = gun;
@@ -397,17 +526,129 @@ public final class Showcase {
             Log.warn("harness: showcase: sidearm " + sidearmType + " is not a weapon: " + s);
          }
       }
+      // the spare magazines last, as many as fit under the carry capacity (2026-10-21: 20 magazines on top of the kit put
+      // the player in Heavy Load, slower than a player would ever fight a horde)
+      // tactics=kite: packed one by one, each weighed by the game's own sum (IsoGameCharacter.getInventoryWeight) until the
+      // next would pass 90 % of the capacity (hk-fight2: a probe of an empty magazine weighed far less than a full one,
+      // 20 "fit" and the player ran in Heavy Load 4, which also takes health down to 75: BodyDamage's heavyLoadDamage)
+      float limit = p.getMaxWeight() * 0.95F; // Heavy Load starts past 1.0
+      // ... in the heaviest state of the fight: a weapon in the hands weighs less than one stowed, and drawing the sidearm
+      // stows the rifle (hk-bench3: 11.26 of 12 at the start, 12.35 and Heavy Load 1 at the draw); the swap is weighed here
+      if (HordeTactics.on && sidearm != null) {
+         float w0 = p.getInventoryWeight();
+         p.setPrimaryHandItem(sidearm);
+         p.setSecondaryHandItem(sidearm.isTwoHandWeapon() || sidearm.isRequiresEquippedBothHands() ? sidearm : null);
+         float swap = Math.max(0F, p.getInventoryWeight() - w0);
+         p.setPrimaryHandItem(gun);
+         p.setSecondaryHandItem(gun.isTwoHandWeapon() || gun.isRequiresEquippedBothHands() ? gun : null);
+         limit -= swap;
+         Log.info(String.format(java.util.Locale.ROOT, "harness: showcase: the sidearm drawn (rifle stowed) weighs %.2f more: magazines packed under %.2f", swap, limit));
+      }
+      // pack=true (the default with tactics=kite): a worn ALICE pack (85 % weight reduction) takes the magazines the belt
+      // line cannot: hk-fight4 ran dry with 5 of 150 left on 8 magazines. The game's reload finds them there
+      // (HandWeapon.getBestMagazine recurses) and moves each to the hands first (ISInventoryPaneContextMenu.transferIfNeeded)
+      zombie.inventory.ItemContainer bagInv = null;
+      if (HordeTactics.on) HordeTactics.boots(p);
+      if (HordeTactics.on) HordeTactics.desensitize(p);
+      if (HordeTactics.on) HordeTactics.buffs(p);
+      if (HordeTactics.on && "true".equalsIgnoreCase(HarnessFlags.get("pack", "true").trim())) {
+         InventoryItem pack = p.getInventory().AddItem("Base.Bag_ALICEpack");
+         if (pack instanceof zombie.inventory.types.InventoryContainer bag && pack.canBeEquipped() != null) {
+            p.setWornItem(pack.canBeEquipped(), pack);
+            bagInv = bag.getInventory();
+         }
+      }
+      int inPack = 0, spareWanted = mags;
+      // main_mags (4): the magazines kept at hand; the rest go in the pack first (a full one weighs ~0.85 at hand, ~0.13 in
+      // the pack: hk-fight5 packed 7 at hand + 3 in the pack and ran dry with 1 of 150 left). The pack is filled before the
+      // hands and an at-hand one over the weight goes in the pack too: the built-in benchmark's new-world character
+      // (capacity 12, not the bench save's 18) carried 4 at hand + 5 in the pack = 9 of 20 the other way round (hk-bench2)
+      int atHand = Integer.parseInt(HarnessFlags.get("main_mags", "4").trim());
+      for (int i = 0; magType != null && i < mags; i++) {
+         InventoryItem mag = p.getInventory().AddItem(magType);
+         if (mag == null) break;
+         mag.setCurrentAmmoCount(mag.getMaxAmmo());
+         if (HordeTactics.on && (p.getInventoryWeight() > limit || bagInv != null && i < mags - atHand)) {
+            p.getInventory().Remove(mag);
+            if (bagInv != null && bagInv.hasRoomFor(p, mag)) {
+               bagInv.AddItem(mag);
+               if (p.getInventoryWeight() <= limit) {
+                  inPack++;
+                  filled++;
+                  continue;
+               }
+               bagInv.Remove(mag);
+            }
+            break;
+         }
+         filled++;
+      }
+      // a gun without a magazine (the JS-3T shotgun, a tube; the maintainer, 2026-10-23: "a test run with the JS-3T Tactical
+      // Shotgun fully kitted"): gun_rounds (200) loose rounds at hand, one by one under the same 95 % of the capacity
+      if (magType == null && gun.getAmmoType() != null) {
+         int want = Integer.parseInt(HarnessFlags.get("gun_rounds", "200").trim()), got = 0;
+         String ammo = gun.getAmmoType().getItemKey();
+         for (; got < want; got++) {
+            InventoryItem r = p.getInventory().AddItem(ammo);
+            if (r == null) break;
+            if (HordeTactics.on && p.getInventoryWeight() > limit) {
+               p.getInventory().Remove(r);
+               break;
+            }
+         }
+         Log.info(String.format(java.util.Locale.ROOT, "harness: showcase: %d of %d loose %s carried (%.1f of %d)", got, want, ammo, p.getInventoryWeight(), p.getMaxWeight()));
+         spareWanted = want;
+         filled = got;
+      }
+      if (HordeTactics.on) Log.info(String.format(java.util.Locale.ROOT, "harness: showcase: %d of %d spare magazines packed (%d in the pack) under 95 %% of the capacity (%.1f of %d)", filled, spareWanted, inPack,
+            p.getInventoryWeight(), p.getMaxWeight()));
+      HordeTactics.magsWanted = spareWanted;
+      HordeTactics.magsCarried = filled;
+      HordeTactics.logWeight(p, "at the start");
       p.resetEquippedHandsModels();
       Log.info("harness: showcase: " + gunType + " loaded (" + gun.getCurrentAmmoCount() + "), " + filled + " spare " + magType + ", angle light "
             + (angleLight == null ? "missing" : "emitting " + angleLight.isEmittingLight()));
    }
 
-   /** Behind the pier spot (away from the horde), facing the horde, headlights and lightbar on. */
+   private static boolean dryGround(IsoCell cell, int cx, int cy) {
+      for (int y = cy - 2; y <= cy + 2; y++) {
+         for (int x = cx - 2; x <= cx + 2; x++) {
+            IsoGridSquare s = cell.getGridSquare(x, y, 0);
+            if (s == null || s.isWaterSquare() || !s.isSolidFloor() || s.HasTree()) return false;
+         }
+      }
+      return true;
+   }
+
+   /**
+    * Behind the pier spot (away from the horde), facing the horde, headlights and lightbar on. The most-behind spot
+    * {@code ambulance_back} (6) to +3 tiles out, never on the horde's side, whose 5x5 squares are all dry ground; its box goes into
+    * HordeTactics' no-go boxes: the player's steering tests squares (Nav), not vehicles, and h80-p49 (2026-10-23, the van
+    * 4 tiles back) kited into it and was pinned against it by the horde.
+    */
    private static void parkAmbulance() {
       IsoCell cell = IsoWorld.instance.currentCell;
-      IsoGridSquare sq = cell.getGridSquare(Math.round(pierX - dirX * 4), Math.round(pierY - dirY * 4), 0);
+      float back = Float.parseFloat(HarnessFlags.get("ambulance_back", "6").trim());
+      IsoGridSquare sq = null;
+      float best = Float.MAX_VALUE;
+      // h80-p50: straight behind the pier spot is the river and the deck; a ring back..back+3 tiles out, never on the horde's
+      // side, the most-behind dry spot first
+      for (int dy = -10; dy <= 10; dy++) {
+         for (int dx = -10; dx <= 10; dx++) {
+            float d = (float)Math.hypot(dx, dy);
+            if (d < back || d > back + 3F) continue;
+            float dot = (dx * dirX + dy * dirY) / d;
+            if (dot > 0.2F) continue;
+            int cx = Math.round(pierX) + dx, cy = Math.round(pierY) + dy;
+            float score = dot + d * 0.05F;
+            if (score < best && dryGround(cell, cx, cy)) {
+               best = score;
+               sq = cell.getGridSquare(cx, cy, 0);
+            }
+         }
+      }
       if (sq == null) {
-         Log.warn("harness: showcase: no square behind the pier spot for the ambulance");
+         Log.warn("harness: showcase: no dry 5x5 spot behind the pier spot for the ambulance");
          return;
       }
       float a = (float)Math.atan2(-dirX, -dirY); // the vehicle frame of Harness.spawnAndEnter
@@ -425,7 +666,9 @@ public final class Showcase {
       v.repair();
       ambulance = v;
       lights();
-      Log.info("harness: showcase: " + ambulanceType + " at " + sq.x + "," + sq.y + " facing " + dir + ", headlights " + v.getHeadlightsOn() + ", lightbar " + v.hasLightbar());
+      HordeTactics.addNogo(sq.x - 2, sq.y - 2, sq.x + 2, sq.y + 2);
+      Log.info("harness: showcase: " + ambulanceType + " at " + sq.x + "," + sq.y + " facing " + dir + ", headlights " + v.getHeadlightsOn() + ", lightbar " + v.hasLightbar()
+            + ", siren mode " + v.getLightbarSirenMode() + " (sounding " + v.isSirenSounding() + ")");
    }
 
    /**
@@ -485,19 +728,30 @@ public final class Showcase {
       if (ambulance == null) return;
       if (!ambulance.getHeadlightsOn()) ambulance.setHeadlightsOn(true);
       if (lightbar > 0 && ambulance.hasLightbar() && ambulance.getLightbarLightsMode() != lightbar) ambulance.setLightbarLightsMode(lightbar);
+      // siren (1-3, the game's three siren sounds; 0 = off): the ambulance's siren sounds through the fight (the maintainer,
+      // 2026-10-23: "add back the ambulance with the siren on", "leave the siren sound on"); the game's own world sound of it
+      // (BaseVehicle: a repeating 100-tile sound while SirenEffectsZombies) is left as the game makes it
+      if (siren > 0 && ambulance.hasLightbar() && ambulance.getLightbarSirenMode() != siren) ambulance.setLightbarSirenMode(siren);
    }
 
    /** A burning horde of fast shamblers hordeGap tiles behind the player (the horde side), chasing. */
    private static void spawnHorde(IsoPlayer p) {
       hordeSpawned = true; // once, even when no ground is found
       IsoCell cell = IsoWorld.instance.currentCell;
-      int cx = Math.round(p.getX() + dirX * hordeGap), cy = Math.round(p.getY() + dirY * hordeGap);
+      int gap = hordeGap;
+      if (HordeTactics.on && gap < HordeTactics.releaseTiles + 4.3F) { // the 7x7 blob's nearest square stays horde_release_tiles out
+         gap = (int)Math.ceil(HordeTactics.releaseTiles + 4.3F);
+         Log.info("harness: showcase: horde_gap " + hordeGap + " -> " + gap + " (the horde's nearest " + HordeTactics.releaseTiles + " tiles out)");
+      }
+      int cx = Math.round(p.getX() + dirX * gap), cy = Math.round(p.getY() + dirY * gap);
       ArrayList<IsoGridSquare> ground = new ArrayList<>();
       for (int y = cy - 3; y <= cy + 3; y++) {
          for (int x = cx - 3; x <= cx + 3; x++) {
             IsoGridSquare sq = cell.getGridSquare(x, y, 0);
             float ddx = x + 0.5F - p.getX(), ddy = y + 0.5F - p.getY();
-            if (dry(sq) && ddx * ddx + ddy * ddy > hordeMin * hordeMin) ground.add(sq); // never on top of the player (cine-1)
+            float minD = HordeTactics.on ? Math.max(hordeMin, HordeTactics.releaseTiles) : hordeMin;
+            boolean open = !HordeTactics.on || sq != null && sq.isOutside() && !sq.HasTree() && !HordeTactics.bush(sq); // tactics: out in the open (the pier's blob reached into the buildings)
+            if (dry(sq) && open && ddx * ddx + ddy * ddy > minD * minD) ground.add(sq); // never on top of the player (cine-1)
          }
       }
       if (ground.isEmpty()) {
@@ -549,12 +803,75 @@ public final class Showcase {
       Log.info("harness: showcase: fire line of " + fireSquares.size() + " across the horde's way");
    }
 
+   /**
+    * no_alarms (default with tactics=kite; the maintainer, 2026-10-22: "disable house alarms during the run since some of
+    * them draw zombies away"): every building's alarm is disarmed once (the game rings one when a character walks in or a
+    * window breaks, AmbientStreamManager.doAlarm), and a ringing one is stopped: Alarm.update calls a 600-tile world sound
+    * every frame for 49 s.
+    */
+   private static void silenceAlarms() {
+      try {
+         if (!alarmsDisarmed) {
+            int n = 0;
+            for (zombie.iso.BuildingDef b : IsoWorld.instance.getMetaGrid().getBuildings()) {
+               if (b.isAlarmed()) {
+                  b.setAlarmed(false);
+                  n++;
+               }
+            }
+            alarmsDisarmed = true;
+            Log.info("harness: showcase: no_alarms: " + n + " building alarms disarmed");
+         }
+         zombie.AmbientStreamManager asm = (zombie.AmbientStreamManager)zombie.AmbientStreamManager.instance;
+         if (!asm.alarmList.isEmpty()) {
+            if (alarmInst == null) {
+               alarmInst = zombie.iso.Alarm.class.getDeclaredField("inst");
+               alarmInst.setAccessible(true);
+            }
+            long inst = alarmInst.getLong(null);
+            if (inst != 0L) {
+               fmod.javafmod.FMOD_Studio_EventInstance_Stop(inst, true);
+               alarmInst.setLong(null, 0L);
+            }
+            alarmsStopped += asm.alarmList.size();
+            Log.info("harness: showcase: no_alarms: " + asm.alarmList.size() + " ringing house alarm(s) stopped");
+            asm.alarmList.clear();
+         }
+      } catch (Throwable t) {
+         Log.warn("harness: showcase: silencing alarms failed: " + t);
+      }
+   }
+
+   private static boolean noAlarms, alarmsDisarmed;
+   private static float adoptTiles = 15F;
+   private static int alarmsStopped;
+   private static java.lang.reflect.Field alarmInst;
+
    /** The area's own zombies near the player (they bit the player from behind in showcase-diag): removed. */
    private static void clearStrangers(IsoPlayer p, float radius) {
       try {
+         // tactics=kite, once the horde is out: the area's own zombies that come near join the count and are fought, not
+         // removed (the maintainer, 2026-10-22: "count all live zombies for the killcount"); membership is the live list, as a
+         // dead horde zombie's object came back as one of them (h80-p33)
+         boolean adopt = HordeTactics.on && hordeSpawned;
+         java.util.Set<IsoZombie> live = null;
+         if (adopt) {
+            live = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
+            live.addAll(zombies);
+         }
          for (IsoZombie z : new ArrayList<>(IsoWorld.instance.getCell().getZombieList())) {
-            if (hordeSet.contains(z)) continue;
+            if (adopt ? z == null || z.isDead() || live.contains(z) : hordeSet.contains(z)) continue;
             float dx = z.getX() - p.getX(), dy = z.getY() - p.getY();
+            // inside the pier arena and within adopt_tiles (15) of the player: h80-p35 took them in at 24 tiles, eight stood 15+
+            // tiles off outside the arena (drawn by the gunfire) and the player shot at the arena's edge for 60 s
+            if (adopt && dx * dx + dy * dy < adoptTiles * adoptTiles
+                  && (!HordeTactics.arenaSet || Math.hypot(z.getX() - HordeTactics.arenaX, z.getY() - HordeTactics.arenaY) <= HordeTactics.arenaR)) {
+               zombies.add(z);
+               hordeSet.add(z);
+               hordeTotal++;
+               adopted++;
+               continue;
+            }
             if (dx * dx + dy * dy < radius * radius) {
                z.removeFromWorld();
                z.removeFromSquare();
@@ -566,14 +883,84 @@ public final class Showcase {
       }
    }
 
+   // ---------------------------------------------------------------- pzopt.HordeScene: a player's own take of the scene
+
+   /** A new world with a scene file: nothing of a previous load's horde is kept. */
+   static void playReset() {
+      zombies.clear();
+      hordeSet.clear();
+      adopted = 0;
+      lastSeen.clear();
+      hordeSpawned = false;
+      started = false;
+      gun = primary = sidearm = wanted = null;
+      angleLight = null;
+   }
+
+   /** The bench's kit (Aiming / Reloading 10, the rifle loaded in the hands, magazines, the .44, boots, the pack); no route, no autopilot. */
+   static void playKit(IsoPlayer p) {
+      startNs = System.nanoTime();
+      p.setPerkLevelDebug(zombie.characters.skills.PerkFactory.Perks.Aiming, 10);
+      p.setPerkLevelDebug(zombie.characters.skills.PerkFactory.Perks.Reloading, 10);
+      clearStrangers(p, 30F);
+      equip(p);
+   }
+
+   /** The horde now, horde_gap out in horde_dir from where the player stands; null when it came, else why not. */
+   static String playRelease(IsoPlayer p) {
+      zombies.clear();
+      if (!on) return "the scene's showcase=horde is not set";
+      try {
+         spawnHorde(p);
+      } catch (Throwable t) {
+         hordeSpawned = false;
+         Log.warn("horde scene: the spawn threw: " + t);
+         return "the spawn failed (" + t + ")";
+      }
+      if (zombies.isEmpty()) {
+         hordeSpawned = false; // the player may move and try again
+         return "no open outdoor ground " + hordeGap + "+ tiles " + hordeDir + " of " + Math.round(p.getX()) + "," + Math.round(p.getY());
+      }
+      HordeTactics.released(p, zombies);
+      return null;
+   }
+
+   static int playLeft() {
+      return zombies.size();
+   }
+
+   /** Every frame of the scene: the horde's vector to the player kept true (no attack from 10 tiles), stragglers re-pathed, the area's own zombies kept off until the release. */
+   static void playTick(IsoPlayer p, long nowNs) {
+      for (int i = zombies.size() - 1; i >= 0; i--) {
+         IsoZombie z = zombies.get(i);
+         if (z == null || z.isDead() || z.getCurrentSquare() == null) {
+            zombies.remove(i);
+         } else if (z.getTarget() == p) {
+            HordeTactics.aimAt(z, p);
+         }
+      }
+      if (nowNs - lastClearNs >= 1_000_000_000L) {
+         lastClearNs = nowNs;
+         if (!hordeSpawned) {
+            clearStrangers(p, 30F);
+         } else {
+            repathStragglers(p);
+         }
+      }
+   }
+
    /** Every frame while the run is live (game thread). */
    static void tick(IsoPlayer p, long nowNs) {
+      if (HordeTactics.scanTick(p, nowNs)) {
+         return; // arena_scan=: the player is moved from point to point
+      }
       if (!on) {
          return;
       }
       if (nowNs - lastClearNs >= 1_000_000_000L) {
          lastClearNs = nowNs;
          clearStrangers(p, started ? 24F : 30F);
+         if (noAlarms) silenceAlarms();
          if (powerOff && IsoWorld.instance.isHydroPowerOn()) IsoWorld.instance.setHydroPowerOn(false);
       }
       if (!started) {
@@ -582,10 +969,14 @@ public final class Showcase {
       RagdollWatch.tick(nowNs);
       lights();
       if (zombie.input.Mouse.isCursorVisible()) zombie.input.Mouse.setCursorVisible(false); // no pointer in the shot
-      p.getCheats().set(zombie.characters.CheatType.GOD_MODE, true);
+      // tactics=kite: mortal once the horde is out (the bench measures the damage), god mode only as the safety after a
+      // failed pass (HordeTactics.safetyGod) so a player's benchmark never dies
+      boolean god = !HordeTactics.on || !hordeSpawned || HordeTactics.safetyGod;
+      if (p.getCheats().isSet(zombie.characters.CheatType.GOD_MODE) != god) p.getCheats().set(zombie.characters.CheatType.GOD_MODE, god);
       p.getStats().set(CharacterStat.ENDURANCE, 1F);
       p.getStats().set(CharacterStat.FATIGUE, 0F);
-      if (noAttack) { // a crowd of 100 at arm's length panics the player, and panic and stress take off hit chance (CombatManager.getMoodlesPenalty)
+      // tactics=kite: the character is Desensitized (HordeTactics.desensitize) and never panics, so nothing is zeroed
+      if (noAttack || HordeTactics.on && !HordeTactics.desensitized) { // a crowd of 100 at arm's length panics the player, and panic and stress take off hit chance (CombatManager.getMoodlesPenalty)
          p.getStats().set(CharacterStat.PANIC, 0F);
          p.getStats().set(CharacterStat.STRESS, 0F);
       }
@@ -654,6 +1045,8 @@ public final class Showcase {
          float turn = Math.abs(((zb - p.getDirectionAngle()) % 360F + 540F) % 360F - 180F);
          float cost = (float)Math.sqrt(d) + turn / 30F + (z.isOnFloor() ? 5F : 0F);
          if (z == lastTarget) cost *= 0.5F;
+         Long aside = skipUntil.get(z);
+         if (aside != null && nowNs < aside) cost += 15F; // set aside: the gun got no round at it
          Long shot = aimedFire ? shotAt.get(z) : null;
          if (shot != null && nowNs - shot < 400_000_000L) cost += 20F; // a round went at it: see whether it goes down first
          if (cost < bestTargetD) {
@@ -661,7 +1054,38 @@ public final class Showcase {
             target = z;
          }
       }
+      // tactics=kite: every other live zombie within 15 tiles is a target too (the maintainer, 2026-10-22: "zombies not spawned
+      // from the horde are not being shot"; h80-p33's last 25 s: 2-5 of them round the player, none shot, and the last horde
+      // zombie's head behind them)
+      others.clear();
+      if (HordeTactics.on && hordeSpawned) {
+         java.util.Set<IsoZombie> live = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
+         live.addAll(zombies);
+         for (IsoZombie z : IsoWorld.instance.getCell().getZombieList()) {
+            if (z == null || z.isDead() || z.getCurrentSquare() == null || live.contains(z)) continue;
+            float dx = z.getX() - p.getX(), dy = z.getY() - p.getY(), d = dx * dx + dy * dy;
+            if (d > 15F * 15F) continue;
+            others.add(z);
+            if (d < bestD) bestD = d;
+            if (!z.isOnFloor() && d < nearestStandingD) nearestStandingD = d;
+            float zb = (float)Math.toDegrees(Math.atan2(dy, dx));
+            float turn = Math.abs(((zb - p.getDirectionAngle()) % 360F + 540F) % 360F - 180F);
+            float cost = (float)Math.sqrt(d) + turn / 30F + (z.isOnFloor() ? 5F : 0F);
+            if (z == lastTarget) cost *= 0.5F;
+            Long aside = skipUntil.get(z);
+            if (aside != null && nowNs < aside) cost += 15F;
+            Long shot = aimedFire ? shotAt.get(z) : null;
+            if (shot != null && nowNs - shot < 400_000_000L) cost += 20F;
+            if (cost < bestTargetD) {
+               bestTargetD = cost;
+               target = z;
+            }
+         }
+      }
       lastTarget = target;
+      float tNow = (nowNs - startNs) / 1e9F;
+      HordeTactics.hordeLeft = zombies.size();
+      HordeTactics.observe(p, nowNs, hordeSpawned, tNow); // tactics=kite: the zombies near, hits, wounds, the load
       if (target != null) {
          targetInfo = String.format(java.util.Locale.ROOT, "%.1f tiles%s, facing %.0f deg off, %s", Math.hypot(target.getX() - p.getX(), target.getY() - p.getY()),
                target.isOnFloor() ? " on the floor" : "", Math.abs((((float)Math.toDegrees(Math.atan2(target.getY() - p.getY(), target.getX() - p.getX())) - p.getDirectionAngle()) % 360F + 540F) % 360F - 180F),
@@ -681,6 +1105,35 @@ public final class Showcase {
          lastInHand = inHand;
       }
       boolean reloading = busy(p, nowNs);
+      // a pump gun's rack after each shell (the game's own ISRackFirearm, queued at OnPlayerAttackFinished) is no reload: it
+      // racks aimed and walking (stopOnAim / stopOnWalk false), so the aim stays up through it; counted as a reload it took
+      // the aim down after every shell, the director asked for a reload, its walk-away ran and the run cancelled the rack,
+      // the gun left unchambered (h80-p37, 2026-10-23: 4 shells in 74 s)
+      racking = reloading && rackOnly(p);
+      if (racking) reloading = false;
+      if (racking) unchamberedSinceNs = 0L; // a rack under way (the game's or ours): never a second one behind it (h80-p38)
+      else if (HordeTactics.on && hordeSpawned && !reloading && gun != null) rackIfNeeded(p, nowNs);
+      // tactics=kite: a target the gun gets no round at with the aim settled (out of sight, or farther than blind_tiles with
+      // the reticle on no body) is set aside for 4 s (h80-p22, 2026-10-22: 12 s aimed at one 13-15 tiles off behind the yards,
+      // not a round fired, while one stood 6.4 tiles off; the current target's half cost kept it)
+      if (HordeTactics.on && hordeSpawned && target != null && starveLimit > 0F) {
+         Long last = shotAt.get(target);
+         boolean waiting = "shoot".equals(command) && !reloading && p.isAiming() && p.getAimingDelay() < 8F && !HordeTactics.closingIn()
+               && (last == null || nowNs - last > 400_000_000L);
+         if (target != starveZ) {
+            starveZ = target;
+            starveS = 0F;
+         }
+         starveS = waiting ? starveS + dt : 0F;
+         if (starveS > starveLimit) {
+            skipUntil.put(target, nowNs + 4_000_000_000L);
+            targetSkips++;
+            HordeTactics.roundAt(target, true); // as a round without the reticle on it: three in a row walk round to it
+            Log.info(String.format(java.util.Locale.ROOT, "harness: horde: target set aside %d at +%.1f s: %.1f s without a round at a zombie %.1f tiles off at %.1f,%.1f (%s)", targetSkips, tNow, starveS,
+                  Math.hypot(target.getX() - px, target.getY() - py), target.getX(), target.getY(), target.getCurrentState() == null ? "-" : target.getCurrentState().getClass().getSimpleName()));
+            starveS = 0F;
+         }
+      }
       if (gun == primary && gun != null) { // the primary's magazines emptied, counted once each (the sidearm replaces the sidearm_at-th reload)
          boolean empty = empty(gun);
          if (empty && !primaryWasEmpty) primaryEmpties++;
@@ -714,13 +1167,42 @@ public final class Showcase {
       }
       releaseKeys();
       p.setForceRun(false);
-      switch (command) {
+      // tactics=kite: the flinch (a zombie within reflex_tiles and the action is not a run) overrides the choice
+      String act = HordeTactics.on && hordeSpawned ? HordeTactics.reflex(HordeTactics.opening(command, tNow), tNow) : command;
+      if (!sidearmDraw && "draw_sidearm".equals(act)) act = "reload"; // sidearm_draw=false: the magazine swap instead
+      if ((hordeAtPier || hordeWhenReady) && !hordeSpawned && toPier > 0.8F && !"hold".equals(act)) act = "run_to_pier"; // the spawn waits for the spot (h80-p27)
+      if (HordeTactics.on && hordeSpawned) { // and its counterpart: a stale kite with the horde well back turns into shooting
+         boolean canShoot = gun != null && !empty(gun) && !dryChambered(p, gun) && !reloading && (wanted == null || p.getPrimaryHandItem() == wanted);
+         act = HordeTactics.instinct(act, canShoot, nowNs, tNow);
+      }
+      if (!"kite".equals(act) && !"reload".equals(act) && !"draw_sidearm".equals(act) && !("shoot".equals(act) && HordeTactics.closingIn())) HordeTactics.still(nowNs);
+      if (HordeTactics.on && !"shoot".equals(act)) HordeTactics.backpedalEnd(nowNs);
+      switch (act) {
+         case "kite" -> { // run round the horde, away from every zombie near (HordeTactics.steer)
+            aimOff();
+            HordeTactics.steer(p, nowNs, true, "kite");
+            lastPath = "kite";
+         }
+         case "draw_sidearm" -> { // the revolver out of the holster (the game's equip action; walking allowed)
+            aimOff();
+            if (sidearm != null && wanted != sidearm && sidearm.getCurrentAmmoCount() > 0) {
+               wanted = sidearm;
+               sidearmDrawn = true;
+               switchTries = 0;
+            }
+            awayWhileBusy(p, nowNs, "away while drawing");
+            if (!reloading) reload(p, nowNs);
+         }
          case "run_to_pier" -> {
             aimOff();
-            if (toPier > 0.8F) {
+            // run, and walk the last 2.5 tiles to within 0.5: since the held Run counts (h80-p26, 4.3 tiles/s) the run stopped
+            // just outside the spawn's 0.8 tiles, the director read "pier 0.8" and shot at nothing for 200 s (h80-p27)
+            if (toPier > 0.5F) {
                moveKeys(pierX - px, pierY - py);
-               holdKey("Run");
-               p.setForceRun(true); // the held Run key alone walked (hl-remaster-11): IsoPlayer.UpdateInputState runs on forceRun
+               if (toPier > 2.5F) {
+                  holdKey("Run");
+                  p.setForceRun(true);
+               }
             }
             lastPath = "keys to pier " + String.format(java.util.Locale.ROOT, "%.1f", toPier) + (p.isGodMod() ? " god" : " mortal");
          }
@@ -737,7 +1219,22 @@ public final class Showcase {
          // no facing gate: the aimed gun turns with the upper body ahead of the feet (getDirectionAngle), so a 30-80 degree
          // "facing off" still hits; holding fire for it left the tail of mac-bench-hd10m2 at 8 rounds in 8 s
          case "shoot" -> {
-            fight(p, nowNs, tx, ty, target != null && bestD < 30F * 30F, reloading, target != null && target.isOnFloor(), target);
+            // tactics=kite: the last zombies far off or down on the ground are walked up to (hk-fight6: the last one lay
+            // 24 tiles off for 50 s while 180 rounds went blind at it), and no round goes with the facing over 25 degrees off
+            if (HordeTactics.on && hordeSpawned && target != null && !reloading && !HordeTactics.devStand && HordeTactics.closeIn(p, nowNs, target, tNow)) {
+               aimOff();
+               HordeTactics.backpedalEnd(nowNs);
+               lastPath = "close in";
+            } else {
+               if (HordeTactics.on) HordeTactics.closeInEnd();
+               boolean facingOk = !HordeTactics.on || target == null || HordeTactics.facingOff(p, target) <= facingGate;
+               // fire_tiles: no round past it (a pump gun's buckshot falls off: 7 shells at 9-12 tiles, 0 kills, h80-p38)
+               fight(p, nowNs, tx, ty, target != null && bestD < fireTiles * fireTiles && facingOk && !dryChambered(p, gun), reloading, target != null && target.isOnFloor(), target);
+               if (HordeTactics.on && hordeSpawned) {
+                  if (!reloading) HordeTactics.backpedal(p, nowNs); // walking back while aiming as the horde comes on
+                  else HordeTactics.backpedalEnd(nowNs);
+               }
+            }
             // a zombie on the floor under the player's feet never gets up (ZombieOnGroundState restarts its reanimate
             // timer while it is stepped on) and the shots at it do not land: the last of flip-bench-hdA2 / hdA3 lay
             // 1.0-1.4 tiles off through 20 s of fire. With no zombie standing near, the player walks back from it (aimed,
@@ -760,14 +1257,30 @@ public final class Showcase {
          }
          case "reload" -> {
             aimOff();
+            awayWhileBusy(p, nowNs, "away while reloading");
             if (!reloading) reload(p, nowNs);
          }
          default -> aimOff(); // hold
       }
       boolean inPlace = hordeWhenReady && !hordeSpawned && firesLit && toPier <= 0.8F && !p.isPlayerMoving() && offFacing <= 8F && (nowNs - startNs) / 1e9 >= hordeAfterS;
-      if (!inPlace) readySinceNs = 0L;
+      if (!inPlace) {
+         readySinceNs = 0L;
+         readyIdleNs = 0L;
+      }
       else if (readySinceNs == 0L) readySinceNs = nowNs;
-      if (inPlace) {
+      if (inPlace && HordeTactics.on) {
+         // tactics=kite: armed, loaded, kitted, idle and aimed for 0.5 s (HordeTactics.notReady), never an unaimed release;
+         // 15 s in place without it releases the horde anyway, flagged NOT ready (the judge's ready_before_contact fails)
+         String missing = "shoot".equals(command) ? (reloading ? "reloading" : HordeTactics.notReady(p, gun)) : "the action is " + command;
+         if (!missing.isEmpty()) readyIdleNs = 0L;
+         else if (readyIdleNs == 0L) readyIdleNs = nowNs;
+         boolean ok = missing.isEmpty() && nowNs - readyIdleNs >= 500_000_000L;
+         if (ok || nowNs - readySinceNs >= 15_000_000_000L) {
+            HordeTactics.ready(p, gun, (nowNs - startNs) / 1e9F, ok, missing.isEmpty() ? "not idle 0.5 s" : missing);
+            spawnHorde(p);
+            HordeTactics.released(p, zombies);
+         }
+      } else if (inPlace) {
          boolean ready = "shoot".equals(command) && p.isAiming() && !reloading && gun != null && (gun.getCurrentAmmoCount() > 0 || gun.isRoundChambered());
          boolean timeout = nowNs - readySinceNs >= 3_000_000_000L; // never a deadlock: 3 s in place without aiming spawns it anyway
          if (ready || timeout) {
@@ -784,7 +1297,9 @@ public final class Showcase {
       if (gun != null) {
          int ammo = gun.getCurrentAmmoCount();
          if (gun != lastAmmoGun) lastAmmo = -1; // another weapon in the hands: its rounds are its own
-         if (lastAmmo >= 0 && ammo < lastAmmo) {
+         if (lastAmmo >= 0 && ammo < lastAmmo && lastAmmo - ammo > 3) {
+            // a magazine out (a reload's eject), not rounds fired: hk-fight3 booked 29 "shots" per eject (rounds per kill 9.6)
+         } else if (lastAmmo >= 0 && ammo < lastAmmo) {
             shots += lastAmmo - ammo;
             lastShotNs = nowNs;
             roundFired(nowNs);
@@ -792,8 +1307,21 @@ public final class Showcase {
          lastAmmo = ammo;
          lastAmmoGun = gun;
       }
+      if (HordeTactics.on) shotLogTick(nowNs, false);
       if (nowNs - lastLogNs >= 2_000_000_000L) {
          lastLogNs = nowNs;
+         if (HordeTactics.on) Log.info(HordeTactics.line(tNow) + ", action " + act + ", at " + String.format(java.util.Locale.ROOT, "%.1f,%.1f, aiming delay %.1f, been moving %.1f, aiming %b, settle frames %d, running %b, sprinting %b, force run %b, run key %b",
+               p.getX(), p.getY(), p.getAimingDelay(), p.getBeenMovingFor(), p.isAiming(), HordeTactics.settleFrames, p.isRunning(), p.isSprinting(), p.isForceRun(),
+               zombie.input.GameKeyboard.isKeyDown("Run")));
+         // the last few: where they stand and what they do (h80-p18, 2026-10-22: the last five stood still 26 tiles off for 18 s)
+         if (HordeTactics.on && hordeSpawned && !zombies.isEmpty() && zombies.size() <= 8) {
+            StringBuilder last = new StringBuilder();
+            for (IsoZombie z : zombies) {
+               last.append(String.format(java.util.Locale.ROOT, " %.1f,%.1f,%d %s%s%s%s;", z.getX(), z.getY(), (int)z.getZ(), z.getCurrentState() == null ? "-" : z.getCurrentState().getClass().getSimpleName(),
+                     z.isOnFloor() ? " floor" : "", z.getTarget() == p ? " targets-player" : z.getTarget() == null ? " no-target" : " other-target", z.isOnFire() ? " burning" : ""));
+            }
+            Log.info("harness: horde: the last " + zombies.size() + ":" + last);
+         }
          Log.info(String.format(java.util.Locale.ROOT, "harness: showcase: horde %d of %d left (%d killed, %d vanished, %d re-pathed), by distance %s, on the floor %d, in hands %s, wanted %s, aim %d,%d re-presses %d, pinned %d, held off %d, woken %d, step-back frames %d, target %s, fire %b, rounds at head/body/none %d/%d/%d, head z %.2f, jams %d",
                zombies.size(), hordeTotal, kills(), vanished, repaths, bands(p), onFloor(), inHand == null ? "-" : inHand.getType(), wanted == null ? "-" : wanted.getType(), aimXA, aimYA, repress, pinned, heldOff, woken, steps, targetInfo, fireDown, headshots, bodyShots, blindShots, headZ, jams));
          Log.info(String.format(java.util.Locale.ROOT, "harness: showcase: %s (%d director commands), %s, %d switches, %d zombies left, nearest %.1f tiles, to pier %.1f, aiming %b, rounds %d, ammo %d, reloads %d, spare mags %d, actions %d, strangers removed %d, light reattached %d, run %s | state %s action %s",
@@ -803,15 +1331,33 @@ public final class Showcase {
       }
    }
 
+   /**
+    * tactics=kite, a reload or an equip with zombies inside reload_room: walk (no Run: the game's reload and equip stop on a
+    * run, not on a walk) away from them while the action runs; with room, stand.
+    */
+   private static void awayWhileBusy(IsoPlayer p, long nowNs, String why) {
+      if (HordeTactics.on && hordeSpawned && HordeTactics.nearest < HordeTactics.reloadRoom && !HordeTactics.devStand) {
+         HordeTactics.steer(p, nowNs, false, why);
+      } else {
+         HordeTactics.still(nowNs);
+      }
+   }
+
    private static int spareMags(IsoPlayer p) {
       if (gun == null) return 0;
       if (gun.getMagazineType() == null) { // a revolver: loose rounds
          String ammo = gun.getAmmoType() != null ? gun.getAmmoType().getItemKey() : null;
          return ammo == null ? 0 : p.getInventory().getCountTypeRecurse(ammo);
       }
+      return loadedMags(p.getInventory(), gun.getMagazineType());
+   }
+
+   /** Loaded magazines of a type in a container and the bags in it (the game's reload takes them from a worn pack too). */
+   private static int loadedMags(zombie.inventory.ItemContainer c, String type) {
       int n = 0;
-      for (InventoryItem it : p.getInventory().getItemsFromFullType(gun.getMagazineType())) {
-         if (it.getCurrentAmmoCount() > 0) n++;
+      for (InventoryItem it : c.getItems()) {
+         if (type.equals(it.getFullType()) && it.getCurrentAmmoCount() > 0) n++;
+         else if (it instanceof zombie.inventory.types.InventoryContainer bag && bag.getInventory() != null) n += loadedMags(bag.getInventory(), type);
       }
       return n;
    }
@@ -840,6 +1386,10 @@ public final class Showcase {
       if (!firesLit && toPier > 0.8F && !"face_horde".equals(command)) next = "run_to_pier";
       else if (!firesLit && offFacing > 8F) next = "face_horde";
       else if (!firesLit) next = "light_fire_line";
+      else if (HordeTactics.on && hordeSpawned) { // the fight, as the director is asked to play it (HordeTactics.autopilot)
+         boolean sidearmReady = sidearmDraw && sidearm != null && gun == primary && sidearm.getCurrentAmmoCount() > 0;
+         next = HordeTactics.autopilot(command, needsReload(p), reloading, sidearmReady, gun != null && gun == sidearm);
+      }
       // the gun is empty, or the hands do not hold the weapon the scene wants yet (an equip under way or refused)
       else if (needsReload(p)) next = "reload";
       else if (!reloading) next = "shoot";
@@ -849,13 +1399,78 @@ public final class Showcase {
       }
    }
 
-   /** a revolver has no magazine or chamber to check: empty when its cylinder is */
+   /** a revolver has no magazine or chamber to check: empty when its cylinder is; a pump gun with its last shell chambered is not */
    private static boolean empty(HandWeapon w) {
-      return w.getCurrentAmmoCount() == 0 && (w.getMagazineType() == null || !w.isRoundChambered());
+      return w.getCurrentAmmoCount() == 0 && (w.getMagazineType() == null && !w.haveChamber() || !w.isRoundChambered());
+   }
+
+   /** a chambered gun with rounds in it and none in the chamber: the pump gun between a shell and its rack */
+   private static boolean unchambered(HandWeapon w) {
+      return w != null && w.haveChamber() && !w.isRoundChambered() && w.getCurrentAmmoCount() > 0;
+   }
+
+   private static boolean racking;
+   private static long unchamberedSinceNs;
+   private static int racksIssued;
+
+   /** the timed-action queue holds racks only (ISRackFirearm) */
+   private static boolean rackOnly(IsoPlayer p) {
+      try {
+         Object q = zombie.Lua.LuaManager.env.rawget("ISTimedActionQueue");
+         Object queues = q instanceof se.krka.kahlua.vm.KahluaTable t ? t.rawget("queues") : null;
+         Object mine = queues instanceof se.krka.kahlua.vm.KahluaTable t2 ? t2.rawget(p) : null;
+         Object list = mine instanceof se.krka.kahlua.vm.KahluaTable t3 ? t3.rawget("queue") : null;
+         if (!(list instanceof se.krka.kahlua.vm.KahluaTable t4) || t4.len() == 0) return false;
+         for (int i = 1; i <= t4.len(); i++) {
+            if (!(t4.rawget(i) instanceof se.krka.kahlua.vm.KahluaTable a) || !"ISRackFirearm".equals(a.rawget("Type"))) return false;
+         }
+         return true;
+      } catch (Throwable t) {
+         return false;
+      }
+   }
+
+   /**
+    * a rack the game queued and a run cancelled (kite) is never queued again: the gun stays unchambered. Unchambered
+    * with nothing under way for 0.25 s (the game's own rack comes at the attack's end), the bot racks it, aimed.
+    */
+   private static void rackIfNeeded(IsoPlayer p, long nowNs) {
+      if (!unchambered(gun) || p.getPrimaryHandItem() != gun || p.isRunning() || p.isSprinting()) {
+         unchamberedSinceNs = 0L;
+         return;
+      }
+      if (unchamberedSinceNs == 0L) unchamberedSinceNs = nowNs;
+      if (nowNs - unchamberedSinceNs < 250_000_000L) return;
+      unchamberedSinceNs = 0L;
+      try {
+         Object cls = zombie.Lua.LuaManager.env.rawget("ISRackFirearm");
+         Object q = zombie.Lua.LuaManager.env.rawget("ISTimedActionQueue");
+         Object neu = cls instanceof se.krka.kahlua.vm.KahluaTable t ? t.rawget("new") : null;
+         Object add = q instanceof se.krka.kahlua.vm.KahluaTable t2 ? t2.rawget("add") : null;
+         if (neu == null || add == null) return;
+         Object[] r = zombie.Lua.LuaManager.caller.pcall(zombie.Lua.LuaManager.thread, neu, cls, p, gun);
+         if (r != null && r.length > 1 && Boolean.TRUE.equals(r[0]) && r[1] != null) {
+            zombie.Lua.LuaManager.caller.pcall(zombie.Lua.LuaManager.thread, add, r[1]);
+            racksIssued++;
+            Log.info("harness: showcase: rack " + racksIssued + " of " + gun.getType() + " (" + gun.getCurrentAmmoCount() + " rounds, the game's rack was cancelled)");
+         }
+      } catch (Throwable t) {
+         Log.warn("harness: showcase: rack failed: " + t);
+      }
    }
 
    private static boolean needsReload(IsoPlayer p) {
-      return gun != null && (empty(gun) || wanted != null && p.getPrimaryHandItem() != wanted);
+      return gun != null && (empty(gun) || dryChambered(p, gun) || wanted != null && p.getPrimaryHandItem() != wanted);
+   }
+
+   /**
+    * tactics=kite: the magazine is out and a round is still chambered, with a loaded spare to go in (the maintainer,
+    * 2026-10-22, after watching their own takes: the bench must win on movement and handling, not aim). The magazine is
+    * swapped before the chambered round goes: the game's reload is then eject + insert and skips the rack
+    * (ISInsertMagazine racks only an unchambered gun; 0.5-1 s at Reloading 10), and the kept round is fired after it.
+    */
+   private static boolean dryChambered(IsoPlayer p, HandWeapon w) {
+      return HordeTactics.on && w != null && w == gun && w.getMagazineType() != null && w.getCurrentAmmoCount() == 0 && w.isRoundChambered() && spareMags(p) > 0;
    }
 
    /**
@@ -930,6 +1545,7 @@ public final class Showcase {
             try {
                z.setTarget(p);
                z.pathToCharacter(p);
+               if (HordeTactics.on) HordeTactics.aimAt(z, p); // its vector to the player, not a stale one (HordeTactics readiness)
                repaths++;
             } catch (Throwable ignored) {
             }
@@ -945,7 +1561,7 @@ public final class Showcase {
          if (seq == commandSeq) return;
          commandSeq = seq;
          String c = parts[1];
-         if (!java.util.Set.of("run_to_pier", "face_horde", "light_fire_line", "shoot", "back_off", "reload", "hold").contains(c)) return;
+         if (!java.util.Set.of("run_to_pier", "face_horde", "light_fire_line", "shoot", "back_off", "reload", "hold", "kite", "draw_sidearm").contains(c)) return;
          if (!c.equals(command)) {
             commands++;
             Log.info("harness: showcase director: " + command + " -> " + c + " (#" + seq + ")");
@@ -968,11 +1584,12 @@ public final class Showcase {
             "{\"t\":%d,\"seconds_since_start\":%.1f,\"current_action\":\"%s\",\"player\":{\"distance_to_pier_tiles\":%.1f,\"at_pier\":%b,\"moving\":%b,"
                   + "\"degrees_between_facing_and_nearest_zombie\":%.0f,\"aiming\":%b},\"horde\":{\"zombies_alive\":%d,\"nearest_zombie_tiles\":%.1f,"
                   + "\"zombies_within_6_tiles\":%d,\"zombies_burning\":%d},\"weapon\":{\"rounds_in_magazine\":%d,\"round_chambered\":%b,\"spare_full_magazines\":%d,"
-                  + "\"reloading\":%b,\"rounds_fired\":%d,\"in_hands\":\"%s\",\"hands_hold_wanted_weapon\":%b,\"sidearm_drawn\":%b},\"fire_line_lit\":%b,\"horde_spawned\":%b,"
-                  + "\"horde_comes_when_aiming\":%b,\"zombies_killed\":%d,\"back_off_allowed\":%b,\"back_off_room_tiles\":%.1f}",
+                  + "\"reloading\":%b,\"needs_reload\":%b,\"rounds_fired\":%d,\"in_hands\":\"%s\",\"hands_hold_wanted_weapon\":%b,\"sidearm_drawn\":%b},\"fire_line_lit\":%b,\"horde_spawned\":%b,"
+                  + "\"horde_comes_when_aiming\":%b,\"zombies_killed\":%d,\"back_off_allowed\":%b,\"back_off_room_tiles\":%.1f"
+                  + (HordeTactics.on ? ",\"revolver_rounds\":" + (sidearm == null || !sidearmDraw ? 0 : sidearm.getCurrentAmmoCount()) + ",\"in_hands_is_revolver\":" + (gun != null && gun == sidearm) + "," + HordeTactics.stateJson() : "") + "}",
             System.currentTimeMillis(), (System.nanoTime() - startNs) / 1e9, command, toPier, toPier <= 0.8F, p.isPlayerMoving(), offFacing, p.isAiming(),
             zombies.size(), bestD == Float.MAX_VALUE ? -1F : Math.sqrt(bestD), near6, burning, gun == null ? 0 : gun.getCurrentAmmoCount(),
-            gun != null && gun.isRoundChambered(), spareMags(p), reloading, shots, gun == null ? "-" : gun.getType(), wanted == null || p.getPrimaryHandItem() == wanted,
+            gun != null && gun.isRoundChambered(), spareMags(p), reloading, needsReload(p), shots, gun == null ? "-" : gun.getType(), wanted == null || p.getPrimaryHandItem() == wanted,
             sidearmDrawn, firesLit, hordeSpawned, hordeWhenReady, kills(), backOffMax > 0F,
             Math.max(0F, backOffMax - toPier));
       try {
@@ -1006,10 +1623,36 @@ public final class Showcase {
       }
       switchTries = 0;
       if (gun == null || !empty(gun) && gun.getCurrentAmmoCount() >= gun.getMaxAmmo()) return;
-      if (gun == primary && empty(gun) && sidearm != null && !sidearmDrawn && primaryEmpties >= sidearmAt && sidearm.getCurrentAmmoCount() > 0) {
+      if (HordeTactics.on && !empty(gun) && !dryChambered(p, gun) && !(gun.getCurrentAmmoCount() <= gun.getMaxAmmo() / 3 && HordeTactics.nearest >= HordeTactics.reloadRoom)) {
+         // tactics=kite: a reload is for an empty gun, or a top-up with a third or less left and the horde far; a "reload"
+         // asked for a gun with 29 of 30 swapped magazines over and over (hk-fight3: 19 reloads in a row, each mag thrown in)
+         return;
+      }
+      if (gun == primary && empty(gun) && sidearm != null && !sidearmDrawn && primaryEmpties >= sidearmAt && sidearm.getCurrentAmmoCount() > 0 && !HordeTactics.on) {
          sidearmDrawn = true;
          wanted = sidearm;
          switchTo(p, sidearm, nowNs, true);
+         return;
+      }
+      if (HordeTactics.on && gun == primary && empty(gun) && spareMags(p) == 0 && sidearm != null) {
+         // tactics=kite: the rifle's magazines are all spent: the revolver from here on (its loose rounds reload it)
+         wanted = sidearm;
+         sidearmDrawn = true;
+         switchTo(p, sidearm, nowNs, true);
+         return;
+      }
+      if (HordeTactics.on && gun == sidearm && empty(gun)) {
+         // tactics=kite: back to the rifle while it has magazines, else the revolver's own reload
+         boolean rifleLeft = false;
+         if (primary != null && primary.getMagazineType() != null) {
+            rifleLeft = loadedMags(p.getInventory(), primary.getMagazineType()) > 0;
+         }
+         if (primary != null && (rifleLeft || !empty(primary))) {
+            wanted = primary;
+            switchTo(p, primary, nowNs, true);
+         } else {
+            automaticReload(p, nowNs);
+         }
          return;
       }
       if (gun == sidearm && empty(gun) && primary != null) {
@@ -1168,6 +1811,18 @@ public final class Showcase {
             targetSinceNs = nowNs;
          }
          if (!prone) tz = tgt.getZ() + headZ;
+         // head_bone: the aim on the head bone itself (CombatManager.getBoneWorldPos, z in levels as HEAD_Z), the sweep a
+         // smaller step round it; a zombie on the floor took 12 rounds at its floor spot, each a body hit for 0.1 (the tail of
+         // h80-p36: 61.8-74.3 s on one crawler). A bone farther than 1.2 tiles off the feet (an animation not updated) is not used
+         if (headBone) {
+            zombie.CombatManager.getBoneWorldPos(tgt, "Bip01_Head", headPos);
+            if (Math.hypot(headPos.x - tgt.getX(), headPos.y - tgt.getY()) < 1.2F && headPos.z > tgt.getZ() - 0.1F && headPos.z < tgt.getZ() + 1F) {
+               tx = headPos.x;
+               ty = headPos.y;
+               tz = headPos.z + (prone ? 0F : (headZ - HEAD_Z) * 0.5F);
+               headBoneAims++;
+            }
+         }
       }
       float sx = (zombie.iso.IsoUtils.XToScreen(tx, ty, tz, 0) - zombie.iso.IsoCamera.getOffX(0)) / zoom;
       float sy = (zombie.iso.IsoUtils.YToScreen(tx, ty, tz, 0) - zombie.iso.IsoCamera.getOffY(0)) / zoom;
@@ -1193,6 +1848,7 @@ public final class Showcase {
       }
       if (!holdButtons) holdSinceNs = nowNs;
       holdButtons = true;
+      if (unchambered(gun)) inRange = false; // racking (or about to): the aim stays up, the trigger waits for the round
       if (!aimedFire) {
          fireDown = inRange && (nowNs - startNs) / 1_000_000L % fireMs < fireMs / 2;
          return;
@@ -1202,6 +1858,10 @@ public final class Showcase {
 
    /** head height above the target's feet, in levels (a standing zombie's head; the reticle's body part corrects it) */
    private static final float HEAD_Z = 0.64F;
+   private static boolean headBone;
+   private static float fireTiles = 30F;
+   private static final zombie.iso.Vector3 headPos = new zombie.iso.Vector3();
+   private static int headBoneAims;
    private static boolean aimedFire, noJamFlag;
    private static IsoZombie headTarget, shotTarget;
    private static float headZ = HEAD_Z;
@@ -1210,6 +1870,27 @@ public final class Showcase {
    private static long targetSinceNs, pressNs, releaseUntilNs;
    private static int shotPart = -1, headshots, bodyShots, blindShots, jams;
    private static final java.util.Map<IsoZombie, Long> shotAt = new java.util.IdentityHashMap<>();
+
+   // tactics: one line per round (pzopt-shots.out): what the trigger knew and whether that zombie was dead a second later,
+   // to tune the trigger from the game's own outcome (h80, 2026-10-22: 1.6-2.3 rounds a kill, half of them without a head)
+   private record Shot(long ns, IsoZombie z, float dist, int part, float aimDelay, float moving, boolean floor, float health, int near6) {}
+   private static final java.util.ArrayDeque<Shot> shotsPending = new java.util.ArrayDeque<>();
+   private static final StringBuilder shotLog = new StringBuilder("t dist part aim_delay moving floor health_before near6 dead_1s health_1s\n");
+
+   private static void shotLogAdd(long nowNs) {
+      IsoPlayer p = IsoPlayer.getInstance();
+      IsoZombie z = shotTarget;
+      if (p == null || z == null) return;
+      shotsPending.add(new Shot(nowNs, z, (float)Math.hypot(z.getX() - p.getX(), z.getY() - p.getY()), shotPart, p.getAimingDelay(), p.getBeenMovingFor(), z.isOnFloor(), z.getHealth(), HordeTactics.within6));
+   }
+
+   private static void shotLogTick(long nowNs, boolean flush) {
+      while (!shotsPending.isEmpty() && (flush || nowNs - shotsPending.peekFirst().ns() > 1_000_000_000L)) {
+         Shot s = shotsPending.pollFirst();
+         shotLog.append(String.format(java.util.Locale.ROOT, "%.2f %.2f %s %.1f %.1f %b %.2f %d %b %.2f%n", (s.ns() - startNs) / 1e9, s.dist(),
+               s.part() == HEAD_PART ? "head" : s.part() == HEAD_NONE ? "none" : "body", s.aimDelay(), s.moving(), s.floor(), s.health(), s.near6(), s.z().isDead(), s.z().getHealth()));
+      }
+   }
 
    /**
     * aimed=true (the horde bench, 2026-10-18, the maintainer: one aimed bullet per zombie, at the head): single fire, one
@@ -1228,8 +1909,8 @@ public final class Showcase {
          if (bc != null) {
             if (tgt != null) part = bc.getTargetedBodyPart(tgt.getID());
             if (part == HEAD_PART) headHit = tgt;
-            for (int i = 0; headHit == null && i < zombies.size(); i++) {
-               IsoZombie z = zombies.get(i);
+            for (int i = 0; headHit == null && i < zombies.size() + others.size(); i++) {
+               IsoZombie z = i < zombies.size() ? zombies.get(i) : others.get(i - zombies.size());
                int zp = bc.getTargetedBodyPart(z.getID());
                if (zp != HEAD_NONE) anyHit = true;
                if (zp == HEAD_PART) headHit = z;
@@ -1256,16 +1937,24 @@ public final class Showcase {
       }
       boolean tap = "Auto".equalsIgnoreCase(gun.getFireMode());
       if (!inRange || tgt == null || nowNs < releaseUntilNs || !p.isAiming() || !tap && p.getRecoilDelay() > 0F) return;
+      if (HordeTactics.unsettled(p)) return; // tactics: the aim settles first (aiming delay, the moving penalty)
       long on = nowNs - targetSinceNs;
       IsoZombie at;
       int atPart;
       if (headHit != null) {
          at = headHit;
          atPart = HEAD_PART;
-      } else if (part != HEAD_NONE && (prone || on > 150_000_000L)) {
+      } else if (headOnly && HordeTactics.on) {
+         // head_only (the maintainer, 2026-10-22: "fire all the shots aimed as headshots, be efficient with the bullets so you
+         // can cut reload time"): no body or blind round; one on the ground takes the body after 1 s without its head in reach
+         if (!(prone && part != HEAD_NONE && on > 1_000_000_000L)) return;
          at = tgt;
          atPart = part;
-      } else if (on > 400_000_000L) {
+      } else if (part != HEAD_NONE && (prone || on > bodyShotNs)) {
+         at = tgt;
+         atPart = part;
+      } else if (on >= (HordeTactics.on ? blindNs : 400_000_000L) && !(HordeTactics.on && part == HEAD_NONE
+            && Math.hypot(tgt.getX() - p.getX(), tgt.getY() - p.getY()) > HordeTactics.blindTiles)) { // tactics: no blind round far off (hk-bp9)
          at = tgt;
          atPart = part;
       } else {
@@ -1285,6 +1974,8 @@ public final class Showcase {
       if (!aimedFire) return;
       if (shotTarget != null) {
          shotAt.put(shotTarget, nowNs);
+         if (HordeTactics.on) shotLogAdd(nowNs);
+         if (HordeTactics.on) HordeTactics.roundAt(shotTarget, shotPart == HEAD_NONE);
          if (shotPart == HEAD_PART) headshots++;
          else if (shotPart == HEAD_NONE) blindShots++;
          else bodyShots++;

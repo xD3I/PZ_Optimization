@@ -49,7 +49,7 @@ public final class Explore {
    private static final String[] DIRS = {"E", "SE", "S", "SW", "W", "NW", "N", "NE"}; // k * 45 deg, 0 = east, +y = south
 
    private static boolean on, director, started, finished, restaurantLit;
-   private static boolean circle, circleJev, stairs, mirror;
+   private static boolean circle, circleJev, stairs, mirror, tour, square;
    private static float circleX, circleY, circleRadius, circleSign, circleTurned, circleLastAngle;
    private static long circleLogNs;
    private static String command = "hold";
@@ -77,7 +77,8 @@ public final class Explore {
 
    /** The harness ends the route when the director (or the autopilot) says done. */
    public static boolean done() {
-      return finished || stairs && StairsWalk.finished() || circleJev && CircleWalk.finished() || mirror && MirrorWalk.finished();
+      return finished || stairs && StairsWalk.finished() || circleJev && CircleWalk.finished() || mirror && MirrorWalk.finished() || tour && TourWalk.finished()
+            || square && SquareWalk.finished();
    }
 
    /** World-ready (game thread): out of harm's way, find the restaurant. */
@@ -86,6 +87,18 @@ public final class Explore {
       if (stairs) {
          on = true;
          StairsWalk.worldReady(p); // explore=stairs: up to the top floor and down to the lowest level (the wall flicker report)
+         return;
+      }
+      tour = "tour".equalsIgnoreCase(HarnessFlags.get("explore", "").trim());
+      if (tour) {
+         on = true;
+         TourWalk.worldReady(p); // explore=tour: a fixed list of stops walked with pzopt.Nav (the reflections showcase walk)
+         return;
+      }
+      square = "square".equalsIgnoreCase(HarnessFlags.get("explore", "").trim());
+      if (square) {
+         on = true;
+         SquareWalk.worldReady(p); // explore=square: laps of a square on a fixed clock, a turn at each corner (the feature sweep)
          return;
       }
       mirror = "mirror".equalsIgnoreCase(HarnessFlags.get("explore", "").trim());
@@ -177,6 +190,8 @@ public final class Explore {
       if (stairs) StairsWalk.routeStart(p);
       if (circleJev) CircleWalk.routeStart(p);
       if (mirror) MirrorWalk.routeStart(p);
+      if (tour) TourWalk.routeStart(p);
+      if (square) SquareWalk.routeStart(p);
       if (circle && !circleJev && (circleX != p.getX() || circleY != p.getY())) {
          // the centre is where the player stands when the route starts: a start= teleport lands after worldReady
          // (2026-10-01, the broken-glass puddle rig circles the street beside the Rosewood store front)
@@ -196,6 +211,14 @@ public final class Explore {
       }
       if (mirror) {
          MirrorWalk.tick(p, nowNs);
+         return;
+      }
+      if (tour) {
+         TourWalk.tick(p, nowNs);
+         return;
+      }
+      if (square) {
+         SquareWalk.tick(p, nowNs);
          return;
       }
       if (circle) {

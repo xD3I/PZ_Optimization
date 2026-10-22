@@ -30,6 +30,7 @@ public final class Benchmark {
          return;
       }
       worldReadyNs = System.nanoTime();
+      BenchCapture.arm(); // the report page's samplers and traces from here (the pre-roll before the route)
       if (!"0".equals(BenchPlan.plan().getProperty("seed", "1"))) {
          BenchSeed.seed("world-ready");
       }
@@ -46,7 +47,11 @@ public final class Benchmark {
       if (sc != null && "sweep".equals(sc.id)) {
          BenchSweep.rebakeAll(); // every window from the same re-baked state (BenchSweep.PREROLL_S)
       }
+      BenchCapture.routeStart();
       BenchRecorder.start();
+      if (!"W".equals(BenchPlan.parts()[1]) && !"0".equals(BenchPlan.plan().getProperty("modlua", "1"))) {
+         ModLuaProfile.start(); // each mod's Lua per frame (the report's Mods row)
+      }
       zombiesAtStart = zombies();
       Log.info("benchmark: route started, recording (" + zombiesAtStart + " zombies, " + vehicles() + " vehicles loaded)");
    }
@@ -54,6 +59,7 @@ public final class Benchmark {
    /** Called every game frame by Harness while a route runs. */
    static void onTick(long nowNs) {
       BenchRecorder.onTick();
+      ModLuaProfile.onFrame(nowNs);
    }
 
    /** Route end (or a rejected run): results, the plan's next step, the restart. Then Harness quits to the menu. */
@@ -63,6 +69,8 @@ public final class Benchmark {
       }
       routeEnded = true;
       BenchRecorder.stop();
+      ModLuaProfile.stop();
+      BenchCapture.routeEnd(); // one last sample at the end, then the samplers stop
       try {
          Properties plan = BenchPlan.plan();
          String run = plan.getProperty("run");
@@ -87,6 +95,8 @@ public final class Benchmark {
          r.put("hud", BenchPlan.option("hud") ? "1" : "0");
          r.put("cooldown", plan.getProperty("cooldown", "0"));
          r.putAll(BenchRecorder.summary());
+         r.putAll(ModLuaProfile.summary()); // lua_* (none when the pass ran without the mod Lua profiler)
+         r.putAll(BenchCapture.summary()); // busiest core, GPU temperature / VRAM, chunk latency, the samplers' own cost
          for (Map.Entry<String, String> e : BenchSystem.describe().entrySet()) {
             r.put("sys." + e.getKey(), e.getValue());
          }
@@ -97,6 +107,9 @@ public final class Benchmark {
          BenchResults.writeStep(run, step, r);
          if (!"W".equals(parts[1])) {
             BenchRecorder.writeFramesCsv(new File(dir, String.format("step-%02d-%s-%s-%s-frames.csv", step, parts[0], parts[1], parts[2])), "ProjectZomboid");
+            BenchRecorder.writeTimelines(dir, String.format("step-%02d-%s-%s-%s", step, parts[0], parts[1], parts[2]));
+            ModLuaProfile.write(dir, String.format("step-%02d-%s-%s-%s", step, parts[0], parts[1], parts[2]));
+            BenchCapture.write(dir, String.format("step-%02d-%s-%s-%s", step, parts[0], parts[1], parts[2]));
          }
          if (BenchPlan.option("screenshot") && !"W".equals(parts[1])) {
             try {
@@ -176,6 +189,7 @@ public final class Benchmark {
             case "menu" -> menu();
             case "start" -> start(arg);
             case "report" -> BenchResults.reportText(arg);
+            case "dash" -> BenchDash.text(arg);
             case "history" -> BenchResults.historyText();
             case "compareRuns" -> compareRuns(arg);
             case "shot" -> shot(arg);
@@ -193,6 +207,7 @@ public final class Benchmark {
             case "auto" -> autoRequested();
             case "devUi" -> Config.DEV_BENCHMARK_UI;
             case "devCompare" -> devCompare();
+            case "devNewest" -> devNewest();
             case "idle" -> idlePoll();
             default -> "error\tunknown command " + cmd;
          };
@@ -283,7 +298,18 @@ public final class Benchmark {
       if (ids.isEmpty()) {
          return "error\tno scenario chosen";
       }
-      int passes = Math.max(1, Math.min(10, Integer.parseInt(o.getOrDefault("passes", "1"))));
+      // passes: one number for every scenario, or each scenario's own ("spin:2,horde:1", the menu's planner); weather and
+      // time: each scenario's ("spin:rain,horde:clear", "spin:20,horde:12"), else the benches' noon and clear weather
+      Map<String, Integer> passes = new LinkedHashMap<>();
+      Map<String, String> weather = perScenario(o.get("weather"));
+      Map<String, String> hour = perScenario(o.get("time"));
+      Map<String, String> fog = perScenario(o.get("fog"));
+      String pv = o.getOrDefault("passes", "1");
+      Map<String, String> each = pv.contains(":") ? perScenario(pv) : null;
+      for (String id : ids) {
+         String n = each != null ? each.getOrDefault(id, "1") : pv;
+         passes.put(id, Math.max(1, Math.min(10, Integer.parseInt(n.trim()))));
+      }
       boolean ab = "ab".equals(o.get("mode"));
       // timedemo (technique 27) steps the route at this PC's frame rate, measured by a real-time warm-up pass; the stock
       // pass of an A/B runs at a fraction of that rate, so the two would not share a step: an A/B runs on the wall clock
@@ -301,7 +327,7 @@ public final class Benchmark {
       p.setProperty("mode", ab ? "ab" : "standard");
       p.setProperty("created_ms", Long.toString(System.currentTimeMillis()));
       p.setProperty("build", BenchPlan.currentBuild()); // another build aborts the plan instead of resuming it
-      for (String k : new String[] {"uncapped", "timedemo", "screenshot", "hud", "auto", "warmup"}) {
+      for (String k : new String[] {"uncapped", "timedemo", "screenshot", "hud", "auto", "warmup", "modlua", "profiler"}) {
          p.setProperty(k, "1".equals(o.get(k)) ? "1" : "0");
       }
       p.setProperty("timedemo", timedemo ? "1" : "0");
@@ -309,12 +335,19 @@ public final class Benchmark {
       p.setProperty("seed", "0".equals(o.get("seed")) ? "0" : "1"); // technique 2 on unless switched off (profiling)
       p.setProperty("cooldown", Integer.toString(Math.max(0, Math.min(120, Integer.parseInt(o.getOrDefault("cooldown", "0"))))));
       p.setProperty("label", o.getOrDefault("label", ""));
+      for (String id : ids) {
+         p.setProperty("passes." + id, Integer.toString(passes.get(id)));
+         String w = weather.getOrDefault(id, "clear");
+         p.setProperty("weather." + id, BenchSuite.WEATHERS.contains(w) ? w : "clear");
+         p.setProperty("time." + id, Integer.toString(BenchSuite.hourOf(hour.get(id))));
+         p.setProperty("fog." + id, BenchSuite.fogOf(fog.get(id)));
+      }
       BenchPlan.backupLatestSave(p);
       BenchPlan.backupUserOptions(p);
       BenchPlan.backupFile(p, "game_options", new File(UserOptions.zomboidDir(), "options.ini"));
       BenchPlan.write(p);
       BenchPlan.runDir(run).mkdirs();
-      BenchSetup.capture(run, p, String.join(",", ids), passes); // the player's settings and mods, before any pass pins one
+      BenchSetup.capture(run, p, ids); // the player's settings and mods, before any pass pins one
       Log.info("benchmark: run " + run + " planned: " + steps);
       if (!Restart.relaunch()) {
          p.setProperty("state", "aborted");
@@ -323,6 +356,21 @@ public final class Benchmark {
          return "error\tthe game could not arrange its own restart on this system";
       }
       return "ok\t" + run;
+   }
+
+   /** "id:value,id:value" as a map (empty for null or ""). */
+   static Map<String, String> perScenario(String v) {
+      Map<String, String> m = new LinkedHashMap<>();
+      if (v == null) {
+         return m;
+      }
+      for (String e : v.split(",")) {
+         int c = e.indexOf(':');
+         if (c > 0) {
+            m.put(e.substring(0, c).trim(), e.substring(c + 1).trim());
+         }
+      }
+      return m;
    }
 
    /** -Dpzopt.benchmark=<scenarios|all>[:passes] at boot (technique 25): plans and starts an unattended run once. */
@@ -357,7 +405,8 @@ public final class Benchmark {
       String autoFlag = opt.contains("report") ? "0" : "1"; // report: end on the report screen as a player would (UI check)
       String r = start("scenarios=" + ids + ";passes=" + passes + ";mode=" + mode + ";uncapped=" + (opt.contains("capped") ? "0" : "1") + ";auto=" + autoFlag
             + ";screenshot=" + (opt.contains("shots") ? "1" : "0") + ";timedemo=" + (opt.contains("timedemo") ? "1" : "0") + ";hud=" + (opt.contains("nohud") ? "0" : "1")
-            + ";seed=" + (opt.contains("noseed") ? "0" : "1") + ";warmup=" + (opt.contains("warmup") ? "1" : "0") + ";cooldown=" + cool + ";label=" + v);
+            + ";seed=" + (opt.contains("noseed") ? "0" : "1") + ";warmup=" + (opt.contains("warmup") ? "1" : "0") + ";cooldown=" + cool + ";label=" + v
+            + ";modlua=" + (opt.contains("nomodlua") ? "0" : "1"));
       return r.startsWith("ok") ? "started" : r;
    }
 
@@ -475,6 +524,21 @@ public final class Benchmark {
     * Rig for the compare screen (devBenchmarkUi=compare): "run\tcode", the newest report with a stock comparison (else the
     * newest report) and the share code of the newest other run with scenario results. Empty when there are not two.
     */
+   /** The report tour (devBenchmarkUi=report): the newest stored run with a scored scenario, "" without one. */
+   private static String devNewest() {
+      File[] dirs = new File(BenchPlan.dir(), "runs").listFiles(File::isDirectory);
+      if (dirs == null) {
+         return "";
+      }
+      java.util.Arrays.sort(dirs, (a, b) -> b.getName().compareTo(a.getName()));
+      for (File d : dirs) {
+         if (BenchResults.reportText(d.getName()).contains("\nS\t")) {
+            return d.getName();
+         }
+      }
+      return "";
+   }
+
    private static String devCompare() {
       File[] dirs = new File(BenchPlan.dir(), "runs").listFiles(File::isDirectory);
       if (dirs == null) {

@@ -24,12 +24,20 @@ public final class LuaEventProfile {
    /** Event.trigger's handler call, timed when the profile is on. */
    public static void call(LuaCaller caller, LuaClosure closure, Object[] params, String event) {
       if (!ON) {
+         if (ModLuaProfile.on) { // the benchmark's mod Lua profiler: the same call, counted, its event named for the sampler
+            ModLuaProfile.callEvent(caller, LuaManager.thread, closure, params, event);
+            return;
+         }
          caller.protectedCallVoid(LuaManager.thread, closure, params);
          return;
       }
       long t0 = System.nanoTime();
       try {
-         caller.protectedCallVoid(LuaManager.thread, closure, params);
+         if (ModLuaProfile.on) {
+            ModLuaProfile.callEvent(caller, LuaManager.thread, closure, params, event);
+         } else {
+            caller.protectedCallVoid(LuaManager.thread, closure, params);
+         }
       } finally {
          long ns = System.nanoTime() - t0;
          String where = closure.prototype == null ? "?" : closure.prototype.filename + ":"

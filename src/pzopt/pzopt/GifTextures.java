@@ -12,15 +12,23 @@ import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Semaphore;
+import java.util.concurrent.TimeUnit;
 import javax.imageio.ImageIO;
 import javax.imageio.ImageReader;
 import javax.imageio.metadata.IIOMetadata;
 import javax.imageio.metadata.IIOMetadataNode;
 import javax.imageio.stream.ImageInputStream;
+import org.lwjgl.opengl.GL11;
+import org.lwjgl.opengl.GL12;
+import org.lwjgl.opengl.GL30;
+import org.lwjgl.system.MemoryUtil;
 import org.w3c.dom.Node;
 import org.w3c.dom.NodeList;
+import zombie.core.SpriteRenderer;
 import zombie.ZomboidFileSystem;
 import zombie.core.opengl.RenderThread;
 import zombie.core.textures.ImageData;
@@ -47,6 +55,15 @@ import zombie.core.utils.WrappedBuffer;
  * {@link #KEEP_CLIPS} clips asked for stay loaded; the rest are destroyed on the render thread. Nothing here
  * runs unless the tab is open, and {@link #releaseAll()} frees everything when the options screen closes.
  *
+ * <p>AVIF (2026-10-20, docs/findings-clip-format-2026-10-20.md): when {@code <clip>.avif} sits beside the GIF the Lua
+ * names, that file is played instead: decoded on the same thread by {@link ClipDecoder} (javif, pure Java AV1), frame by
+ * frame, at most {@link #AVIF_AHEAD} decoded frames waiting; each frame becomes its own texture through one queued
+ * render-thread job at a time (never a blocking call on the game thread), GL_RGBA8, or GL_RGB9_E5 with values above
+ * the UI white when the game's HDR output is on ({@link Hdr#active}: a PQ file then shows its highlights; with HDR off
+ * it gets the GIFs' tone map). The clip shows its first frame until every frame is on the GPU, then plays on the
+ * caller's clock with the file's frame times. A missing AVIF, a decode error or a failed upload falls back to the GIF.
+ * {@code -Dpzopt.clipAvif=false} plays the GIFs only. The same VRAM bound: 96 frames of at most 1024 px a side, two clips.
+ *
  * <p>Exposed to Lua through the {@code PerformanceSettings} override ({@code getPzoptGifFrame} and friends).
  */
 public final class GifTextures {
@@ -55,6 +72,9 @@ public final class GifTextures {
    public static final int KEEP_CLIPS = 2;
    static final int UPLOADS_PER_CALL = 4;
    static final int DEFAULT_DELAY_MS = 100;
+   /** Decoded AVIF frames allowed to wait for their upload (RAM bound: 16 x 512 x 216 x 4 bytes = 7 MB). */
+   static final int AVIF_AHEAD = 16;
+   static final boolean AVIF = !"false".equalsIgnoreCase(System.getProperty("pzopt.clipAvif", "true"));
 
    /** A decoded clip: composited RGBA frames (row-major, {@code width*4} bytes a row) and their delays. */
    public static final class Decoded {
@@ -86,9 +106,83 @@ public final class GifTextures {
       Texture[] frames;
       int uploaded;
       long lastUsedMs;
+      /** The AVIF form while it is used; null for a GIF (or after the AVIF failed). */
+      volatile AvifStream avif;
+      /** An AVIF stream that failed after its textures were made: freed by the game thread. */
+      volatile AvifStream failedAvif;
 
       Clip(String path) {
          this.path = path;
+      }
+   }
+
+   /** An AVIF clip on its way to the GPU: the decode thread fills {@link #decoded}, the game thread makes textures. */
+   static final class AvifStream {
+      final String file;
+      final boolean hdrOut;
+      volatile int width;
+      volatile int height;
+      volatile int[] delaysMs;
+      volatile boolean rgb9e5;
+      volatile String describe = "";
+      volatile boolean began;
+      volatile boolean decodeDone;
+      volatile boolean failed;
+      volatile boolean glFailed;
+      volatile boolean cancelled;
+      final ConcurrentLinkedQueue<int[]> decoded = new ConcurrentLinkedQueue<>();
+      final Semaphore room = new Semaphore(AVIF_AHEAD);
+      // game thread
+      ClipTexture[] textures;
+      int handed; // frames whose upload job was queued
+      // render thread
+      volatile int onGpu;
+      volatile boolean uploading;
+      volatile boolean checkedGl;
+      // stats
+      volatile long decodeStartNs;
+      volatile long decodeNs;
+      volatile long uploadNs;
+      volatile long uploadMaxNs;
+      volatile int uploadJobs;
+      long gameNs;
+      long gameMaxNs;
+      boolean logged;
+      /** Game thread: the clock origin of the playback, -1 until the clip plays (see {@link #playable}). */
+      long playStartMs = -1;
+      long playAfterNs;
+
+      AvifStream(String file, boolean hdrOut) {
+         this.file = file;
+         this.hdrOut = hdrOut;
+      }
+
+      int totalMs() {
+         int t = 0;
+         for (int d : delaysMs) {
+            t += d;
+         }
+         return Math.max(t, 1);
+      }
+   }
+
+   /**
+    * A clip frame's texture: the game's own TextureID of the frame's format (created empty by its queued render-thread
+    * job, flags FBO-style: no pixel buffer, clamped, linear) and the Texture the Lua draws; the pixels follow with
+    * glTexSubImage2D in {@link #upload}, queued after it.
+    */
+   static final class ClipTexture {
+      final TextureID id;
+      final Texture texture;
+
+      ClipTexture(int width, int height, boolean rgb9e5) {
+         id = new TextureID(width, height, 16 | 32, rgb9e5 ? GL11.GL_RGB : GL11.GL_RGBA, rgb9e5 ? GL30.GL_RGB9_E5 : GL11.GL_RGBA8);
+         texture = new Texture(id, "pzopt-clip");
+      }
+
+      /** Render thread: free the GL texture. */
+      void destroyTexture() {
+         texture.destroy();
       }
    }
 
@@ -100,9 +194,11 @@ public final class GifTextures {
 
    private static synchronized ExecutorService decoder() {
       if (decoder == null) {
-         decoder = Executors.newSingleThreadExecutor(r -> {
+         // two threads: the stock and the optimized side of a pair decode at once (an AVIF decode is single-threaded)
+         decoder = Executors.newFixedThreadPool(2, r -> {
             Thread t = new Thread(r, "pzopt-gif-decode");
             t.setDaemon(true);
+            t.setPriority(Thread.NORM_PRIORITY - 1);
             return t;
          });
       }
@@ -133,20 +229,37 @@ public final class GifTextures {
 
    /** "loading", "ready", "missing" or "error"; asking for a clip starts its decode. */
    public static String state(String path) {
-      return clip(path, System.currentTimeMillis()).state;
+      Clip c = clip(path, System.currentTimeMillis());
+      AvifStream a = c.avif;
+      if (a != null) {
+         return a.onGpu > 0 ? "ready" : "loading";
+      }
+      return c.state;
    }
 
    public static int width(String path) {
+      AvifStream a = clip(path, System.currentTimeMillis()).avif;
+      if (a != null) {
+         return a.began ? a.width : 0;
+      }
       Decoded d = clip(path, System.currentTimeMillis()).decoded;
       return d == null ? 0 : d.width;
    }
 
    public static int height(String path) {
+      AvifStream a = clip(path, System.currentTimeMillis()).avif;
+      if (a != null) {
+         return a.began ? a.height : 0;
+      }
       Decoded d = clip(path, System.currentTimeMillis()).decoded;
       return d == null ? 0 : d.height;
    }
 
    public static int frameCount(String path) {
+      AvifStream a = clip(path, System.currentTimeMillis()).avif;
+      if (a != null) {
+         return a.began ? a.delaysMs.length : 0;
+      }
       Decoded d = clip(path, System.currentTimeMillis()).decoded;
       return d == null ? 0 : d.rgba.length;
    }
@@ -157,6 +270,10 @@ public final class GifTextures {
     */
    public static Texture frame(String path, long nowMs) {
       Clip c = clip(path, nowMs);
+      AvifStream a = c.avif;
+      if (a != null) {
+         return avifFrame(c, a, nowMs);
+      }
       Decoded d = c.decoded;
       if (d == null || c.frames == null) {
          return null;
@@ -192,22 +309,48 @@ public final class GifTextures {
          clips.put(path, c);
          final Clip started = c;
          File f = resolve(path);
-         if (!f.isFile()) {
-            c.state = "missing";
-         } else {
+         File fa = AVIF ? resolve(avifPath(path)) : null;
+         if (fa != null && fa.isFile()) {
+            AvifStream s = new AvifStream(fa.getPath(), hdrOut());
+            c.avif = s;
             decoder().execute(() -> {
-               try (InputStream in = new java.io.FileInputStream(f)) {
-                  Decoded d = decode(in, MAX_WIDTH, MAX_FRAMES);
-                  started.decoded = d;
-                  started.state = "ready";
+               try {
+                  decodeAvif(s, java.nio.file.Files.readAllBytes(fa.toPath()));
                } catch (Throwable t) {
-                  Log.warn("gif " + path + ": " + t);
-                  started.state = "error";
+                  if (s.cancelled) {
+                     return;
+                  }
+                  Log.warn("clip " + avifPath(path) + ": " + t + "; playing the GIF");
+                  s.failed = true;
+                  started.failedAvif = s;
+                  started.avif = null;
+                  decodeGif(started, f, path);
                }
             });
+         } else if (!f.isFile()) {
+            c.state = "missing";
+         } else {
+            decoder().execute(() -> decodeGif(started, f, path));
          }
       }
+      AvifStream failed = c.failedAvif;
+      if (failed != null) {
+         c.failedAvif = null;
+         releaseStream(failed);
+      }
+      AvifStream glFailed = c.avif;
+      if (glFailed != null && glFailed.glFailed) { // the driver refused the upload: the GIF instead
+         c.avif = null;
+         releaseStream(glFailed);
+         final Clip fallback = c;
+         decoder().execute(() -> decodeGif(fallback, resolve(fallback.path), fallback.path));
+      }
       c.lastUsedMs = nowMs;
+      if (c.avif != null && c.avif.began && c.avif.textures == null) {
+         AvifStream s = c.avif;
+         s.textures = new ClipTexture[s.delaysMs.length];
+         evict(nowMs);
+      }
       if (c.decoded != null && c.frames == null) {
          c.frames = new Texture[c.decoded.rgba.length];
          evict(nowMs);
@@ -221,7 +364,8 @@ public final class GifTextures {
          Clip oldest = null;
          int held = 0;
          for (Clip c : clips.values()) {
-            if (c.frames == null) {
+            AvifStream a = c.avif;
+            if (c.frames == null && (a == null || a.textures == null)) {
                continue;
             }
             held++;
@@ -274,7 +418,20 @@ public final class GifTextures {
    /** Free a clip's textures (on the render thread) and forget it; a later ask decodes it again. */
    public static void release(String path) {
       Clip c = clips.remove(path);
-      if (c == null || c.frames == null) {
+      if (c == null) {
+         return;
+      }
+      AvifStream a = c.avif;
+      if (a != null) {
+         c.avif = null;
+         releaseStream(a);
+      }
+      AvifStream failed = c.failedAvif;
+      if (failed != null) {
+         c.failedAvif = null;
+         releaseStream(failed);
+      }
+      if (c.frames == null) {
          return;
       }
       final Texture[] frames = c.frames;
@@ -301,8 +458,251 @@ public final class GifTextures {
       int n = 0;
       for (Clip c : clips.values()) {
          n += c.uploaded;
+         AvifStream a = c.avif;
+         if (a != null) {
+            n += a.onGpu;
+         }
       }
       return n;
+   }
+
+   /** {@code media/ui/pzopt/compare/x-opt.gif} -> {@code media/ui/pzopt/compare/x-opt.avif}. */
+   static String avifPath(String gifPath) {
+      int dot = gifPath.lastIndexOf('.');
+      int slash = gifPath.lastIndexOf('/');
+      return (dot > slash ? gifPath.substring(0, dot) : gifPath) + ".avif";
+   }
+
+   /** HDR textures only into the FP16 back buffer (not the macOS 8-bit alpha-gain bridge, where the UI stays SDR). */
+   static boolean hdrOut() {
+      try {
+         return Hdr.active && !Hdr.alphaGain;
+      } catch (Throwable t) {
+         return false;
+      }
+   }
+
+   private static void decodeGif(Clip c, File f, String path) {
+      try (InputStream in = new java.io.FileInputStream(f)) {
+         Decoded d = decode(in, MAX_WIDTH, MAX_FRAMES);
+         c.decoded = d;
+         c.state = "ready";
+      } catch (Throwable t) {
+         Log.warn("gif " + path + ": " + t);
+         c.state = f.isFile() ? "error" : "missing";
+      }
+   }
+
+   /** The decode thread's side of an AVIF clip: frames into {@code s.decoded}, at most {@link #AVIF_AHEAD} waiting. */
+   static void decodeAvif(AvifStream s, byte[] file) throws Exception {
+      CorePlacement.background();
+      s.decodeStartNs = System.nanoTime();
+      java.lang.management.ThreadMXBean mx = java.lang.management.ManagementFactory.getThreadMXBean();
+      long cpu0 = mx.isCurrentThreadCpuTimeSupported() ? mx.getCurrentThreadCpuTime() : 0;
+      ClipDecoder.decode(file, s.hdrOut, MAX_FRAMES, new ClipDecoder.Sink() {
+         @Override
+         public void begin(int width, int height, int[] delaysMs, boolean rgb9e5, String describe) {
+            s.width = width;
+            s.height = height;
+            s.delaysMs = delaysMs;
+            s.rgb9e5 = rgb9e5;
+            s.describe = describe;
+            s.began = true;
+         }
+
+         @Override
+         public void frame(int index, int[] pixels) throws Exception {
+            while (!s.room.tryAcquire(100, TimeUnit.MILLISECONDS)) {
+               if (s.cancelled) {
+                  throw new InterruptedException("clip released");
+               }
+            }
+            if (s.cancelled) {
+               throw new InterruptedException("clip released");
+            }
+            s.decoded.add(pixels);
+         }
+      });
+      s.decodeNs = mx.isCurrentThreadCpuTimeSupported() ? mx.getCurrentThreadCpuTime() - cpu0 : System.nanoTime() - s.decodeStartNs;
+      s.decodeDone = true;
+   }
+
+   /** Game thread: hand waiting frames to the render thread, then the frame for the clock (see {@link #playable}). */
+   private static Texture avifFrame(Clip c, AvifStream s, long nowMs) {
+      if (s.textures == null) {
+         return null;
+      }
+      long t0 = System.nanoTime();
+      pump(s);
+      if (s.decoded.isEmpty()) { // this clip has nothing waiting: move another clip's decoded frames along (the decode
+         for (Clip o : clips.values()) { // threads wait on them, so a clip nobody draws must not stall the others)
+            AvifStream oa = o.avif;
+            if (oa != null && oa != s && oa.began && !oa.decoded.isEmpty()) {
+               if (oa.textures == null) {
+                  oa.textures = new ClipTexture[oa.delaysMs.length];
+                  evict(nowMs);
+               }
+               pump(oa);
+               break;
+            }
+         }
+      }
+      Texture out = null;
+      int ready = s.onGpu;
+      if (s.failed || s.glFailed) {
+         out = null;
+      } else if (ready > 0) {
+         if (s.playStartMs < 0 && playable(s, ready, System.nanoTime())) {
+            s.playStartMs = nowMs;
+            s.playAfterNs = System.nanoTime() - s.decodeStartNs;
+            for (Clip o : clips.values()) { // a clip of the same length already playing (the other side of the pair): its clock
+               AvifStream oa = o.avif;
+               if (oa != null && oa != s && oa.playStartMs >= 0 && oa.delaysMs != null && oa.totalMs() == s.totalMs()) {
+                  s.playStartMs = oa.playStartMs;
+                  break;
+               }
+            }
+         }
+         int f = s.playStartMs < 0 ? 0 : frameAt(s.delaysMs, s.totalMs(), nowMs - s.playStartMs);
+         out = s.textures[Math.min(f, ready - 1)].texture;
+      }
+      long dt = System.nanoTime() - t0;
+      s.gameNs += dt;
+      s.gameMaxNs = Math.max(s.gameMaxNs, dt);
+      if (ready >= s.textures.length && !s.logged) {
+         s.logged = true;
+         Log.info(String.format("clip %s: %s, decode %.0f ms CPU (%.1f ms a frame), playing after %.0f ms, last upload "
+                     + "at %.0f ms; render thread %.1f ms in %d uploads (max %.2f ms); game thread %.2f ms (max %.3f ms a call)",
+               new File(s.file).getName(), s.describe, s.decodeNs / 1e6, s.decodeNs / 1e6 / Math.max(1, s.textures.length),
+               s.playAfterNs / 1e6, (System.nanoTime() - s.decodeStartNs) / 1e6, s.uploadNs / 1e6, s.uploadJobs, s.uploadMaxNs / 1e6,
+               s.gameNs / 1e6, s.gameMaxNs / 1e6));
+      }
+      return out;
+   }
+
+   /**
+    * Whether a clip with {@code ready} of its frames on the GPU can start playing: all of them, or the decode so far is
+    * fast enough that the rest arrives before the playhead needs it (with a quarter to spare). A slow CPU starts later
+    * instead of stuttering through its first loop; a fast one starts at the first frame.
+    */
+   static boolean playable(AvifStream s, int ready, long nowNs) {
+      int n = s.delaysMs.length;
+      if (ready >= n) {
+         return true;
+      }
+      if (s.decodeDone && s.decoded.isEmpty() && s.handed >= n) {
+         return false; // all handed, waiting for the render thread: next frame
+      }
+      double msPerFrame = (nowNs - s.decodeStartNs) / 1e6 / ready;
+      long left = 0;
+      for (int i = ready; i < n; i++) {
+         left += s.delaysMs[i];
+      }
+      return (n - ready) * msPerFrame * 1.25 <= left;
+   }
+
+   /** Queue the next upload job of a stream (one in flight at a time). */
+   private static void pump(AvifStream s) {
+      if (s.uploading || s.textures == null || s.handed >= s.textures.length || s.decoded.isEmpty()) {
+         return;
+      }
+      int n = 0;
+      int[][] px = new int[UPLOADS_PER_CALL][];
+      ClipTexture[] tex = new ClipTexture[UPLOADS_PER_CALL];
+      while (n < UPLOADS_PER_CALL && s.handed < s.textures.length) {
+         int[] p = s.decoded.poll();
+         if (p == null) {
+            break;
+         }
+         ClipTexture t = new ClipTexture(s.width, s.height, s.rgb9e5);
+         s.textures[s.handed++] = t;
+         px[n] = p;
+         tex[n++] = t;
+      }
+      if (n > 0) {
+         s.uploading = true;
+         final int count = n;
+         RenderThread.queueInvokeOnRenderContext(() -> upload(s, tex, px, count));
+      }
+   }
+
+   /** Render thread: the textures of up to {@link #UPLOADS_PER_CALL} frames. */
+   private static void upload(AvifStream s, ClipTexture[] tex, int[][] px, int count) {
+      long t0 = System.nanoTime();
+      try {
+         if (s.cancelled || s.failed || s.glFailed) {
+            return;
+         }
+         if (!s.checkedGl) {
+            while (GL11.glGetError() != 0) {
+               // errors left by someone else
+            }
+         }
+         int w = s.width, h = s.height;
+         java.nio.IntBuffer buf = MemoryUtil.memAllocInt(w * h);
+         try {
+            for (int i = 0; i < count; i++) {
+               buf.clear();
+               buf.put(px[i]).flip();
+               GL11.glBindTexture(GL11.GL_TEXTURE_2D, Texture.lastTextureID = tex[i].id.getID());
+               SpriteRenderer.ringBuffer.restoreBoundTextures = true;
+               if (s.rgb9e5) {
+                  GL11.glTexSubImage2D(GL11.GL_TEXTURE_2D, 0, 0, 0, w, h, GL11.GL_RGB, GL30.GL_UNSIGNED_INT_5_9_9_9_REV, buf);
+               } else {
+                  GL11.glTexSubImage2D(GL11.GL_TEXTURE_2D, 0, 0, 0, w, h, GL11.GL_RGBA, GL12.GL_UNSIGNED_INT_8_8_8_8_REV, buf);
+               }
+               px[i] = null;
+               if (!s.checkedGl) { // once a clip: one driver round trip, so a format the driver refuses falls back to the GIF
+                  s.checkedGl = true;
+                  int err = GL11.glGetError();
+                  if (err != 0) {
+                     Log.warn("clip " + s.file + ": GL error 0x" + Integer.toHexString(err) + " on upload; playing the GIF");
+                     s.glFailed = true;
+                     return;
+                  }
+               }
+               s.onGpu++;
+            }
+         } finally {
+            MemoryUtil.memFree(buf);
+         }
+      } finally {
+         s.room.release(count);
+         long dt = System.nanoTime() - t0;
+         s.uploadNs += dt;
+         s.uploadMaxNs = Math.max(s.uploadMaxNs, dt);
+         s.uploadJobs++;
+         s.uploading = false;
+      }
+   }
+
+   /** Stop a stream's decode and free its textures on the render thread. */
+   private static void releaseStream(AvifStream s) {
+      s.cancelled = true;
+      s.decoded.clear();
+      final ClipTexture[] tex = s.textures;
+      s.textures = null;
+      if (tex == null) {
+         return;
+      }
+      RenderThread.queueInvokeOnRenderContext(() -> {
+         for (ClipTexture t : tex) {
+            if (t != null) {
+               t.destroyTexture();
+            }
+         }
+      });
+   }
+
+   static int frameAt(int[] delaysMs, int totalMs, long nowMs) {
+      long t = Math.floorMod(nowMs, (long) totalMs);
+      for (int i = 0; i < delaysMs.length; i++) {
+         t -= delaysMs[i];
+         if (t < 0) {
+            return i;
+         }
+      }
+      return delaysMs.length - 1;
    }
 
    // ---------------------------------------------------------------- decoding (no game classes; unit-tested)

@@ -1059,6 +1059,7 @@ public final class Config {
    public static final boolean LAZY_OPTIONS_SCREEN = bool("lazyOptionsScreen", true); // the options screen built when first opened, key bindings at once (Lua)
    public static final boolean PREVIEW_CLIPS = bool("previewClips", false); // the options tabs' before / after GIFs in the preview panel; the tick box in each tab's header saves it at once (Lua)
    public static final boolean LUA_EVENT_PROFILE = bool("luaEventProfile", false); // measurement: time every Lua event handler (pzopt.LuaEventProfile)
+   public static final boolean MOD_LUA_PROFILE = bool("modLuaProfile", true); // measurement: harness runs record each mod's Lua per frame over the route window (pzopt.HarnessModLua -> ModLuaProfile: pzopt-luaprof.out / pzopt-luaprof-frames.out); no effect outside harness runs (the in-game benchmark has its own modlua plan key)
    public static final boolean DEV_ELECTRICITY_CHECK = bool("devElectricityCheck", false); // dev: count the stock 64-level walk in the same call (instrumented runs)
    public static final int FILE_INFLIGHT_LOAD = Math.max(FILE_INFLIGHT, integer("fileInflightLoad", 128));
    public static final int FILE_THREADS_WAIT = Math.max(1, integer("fileThreadsWait", Runtime.getRuntime().availableProcessors()));
@@ -1156,6 +1157,10 @@ public final class Config {
    public static final String BENCHMARK_AUTO = string("benchmarkAuto", "off");
    /** dev: the main menu opens a benchmark screen by itself (panel | history | report:<run>) for the UI checks (harness/benchmark-run.sh). */
    public static final String DEV_BENCHMARK_UI = string("devBenchmarkUi", "");
+   /** The benchmark pass's capture collectors (pzopt.BenchCapture); false = a pass without them (its A/B). */
+   public static final boolean BENCH_CAPTURE = bool("benchCapture", true);
+   /** dev: the pass the report page opens on when none is chosen (the report tour of devBenchmarkUi=report); "" = the first. */
+   public static final String DEV_REPORT_PASS = string("devReportPass", "").trim();
    public static final int PRESENT_PACING_PCT = Math.max(50, Math.min(100, integer("presentPacingPct", 90)));
    public static final int PRESENT_PACING_MARGIN_US = Math.max(0, integer("presentPacingMarginUs", 200));
    /**

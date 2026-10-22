@@ -83,7 +83,7 @@ local FPS_COLOURS = { "blue", "green", "yellow", "red", "white", "cyan", "lime",
 -- `bezier` adds the curve sliders and plot under the combo (addBezierOption).
 local SECTIONS = {
     {
-        title = "Chunk textures: what bakes", clip = "drive",
+        title = "Chunk textures: what bakes",
         entries = {
             { key = "treesInChunkTexture", label = "Trees: bake into chunk textures",
               tip = "Static trees are drawn once into the chunk textures instead of every frame; only fading trees stay per-frame. Off = stock (every tree every frame)." },
@@ -147,7 +147,7 @@ local SECTIONS = {
         },
     },
     {
-        title = "Chunk textures: bake budgets", clip = "nightdrive",
+        title = "Chunk textures: bake budgets",
         entries = {
             { key = "bakeScheduler", label = "One prioritized bake budget per frame",
               tip = "Every chunk-level bake of a frame (new chunks, cutaways, strong light, redraws, lighting drift) shares one budget, granted by urgency and distance, instead of each kind having its own; a level waiting past its kind's longest wait goes first. Driving through Rosewood at 120 km/h: 214 -> ~230 fps, worst frames 37 -> 16 ms. Replaces the per-kind budgets below." },
@@ -224,7 +224,7 @@ local SECTIONS = {
         },
     },
     {
-        title = "Cutaways, lighting and weather (game thread)", clip = "spin",
+        title = "Cutaways, lighting and weather (game thread)",
         entries = {
             { key = "visBlurReduce", label = "Vision-cone edge blur summed once per texel",
               tip = "The soft edge of the vision cone is a 25-sample blur that stock runs for every pixel of the zoomed-out world image (at the widest zoom ~13 million pixels, 340 million texture reads a frame), although the sum only changes every few pixels. It is now summed once per blur texel and looked up per pixel: the same image, less GPU work." },
@@ -439,7 +439,7 @@ local SECTIONS = {
         },
     },
     {
-        title = "Entity updates on the worker threads", clip = "horde",
+        title = "Entity updates on the worker threads",
         entries = {
             { key = "entityUpdateParallel", label = "Zombie updates on other cores",
               tip = "The update loop itself - the only part of the frame that grows with the whole moving-object population - runs the calm zombies on the worker threads instead of one after another on the game thread, with the stock four-step sequence per zombie kept. Players, animals, vehicles and busy zombies stay on the game thread; Lua events fired from a worker are replayed on the game thread in the stock order; a zombie that fails on a worker turns the batching off for the rest of the session. The batched zombies see each other where they stood at the start of the batch (like the separation pass), and their random rolls come in a different order. In a 2,700-zombie horde: 67 -> 95 fps; the horde behaves the same in the brawl check (2026-10-13). On by default." },
@@ -482,7 +482,7 @@ local SECTIONS = {
         },
     },
     {
-        title = "More game-thread work on the worker threads", clip = "horde",
+        title = "More game-thread work on the worker threads",
         entries = {
             { key = "renderPrepParallel", label = "Character shadows and reflections: prepared on other cores",
               tip = "Every character on screen asks the sun shadows how much sun reaches it (a walk through the buildings towards the sun) and the reflections whether water is near it. Both answers only read the world, so they are worked out on the worker threads while the game thread draws the ground; the characters then take them ready. Same picture." },
@@ -541,7 +541,7 @@ local SECTIONS = {
         },
     },
     {
-        title = "Sprite buffers", clip = "drive",
+        title = "Sprite buffers",
         entries = {
             { key = "persistentVbo", label = "Persistently mapped sprite buffers",
               tip = "Sprite ring buffers use persistently mapped buffer storage instead of an orphan and re-map per batch. About 2.7x the uncapped frame rate at max zoom." },
@@ -558,7 +558,7 @@ local SECTIONS = {
         },
     },
     {
-        title = "Input latency (keyboard, mouse, controller)", clip = "spin",
+        title = "Input latency (keyboard, mouse, controller)",
         entries = {
             { key = "keyboardFresh", label = "Keyboard read in the frame it was polled",
               tip = "The game read the keyboard one frame behind the mouse and the controller: it filled its key table from the previous poll and swapped the new one in afterwards. With this on it reads the new one. One frame less for every key (4 ms at 240 fps, 17 ms at 60). Applies on the next launch." },
@@ -588,7 +588,7 @@ local SECTIONS = {
         },
     },
     {
-        title = "Menus, inventory and map (UI)", clip = "spin",
+        title = "Menus, inventory and map (UI)",
         entries = {
             { key = "uiRetained", label = "UI: redraw only what changed, the moment you act",
               tip = "The game redrew every open window's Lua 60 times a second into the UI picture, although almost all of them drew exactly the same as the frame before, and showed a click or key only at the next of those redraws. With this on each window's drawing is kept and reused while nothing can have changed it (no click, key, wheel or mouse over it, no change to its data, the inventory not marked for refresh); anything you do is drawn in the same frame. Measured at 240 fps: the UI's share of the frame 4 -> 0.9 % with the HUD, 9.8 -> 1.4 % with the inventory open, 16.6 -> 2.2 % with the crafting window, 40 -> 4 % with the map." },
@@ -623,7 +623,7 @@ local SECTIONS = {
         },
     },
     {
-        title = "Mod compatibility", clip = "spin",
+        title = "Mod compatibility",
         entries = {
             { key = "modProfile", label = "Mods: max performance or max compatibility",
               choices = { "performance", "compatibility" }, note = { ["performance"] = "max performance" },
@@ -638,7 +638,7 @@ local SECTIONS = {
         },
     },
     {
-        title = "Driving smoothness (the car's stutter and rubber banding)", clip = "drive",
+        title = "Driving smoothness (the car's stutter and rubber banding)",
         entries = {
             { key = "vehicleSmooth", label = "Vehicles drawn between physics steps",
               choices = { "interp", "extrap", "off" },
@@ -662,7 +662,7 @@ local SECTIONS = {
         },
     },
     {
-        title = "Variable refresh rate (G-SYNC, FreeSync, ProMotion)", clip = "spin",
+        title = "Variable refresh rate (G-SYNC, FreeSync, ProMotion)",
         entries = {
             { key = "vrr", label = "Variable refresh rate",
               choices = { "auto", "on", "off" },
@@ -716,7 +716,7 @@ local SECTIONS = {
         },
     },
     {
-        title = "CPU cores and power (laptops and handhelds)", clip = "spin",
+        title = "CPU cores and power (laptops and handhelds)",
         entries = {
             { key = "corePlacement", label = "Which cores the game's threads run on (hybrid CPUs)",
               choices = { "auto", "efficient", "performance", "off" },
@@ -737,7 +737,7 @@ local SECTIONS = {
         },
     },
     {
-        title = "Java memory and garbage collector", clip = "horde",
+        title = "Java memory and garbage collector",
         entries = {
             { key = "gcHeap", label = "Java memory for the game (heap size)",
               choices = { "auto", "game", "4096", "6144", "8192", "12288", "16384", "24576", "32768", "40960", "49152", "57344", "65536" },
@@ -767,7 +767,7 @@ local SECTIONS = {
         },
     },
     {
-        title = "Sound", clip = "horde",
+        title = "Sound",
         entries = {
             { key = "audioLimiter", label = "Limiter on the game's final mix",
               tip = "The game mixes in 5.1 at 32 kHz and has no limiter: a gun fired next to you over alarms and a horde went over full scale and the sound card clipped it (about 6,000 clipped samples in 25 s in the test scene). FMOD's own limiter now sits at the very end of the mix; below its ceiling it changes nothing. Applies on the next launch." },
@@ -788,14 +788,14 @@ local SECTIONS = {
         },
     },
     {
-        title = "Multiplayer", clip = "drive",
+        title = "Multiplayer",
         entries = {
             { key = "luaChecksumExempt", label = "Leave the pzopt Lua files out of the server file check",
               tip = "When joining a server the game lists every Lua file under media/lua to the server; the pzopt files (this tab and its search index, the frame cap combo, the key binding, the update item) only exist on clients and a server without them refused the join with \"File doesn't exist on the server\". They are skipped like the game skips SandboxVars.lua. Applies on the next launch." },
         },
     },
     {
-        title = "Updates", clip = "load",
+        title = "Updates",
         entries = {
             { key = "updateCheck", label = "Offer new releases in the main menu",
               tip = "Once per boot the main menu asks the GitHub releases (one request to api.github.com) whether a newer build for this game revision exists. The main menu's PZ OPTIMIZATION item then says \"Update available\" under it, and so does its screen's UPDATE entry: its dialog downloads the zip, replaces the installed files and asks to restart so the next launch loads them. Nothing is downloaded without that click. Applies on the next launch." },
@@ -806,7 +806,7 @@ local SECTIONS = {
         },
     },
     {
-        title = "Render distance", clip = "grid",
+        title = "Render distance",
         entries = {
             { key = "chunkGridWidth", label = "Render distance (chunk grid width)",
               choices = { "0", "auto", "7", "9", "11", "13", "15", "19", "21", "23", "25", "27", "31" },
@@ -820,7 +820,7 @@ local SECTIONS = {
         },
     },
     {
-        title = "Chunk streaming", clip = "drive",
+        title = "Chunk streaming",
         entries = {
             { key = "parallel", label = "Chunk loading in parallel",
               tip = "Chunk recalculation runs on a worker pool. Off = the stock single-threaded pass." },
@@ -860,7 +860,7 @@ local SECTIONS = {
         },
     },
     {
-        title = "Boot: threads and caches", clip = "load",
+        title = "Boot: threads and caches",
         entries = {
             { key = "fmodAsync", label = "Start audio on a boot thread",
               tip = "FMOD and its banks (~1.6 s) initialise on a thread during boot." },
@@ -882,7 +882,7 @@ local SECTIONS = {
         },
     },
     {
-        title = "Boot: parsers", clip = "load",
+        title = "Boot: parsers",
         entries = {
             { key = "scriptParserFast", label = "Linear script parser",
               tip = "Script comments strip in one pass and tokens parse without re-substringing; identical output (the stock passes cost 1.8 s at boot)." },
@@ -891,7 +891,7 @@ local SECTIONS = {
         },
     },
     {
-        title = "World load: file system and decoding", clip = "load",
+        title = "World load: file system and decoding",
         entries = {
             { key = "fileThreads", label = "File threads in game",
               choices = { "1", "2", "4", "6", "8", "12" },
@@ -931,7 +931,7 @@ local SECTIONS = {
         },
     },
     {
-        title = "World load: loading screen", clip = "load",
+        title = "World load: loading screen",
         entries = {
             { key = "noLoadFade", label = "Skip the loading-screen fade",
               tip = "The loading screen does not fade to black (350 ms) before the world's own fade-in." },
@@ -1025,7 +1025,7 @@ local ENHANCEMENT_SECTIONS = {
         },
     },
     {
-        title = "Sprite filtering (sharp world art when zoomed in or out)", clip = "upscale",
+        title = "Sprite filtering (sharp world art when zoomed in or out)", clip = "visuals",
         entries = {
             { key = "spriteFilter", label = "Sprite filtering",
               choices = { "stock", "sharp", "nearest" },
@@ -1107,7 +1107,7 @@ local ENHANCEMENT_SECTIONS = {
         },
     },
     {
-        title = "Sun, moon and cloud shadows (soft shadows of walls, trees, fences and furniture that follow the real sky)", clip = "ao",
+        title = "Sun, moon and cloud shadows (soft shadows of walls, trees, fences and furniture that follow the real sky)", clip = "sunshadows",
         entries = {
             { key = "sunShadows", label = "Sun shadows",
               tip = "By day, walls, trees, fences, cars parked in the world's pictures and furniture outdoors cast soft shadows of the sun onto the ground and onto each other: sharp where they touch the ground, softer further away, like real sunlight. The sun stands where it really does over Kentucky for the game's date and hour (high and short-shadowed in summer, low and long in winter, rising in the north-east in June and the south-east in December), so the shadows turn and lengthen through the day; rain and fog thin them out and they fade away at dusk. Indoors stays as it is (rooms have a roof). Computed with the ambient occlusion when a chunk's picture is drawn and baked into it, so a still or moving camera costs nothing; when the sun has moved a little (every few in-game minutes) the pictures on screen are updated a few per frame. Windows, Linux and macOS (on a Mac with \"macOS: OpenGL 4.1\" on, the default)." },
@@ -1173,7 +1173,7 @@ local ENHANCEMENT_SECTIONS = {
         },
     },
     {
-        title = "Reflections (the scene mirrored in rivers, lakes and puddles)", clip = "hdr",
+        title = "Reflections (the scene mirrored in rivers, lakes and puddles)", clip = "reflections",
         entries = {
             { key = "reflections", label = "Reflections",
               tip = "Buildings, fences, trees, lamp posts, cars and characters are mirrored in rivers, lakes and puddles, rippled by the waves and the rain, sharp where they meet the water and softer further out, stronger at grazing angles of the waves. Every surface picture the game already draws writes itself where its mirror image lands, so the water only looks up one value: nothing extra is drawn where there is no water or puddle on screen. Characters' reflections are one frame behind. Windows, Linux and macOS (on a Mac with \"macOS: OpenGL 4.1\" on, the default; there the water marches up its pixel column for the reflection, OpenGL 4.1 has no image atomics for the pixel-projected method). Turning it on applies on the next launch (the game's water and chunk shaders are only patched when it starts with reflections on; off, they stay exactly the game's own)." },
@@ -1185,7 +1185,7 @@ local ENHANCEMENT_SECTIONS = {
         },
     },
     {
-        title = "Puddle ripples (footsteps, raindrops and car wakes)", clip = "hdr",
+        title = "Puddle ripples (footsteps, raindrops and car wakes)", clip = "ripples",
         entries = {
             { key = "ripples", label = "Puddle ripples",
               tip = "Anyone walking or running through a puddle, zombies, animals and you, rings it at every step, and car wheels leave trails of rings behind them. The rings are real water: each one a train of waves that spreads and fades (the longer waves run ahead), they cross and add up, and they bend whatever the puddle mirrors (the sky, and with Reflections on the zombies and the buildings). Only puddles big enough to show do it, outdoors, only where someone steps. The rain rings puddles and wet ground with real drop rings instead of the game's grid of half rings (cheaper than the game's own), and cars leave a continuous wake. Nearly free: nothing at all when it is dry or nobody walks in a puddle. Windows, Linux and macOS. Turning it on applies on the next launch, the rest at once." },
@@ -1212,7 +1212,7 @@ local ENHANCEMENT_SECTIONS = {
         },
     },
     {
-        title = "Car glass (windows that reflect the world and show the cabin)", clip = "hdr",
+        title = "Car glass (windows that reflect the world and show the cabin)", clip = "carglass",
         entries = {
             { key = "carGlass", label = "Car glass",
               tip = "Car windows become glass instead of the stock opaque blue: they mirror the sky (the game's own, with its clouds and sunsets, turned to the real sun), the buildings, trees and road around the car (each car's small reflection probe, marched through the scene before the cars are drawn), and glint where they mirror the sun, the moon, the street lamps and headlights, more at grazing angles (Fresnel); and through them you see the cabin: seats, headrests, the dashboard, the driver and passengers, and the street behind the car where you look out through the far window. Cracks, blood and broken-out windows stay as the game draws them; rain beads on the glass. About a hundredth of a millisecond for a street of parked cars on a fast GPU; nothing when no car is on screen. Windows, Linux and macOS (on a Mac with \"macOS: OpenGL 4.1\" on, the default). Turning it on applies on the next launch (the game's vehicle shaders are only patched when it starts with car glass on)." },
@@ -1239,7 +1239,7 @@ local ENHANCEMENT_SECTIONS = {
         },
     },
     {
-        title = "Occluded zombie outlines (the hidden parts of the zombies you see)",
+        title = "Occluded zombie outlines (the hidden parts of the zombies you see)", clip = "outlines",
         entries = {
             { key = "occludedZombieOutlines", label = "Outline the hidden parts of zombies you see",
               tip = "A zombie you can see that walks behind a wall, a tree, a fence or a car keeps a thin contour where the scenery hides it, so you know where it went. Only zombies your character sees right now (the same sight that draws them): no unseen or remembered zombies, nothing through the dark (the contour fades with the light on the zombie). The parts hidden behind other characters are not outlined. Next to nothing on a fast GPU: the zombies' own draws mark what they cover, then one pass draws the contour where they are hidden. Applies at once. Off while DLSS / TAAU object motion is on (it uses the same buffer bits)." },
@@ -1256,7 +1256,7 @@ local ENHANCEMENT_SECTIONS = {
         },
     },
     {
-        title = "Mirrors and windows (real reflections)", clip = "hdr",
+        title = "Mirrors and windows (real reflections)", clip = "mirrors",
         entries = {
             { key = "mirrors", label = "Mirror and window reflections",
               tip = "Wall mirrors, mirrored medicine cabinets and dressers, and window panes reflect what stands in front of them: the floor and the room, the street, and you, the zombies and the cars as their real other side (the game's own models drawn once more through the mirror's plane, lit as they are lit), so a mirror shows your face, not your back. From the game's high camera a wall mirror shows the floor and whoever stands within a couple of squares of it; a window upstairs shows the street below. Someone inside a room seen through a window keeps the reflection over them, as glass does; a closed curtain stops it. The room part of each pane's reflection is worked out once and kept while nothing changes (the camera's pan does not change it), panes hidden under a roof or behind a building are skipped, and the people in it are redrawn at most 120 times a second: a few hundredths of a millisecond a frame for a street of windows on a fast GPU, nothing when no mirror or window is on screen. Applies on the next launch (mirror tiles are drawn on their own instead of into the chunk pictures)." },
@@ -1288,7 +1288,7 @@ local ENHANCEMENT_SECTIONS = {
         },
     },
     {
-        title = "Wet blood (fresh blood reflects and catches the light)", clip = "hdr",
+        title = "Wet blood (fresh blood reflects and catches the light)", clip = "blood",
         entries = {
             { key = "bloodWet", label = "Wet blood",
               tip = "Fresh blood on the floor is a film of liquid until it dries: the rims of the pools catch the sun and the lamps, the sky and (with Reflections on) the zombies and walls standing in them are mirrored at the film's own angle, and with HDR output the highlights go above white. The film's shape comes from the splat itself (flat pools, bright edges) and it dries from the edges in. Only the wet splats on screen are drawn, once a frame, like the puddles; walls, tables and bodies in front of the floor hide it. Windows, Linux and macOS (on a Mac with \"macOS: OpenGL 4.1\" on, the default)." },
@@ -1357,7 +1357,7 @@ local ENHANCEMENT_SECTIONS = {
         },
     },
     {
-        title = "Foliage sway (grass, bushes and trees in the wind)", clip = "hdr",
+        title = "Foliage sway (grass, bushes and trees in the wind)", clip = "sway",
         entries = {
             { key = "foliageSway", label = "Foliage sway",
               tip = "Grass, bushes and trees bend and sway in the wind: they lean with it, gusts roll across fields and tree crowns, each plant swings at its own pace (grass quick, trees slow) and leaves flutter. The plants stay in the game's cached chunk pictures; the pass that puts those pictures on screen every frame moves each plant's pixels by the wind, so nothing extra is drawn. The game's own \"Wind sprite effects\" option (off by default) does this by drawing every plant every frame instead. Windows, Linux and macOS (on a Mac with \"macOS: OpenGL 4.1\" on, the default)." },
@@ -1396,7 +1396,7 @@ local ENHANCEMENT_SECTIONS = {
         },
     },
     {
-        title = "Per-pixel lighting (smooth light, torch and headlight beams drawn per pixel)", clip = "torch",
+        title = "Per-pixel lighting (smooth light, torch and headlight beams drawn per pixel)", clip = "ppl",
         entries = {
             { key = "pixelLight", label = "Per-pixel lighting",
               tip = "The world's light is drawn per pixel instead of being painted into the chunk pictures square by square. The game's own lighting still decides how much light every square gets and what walls hide; the picture follows it smoothly between squares instead of in blocky steps, and a torch or headlight beam is drawn from its own cone, so it has straight edges and follows your aim every frame. A light change no longer redraws chunk pictures, which saves work when torches, headlights or lightning move the light. Nights look a little darker than stock: stock spreads every lit square's light half a square into its neighbours, even through walls. Windows, Linux and macOS (on a Mac with \"macOS: OpenGL 4.1\" on, the default). Applies on the next launch." },
@@ -1432,7 +1432,7 @@ local ENHANCEMENT_SECTIONS = {
         },
     },
     {
-        title = "Light from the torch itself (flashlights, lanterns and weapon lights shine from the item you carry)", clip = "torch",
+        title = "Light from the torch itself (flashlights, lanterns and weapon lights shine from the item you carry)", clip = "torchsource",
         entries = {
             { key = "torchSource", label = "Light from the torch itself",
               tip = "A flashlight, lantern, lighter or weapon light shines from the item in your hand, on your webbing or under your gun barrel, at its height, instead of from the middle of your feet: the beam starts at the lens and moves with your arm, a lantern held at your side lights that side, and with Per-pixel lighting the beam, its shadows, the glow in fog and the shadows other people cast from it all start there too. The game's own square-by-square lighting starts from the same spot (never through a wall) and holds still while you stand still. Costs a few microseconds a frame. Applies at once." },
@@ -1444,7 +1444,7 @@ local ENHANCEMENT_SECTIONS = {
         },
     },
     {
-        title = "Relief (parallax textures: bricks, stones, planks and shingles catch the light)", clip = "torch",
+        title = "Relief (parallax textures: bricks, stones, planks and shingles catch the light)", clip = "relief",
         entries = {
             { key = "relief", label = "Relief (parallax textures)",
               tip = "The fine relief the art paints (mortar between bricks and stones, gaps between planks and floor tiles, roof shingles, cobbles) catches the light that moves: a low sun or the moon rakes it and the grooves fall into shade, a torch, headlight or lamp sweeping along a wall brings the stones out. The height is read once from each chunk picture after it is drawn (two bytes per pixel of video memory); the sun and the moon are baked into the picture with it and redone a few pictures a frame when they move a step, so they cost nothing per frame; a torch, headlight or lamp reads one byte where it shines. Floors and walls only: furniture keeps its painted shading. Sun and moon: needs Sun shadows. Torches, headlights and lamps: needs Per-pixel lighting. Windows, Linux and macOS (on a Mac with \"macOS: OpenGL 4.1\" on, the default). Applies on the next launch." },
@@ -1489,7 +1489,7 @@ end
 -- own; same controls, preview and search as the Optimizations tab.
 local PROFILER_SECTIONS = {
     {
-        title = "Performance overlay (F9 or the \"Toggle performance overlay\" key binding; L3 + R3 on a controller)", clip = "spin",
+        title = "Performance overlay (F9 or the \"Toggle performance overlay\" key binding; L3 + R3 on a controller)",
         entries = {
             { key = "overlaySampling", label = "Sample frame times and utilization (needed for F9 / L3 + R3)",
               tip = "Records every presented frame, times the GPU with GL timer queries and samples the CPU load twice a second on a background thread. Off by default: without it F9 (or L3 + R3 on a controller) only shows a notice. \"Show the overlay from boot\" and \"Log every presented frame\" turn it on too." },
@@ -1543,7 +1543,7 @@ local PROFILER_SECTIONS = {
         },
     },
     {
-        title = "Performance overlay: fps colour", clip = "spin",
+        title = "Performance overlay: fps colour",
         entries = {
             { key = "overlayFpsColor", label = "Colour the fps number",
               tip = "The fps number takes one of four colours by how close it is to the target; off = white like the rest of the line." },
@@ -1582,7 +1582,7 @@ local PROFILER_SECTIONS = {
         },
     },
     {
-        title = "Console log", clip = "spin",
+        title = "Console log",
         entries = {
             { key = "consoleLog", label = "PZ Optimization lines in the console",
               choices = { "all", "warnings", "errors", "off" },
@@ -1661,16 +1661,10 @@ end
 -- Preview panel: the two clips, the description and the effect bars of the setting under the mouse.
 
 -- Clips under media/ui/pzopt/compare/<clip>-stock.gif / -opt.gif (harness/menu-gifs.py, harness/menu-gifs.json
--- names the runs). A section's `clip` is the default for its keys; KEY_CLIP picks another for one key.
+-- names the runs). A section's `clip` is the default for its keys; KEY_CLIP picks another for one key. Only settings
+-- that change the picture have one (2026-10-20, the maintainer): the others say "No visual comparison available"
+-- (their fps route clips are gone).
 local CLIP_TITLES = {
-    drive = "120 km/h highway drive, clear day, max zoom",
-    spin = "Rosewood, camera spinning through town, max zoom",
-    fog = "120 km/h drive in heavy fog, max zoom",
-    storm = "120 km/h drive in a thunderstorm, max zoom",
-    horde = "Downtown Louisville, zombie population maxed",
-    torch = "Night, hand torch, turning in place",
-    nightdrive = "Night drive with headlights",
-    load = "Launch to the main menu, then Continue to the world (real time)",
     -- the performance overlay's elements: the spinning route with the overlay off / with every default element on
     -- (overlayFont=Large, each clip a crop of the same capture; the overlay shows its own numbers, no burned counter)
     overlay = "The whole overlay with every element on: statistics, game-thread tree, verdict, frame graph, flame graph",
@@ -1679,11 +1673,6 @@ local CLIP_TITLES = {
     ovverdict = "The verdict line: what holds the frame rate below the cap",
     ovgraph = "The frame-time graph: one bar per presented frame, GPU time in blue, the budget line and ms ticks",
     ovflame = "The flame graph: the last 5 s of game-thread stacks, root at the bottom, biggest first from the left",
-    -- the Louisville horde, one group of keys at a time (overlay + profiler on both sides)
-    zombies = "Downtown Louisville horde: stock vs stock + only the zombie simulation settings (all cores, lookups, push-apart)",
-    player = "Downtown Louisville horde: stock vs stock + only the player line-of-sight settings",
-    zgt = "Downtown Louisville horde: every optimization on, without vs with the zombie game-thread settings (on their own over stock they gain nothing: the stock frame waits on other work)",
-    grid = "Rosewood, camera spinning, uncapped, every optimization on: the vanilla chunk grid (19x19) vs 15x15",
     -- the Enhancements tab: every optimization on in both runs, only the enhancement differs (2026-09-25, runs enh-*)
     upscale = "Rosewood, camera spinning, uncapped, max zoom, RTX 4090 at 5120x2160: the world at the screen size vs rendered at 67 % and upscaled with FSR 1.0",
     fsrzoom = "A furnished Rosewood house at noon, zoom 1, still camera, a 1:1 pixel crop around the player: FSR 1.0 at quality (67 %, sharpening 80) against the native picture",
@@ -1691,27 +1680,53 @@ local CLIP_TITLES = {
     dlsszoom = "A furnished Rosewood house at noon, zoom 1, still camera, a 1:1 pixel crop around the player: DLSS at the defaults against the native picture",
     hdr = "Night, fires beside a police car with its light bar: the HDR side is tone-mapped to fit this SDR preview, so its lights look brighter, not as bright as on an HDR screen",
     hdrday = "River shore at 15:00, clear sky, a crop of the pier and the water: the sun glitter on the water, tone-mapped to fit this SDR preview",
-    ao = "Rosewood houses at noon, walking south at zoom 1: a crop around the player, ambient occlusion off vs on",
+    ao = "A Rosewood living room at noon, zoom 1, the player turning in place: ambient occlusion off vs on",
     -- darkness floor, remembered places, colour grading (2026-09-26, runs cap-*: the game's own frames, the player turning in place)
     darkness = "Rosewood house at 01:00, the player turning in place: darkness floor 20 %, remembered places and colour grading together",
-    memory = "Rosewood house at 13:00, the player turning in place: what is out of sight is drawn grey, dimmer and cooler",
-    grade = "Rosewood house in the rain at 14:00, the player turning in place: colour grading (cooler, greyer, softer in rain)",
+    memory = "Rosewood house at 13:00, the player turning in place: what is out of sight is drawn grey, dimmer and cooler (colour grading off)",
+    grade = "Rosewood house at 20:30, clear sky, the player turning in place: colour grading off vs on (the warm evening look)",
     -- voxel lighting (2026-10-19, the game's own frames: stock vs every default + per-pixel and voxel lighting)
     voxel = "A parking lot at 01:00, street lamps and room lights on, the camera panning east: stock vs voxel lighting (lamps and room lights traced through walls, windows and fences)",
     -- god rays through doors (2026-10-18, runs grmenu-*: the game's own frames at 1:1, the door toggled every 2 s)
     godrays = "The Riverside fire station at 15:00, zoom 1: the sun comes in through the garage doors as they open and close",
     godraysdoor = "A shop door at 17:00, zoom 1, the player just inside: the door settings off vs on (the light follows the door's swing, the open door blocks its share, the player's shadow in the shaft, dust stirred up)",
     godraysspill = "A Rosewood house at 23:00 in dark fog, its lamps on, zoom 1: the rooms' lamplight spills out of the windows and the opening door into the fog",
+    -- the benchmark's scenes (2026-10-20, the run planner's card; harness/menu-gifs.py kind `scene`: one capture run per
+    -- scene, the GIF at 512x216 and the AVIF at 1024x432 in the same bytes)
+    ["bench-spin"] = "Rosewood at noon, south through town at the widest zoom, the view turning 90 degrees a second",
+    ["bench-drive120"] = "120 km/h east on KY-60 at noon, the widest zoom",
+    ["bench-louisville"] = "Downtown Louisville, about 2,000 zombies, a slow turning walk at the widest zoom",
+    ["bench-drive120south"] = "120 km/h through Rosewood at noon, past the shops on North Main Street, the widest zoom",
+    ["bench-horde"] = "The Riverside pier at noon: the horde of 150 fast zombies reaching the player",
+    ["bench-sweep"] = "Rosewood at noon, the camera turning in place at the widest zoom: every Visuals feature the sweep measures on",
+    visuals = "A Rosewood house at 08:00, zoom 1: every Visuals feature off vs on (sun shadows, ambient occlusion, god rays, per-pixel light, colour grading)",
+    -- one clip per Visuals setting (2026-10-20, runs mc-*: the game's own frames, the two runs on the same build, save, spot,
+    -- hour and route with an empty options file, only the setting differs; docs/menu-clips-2026-10-20.md, Jev judged each)
+    ppl = "A parking lot at 23:00, the lamps on, a hand torch, the player turning in place, zoom 1: per-pixel lighting off vs on",
+    torchsource = "The same lot at 01:00, a hand torch and a lantern, zoom 0.5, a crop round the player: torch source off vs on (per-pixel lighting on in both)",
+    relief = "A brick facade at 11:00, zoom 1, a 1:1 pixel crop: relief off vs on (per-pixel lighting and sun shadows on in both)",
+    sunshadows = "A Rosewood house at 16:30, clear sky, zoom 1, the player turning in place: sun shadows off vs on",
+    clouds = "Rosewood at 16:00, max zoom, half cloud cover, the clouds at 8x speed: cloud shadows off vs on (sun shadows on in both)",
+    moon = "A full moon at 23:00, zoom 1: moon shadows off vs on (sun shadows on in both)",
+    reflections = "The Riverside pier at 15:00, zoom 1, a crop of the river: reflections off vs on",
+    ripples = "Walking through puddles in the rain at noon, zoom 0.5: puddle ripples off vs on (round raindrop rings, footsteps)",
+    wakes = "Driving at 30 km/h through puddles at noon, zoom 0.75: car wakes off vs on (the trail behind the car)",
+    carglass = "Three parked cars at 10:30, zoom 0.5: car glass off vs on (one run switching every 4 s: the same frame, only the glass)",
+    occupant = "Driving at 60 km/h at 11:00, zoom 0.5, car glass on in both: the people inside off vs on",
+    outlines = "A crowd of 200 round the church at noon, zoom 1, a crop: outlines of the hidden parts of zombies off vs on",
+    mirrors = "A Rosewood bedroom at noon, zoom 0.5, a 1:1 pixel crop: mirrors and windows off vs on (the panes reflect the room)",
+    props = "A glass case, a TV, a glass door and a fridge by the road, walking east, zoom 0.5: reflective props off vs on",
+    sway = "A Rosewood yard at noon in the wind, zoom 1: foliage sway off vs on",
+    darkfloor = "A Rosewood house at 01:00, the player turning in place: darkness floor 0 % vs 20 % (remembered places and grading off)",
+    blood = "A Rosewood living room at 15:00, fresh blood on the floor, the player turning, zoom 0.5, a 1:1 pixel crop: wet blood off vs on (reflections on in both)",
+    treecut = "Driving at 60 km/h past trees at noon, zoom 1: Build 42.21's tree cutaway while driving vs this setting off (the default)",
 }
 -- Clips whose stock side is a shared GIF (one stock run for several group clips): <STOCK_FILE[clip]>-stock.gif.
-local STOCK_FILE = { zombies = "lou", player = "lou", upscale = "native", dlss = "native", fsrzoom = "nativezoom", dlsszoom = "nativezoom" }
+local STOCK_FILE = { upscale = "native", dlss = "native", fsrzoom = "nativezoom", dlsszoom = "nativezoom" }
 -- The captions over the two clips; the overlay clips are "off" / "on" rather than stock / optimized.
 local CLIP_SIDES = {
     default = { "STOCK GAME", "OPTIMIZED (every optimization on)" },
     overlay = { "OVERLAY OFF", "OVERLAY ON (F9 / L3 + R3)" },
-    alone = { "STOCK GAME", "STOCK + THESE SETTINGS ONLY" },
-    without = { "EVERYTHING ON EXCEPT THESE", "EVERYTHING ON" },
-    grid = { "VANILLA GRID (19x19)", "15x15 GRID" },
     upscale = { "NO UPSCALER (NATIVE)", "FSR 1.0, QUALITY" },
     fsrzoom = { "NATIVE, 1:1 PIXELS", "FSR 1.0 QUALITY, 1:1 PIXELS" },
     dlss = { "NO UPSCALER (NATIVE)", "NVIDIA DLSS (DEFAULTS)" },
@@ -1726,6 +1741,26 @@ local CLIP_SIDES = {
     godrays = { "GOD RAYS OFF", "GOD RAYS ON" },
     godraysdoor = { "DOOR SETTINGS OFF", "DOOR SETTINGS ON" },
     godraysspill = { "SPILL OFF", "SPILL ON" },
+    visuals = { "VISUALS OFF", "EVERY VISUALS FEATURE ON" },
+    ["bench-sweep"] = { "VISUALS OFF", "EVERY VISUALS FEATURE ON" },
+    ppl = { "PER-PIXEL LIGHTING OFF", "PER-PIXEL LIGHTING ON" },
+    torchsource = { "LIGHT FROM THE PLAYER", "LIGHT FROM THE TORCH" },
+    relief = { "RELIEF OFF", "RELIEF ON" },
+    sunshadows = { "SUN SHADOWS OFF", "SUN SHADOWS ON" },
+    clouds = { "CLOUD SHADOWS OFF", "CLOUD SHADOWS ON" },
+    moon = { "MOON SHADOWS OFF", "MOON SHADOWS ON" },
+    reflections = { "REFLECTIONS OFF", "REFLECTIONS ON" },
+    ripples = { "STOCK RIPPLES", "PUDDLE RIPPLES ON" },
+    wakes = { "CAR WAKES OFF", "CAR WAKES ON" },
+    carglass = { "CAR GLASS OFF", "CAR GLASS ON" },
+    occupant = { "NOBODY INSIDE (STOCK)", "THE PEOPLE INSIDE ON" },
+    outlines = { "OUTLINES OFF", "OUTLINES ON" },
+    mirrors = { "MIRRORS AND WINDOWS OFF", "MIRRORS AND WINDOWS ON" },
+    props = { "REFLECTIVE PROPS OFF", "REFLECTIVE PROPS ON" },
+    sway = { "FOLIAGE SWAY OFF", "FOLIAGE SWAY ON" },
+    darkfloor = { "DARKNESS FLOOR 0 %", "DARKNESS FLOOR 20 %" },
+    blood = { "WET BLOOD OFF", "WET BLOOD ON" },
+    treecut = { "GAME'S 42.21 RULE (SEE-THROUGH)", "OFF, THE DEFAULT (TREES STAY)" },
 }
 -- The line under the clips: what is the same in both, and what the burned-in number is (clips without one say so).
 local CLIP_NOTES = {
@@ -1733,7 +1768,7 @@ local CLIP_NOTES = {
     dlsszoom = ". Same save, spot and machine; the picture is the point, no counter.",
     hdr = ". Same save, spot and machine; no counter.",
     hdrday = ". Same save, spot and machine; no counter.",
-    ao = ". Same save, route and machine; no counter.",
+    ao = ". Same save, spot and hour, frames lined up; no counter.",
     darkness = ". Same save, spot and hour, frames lined up; no counter.",
     memory = ". Same save, spot and hour, frames lined up; no counter.",
     grade = ". Same save, spot and hour, frames lined up; no counter.",
@@ -1741,44 +1776,51 @@ local CLIP_NOTES = {
     godrays = ". Same save, spot and hour, frames lined up; no counter.",
     godraysdoor = ". Same save, spot and hour, frames lined up; no counter.",
     godraysspill = ". Same save, spot and hour, frames lined up; no counter.",
+    ["bench-spin"] = ". The optimized defaults, the game's own frames; no counter.",
+    ["bench-drive120"] = ". The optimized defaults, the game's own frames; no counter.",
+    ["bench-louisville"] = ". The optimized defaults, the game's own frames; no counter.",
+    ["bench-drive120south"] = ". The optimized defaults, the game's own frames; no counter.",
+    ["bench-horde"] = ". The optimized defaults, the game's own frames; no counter.",
+    ["bench-sweep"] = ". The game's own frames; no counter.",
+    visuals = ". Same save, spot and hour, frames lined up; no counter.",
+    ppl = ". Same save, spot and hour, frames lined up; no counter.",
+    torchsource = ". Same save, spot and hour, frames lined up; no counter.",
+    relief = ". Same save, spot and hour, frames lined up; no counter.",
+    sunshadows = ". Same save, spot and hour, frames lined up; no counter.",
+    clouds = ". Same save, spot and hour, frames lined up; no counter.",
+    moon = ". Same save, spot and hour, frames lined up; no counter.",
+    reflections = ". Same save, spot and hour, frames lined up; no counter.",
+    ripples = ". Same save, spot and hour, frames lined up; no counter.",
+    wakes = ". Same save, route and hour, frames matched by route time; no counter.",
+    occupant = ". Same save, route and hour, frames matched by route time; no counter.",
+    outlines = ". Same save, spot and hour, frames lined up; no counter.",
+    mirrors = ". Same save, spot and hour, frames lined up; no counter.",
+    props = ". Same save, spot and hour, frames lined up; no counter.",
+    sway = ". Same save, spot and hour, frames lined up; no counter.",
+    darkfloor = ". Same save, spot and hour, frames lined up; no counter.",
+    blood = ". Same save, spot and hour, frames lined up; no counter.",
+    treecut = ". Same save, route and hour, frames matched by route time; no counter.",
+    carglass = ". One run, the same cars and frame, the glass switched; no counter.",
 }
 local function clipSides(clip)
     if CLIP_SIDES[clip] then return CLIP_SIDES[clip] end
     if string.sub(clip, 1, 2) == "ov" then return CLIP_SIDES.overlay end
-    if STOCK_FILE[clip] then return CLIP_SIDES.alone end
-    if clip == "zgt" then return CLIP_SIDES.without end
     return CLIP_SIDES.default
 end
 local KEY_CLIP = {
     memoryTint = "memory", memoryTintPct = "memory", memoryLightPct = "memory", colorGrading = "grade", colorGradingPct = "grade",
-    rainTiles = "storm", puddleCache = "storm", rainSplashesFast = "storm", puddleEarlyZ = "storm", puddleVbo = "storm",
-    puddleCacheFrames = "storm", weatherMaskIdleSkip = "storm", weatherFxScalePct = "storm", vboBatchKb = "storm",
-    vboFastQuads = "storm", lightingRebakeBudget = "storm", lightingRebakeMaxFrames = "storm",
-    fogPass = "fog", fogScalePct = "fog", fogMaskFrames = "fog",
     fsrSharpnessPct = "fsrzoom", dlssWaterCurrent = "dlss", dlssWaterHistoryPct = "dlss", dlssPreset = "dlss", dlssOutputPct = "dlss", dlssOutputFilter = "dlsszoom", dlssSharpen = "dlsszoom",
     hdrSunPct = "hdrday", hdrGlintPct = "hdrday",
     godRaysDoorLeaf = "godraysdoor", godRaysDoorSwingMs = "godraysdoor", godRaysCharShadows = "godraysdoor", godRaysDoorDustPct = "godraysdoor",
     godRaysSpill = "godraysspill", godRaysSpillPct = "godraysspill",
-    pixelLight = "torch", voxelLight = "voxel", voxelLightTorchShadows = "voxel", voxelLightSkyMethod = "voxel", voxelLightBounce = "voxel", pplAnalytic = "torch", pplNormals = "torch", pplWrapPct = "torch", pplShadows = "torch", pplTorchFeetGlow = "torch", torchSource = "torch", torchSourceAim = "torch", torchSourceSelfShadow = "torch", pplSmooth = "torch", pplPointLights = "torch", pplWetSpecular = "storm", pplSpecPct = "storm",
-    lightingStrongDelta = "torch", lightingStrongBudget = "horde", lightingStrongFrameMs = "horde", lightingFlush = "torch", lightingBudget = "torch",
-    audioLimiter = "horde", audioLimiterCeilingDb = "horde", audioLimiterStereoFold = "horde", soundTickHz = "horde", emitterIdleSkip = "horde", worldSoundCleanupFast = "horde", hearingHoist = "horde",
-    lightSwitchCheckFrames = "horde", soundZoneCache = "horde", worldSoundFast = "horde", gridStackInterval = "horde",
-    playerLosFast = "player", zombieSpotFast = "player", charDrawPrep = "horde", hordeBatch = "horde", hordeBatchUpload = "horde", hordeBatchVao = "horde", atlasBatch = "horde", hordeBatchOrder = "horde", hordeBatchUnits = "horde", renderPrewarm = "horde", renderPrewarmOutlines = "horde", hordePaletteMismatch = "horde", zombieAtlasFast = "horde", renderLastFast = "horde", charDrawThreads = "horde",
-    actionSnapshotFilter = "zgt", emitterParamSkip = "zgt", separateFast = "zgt", ragdollGate = "zgt", bodyModelCache = "zgt", entityUpdateParallel = "zgt", entityUpdatePipeline = "zgt", entityUpdatePlayerFirst = "zgt", entityUpdateMoreStates = "zgt", postupdateParallel = "zgt", separateParallel = "zgt", sleepCheckMemo = "zgt",
-    renderPrepParallel = "horde", pplPackParallel = "torch", pplTorchNearChunk = "torch", schedulerClassifyParallel = "zgt", schedulerFillParallel = "zgt", playerLosParallel = "player", zombieStatsFold = "zgt", losLightPrefetch = "player", entityUpdateSafeStates = "horde", ragdollCorpseGuard = "horde", ragdollQuitSweep = "horde", visPolyAsync = "player", aoContextParallel = "horde", translucentOrderCache = "drive",
-    stateParamMemo = "zgt", actionGroupCache = "zgt", profilerThreadMemo = "zgt", zombieSimLodTiles = "zgt", zombieSimLodSteps = "zgt",
-    zombieCheckSpread = "zgt", chunkGridWidth = "grid", chunkGridFollowView = "grid",
-    zombieLodDynamic = "horde", zombieLodMin3d = "horde", zombieLodMinBlend = "horde", zombieLodUncappedFps = "horde", zombieLodHysteresis = "horde", zombieLodFadeMs = "horde", zombieLodFixed3d = "horde", zombieLodSpriteLight = "horde", zombieFirstSightSprite = "horde", zombieCompositeBudgetUs = "horde",
-    animBonesParallel = "zombies", vehicleCull = "zombies", nearVehicleGrid = "zombies", separateMemo = "zombies", frameThreads = "zombies", actionEvalParallel = "zombies", ecsLookupFast = "zombies",
-    actionConditionFast = "zombies", skinTransformsPrecompute = "zombies", skinPalettePrecompute = "zombies", shadowPrep = "zombies",
-    boneIndexCache = "zombies", lightingReadParallel = "zombies", zombieCullSortFast = "zombies",
-    animatorParallel = "zombies", headOnWorker = "zombies", postupdateNoopSkip = "zombies", postupdateEligibleOnWorker = "zombies", postupdateVehicleOnWorker = "zombies", postupdateFuse = "zombies", postupdateClean = "zombies", separateEdgeCache = "zombies", luaSilentSkip = "zombies", lazyPose = "zombies", animatorPipeline = "zombies", animBatchAsync = "zombies", guardedCallbacks = "zombies",
-    randPerWorker = "zombies",
-    modelLockPerInstance = "zombies", poolStatsBatched = "zombies",
-    bakeBudget = "drive", rebakeBudget = "drive", rebakeMaxFrames = "drive", treeBakeMaxChunksPerSec = "drive", driveTreeCutaway = "drive", edgeTestFast = "horde", treeRebakeLazy = "drive", treeRebakeLingerMs = "drive", treeCutawayReach = "drive", treeCutawayReachPx = "drive",
-    bakeScheduler = "drive", bakeFrameBudget = "drive", bakeBudgetAdaptive = "drive", occlusionGrantedOnly = "drive", bakeMipLevels = "drive", bakeNoSync = "drive",
-    renderChunkTopUp = "drive", fliesToggleFix = "drive",
-    translucentLightsPerFrame = "spin", glassTilesPerFrame = "spin", floorDecalsPerFrame = "spin", curtainDepthNudgePct = "spin", treeBakePass = "spin", windSpriteSway = "drive", treeBakeDirect = "spin", roofHideDebounceFrames = "spin",
+    -- the Visuals keys without their section's clip (2026-10-20, docs/menu-clips-2026-10-20.md; per-pixel lighting, torch source
+    -- and relief show their sections' clips "ppl" / "torchsource" / "relief")
+    voxelLight = "voxel", voxelLightTorchShadows = "voxel", voxelLightSkyMethod = "voxel", voxelLightBounce = "voxel",
+    cloudShadows = "clouds", cloudOpacityPct = "clouds", cloudSpeedPct = "clouds", cloudScalePct = "clouds", moonShadows = "moon", moonShadowPct = "moon",
+    ripplesWake = "wakes", ripplesVehicles = "wakes", carOccupant = "occupant", carOccupantOcclusion = "occupant", carOccupantLightPct = "occupant",
+    mirrorsProps = "props", mirrorsPropGlassPct = "props", darknessFloorPct = "darkfloor", darknessFloorBasements = "darkfloor", colorGradingNightPct = "grade",
+    driveTreeCutaway = "treecut",
+    windSpriteSway = "sway",
     overlaySampling = "overlay", overlay = "overlay", overlayLog = "overlay", overlayCorner = "overlay", overlayFont = "overlay", overlayTexture = "overlay", overlayRefreshMs = "overlay", overlayGraphHz = "ovgraph",
     gameThreadProfileHz = "ovtree", overlayStats = "ovstats", overlayPower = "ovstats", overlayTree = "ovtree", overlayVerdict = "ovverdict",
     overlayGraph = "ovgraph", overlayFlame = "ovflame", overlayFlameDepth = "ovflame",
@@ -2776,10 +2818,12 @@ local DEPS_TIP = "Downloads the two native files NVIDIA DLSS needs into the game
 PzoptSettings = {}
 local API = PzoptSettings
 API.MASTERS = { MASTER, ENHANCEMENTS_MASTER, PROFILER_MASTER } -- by page: 1 Optimizations, 2 Enhancements, 3 Profiler
-API.MASTER_CLIPS = { enabled = "drive", enhancementsEnabled = "upscale", profilerEnabled = "overlay" }
+API.MASTER_CLIPS = { enhancementsEnabled = "visuals", profilerEnabled = "overlay" }
 API.GROUP_NAMES = { "Optimizations", ENHANCEMENTS_TAB, PROFILER_TAB }
 API.CATS = CATS
 API.AXES = AXES
+API.LEVELS = LEVELS -- (the menu's compact effect line)
+API.FX_COLOURS = { less = C_OPT, more = C_STOCK, moreText = C_STOCK_TEXT, work = C_BLUE }
 API.CLIP_W, API.CLIP_H = CLIP_W, CLIP_H
 API.RESTART_NOTE, API.LIVE_NOTE = RESTART_NOTE, LIVE_NOTE
 API.EXPORT_TITLE, API.EXPORT_TIP, API.IMPORT_TITLE = EXPORT_TITLE, EXPORT_TIP, IMPORT_TITLE
@@ -2801,9 +2845,10 @@ function API.effectRows(key)
 end
 function API.compatReason(key) return compatReason(key) end
 
--- the clip a setting shows: its key's own, else its section's, else the highway drive
+-- the clip a setting shows: its key's own, else its section's; nil = no visual comparison (a setting that does not change
+-- the picture)
 function API.clipOf(key, section)
-    return API.MASTER_CLIPS[key] or KEY_CLIP[key] or (section and section.clip) or "drive"
+    return API.MASTER_CLIPS[key] or KEY_CLIP[key] or (section and section.clip) or nil
 end
 
 -- the two GIFs of a clip, their captions and the line under them
@@ -2829,6 +2874,95 @@ function API.tier(key)
         if string.find(key, pattern) then return 3 end
     end
     return 2
+end
+
+-- The value that switches a choice setting off ("off", "false", or the layout's offValues), nil when it has none
+function API.offValue(key, e)
+    local L = PzoptSettingsLayout or {}
+    if L.offValues and L.offValues[key] then return L.offValues[key] end
+    for _, c in ipairs((e and e.choices) or {}) do
+        if tostring(c) == "off" or tostring(c) == "false" then return tostring(c) end
+    end
+    return nil
+end
+
+-- A subcategory's keys as a tree: each setting with its modifiers under it (the main menu's settings pages draw them
+-- indented under the setting's switch). Nothing in the entries says which key tunes which, so it is read from the labels
+-- and the order, and the layout's `parents` corrects the rest:
+--  1. `parents[key]`: the key's parent ("" = a setting of its own);
+--  2. a label "God rays: brightness (%)" (or "Upscaler, NVIDIA DLSS: preset") goes under the earlier key labelled "God rays"
+--     ("Upscaler"), or starting with it ("HDR output: automatic"), or under the first setting whose label has the same
+--     "Frame queue:" prefix, else (a subcategory made of whole tab sections, `sectioned`) under the first setting of its
+--     section (Mirrors: ... under "Mirror and window reflections");
+--  3. a key that switches nothing (a number, a choice without an off value) goes under the setting before it;
+--  4. anything else is a setting of its own.
+-- Two levels at most under a setting. kindOf(key) -> "bool" | "choice" | "other"; entryOf(key) -> { e, section }.
+function API.nest(keys, entryOf, kindOf, sectioned)
+    local L = PzoptSettingsLayout or {}
+    local fixed = L.parents or {}
+    local top, nodeOf, list = {}, {}, {}
+    local function lower(s) return string.lower(s or "") end
+    local function prefixOf(label)
+        local p = string.match(label or "", "^(.-): ")
+        return p and lower(p) or nil
+    end
+    local function isSwitch(k)
+        local b = entryOf(k)
+        local kind = kindOf(k)
+        return kind == "bool" or (kind == "choice" and API.offValue(k, b and b.e) ~= nil)
+    end
+    local function startsWith(s, p)
+        if s == p then return true end
+        if string.sub(s, 1, #p) ~= p then return false end
+        local nextCh = string.sub(s, #p + 1, #p + 1)
+        return nextCh == " " or nextCh == ":" or nextCh == "," or nextCh == "("
+    end
+    local function attach(n, parent)
+        while parent and parent.depth >= 2 do parent = parent.parent end
+        if parent then
+            n.parent, n.depth = parent, parent.depth + 1
+            table.insert(parent.kids, n)
+        else
+            n.depth = 0
+            table.insert(top, n)
+        end
+    end
+    for _, k in ipairs(keys) do
+        local b = entryOf(k)
+        local label = lower(b and b.e and b.e.label or k)
+        local n = { key = k, kids = {}, label = label, prefix = prefixOf(label), section = b and b.section or "" }
+        nodeOf[k] = n
+        local parent = nil
+        local f = fixed[k]
+        if f ~= nil then
+            parent = f ~= "" and nodeOf[f] or nil
+        else
+            local p = n.prefix
+            local p2 = p and string.match(p, "^(.-),") or nil
+            if p then
+                for pass = 1, 3 do -- (an exact label: the nearest; a label or prefix it starts: the first, "Frame queue: ...")
+                    for j = (pass == 1 and #list or 1), (pass == 1 and 1 or #list), (pass == 1 and -1 or 1) do
+                        local x = list[j]
+                        local hit = (pass == 1 and (x.label == p or (p2 and x.label == p2)))
+                            or (pass == 2 and x.prefix ~= p and (startsWith(x.label, p) or (p2 and startsWith(x.label, p2))))
+                            or (pass == 3 and x.depth == 0 and x.prefix == p)
+                        if hit then parent = x break end
+                    end
+                    if parent then break end
+                end
+                for _, x in ipairs((sectioned and not parent) and list or {}) do
+                    if x.depth == 0 and x.section == n.section then parent = x break end
+                end
+            end
+            if not parent and not isSwitch(k) and #list > 0 then
+                parent = list[#list]
+                while parent.depth > 0 do parent = parent.parent end
+            end
+        end
+        attach(n, parent)
+        table.insert(list, n)
+    end
+    return top
 end
 
 -- the colour row (occludedOutlineColour) and the zoom curve (zoomEase)
@@ -3055,6 +3189,82 @@ function API.exportSettings()
         or (count .. (count == 1 and " setting differs" or " settings differ") .. " from the build's defaults.")
     return "Settings copied to the clipboard. " .. what .. " "
         .. (path ~= "" and ("Also saved to " .. path .. ".") or "The file Zomboid/pzopt/settings-export.ini could not be written (see console.txt).")
+end
+
+-- The export's key=value lines (the saved choices that differ from the defaults, all three groups), sorted, without the
+-- headings: what a saved preset holds and what the preset card compares to tell which preset is in force
+function API.settingsLines()
+    local rows, seen = {}, {}
+    for page = 1, 3 do
+        for _, key in ipairs(exportKeys(page)) do
+            if not seen[key] then
+                seen[key] = true
+                local v = exportValue(key)
+                if v then table.insert(rows, key .. "=" .. v) end
+            end
+        end
+    end
+    table.sort(rows)
+    return table.concat(rows, "\n")
+end
+
+-- ---- saved presets (the menu's preset card, 2026-10-20): Zomboid/Lua/pzopt-presets.ini, a [name] heading per preset and
+-- its key=value lines (an export without the group comments); loading one is an import of its text
+local PRESETS_FILE = "pzopt-presets.ini"
+
+function API.userPresets()
+    local list = {}
+    local r = getFileReader(PRESETS_FILE, false)
+    if not r then return list end
+    local cur
+    local line = r:readLine()
+    while line do
+        local name = string.match(line, "^%[(.*)%]%s*$")
+        if name then
+            cur = { name = name, lines = {} }
+            table.insert(list, cur)
+        elseif cur and string.match(line, "^[%w_%.%-]+=") then
+            table.insert(cur.lines, (string.gsub(line, "%s+$", "")))
+        end
+        line = r:readLine()
+    end
+    r:close()
+    for _, pr in ipairs(list) do
+        table.sort(pr.lines)
+        pr.text = table.concat(pr.lines, "\n")
+    end
+    return list
+end
+
+local function writeUserPresets(list)
+    local w = getFileWriter(PRESETS_FILE, true, false)
+    if not w then return false end
+    for _, pr in ipairs(list) do
+        w:write("[" .. pr.name .. "]\n")
+        if pr.text ~= "" then w:write(pr.text .. "\n") end
+    end
+    w:close()
+    return true
+end
+
+-- the current settings under `name` (a preset of that name is replaced); returns ok
+function API.saveUserPreset(name, text)
+    name = string.gsub(string.gsub(name or "", "[%[%]\r\n]", ""), "^%s*(.-)%s*$", "%1")
+    if name == "" then return false end
+    local list, done = API.userPresets(), false
+    for _, pr in ipairs(list) do
+        if pr.name == name then pr.text, done = text, true end
+    end
+    if not done then table.insert(list, { name = name, text = text }) end
+    return writeUserPresets(list), name
+end
+
+function API.deleteUserPreset(name)
+    local list = {}
+    for _, pr in ipairs(API.userPresets()) do
+        if pr.name ~= name then table.insert(list, pr) end
+    end
+    return writeUserPresets(list)
 end
 
 -- settings text: a known key, or an export of nothing but defaults (its "# Optimizations" heading and no key lines)
