@@ -209,6 +209,7 @@ public final class Benchmark {
             case "devCompare" -> devCompare();
             case "devNewest" -> devNewest();
             case "idle" -> idlePoll();
+            case "machine" -> machineProfile();
             default -> "error\tunknown command " + cmd;
          };
       } catch (RuntimeException e) {
@@ -535,6 +536,63 @@ public final class Benchmark {
          if (BenchResults.reportText(d.getName()).contains("\nS\t")) {
             return d.getName();
          }
+      }
+      return "";
+   }
+
+   // (2026-10-23) the PZ OPTIMIZATION screen's "on your PC" icons: what limited this PC's frames
+   private static String profileRun = "", profileText = "";
+
+   /**
+    * What limited the frames in this PC's newest benchmark run (the passes with PZ Optimization over the scored scenes, the
+    * mean of each scene's shares): "run\tdate\tgpu\tgame\trender\tcap" with the share of frames each stage limited, in
+    * percent; "" without a run of this CPU. The settings screen weighs each setting's game-thread, render-thread and GPU
+    * effect by these shares (PzoptSettings.verdict). Read once per newest run.
+    */
+   private static String machineProfile() {
+      List<String> lines = BenchResults.readHistoryLines();
+      String cpu = BenchSystem.cpuName();
+      for (int i = lines.size() - 1; i >= 0; i--) {
+         Map<String, String> h = BenchResults.parseHistory(lines.get(i));
+         if (h == null) {
+            continue;
+         }
+         String run = h.get("run");
+         if (run.equals(profileRun)) {
+            return profileText;
+         }
+         List<Map<String, String>> steps = BenchResults.readSteps(run);
+         if (!cpu.equals(BenchResults.firstSys(steps).get("cpu"))) {
+            continue; // (another PC's run, or one without its facts)
+         }
+         double[] sum = new double[4];
+         int n = 0;
+         for (BenchResults.Agg a : BenchResults.aggregate(steps).values()) {
+            if (!"A".equals(a.config) || a.fps.n == 0 || !BenchSuite.scored(a.scenario)) {
+               continue;
+            }
+            String[] keys = {"bound_gpu_pct", "bound_game_pct", "bound_render_pct", "bound_cap_pct"};
+            double[] v = new double[4];
+            boolean ok = true;
+            for (int k = 0; k < 4; k++) {
+               Double d = a.mean.get(keys[k]);
+               v[k] = d == null ? Double.NaN : d;
+               ok &= !Double.isNaN(v[k]);
+            }
+            if (ok) {
+               for (int k = 0; k < 4; k++) {
+                  sum[k] += v[k];
+               }
+               n++;
+            }
+         }
+         if (n == 0) {
+            continue;
+         }
+         profileRun = run;
+         profileText = String.format(java.util.Locale.ROOT, "%s\t%s\t%.0f\t%.0f\t%.0f\t%.0f", run, h.get("date"), sum[0] / n, sum[1] / n,
+               sum[2] / n, sum[3] / n);
+         return profileText;
       }
       return "";
    }

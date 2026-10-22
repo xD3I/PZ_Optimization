@@ -972,6 +972,232 @@ PAGES.home = function(self)
     return p
 end
 
+-- Why a setting moves each resource it moves (PzoptSettings.why, one line per non-zero axis of its EFFECTS row), right
+-- under its description. The description is built before the detail knows its width, so it carries WHY.MARK there and the
+-- detail puts WHY.text(key, width) in its place: the resource, its level's word in the effect grid's colour, then the
+-- reason, hanging beside them when the text is wide enough, under them when it is not (width nil: always under).
+-- (one table, not top-level locals: a -debug game's Lua compiler fails a chunk past 200 locals, issue #58)
+local WHY = { MARK = " <PZOPT_WHY> ", MIN_TEXT = 260 } -- (MIN_TEXT: the narrowest the reason's column may be beside the resource)
+
+function WHY.text(key, width)
+    if not (PzoptSettings and PzoptSettings.why and key) then return "" end
+    local fx, why = PzoptSettings.effects(key), PzoptSettings.why(key)
+    local C = PzoptSettings.FX_COLOURS
+    local rows, labW, wordW = {}, 0, 0
+    for _, axis in ipairs(PzoptSettings.AXES) do
+        local v = math.max(-3, math.min(3, fx[axis.id] or 0))
+        if v ~= 0 and why[axis.id] then
+            local col = v < 0 and C.less or (axis.moreIsWork and C.work or C.more)
+            local word = PzoptSettings.LEVELS[v]
+            table.insert(rows, { label = axis.label, word = word, col = col == C.more and C.moreText or col, why = why[axis.id] })
+            labW = math.max(labW, textW(UIFont.NewSmall, axis.label))
+            wordW = math.max(wordW, textW(UIFont.NewSmall, word))
+        end
+    end
+    if #rows == 0 then return "" end
+    local function rich(c) return string.format(" <RGB:%.2f,%.2f,%.2f> ", c.r, c.g, c.b) end
+    local wordX = labW + 10
+    local whyX = wordX + wordW + 14
+    local beside = width and width - whyX >= WHY.MIN_TEXT
+    local s = " <LINE> <LINE> " .. rich(C_DIM) .. "EFFECT ON YOUR HARDWARE <LINE> "
+    for i, r in ipairs(rows) do
+        -- (a blank line between two resources; the indent back to 0 before the next text, or it would hang too)
+        s = s .. (i > 1 and " <INDENT:0> <LINE> <LINE> " or " <INDENT:0> ") .. rich(C_GREY) .. esc(r.label) .. " <SETX:" .. wordX .. "> "
+            .. rich(r.col) .. esc(r.word)
+        if beside then
+            s = s .. " <SETX:" .. whyX .. "> <INDENT:" .. whyX .. "> " .. rich(C_TEXT) .. esc(r.why)
+        else
+            s = s .. " <LINE> <INDENT:" .. wordX .. "> " .. rich(C_TEXT) .. esc(r.why)
+        end
+    end
+    return s .. " <INDENT:0> " .. rich(C_TEXT)
+end
+
+-- the text with its WHY.MARK replaced (plain find: the reasons hold "%")
+function WHY.put(text, key, width)
+    local a, b = string.find(text, WHY.MARK, 1, true)
+    if not a then return text end
+    return string.sub(text, 1, a - 1) .. WHY.text(key, width) .. string.sub(text, b + 1)
+end
+
+-- (2026-10-23) The setting at a glance, the head of its detail card under the name: one sentence of what it saves and
+-- costs (PzoptSettings.summary), what it does on this PC (PzoptSettings.verdict, the list's icon beside it), then two
+-- columns, SAVES (with the idle cores it puts to work under them) and COSTS, each resource with one to three blocks for
+-- its level. The same height for every row of a page (the page's tallest), so the text under it never moves.
+WHY.BLOCK, WHY.BLOCK_GAP, WHY.COL_GAP = 8, 3, 24
+WHY.NEUTRAL = { r = 0.55, g = 0.55, b = 0.58 }
+
+-- the colour of a verdict, an icon's glyph
+function WHY.verdictColour(kind)
+    local C = PzoptSettings.FX_COLOURS
+    return kind == "helps" and C.less or (kind == "costs" and C.more or WHY.NEUTRAL)
+end
+
+-- the icon of a verdict, s x s at x, y: green +, amber -, grey = (the glyph tells them apart without the colour)
+function WHY.badge(el, x, y, s, kind)
+    local c = WHY.verdictColour(kind)
+    el:drawRect(x, y, s, s, 1, c.r, c.g, c.b)
+    local t = math.max(2, math.floor(s / 6))
+    local bar = s - 2 * math.max(2, math.floor(s / 4))
+    local bx, my = x + math.floor((s - bar) / 2), y + math.floor((s - t) / 2)
+    local g = kind == "neutral" and 0.12 or 0.05
+    if kind == "neutral" then
+        el:drawRect(bx, my - t, bar, t, 1, g, g, g)
+        el:drawRect(bx, my + t, bar, t, 1, g, g, g)
+    else
+        el:drawRect(bx, my, bar, t, 1, g, g, g)
+        if kind == "helps" then el:drawRect(x + math.floor((s - t) / 2), y + math.floor((s - bar) / 2), t, bar, 1, g, g, g) end
+    end
+end
+
+-- a resource's pictogram (harness/resource-icons.py: white on transparent, media/ui/pzopt/icons/<axis id>.png), s x s at
+-- x, y in colour c. The textures load asynchronously (on the texture-compression workers where those run) and draw
+-- nothing until ready, so they are asked for when this file loads at boot; a square of the colour stands in meanwhile.
+WHY.ICONS = {}
+function WHY.iconTexture(id)
+    local tex = WHY.ICONS[id]
+    if tex == nil then
+        tex = getTexture("media/ui/pzopt/icons/" .. id .. ".png") or false
+        WHY.ICONS[id] = tex
+    end
+    return tex
+end
+function WHY.preload() -- (a function: the loop's locals would count against the file's 200)
+    for _, id in ipairs({ "cpu", "render", "cores", "gpu", "vram", "ram", "disk", "load", "chunks" }) do WHY.iconTexture(id) end
+end
+WHY.preload()
+
+function WHY.icon(el, id, x, y, s, c)
+    local tex = WHY.iconTexture(id)
+    local ok, ready = false, false
+    if tex then ok, ready = pcall(function() return tex:isReady() end) end
+    if tex and (ready or not ok) then
+        el:drawTextureScaled(tex, x, y, s, s, 1, c.r, c.g, c.b)
+    else
+        local m = math.floor(s / 4)
+        el:drawRect(x + m, y + m, s - 2 * m, s - 2 * m, 1, c.r, c.g, c.b)
+    end
+end
+
+-- the label column of the columns: the widest resource name, after its icon
+function WHY.labelW()
+    local w = 0
+    for _, axis in ipairs(PzoptSettings.AXES) do w = math.max(w, textW(UIFont.Small, axis.label)) end
+    return w + fontH(UIFont.Small) + 4
+end
+
+-- a key's columns: { left = { {head} | {axis, level, col}... }, right = {...} }, side by side or (narrow) one under the other
+function WHY.columns(key, w)
+    local s = PzoptSettings.sides(key or "")
+    local C = PzoptSettings.FX_COLOURS
+    local left, right = { { head = "SAVES", col = C.less } }, { { head = "COSTS", col = C.moreText } }
+    for _, r in ipairs(s.saves) do table.insert(left, { axis = r.axis, level = r.level, col = C.less }) end
+    if #s.saves == 0 then table.insert(left, { none = true }) end
+    if #s.work > 0 then
+        table.insert(left, { head = "PUTS IDLE CORES TO WORK", col = C.work })
+        for _, r in ipairs(s.work) do table.insert(left, { axis = r.axis, level = r.level, col = C.work }) end
+    end
+    for _, r in ipairs(s.costs) do table.insert(right, { axis = r.axis, level = r.level, col = C.more }) end
+    if #s.costs == 0 then table.insert(right, { none = true }) end
+    local need = WHY.labelW() + 10 + 3 * (WHY.BLOCK + WHY.BLOCK_GAP)
+    local beside = w and (w - WHY.COL_GAP) / 2 >= need
+    if not beside then
+        for _, r in ipairs(right) do table.insert(left, r) end
+        right = {}
+    end
+    return { left = left, right = right, beside = beside, rows = math.max(#left, #right) }
+end
+
+-- the head's lines at width w: the sentence's and the verdict's (wrapped), and the columns' rows
+function WHY.headParts(key, w)
+    local sentence = PzoptSettings.summary(key or "") or "No measurable effect on your hardware."
+    local kind, why = PzoptSettings.verdict(key or "")
+    if not kind and PzoptSettings.moves(key or "") then
+        why = "On your PC: run the BENCHMARK once and this says whether the setting helps your PC."
+    end
+    local hS = fontH(UIFont.Small)
+    return { sentence = wrap(sentence, UIFont.Small, w), kind = kind,
+        verdict = why and wrap(why, UIFont.Small, w - (kind and (hS + 8) or 0)) or {}, cols = WHY.columns(key, w) }
+end
+
+-- the room of the page's tallest head at width w (sentence lines, verdict lines, column rows), cached per page and width
+function WHY.pageHead(page, w)
+    page.cardHead = page.cardHead or {}
+    if page.cardHead[w] then return page.cardHead[w] end
+    local m = { sentence = 1, verdict = 0, rows = 2 }
+    for _, row in ipairs(page.items or {}) do
+        local key = row.meta and not row.use and (row.setting or row.master)
+        if key then
+            local p = WHY.headParts(key, w)
+            m.sentence = math.max(m.sentence, #p.sentence)
+            m.verdict = math.max(m.verdict, #p.verdict)
+            m.rows = math.max(m.rows, p.cols.rows)
+        end
+    end
+    page.cardHead[w] = m
+    return m
+end
+
+function WHY.headHeight(m)
+    local hS = fontH(UIFont.Small)
+    return 6 + m.sentence * hS + (m.verdict > 0 and (4 + m.verdict * hS) or 0) + 8 + m.rows * (hS + 4)
+end
+
+-- draws the head of `key` at x, y, width w, in the room of the page's tallest (m)
+function WHY.drawHead(el, x, y, w, key, m)
+    local hS = fontH(UIFont.Small)
+    local p = WHY.headParts(key, w)
+    local ty = y + 6
+    for _, line in ipairs(p.sentence) do
+        el:drawText(line, x, ty, C_TEXT.r, C_TEXT.g, C_TEXT.b, 1, UIFont.Small)
+        ty = ty + hS
+    end
+    ty = y + 6 + m.sentence * hS
+    if m.verdict > 0 then
+        ty = ty + 4
+        local tx = x
+        local vc = C_DIM
+        if p.kind then
+            local s = hS - 4
+            WHY.badge(el, x, ty + 2, s, p.kind)
+            tx = x + s + 8
+            vc = WHY.verdictColour(p.kind)
+        end
+        for k, line in ipairs(p.verdict) do el:drawText(line, tx, ty + (k - 1) * hS, vc.r, vc.g, vc.b, 1, UIFont.Small) end
+        ty = ty + m.verdict * hS
+    end
+    ty = ty + 8
+    local labW = WHY.labelW()
+    local colW = p.cols.beside and math.floor((w - WHY.COL_GAP) / 2) or w
+    local function column(list, cx)
+        local ry = ty
+        for _, r in ipairs(list) do
+            if r.head then
+                el:drawText(r.head, cx, ry, r.col.r, r.col.g, r.col.b, 1, UIFont.Small)
+            elseif r.none then
+                el:drawText("nothing", cx, ry, C_DIM.r, C_DIM.g, C_DIM.b, 1, UIFont.Small)
+            else
+                local s = fontH(UIFont.Small) - 2
+                WHY.icon(el, r.axis.id, cx, ry + 1, s, r.col)
+                el:drawText(r.axis.label, cx + s + 6, ry, C_GREY.r, C_GREY.g, C_GREY.b, 1, UIFont.Small)
+                local bx = cx + labW + 10
+                local by = ry + math.floor((hS - WHY.BLOCK) / 2)
+                for b = 1, 3 do
+                    if b <= r.level then
+                        el:drawRect(bx, by, WHY.BLOCK, WHY.BLOCK, 1, r.col.r, r.col.g, r.col.b)
+                    else
+                        el:drawRect(bx, by, WHY.BLOCK, WHY.BLOCK, 1, 0.16, 0.16, 0.19)
+                    end
+                    bx = bx + WHY.BLOCK + WHY.BLOCK_GAP
+                end
+            end
+            ry = ry + hS + 4
+        end
+    end
+    column(p.cols.left, x)
+    if p.cols.beside then column(p.cols.right, x + colW + WHY.COL_GAP) end
+end
+
 -- a master switch's row (a group's or a category's): its value, its description, A flips it
 local function masterRow(id, key, label, live, tip)
     return { id = id, kind = "master", master = key,
@@ -980,8 +1206,8 @@ local function masterRow(id, key, label, live, tip)
         meta = function() return { restart = not live, key = key } end,
         desc = function()
             local on, now, pinned = masterState(key)
-            local d = TAB_LAYOUT and esc(stripLaunchNote(tip))
-                or (esc(tip) .. " " .. (live and LIVE_NOTE or RESTART_NOTE) .. " <LINE> <LINE> <RGB:0.66,0.66,0.70> Key: " .. key)
+            local d = TAB_LAYOUT and (esc(stripLaunchNote(tip)) .. WHY.MARK)
+                or (esc(tip) .. WHY.MARK .. " " .. (live and LIVE_NOTE or RESTART_NOTE) .. " <LINE> <LINE> <RGB:0.66,0.66,0.70> Key: " .. key)
             if pinned ~= "" then d = d .. " <LINE> <RGB:1,0.85,0.45> Pinned by " .. esc(pinned) .. ", which wins: change it there."
             elseif on ~= now and not live then d = d .. " <LINE> <RGB:1,0.85,0.45> Switched " .. (on and "on" or "off") .. ": applies when the game restarts." end
             return d
@@ -1121,7 +1347,7 @@ local function settingDesc(k, e, page)
     local v, pinned = settingNext(k)
     local now = opt("getPzoptOption", k)
     local def = opt("getPzoptOptionDefault", k)
-    local d = esc(TAB_LAYOUT and stripLaunchNote(e and e.tip) or (e and e.tip or "")) .. " <LINE> <LINE> <RGB:0.66,0.66,0.70> "
+    local d = esc(TAB_LAYOUT and stripLaunchNote(e and e.tip) or (e and e.tip or "")) .. WHY.MARK .. " <LINE> <LINE> <RGB:0.66,0.66,0.70> "
         .. (TAB_LAYOUT and "" or ((settingLive(k, e, page) and LIVE_NOTE or RESTART_NOTE) .. " <LINE> "))
         .. "Next launch: " .. esc(showValue(v, e)) .. "  /  In use now: " .. esc(showValue(now, e)) .. "  /  Default: "
         .. esc(showValue(def, e)) .. (TAB_LAYOUT and "" or (" <LINE> Key: " .. k))
@@ -2539,9 +2765,16 @@ function PzoptMenuList:layoutTree()
     end
     self.dropW = dropW > 0 and (dropW + 16 + hS + 4) or nil
     local col, maxVW = 0, 0
+    -- (2026-10-23) the resource a setting moves most (PzoptSettings.top): its icon after the name, room kept for it
+    local iconW = hS + 2
+    for _, it in ipairs(self.items) do
+        local key = (it.kind == "setting" or it.kind == "master") and (it.setting or it.master)
+        local ok, top = pcall(function() return key and PzoptSettings and PzoptSettings.top(key) or nil end)
+        it.top = ok and top or nil -- (an icon is never worth the page: a failure leaves it out)
+    end
     for _, it in ipairs(self.items) do
         if selectable(it) and it.kind ~= "group" and it.kind ~= "cat" and (it.value or valueDeco(it)) then
-            col = math.max(col, treeLabelX(it, G) + textW(UIFont.Small, tostring(val(it.label))))
+            col = math.max(col, treeLabelX(it, G) + textW(UIFont.Small, tostring(val(it.label))) + (it.top and iconW or 0))
             local v = it.value and tostring(val(it.value)) or ""
             maxVW = math.max(maxVW, rowChooser(it) and self.dropW or (textW(UIFont.Small, v) + decoW(valueDeco(it), it)))
         end
@@ -2556,8 +2789,9 @@ function PzoptMenuList:layoutTree()
         if value == "" then value = nil end
         local deco = valueDeco(it)
         if deco ~= "button" and not value then deco = nil end
-        local L = { value = value, deco = deco }
+        local L = { value = value, deco = deco, top = it.top }
         local lx = treeLabelX(it, G)
+        local icon = it.top and iconW or 0
         -- (a row with a link at its right end, the tab's switch: the label wraps left of the link)
         local linkR = (it.kind ~= "cat" and it.headLink) and (right - textW(UIFont.Small, it.headLink.text) - 24) or right
         local vw = (value and textW(UIFont.Small, value) or 0) + decoW(deco, it)
@@ -2581,7 +2815,7 @@ function PzoptMenuList:layoutTree()
         elseif not selectable(it) then
             L.label = wrap(it.kind == "section" and string.upper(label) or label, UIFont.Small, right - lx)
         elseif (value or deco) and vw <= right - col then
-            local room = math.min(col, linkR) - lx - 16
+            local room = math.min(col, linkR) - lx - 16 - icon
             L.label = wrap(label, UIFont.Small, math.max(minW, room))
             L.inline = true
             -- (a narrow list, a deep row: the name in a column narrower than a word of it, or past two lines; the
@@ -2594,12 +2828,12 @@ function PzoptMenuList:layoutTree()
                 for _, line in ipairs(alt) do if textW(UIFont.Small, line) > room then fits = false end end
                 if fits then L.label = alt end
             elseif narrow and deco ~= "button" and lx + vw <= right then
-                L.label = wrap(label, UIFont.Small, math.max(minW, linkR - lx))
+                L.label = wrap(label, UIFont.Small, math.max(minW, linkR - lx - icon))
                 L.under = true
                 L.h = 10 + (#L.label + 1) * hS + 8
             end
         else
-            L.label = wrap(label, UIFont.Small, math.max(minW, linkR - lx))
+            L.label = wrap(label, UIFont.Small, math.max(minW, linkR - lx - icon))
             L.valueLines = value and wrap(value, UIFont.Small, math.max(minW, right - lx - 14)) or {}
         end
         if #L.label == 0 then L.label = { "" } end
@@ -2737,6 +2971,10 @@ function PzoptMenuList:renderTree()
                 self:drawText(line, lx, ly, col.r, col.g, col.b, 1, UIFont.Small)
                 ly = ly + hS
             end
+            if L.top then -- the resource it moves most: green saves, amber costs, blue puts idle cores to work
+                WHY.icon(self, L.top.axis.id, lx + textW(UIFont.Small, L.label[#L.label] or "") + 6, ty + (#L.label - 1) * hS + 1,
+                    hS - 2, PzoptSettings.fxColour(L.top.axis, L.top.level))
+            end
             local vc = dim and C_DIM or C_GREY
             local v = L.value
             if not dim then
@@ -2812,7 +3050,7 @@ function PzoptMenuList:renderTree()
             local rw = textW(UIFont.Small, "reset")
             local ry = self.underY[i] or ty
             if rx + rw > right + 4 then -- (no room right of the value, a narrow list: at the end of the name's last line)
-                rx = treeLabelX(it, G) + textW(UIFont.Small, L.label[#L.label] or "") + 18
+                rx = treeLabelX(it, G) + textW(UIFont.Small, L.label[#L.label] or "") + 18 + (L.top and (hS + 2) or 0)
                 ry = ty + (#L.label - 1) * hS
             end
             local rc = (hot and mx >= rx - 4 and mx < rx + rw + 4) and C_TEXT or C_GREY
@@ -4850,15 +5088,15 @@ function PzoptMainMenu:followScroll()
 end
 
 -- ------------------------------------------------------------------ (tab layout) a setting's detail card
--- One card (maintainer, 2026-10-20): the setting's name, its effect on the hardware compacted to a line of chips under it
--- (a resource, a small bar from the stock middle: left green = less load, right amber = more, blue = idle cores put to
--- work, and the level's word), the text, and under a divider at the foot the metadata: Needs restart / Applies at once,
--- the release it came with, its key, the Java classes that read it.
+-- One card (maintainer, 2026-10-20): the setting's name, its effect at a glance under it (since 2026-10-23 WHY.drawHead:
+-- a sentence, the verdict on this PC, SAVES / COSTS columns; a benchmark scene keeps its resource-use grid), the text
+-- with the reason per resource, and under a divider at the foot the metadata: Needs restart / Applies at once, the
+-- release it came with, its key, the Java classes that read it.
 local CARD_BG = { r = 0.04, g = 0.04, b = 0.06, a = 0.85 }
 local META_WARN = { r = 1, g = 0.85, b = 0.45 }
 
--- the effect grid at width w: every resource in a fixed cell (columns of equal width, the bars aligned), the same for
--- every setting so nothing moves between rows; a resource the setting does not move is dimmed as "stock"
+-- the resource grid at width w (a benchmark scene's resource use; the cells a squeezed card lists in its text): every
+-- resource in a fixed cell (columns of equal width, the bars aligned), the same for every row so nothing moves
 local FX_BAR_W, FX_GAP = 40, 20
 -- (a benchmark scene) its resource use: 0 .. 3, a bar from the left
 local USE_WORDS = { [0] = "none", [1] = "light", [2] = "medium", [3] = "heavy" }
@@ -4873,34 +5111,6 @@ local function effectGrid(w)
     local rows = math.max(1, math.ceil(#axes / fit))
     local cols = math.max(1, math.ceil(#axes / rows)) -- (as few columns as give that many rows: even columns)
     return { axes = axes, labW = labW, cellW = cellW, cols = cols, rows = #axes > 0 and rows or 0 }
-end
-
-local function drawEffectGrid(el, x, y, g, key)
-    local hS = fontH(UIFont.Small)
-    local C = PzoptSettings.FX_COLOURS
-    local fx = PzoptSettings.effects(key or "")
-    for i, axis in ipairs(g.axes) do
-        local col0 = (i - 1) % g.cols
-        local row0 = math.floor((i - 1) / g.cols)
-        local cx, cy = x + col0 * (g.cellW + FX_GAP), y + row0 * (hS + 6)
-        local v = fx[axis.id] or 0
-        if v > 3 then v = 3 elseif v < -3 then v = -3 end
-        local lc = v ~= 0 and C_GREY or C_DIM
-        el:drawTextRight(axis.label, cx + g.labW, cy, lc.r, lc.g, lc.b, 1, UIFont.Small)
-        local bx = cx + g.labW + 6
-        local by, bh = cy + math.floor(hS / 2) - 3, 6
-        el:drawRect(bx, by, FX_BAR_W, bh, 1, 0.13, 0.13, 0.16)
-        local mid = bx + math.floor(FX_BAR_W / 2)
-        local word, wc = "stock", C_DIM
-        if v ~= 0 then
-            local len = math.floor((FX_BAR_W / 2 - 1) * math.abs(v) / 3)
-            local col = v < 0 and C.less or (axis.moreIsWork and C.work or C.more)
-            el:drawRect(v < 0 and (mid - len) or (mid + 1), by, len, bh, 1, col.r, col.g, col.b)
-            word, wc = PzoptSettings.LEVELS[v], (col == C.more and C.moreText or col)
-        end
-        el:drawRect(mid, by - 2, 1, bh + 4, 1, 0.55, 0.55, 0.60)
-        el:drawText(word, bx + FX_BAR_W + 6, cy, wc.r, wc.g, wc.b, 1, UIFont.Small)
-    end
 end
 
 -- the same cells for a scene's resource use: the bar fills from the left with the load, an unused part dimmed as "none"
@@ -4951,7 +5161,9 @@ function PzoptMainMenu:settingCard(x, y, w, h, it, title, text)
     local grid = effectGrid(w - 2 * pad)
     local useLabel = it.use and grid.rows > 0 and (hS + 4) or 0 -- (a scene: its grid under a "RESOURCE USE" label)
     local titleH = 10 + self:cardTitleLines(w - 2 * pad) * hM
-    local gridH = grid.rows > 0 and (8 + useLabel + grid.rows * (hS + 6)) or 0
+    -- (a setting: its sentence, its verdict on this PC and the SAVES / COSTS columns, WHY.drawHead; a scene: its grid)
+    local headM = (not it.use) and key and WHY.pageHead(self.page or {}, w - 2 * pad) or nil
+    local gridH = headM and WHY.headHeight(headM) or (grid.rows > 0 and (8 + useLabel + grid.rows * (hS + 6)) or 0)
     -- the metadata: label | value rows under a divider
     local m = it.meta() or {}
     local rows = {}
@@ -5014,8 +5226,8 @@ function PzoptMainMenu:settingCard(x, y, w, h, it, title, text)
         if grid.rows > 0 and it.use then
             o:drawText("RESOURCE USE", pad, gy - useLabel, C_DIM.r, C_DIM.g, C_DIM.b, 1, UIFont.Small)
             drawUseGrid(o, pad, gy, grid, it.use)
-        elseif grid.rows > 0 then
-            drawEffectGrid(o, pad, gy, grid, key)
+        elseif headM then
+            WHY.drawHead(o, pad, titleH, w - 2 * pad, key, headM)
         end
     end
     self:addChild(headEl)
@@ -5023,7 +5235,17 @@ function PzoptMainMenu:settingCard(x, y, w, h, it, title, text)
     -- what moved into the text: under it, as label | value lines (the grid's words in their colours)
     local function rgb(c) return string.format(" <RGB:%.2f,%.2f,%.2f> ", c.r, c.g, c.b) end
     local tail = ""
-    if gridInText then
+    -- (the reasons per resource name the resources the setting moves and their levels: a grid moved into the text adds
+    -- nothing to them)
+    local hasWhy = not it.use and WHY.text(key) ~= ""
+    if gridInText and headM then -- (the sentence and the verdict on this PC lead what moved into the text)
+        local p = WHY.headParts(key, w - 2 * pad)
+        tail = tail .. " <LINE> <LINE> " .. rgb(C_TEXT) .. esc(table.concat(p.sentence, " "))
+        if #p.verdict > 0 then
+            tail = tail .. " <LINE> " .. rgb(p.kind and WHY.verdictColour(p.kind) or C_DIM) .. esc(table.concat(p.verdict, " "))
+        end
+    end
+    if gridInText and not hasWhy then
         local C = PzoptSettings.FX_COLOURS
         local fx = (not it.use) and PzoptSettings.effects(key or "") or {}
         tail = tail .. " <LINE> <LINE> " .. rgb(C_DIM) .. (it.use and "RESOURCE USE" or "EFFECT ON YOUR HARDWARE") .. " <LINE> "
@@ -5102,7 +5324,7 @@ function PzoptMainMenu:settingCard(x, y, w, h, it, title, text)
     tp.background = false
     tp.borderColor = { r = 0, g = 0, b = 0, a = 0 }
     tp.marginTop = 2
-    tp.text = text .. tail
+    tp.text = WHY.put(text, key, w - 2 - tp.marginLeft - tp.marginRight) .. tail
     tp:paginate()
     table.insert(self.detailEls, tp)
     self.detailText = tp
@@ -5286,6 +5508,9 @@ function PzoptMainMenu:showDetail()
     local head = page.head and page.head() or nil
     local title = it and tostring(val(it.label)) or ""
     local body = breakLong(it and it.desc and it.desc() or (self.emptyText or "")) -- (a path, a long key list)
+    if not (TAB_LAYOUT and fixed and it and it.meta) then -- (a setting card puts the reasons in at its own width)
+        body = WHY.put(body, it and (it.setting or it.master), D[3] - 26)
+    end
     if fixed and clipsOn() and it and (it.setting or it.master) and not (TAB_LAYOUT and it.meta) then -- what the clips above show
         -- (tab layout: the card says it under the clip)
         local clip = PzoptSettings.clipOf(it.setting or it.master, it.sec)
