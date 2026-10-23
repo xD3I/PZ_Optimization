@@ -3,7 +3,9 @@
 explore=stairs scene (2026-09-25, walls flicker on the stairs: up to the top floor, down to the basement; the state
 says "scene": "stairs") and the explore=circle scene with director=jev (2026-09-29, the gas-station shelves flicker while
 the player walks in circles: circles round the start square and the aisles beside the shelves; "scene": "circle") and the
-explore=mirror scene (2026-10-04, pzopt.MirrorWalk: every mirror of the save's house, stations in front of each; "scene": "mirror").
+explore=mirror scene (2026-10-04, pzopt.MirrorWalk: every mirror of the save's house, stations in front of each; "scene": "mirror")
+and the explore=tour scene (2026-10-21, pzopt.TourWalk: the reflections showcase walk, a fixed list of stops round a house by the
+water, a view to face and a look round at some; "scene": "tour").
 
 The game (pzopt.Explore, flags explore=restaurant director=jev) writes the scene's facts every 0.3 s to
 ~/Zomboid/pzopt-explore-state.json; this loop asks TypeSafe's Jev what the character does next and writes
@@ -127,6 +129,25 @@ MIRROR = choice(
     },
 )
 
+TOUR = choice(
+    "You direct a character in Project Zomboid on a showcase walk past mirrors, windows and water so that a camera can show "
+    "their reflections, one decision at a time, from the scene state. The walk is a fixed list of stops (stop.number of "
+    "stops_total). At every stop you arrive at: if has_a_view_to_face is true, first face the view (until faced_view_here is "
+    "true); then, if wants_a_look_around is true, turn once round on the spot (until looked_around_here is true); then go to "
+    "the next stop with next_stop, or finish with done when is_last_stop is true. Never pick next_stop while arrived_at_stop is "
+    "false: keep the current action with hold. When time_is_up is true, finish with done.",
+    {
+        "face_view": "Turn to the stop's view (a mirror, a window, the river) and hold it. Right when arrived_at_stop is true "
+                     "and faced_view_here is false.",
+        "look_around": "Turn once round on the spot. Right when arrived_at_stop is true, faced_view_here is true, "
+                       "wants_a_look_around is true and looked_around_here is false.",
+        "next_stop": "Walk to the next stop. Right when all_done_here is true and is_last_stop is false.",
+        "hold": "Keep doing the current action. Right while arrived_at_stop is false, or while the current action (face_view, "
+                "look_around) is not finished yet.",
+        "done": "Finish the walk. Right when all_done_here is true and is_last_stop is true, or when time_is_up is true.",
+    },
+)
+
 BRIDGE = r"""
 import os, sys, time, select
 z = os.path.expanduser('~/Zomboid')
@@ -241,7 +262,7 @@ def main():
         last_t = st["t"]
         lat = []
         try:
-            q = {"stairs": STAIRS, "circle": CIRCLE, "mirror": MIRROR}.get(st.get("scene"), QUESTION)
+            q = {"stairs": STAIRS, "circle": CIRCLE, "mirror": MIRROR, "tour": TOUR}.get(st.get("scene"), QUESTION)
             ans = ask(st, {"action": q}, log=lat)["action"]
         except Exception as e:  # keep the last command; the next state gets another try
             log.write(f"{st['seconds_since_start']:6.1f}s  jev error: {e}\n")
@@ -264,6 +285,12 @@ def main():
                       f"mirror {m['number']}/{m['mirrors_total']} arrived {p['arrived_at_station']} faced {s['faced_mirror_here']} "
                       f"turned {s['turned_back_here']} circled {m['circled_at_this_mirror']} left {m['stations_left_to_visit']} "
                       f"done_here {m['all_done_here']} map {'/'.join(m['map_rows_near_to_far_columns_left_to_right'])} | {probs}\n")
+            continue
+        if st.get("scene") == "tour":
+            p, s = st["player"], st["stop"]
+            log.write(f"{st['seconds_since_start']:6.1f}s  {act:<12} conf {ans.get('confidence', 0):.2f}  {lat[0]['ms'] if lat else '?'} ms | "
+                      f"stop {s['number']}/{s['stops_total']} {s['place']} arrived {s['arrived_at_stop']} faced {s['faced_view_here']} "
+                      f"looked {s['looked_around_here']} done_here {s['all_done_here']} dist {p['distance_to_stop_tiles']:.1f} | {probs}\n")
             continue
         if st.get("scene") == "stairs":
             p, g = st["player"], st["progress"]

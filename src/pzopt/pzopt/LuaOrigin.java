@@ -14,7 +14,8 @@ import java.util.concurrent.ConcurrentHashMap;
  * Where a Lua function was loaded from (Lua mod compatibility, 2026-10-01): a closure's prototype keeps the path
  * LuaManager.RunLua loaded (FuncState.currentfullFile: the game's own file, or the mod file that replaces it at the
  * same relative path, or a mod's own file). The game's media/lua is "game" (ours under it, pzopt/, is "pzopt"); a file
- * inside a mod folder is "mod:<id>" (the id= of the nearest mod.info above it); anything else "other".
+ * inside a mod folder is "mod:<id>" (the id= of the nearest mod.info above it, a Build 42 common/ folder's from its
+ * version folders beside it); anything else "other".
  *
  * <p>Users: the retained UI renders mod-drawn elements at the stock rate (uiRetainedMods), pzopt_ui_fast.lua only
  * replaces functions that are still the game's own (getPzoptLuaOrigin), the Lua gate's log line.
@@ -66,12 +67,35 @@ public final class LuaOrigin {
       }
       File dir = new File(path).getAbsoluteFile().getParentFile();
       for (int depth = 0; dir != null && depth < 12; depth++, dir = dir.getParentFile()) {
-         String id = byDir.computeIfAbsent(dir.getPath(), d -> modId(new File(d, "mod.info")));
+         String id = byDir.computeIfAbsent(dir.getPath(), d -> dirModId(new File(d)));
          if (!id.isEmpty()) {
             return "mod:" + id;
          }
       }
       return "other";
+   }
+
+   /**
+    * The mod id of a folder: its mod.info's, or for a Build 42 mod's {@code common} folder (which has none: the mod.info
+    * files sit in the version folders beside it, 42/ or 42.19/) the first version folder's.
+    */
+   private static String dirModId(File dir) {
+      String id = modId(new File(dir, "mod.info"));
+      if (!id.isEmpty() || !dir.getName().equalsIgnoreCase("common")) {
+         return id;
+      }
+      File[] siblings = dir.getParentFile() == null ? null : dir.getParentFile().listFiles(File::isDirectory);
+      if (siblings == null) {
+         return "";
+      }
+      java.util.Arrays.sort(siblings);
+      for (File s : siblings) {
+         String v = s.equals(dir) ? "" : modId(new File(s, "mod.info"));
+         if (!v.isEmpty()) {
+            return v;
+         }
+      }
+      return "";
    }
 
    private static String modId(File info) {

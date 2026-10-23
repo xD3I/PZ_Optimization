@@ -62,16 +62,38 @@ public final class BenchSuite {
       new Scenario("drive120south", "Rosewood town drive", "120 km/h through Rosewood: KY-60, right onto North Main Street and south through the town, braking for the corner.",
             "chunk arrival, render thread, GPU, frame pacing", 8010, 11206, 0, "normal", 40 + 6,
             "mode", "drive", "path", "8010,11204.5/8106,11204.5/8106,11965.5", "kmh", "120", "zoom", "max", "max_seconds", "90", "settle", "6"),
-      new Scenario("horde", "Horde shooting", "The Riverside pier at noon: the player runs to the pier, turns and aims; then a horde of 150 fast zombies comes and the player shoots until every one is down (at most 90 s). An M16, and a .44 Magnum drawn instead of the second reload. Combat, gunfire, ragdolls.",
-            "game thread, render thread, ragdolls", 6445, 5195, 0, "normal", 60 + 6,
-            "mode", "bench", "showcase", "horde", "pier", "6436,5186", "horde_dir", "SE", "burn", "false", "fire_line", "false",
-            "no_attack", "true", "horde", "150", "mags", "20", "horde_when", "ready", "sidearm", "Base.Revolver_Long", "sidearm_rounds", "60",
-            // end=horde_dead (2026-10-18): the route ends 2 s after the last horde zombie died, at 90 s at the latest (the old
-            // fixed 25 s + 10 s hold ended with ~135 of the 150 alive); the route's own leg is only the timer underneath
-            "route", "S:1", "speed", "0.04", "end", "horde_dead", "end_cap", "90", "end_tail", "2", "zoom", "1", "settle", "6"),
-      new Scenario("sweep", "Visuals feature costs", "The camera stands still in Rosewood and turns while each Visuals feature that switches live is turned on and off in turn: what every feature costs on this PC, in milliseconds per frame.",
-            "GPU, render thread (per feature)", RW_X, RW_Y, 0, "normal", 120,
-            "mode", "bench", "zoom", "max", "settle", "6"),
+      // (2026-10-21, maintainer) the horde fights like a player (pzopt.HordeTactics, tactics=kite); since 2026-10-23 the same
+      // scene and tactics as the harness horde bench (docs/findings-horde-bench-rework-2026-10-21.md "Under 80 s"): the old
+      // Riverside pier, the horde from the south-east out of the gap between the blocks, the fight held in the arena round
+      // the pier, the M16 with Laser + red dot, Desensitized, house alarms off, the aim on the head bone; zombies attack (no
+      // no_attack): the first hit ends the pass as failed (kill switch), end_cap 200 s + a 220 s watchdog end a stuck one.
+      // Harness clear times with the director 44.2-55.2 s (h80-p39/p40/p41), 0 hits; seconds = 70 + the settle
+      new Scenario("horde", "Horde shooting", "The old pier in Riverside at noon: a horde of 150 fast zombies comes out of the gap between the blocks to the south-east and the player fights it like a player would: shoots their heads while they are far, runs round them when they come close or crowd in, reloads with room, and walks up to the last ones until every one is down. Zombies can attack: the first bite or scratch ends the pass as failed. Combat, gunfire, ragdolls.",
+            "game thread, render thread, ragdolls", 6445, 5195, 0, "normal", 70 + 6,
+            "mode", "bench", "showcase", "horde", "tactics", "kite", "start", "6445,5195", "pier", "6436,5186", "arena", "6450,5198,22",
+            "horde_dir", "SE", "horde_gap", "12",
+            "burn", "false", "fire_line", "false", "ambulance", "Base.VanAmbulance", "siren", "1", "horde", "150", "mags", "20", "horde_when", "ready",
+            "sidearm", "Base.Revolver_Long", "sidearm_rounds", "24",
+            // the tuned fight of h80-p39 (the M16's draw of the .44 is off: a magazine swap is faster)
+            "body_shot_ms", "300", "crowd_zombies", "20", "sidearm_draw", "false", "kite_tiles", "3", "shoot_tiles", "5.5",
+            "reflex_tiles", "2.2", "backpedal", "false", "reload_room", "5", "blind_tiles", "10", "close_in_left", "20",
+            "close_in_tiles", "9", "floor_close_tiles", "5", "aim_settle", "-1",
+            // end=horde_dead: the route ends 2 s after the last horde zombie died; end_cap / the watchdog are the safety net
+            "route", "S:1", "speed", "0.02", "end", "horde_dead", "end_cap", "200", "end_tail", "2", "zoom", "1", "settle", "6"),
+      // (2026-10-21, maintainer) outside the Rosewood church's main doors (east front, 8150,11517-11519): the player walks a
+      // 2-square square on the pavement in front of them and turns once round at each corner, a lap per measured window
+      // (BenchSweep, pzopt.SquareWalk); 4 s pre-roll + 23 windows (laps) of 10 s: 11 of the 14 features switch live on
+      // this build (pixelLight, relief, mirrors apply at the next launch), bench-refl-sweep1 walked 234 s; the walk ends the route
+      new Scenario("sweep", "Visuals feature costs", "The player walks a small square outside the Rosewood church's east doors, turning once round at every corner, while each Visuals feature that switches live is turned on and off in turn: what every feature costs on this PC, in milliseconds per frame.",
+            "GPU, render thread (per feature)", 8153, 11515, 0, "normal", 234 + 6,
+            "mode", "bench", "explore", "square", "square", "8153.5,11515.5,2", "square_spin", "360", "zombies", "off", "zoom", "max", "settle", "6"),
+      // (2026-10-21, maintainer) the reflections showcase walk: the Riverside house with a home gym on the Ohio's bank (gym
+      // 6283-6286 x 5377-5379, its full-length prop mirror on the west wall), puddles after rain, no zombies; the tour's stops
+      // are pzopt.TourWalk's riverside-gym (walked with the game's own walk-to, pzopt.Nav; 16 stops, the autopilot's walk 99.6 s
+      // in bench-refl-sweep1); the route's time is only the cap
+      new Scenario("reflections", "Reflections walk", "A house with a home gym on the river bank in Riverside, after rain, no zombies: the player walks along the river, through a gate to the neighbour's swimming pool, looks in at the windows, goes in, stands before the gym's full-length mirror and turns round, and walks out to the river again. Mirrors, windows, water and puddle reflections when those Visuals are on.",
+            "GPU, render thread, reflections", 6291, 5370, 0, "normal", 100 + 6,
+            "mode", "bench", "explore", "tour", "tour", "riverside-gym", "zombies", "off", "puddles", "0.7", "route", "S:1", "speed", "0.004", "zoom", "0.75", "settle", "6"),
    };
 
    /** Scenarios in the score (the sweep measures features, not a frame rate). */
@@ -81,6 +103,32 @@ public final class BenchSuite {
 
    /** Flags every benchmark pass adds: noon, clear weather (the bench routes' daylight, without the save's weather). */
    static final String[] COMMON = {"time_of_day", "12", "weather", "clear"};
+
+   /** The weathers a scenario can run in (the menu's planner): Scene's weather= values. */
+   static final java.util.List<String> WEATHERS = java.util.List.of("clear", "rain", "storm");
+
+   /** A planned fog (Scene's fog=): "off", "heavy" or an intensity 0..1; "off" for anything else. */
+   static String fogOf(String v) {
+      if (v == null || v.isBlank() || "off".equals(v.trim()) || "heavy".equals(v.trim())) {
+         return v == null || v.isBlank() ? "off" : v.trim();
+      }
+      try {
+         float f = Float.parseFloat(v.trim());
+         return f > 0f && f <= 1f ? Float.toString(f) : "off";
+      } catch (NumberFormatException e) {
+         return "off";
+      }
+   }
+
+   /** A planned hour (0-23), noon when it is missing or not a number. */
+   static int hourOf(String v) {
+      try {
+         int h = Integer.parseInt(v == null ? "12" : v.trim());
+         return h >= 0 && h <= 23 ? h : 12;
+      } catch (NumberFormatException e) {
+         return 12;
+      }
+   }
 
    public static Scenario byId(String id) {
       for (Scenario s : ALL) {
@@ -99,13 +147,25 @@ public final class BenchSuite {
       return "bench".equals(s.flags.get("mode")) && !s.flags.containsKey("showcase") && !"sweep".equals(s.id);
    }
 
-   /** The pass's harness flags: the scenario's own, the common pins, and the timedemo step (route steps a second, 0 = wall clock). */
-   static Map<String, String> flagsFor(Scenario s, int fixedStep) {
+   /**
+    * The pass's harness flags: the scenario's own, the common pins, the plan's weather, fog and hour for it (the menu's
+    * planner, 2026-10-21; null: clear, no fog, noon) and the timedemo step (route steps a second, 0 = wall clock).
+    */
+   static Map<String, String> flagsFor(Scenario s, int fixedStep, String weather, String fog, String hour) {
       Map<String, String> m = new LinkedHashMap<>();
       for (int i = 0; i + 1 < COMMON.length; i += 2) {
          m.put(COMMON[i], COMMON[i + 1]);
       }
       m.putAll(s.flags);
+      if (hour != null) {
+         m.put("time_of_day", Integer.toString(hourOf(hour)));
+      }
+      if (weather != null && WEATHERS.contains(weather)) {
+         m.put("weather", weather);
+      }
+      if (fog != null && !"off".equals(fogOf(fog))) { // (fog=off would pin it at 0: the weather's own pins already hold none)
+         m.put("fog", fogOf(fog));
+      }
       if ("sweep".equals(s.id)) {
          BenchSweep.flags(m);
       }

@@ -75,6 +75,12 @@ def overlap(a, b):
     return (ox, oy) if ox > 2 and oy > 2 else None
 
 
+# texts whose "..." is not a cut: a button that opens a dialog (SAVE..., IMPORT..., EDIT...), the breadcrumbs' collapsed
+# root and the sidebar's "more rows above" mark
+ELLIPSIS_LABELS = {"...", "SAVE...", "IMPORT...", "EDIT...", "Change...", "Import settings...", "Save current settings as...",
+                   "Uninstall PZ Optimization..."}
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("run")
@@ -115,7 +121,7 @@ def main():
                 findings["outside_dialog"].append({"where": tag, "text": t["text"], "x": t["x"], "w": t["w"], "dialog": t["root"]})
             if t["clip"] and not inside_x(t, t["el"]):
                 findings["clipped"].append({"where": tag, "text": t["text"], "past_px": t["x"] + t["w"] - (t["el"][0] + t["el"][2])})
-            if t["text"].rstrip().endswith("...") and (screen, t["text"]) not in seen_cut:
+            if t["text"].rstrip().endswith("...") and t["text"].strip() not in ELLIPSIS_LABELS and (screen, t["text"]) not in seen_cut:
                 seen_cut.add((screen, t["text"]))
                 findings["cut"].append({"where": tag, "text": t["text"]})
             box = None
@@ -139,6 +145,8 @@ def main():
                 p, q = vis[i], vis[j]
                 if p["text"] == q["text"] and abs(p["x"] - q["x"]) <= 2 and abs(p["y"] - q["y"]) <= 2:
                     continue  # the same text drawn twice in place (a shadow, a highlighted row)
+                if screen.endswith("-presets") and p.get("el") != q.get("el"):
+                    continue  # the preset list open over the page: its texts cover the page's (a popup with a background)
                 o = overlap(p, q)
                 if o:
                     findings["overlaps"].append({"where": f"{'hud' if hud else stop}:{screen}", "a": p["text"][:60], "b": q["text"][:60],
@@ -174,7 +182,10 @@ def main():
                                   "pzmenu-update, pzmenu-compat, pzmenu-home-tools, pzmenu-perf-drive, pzmenu-problems, pzmenu-problems-1, "
                                   "pzmenu-search, pzmenu-clips, pzmenu-zoom-curve, pzmenu-colour, pzmenu-chart-few, pzmenu-chart-many, "
                                   "pzmenu-chart-none, panel, history, runs, runs-all, "
-                                  "report and report-code; a tour over the pause menu has the ig- stops instead) with a screenshot "
+                                  "report and report-code; a tour over the pause menu has the ig- stops instead; the PZ OPTIMIZATION "
+                                  "screen's tab layout has opt- stops instead: opt-perf, opt-boot, opt-sys, opt-vis, opt-tools, "
+                                  "opt-bench-setup, opt-bench-compare, opt-bench-report, opt-update, opt-compat, opt-problems and "
+                                  "opt-problems-1, opt-scene-*, opt-side-preset, opt-side-row, opt-presets and opt-done) with a screenshot "
                                   "per stop (`screenshots` equals `stops`)?"),
             "nothing_overflows": noul("Does every text stay inside the screen, its dialog and the box that clips it "
                                       "(`off_screen.total`, `outside_dialog.total` and `clipped_by_its_box.total` all 0)?"),

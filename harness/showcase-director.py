@@ -110,6 +110,51 @@ QUESTION_READY = choice(
 )
 
 
+# the horde bench fought like a player (flag tactics=kite, 2026-10-21): the zombies attack, nothing holds them off; the
+# character shoots while the horde is far, runs round it when it gets close, reloads where there is room and draws the
+# revolver when the rifle runs dry with the horde near. The state's "tactics" block carries the distances and the
+# thresholds; the game's own flinch (reflex_running) runs whatever is chosen while a zombie is within 3.5 tiles
+QUESTION_TACTICS = choice(
+    "You play a survivor in Project Zomboid, one decision at a time from the game state, the way a skilled player fights a "
+    "horde of fast zombies in an open field with an M16 rifle and a .44 revolver. A zombie that reaches the character hurts "
+    "them: the goal is to kill every zombie without one ever getting within reach. Before the fight the character goes to "
+    "the spot ('pier' in the state), turns to the horde side, marks the fight as started (fire_line_lit) and aims the loaded "
+    "gun; aiming brings the horde (horde_spawned). In the fight: shoot while the nearest standing zombie is far; once it "
+    "comes closer than tactics.kite_under_tiles, run on (kite: the run follows the loop round a block by itself when one is set, the way a player leads a horde round a block so it trails behind as a column) until it is farther than "
+    "tactics.shoot_over_tiles, then turn and shoot again; reload only with room (a reload walks away from close zombies by "
+    "itself, a run cancels it); with the rifle empty and zombies too close to reload, draw the revolver. Pick the "
+    "character's next action.",
+    {
+        "run_to_pier": "Run to the spot. Right while the character is not at the spot and the fight has not started "
+                       "(fire_line_lit false).",
+        "face_horde": "Turn to face the horde side. Right when the character is at the spot, the fight has not started and "
+                      "the angle between the facing and the nearest zombie (or the horde side) is over 8 degrees.",
+        "light_fire_line": "Mark the fight as started. Right when the character is at the spot, faces the horde side (angle "
+                           "under 8 degrees) and fire_line_lit is false.",
+        "shoot": "Aim and fire at the nearest zombie, walking back while the horde comes on. Right when the fight has started, the gun in hand does not need a reload "
+                 "(weapon.needs_reload false), hands_hold_wanted_weapon is true, no reload is in "
+                 "progress, and either the horde has not appeared yet (horde_spawned false: aiming is what brings it, so once "
+                 "fire_line_lit is true this is the action) or tactics.nearest_is_closer_than_kite_under is false "
+                 "(when current_action is kite: once tactics.nearest_is_farther_than_shoot_over is true).",
+        "kite": "Run round the horde and away from every zombie, the gun lowered, to win distance back. Right when the horde "
+                "has appeared, zombies are alive and tactics.nearest_is_closer_than_kite_under is true, or when "
+                "current_action is kite and tactics.nearest_is_farther_than_shoot_over is still false. Wrong once "
+                "tactics.nearest_is_farther_than_shoot_over is true and the gun has a round: then shoot.",
+        "reload": "Reload the gun in hand (from an empty revolver: back to the rifle; it also fixes the hands when "
+                  "hands_hold_wanted_weapon is false); with zombies near it walks away while reloading. Right when the gun "
+                  "needs a reload (weapon.needs_reload true: the magazine is empty, even with a round still chambered, "
+                  "which the reload keeps) or a reload is in progress or "
+                  "hands_hold_wanted_weapon is false, and tactics.nearest_is_closer_than_kite_under is false; or when "
+                  "in_hands_is_revolver is true and the revolver is empty. Wrong while weapon.needs_reload is false and no reload is in progress.",
+        "draw_sidearm": "Draw the loaded revolver instead of reloading the rifle. Right when the rifle is in hand and empty, "
+                        "no reload is in progress, revolver_rounds is over 0, tactics.room_to_reload is false and "
+                        "tactics.nearest_is_closer_than_kite_under is false.",
+        "hold": "Stand still. Right only when the horde has appeared (horde_spawned true) and zombies_alive is 0. Wrong "
+                "while horde_spawned is false: the horde waits for the aim (shoot).",
+    },
+)
+
+
 class Remote:
     """The state / command files of a laptop's ~/Zomboid over one persistent ssh connection."""
 
@@ -172,7 +217,7 @@ def main():
         seen, last_t = True, st["t"]
         lat = []
         try:
-            q = QUESTION_BACK_OFF if st.get("back_off_allowed") else QUESTION_READY if st.get("horde_comes_when_aiming") else QUESTION
+            q = QUESTION_TACTICS if "tactics" in st else QUESTION_BACK_OFF if st.get("back_off_allowed") else QUESTION_READY if st.get("horde_comes_when_aiming") else QUESTION
             ans = ask(st, {"action": q}, log=lat)["action"]
         except Exception as e:  # keep the last command; the next state gets another try
             log.write(f"{st['seconds_since_start']:6.1f}s  jev error: {e}\n")
@@ -196,7 +241,10 @@ def main():
                   f"pier {p['distance_to_pier_tiles']:.1f} face {p['degrees_between_facing_and_nearest_zombie']:.0f} "
                   f"zombies {h['zombies_alive']} near {h['nearest_zombie_tiles']:.1f} mag {w['rounds_in_magazine']}"
                   f"{'+1' if w['round_chambered'] else ''} spare {w['spare_full_magazines']} reloading {w['reloading']} "
-                  f"fire {st['fire_line_lit']} killed {st.get('zombies_killed', '-')} hands_ok {w.get('hands_hold_wanted_weapon', '-')} | {probs}\n")
+                  f"fire {st['fire_line_lit']} killed {st.get('zombies_killed', '-')} hands_ok {w.get('hands_hold_wanted_weapon', '-')}"
+                  + (f" standing {st['tactics']['nearest_standing_zombie_tiles']:.1f} w6 {st['tactics']['zombies_within_6_tiles']}"
+                     f" reflex {st['tactics']['reflex_running']} hits {st['tactics']['hits_taken']}" if "tactics" in st else "")
+                  + f" | {probs}\n")
 
 
 if __name__ == "__main__":

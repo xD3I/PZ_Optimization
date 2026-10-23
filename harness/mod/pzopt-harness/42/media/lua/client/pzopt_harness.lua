@@ -70,6 +70,8 @@ local LEVELS = { simple = 1, advanced = 2, everything = 3 }
 --   as the game does for a pad (focus = gain focus; up / down / left / right; a, b, x, y, lb, rb, back = those buttons),
 --   one every 0.6 s, logging the focused element and the page after each ("[pzopt-harness] joy: ..."); shot writes
 --   Screenshots/pzopt-joy-<n>.png. Quits when done. (benchmark-pad-check.sh walks the screen with a real virtual pad.)
+--   hints = the screen's in-place prompts on (forceHints), wait = a step that does nothing; b closes the on-screen keyboard
+--   when it is up; options_joy_ms=<ms> sets the time between steps (2026-10-19, the menu preview video).
 local JOY = { id = 0, player = 0 }
 -- options_read=1: the readability tour of every settings page of the screen (home, each group, each category, each
 --   subcategory and each further page of its list in the Everything view, Fix a problem and each problem, a search) through
@@ -129,15 +131,171 @@ local function joyDescribe(m)
         .. tostring(m.selected) .. (m.help and "+help" or "") .. (m.prompt and "+prompt" or "")
 end
 local JOY_BUTTONS = { a = "AButton", b = "BButton", x = "XButton", y = "YButton", lb = "LBumper", rb = "RBumper", back = "Back" }
+-- (2026-10-21) the rig's holds, triggers, keys and mouse steps (options_joy):
+--   hold:x / hold:y = the button down, its release 0.8 s later (the screen acts once held 0.5 s); hold:lt = the left trigger
+--   held 0.8 s, lt / rt = a trigger tapped (0.15 s): isJoypadLTPressed / isJoypadRTPressed answer true for the rig's pad
+--   meanwhile (the screen polls them in pollPad); press:ctrl+s / press:alt+s / press:cmd+f ... = the main screen's key release of that key with that
+--   modifier reported down; cancel / ok = the button of the text box opened last (ISTextBox); nav:<page> = a page as
+--   options_nav names it (key:<setting> included); open:report[:n] = the n-th newest report, open:compare = the compare
+--   page; leaf:<label> = a mouse click on the sidebar row of that label (_ for a space, a prefix is enough; :n = the n-th
+--   such row; leaf:@report:n = the n-th newest report's row); wheel:<n> = the mouse wheel over the page of panels (n notches, + = down); state = the screen's state
+--   (sidebar, preset list, text box, page, the panel row at the top and the lit section leaf, holds); val:<key> = a
+--   setting's value; shot:<name> = Screenshots/pzopt-bench-ui-joy-<n>-<name>.png; detail = the cursor on the page's first control;
+--   act:<label> = the page's button of that label (_ for a space); boxpaste = the clipboard into the text box opened last.
+--   A step that holds returns how long to wait.
+local RIG = { lt = 0, rt = 0, box = nil, focused = false }
+local function rigInstall()
+    if RIG.installed then return end
+    RIG.installed = true
+    local lt0, rt0 = isJoypadLTPressed, isJoypadRTPressed
+    isJoypadLTPressed = function(id) if id == JOY.id and getTimestampMs() < RIG.lt then return true end return lt0(id) end
+    isJoypadRTPressed = function(id) if id == JOY.id and getTimestampMs() < RIG.rt then return true end return rt0(id) end
+    if ISTextBox then
+        local init0 = ISTextBox.initialise
+        ISTextBox.initialise = function(self, ...)
+            RIG.box = self
+            return init0(self, ...)
+        end
+    end
+end
+local function rigSideRows(m, label, nth)
+    local want, k = string.lower(string.gsub(label, "_", " ")), 0
+    for _, r in ipairs((m.side and m.side.rows) or {}) do
+        local l = type(r.label) == "function" and r.label() or r.label
+        if type(l) == "string" and string.sub(string.lower(l), 1, #want) == want then
+            k = k + 1
+            if k == (nth or 1) then return r end
+        end
+    end
+    return nil
+end
+local function rigState(m)
+    local p = m.detailText
+    local cur = (p and p.dash and PzoptReportDash and PzoptReportDash.currentRow) and PzoptReportDash.currentRow(p) or nil
+    local lit = "-"
+    if cur ~= nil then
+        for _, r in ipairs((m.side and m.side.rows) or {}) do
+            if r.section == cur and (r.run == nil or r.run == p.dash.run) then
+                lit = tostring(type(r.label) == "function" and r.label() or r.label)
+            end
+        end
+    end
+    local box = RIG.box and RIG.box:isVisible() and (RIG.box.text or "?") or nil
+    local presets = (PzoptSettings and PzoptSettings.userPresets) and #PzoptSettings.userPresets() or -1
+    return string.format("sidebar=%s presetList=%s box=%s page=%s pane=%s row=%s yOff=%s/%s topRow=%s litLeaf=%s xHold=%s yHold=%s ltDown=%s userPresets=%d",
+        tostring(m.side ~= nil and m.side:isVisible() and m.side:getWidth() > 0), tostring(m.presetOpen and m:presetOpen() or false),
+        box and ("'" .. tostring(box) .. "'") or "none", tostring(m.selected), tostring(m.pane), tostring(m.list and m.list.selected),
+        tostring(p and p.yOff and math.floor(p.yOff)), tostring(p and p.contentH and math.floor(p.contentH)), tostring(cur), lit,
+        tostring(m.xHold ~= nil), tostring(m.yHold ~= nil), tostring(m.ltDown), presets)
+end
 local function joyStep(m, step, n)
+    rigInstall()
+    -- (a rebuilt screen, the sidebar shown / hidden: the rig's pad goes to the new one as the game's pad does, mainJoypad)
+    if RIG.focused and m.joyfocus ~= JOY and step ~= "focus" then m:onGainJoypadFocus(JOY) end
+    local verb, arg = string.match(step, "^([%w]+):(.*)$")
     if step == "focus" then
+        RIG.focused = true
         m:onGainJoypadFocus(JOY)
+    elseif step == "hints" then -- (2026-10-19) the in-place prompts without a real pad
+        m.forceHints = true
+        RIG.hints = true
+    elseif step == "wait" then return
+    elseif step == "b" and OnScreenKeyboard and OnScreenKeyboard.IsVisible() then -- B on the on-screen keyboard closes it
+        OnScreenKeyboard.Hide()
+        m.joyfocus = JOY
     elseif step == "down" then m:onJoypadDirDown(JOY)
     elseif step == "up" then m:onJoypadDirUp(JOY)
     elseif step == "left" then m:onJoypadDirLeft(JOY)
     elseif step == "right" then m:onJoypadDirRight(JOY)
-    elseif JOY_BUTTONS[step] then m:onJoypadDown(Joypad[JOY_BUTTONS[step]], JOY)
+    elseif JOY_BUTTONS[step] then
+        m:onJoypadDown(Joypad[JOY_BUTTONS[step]], JOY)
+        -- (a tap: X and Y act on their release since X became the presets, 2026-10-21; held they act after half a second)
+        if m.onJoypadButtonReleased then m:onJoypadButtonReleased(Joypad[JOY_BUTTONS[step]], JOY) end
+    elseif step == "lt" or step == "rt" then
+        RIG[step] = getTimestampMs() + 150
+        return 400
+    elseif verb == "hold" and arg == "lt" then
+        RIG.lt = getTimestampMs() + 800
+        return 1200
+    elseif verb == "hold" and JOY_BUTTONS[arg] then
+        m:onJoypadDown(Joypad[JOY_BUTTONS[arg]], JOY)
+        RIG.release = { b = Joypad[JOY_BUTTONS[arg]], at = getTimestampMs() + 800 }
+        return 1200
+    elseif verb == "press" then
+        -- (press:cmd+s = macOS's Command key: isMetaKeyDown)
+        local ctrl, alt, cmd = string.find(arg, "ctrl+", 1, true) ~= nil, string.find(arg, "alt+", 1, true) ~= nil, string.find(arg, "cmd+", 1, true) ~= nil
+        local key = Keyboard["KEY_" .. string.upper(string.sub(arg, -1))]
+        local c0, a0, m0 = isCtrlKeyDown, isAltKeyDown, isMetaKeyDown
+        isCtrlKeyDown = function() return ctrl end
+        isAltKeyDown = function() return alt end
+        isMetaKeyDown = function() return cmd end
+        local ok, err = pcall(function() MainScreen.instance:onKeyRelease(key) end)
+        isCtrlKeyDown, isAltKeyDown, isMetaKeyDown = c0, a0, m0
+        if not ok then error(err) end
+    elseif step == "cancel" or step == "ok" then
+        local box = RIG.box
+        if not (box and box:isVisible()) then error("no text box open") end
+        box:onClick(step == "ok" and box.yes or box.no)
+    elseif verb == "nav" then
+        applyNav(arg)
+    elseif verb == "open" then
+        local what, k = string.match(arg, "^([%w]+):?(%d*)$")
+        if what == "report" then
+            local items = m:benchHistory()
+            local it = items[tonumber(k) or 1]
+            if not it then error("no report " .. tostring(k)) end
+            m:openPage("bench/report", { it[1] })
+        elseif what == "compare" then
+            m:openPage("bench/compare")
+        else
+            m:selectNode(arg, "master")
+        end
+    elseif verb == "leaf" then
+        local label, k = string.match(arg, "^([^:]+):?(%d*)$")
+        local r = nil
+        if label == "@report" then -- (the n-th newest report's own row)
+            local it = m:benchHistory()[tonumber(k) or 1]
+            for _, row in ipairs((m.side and m.side.rows) or {}) do
+                if it and row.run == it[1] and row.fold and not row.scene and not row.section then r = row end
+            end
+        else
+            r = rigSideRows(m, label, tonumber(k))
+        end
+        if not r then error("no sidebar row '" .. arg .. "'") end
+        if r.hidden then error("sidebar row '" .. arg .. "' is out of the sidebar's window") end
+        local x, y = math.floor(m.side:getWidth() * 0.6), r.y + math.floor(r.h / 2)
+        m.side:onMouseDown(x, y)
+        m.side:onMouseUp(x, y)
+    elseif verb == "wheel" then
+        local p = m.detailText
+        if not (p and p.onMouseWheel) then error("no page to scroll") end
+        p:onMouseWheel(tonumber(arg) or 1)
+    elseif step == "detail" then
+        m:focusDetail(1, true)
+    elseif verb == "act" then
+        local want = string.lower(string.gsub(arg, "_", " "))
+        for _, a in ipairs(m.detailActions or {}) do
+            local l = type(a.label) == "function" and a.label() or a.label
+            if type(l) == "string" and string.lower(l) == want then
+                m:runAction(a)
+                return
+            end
+        end
+        error("no action '" .. arg .. "'")
+    elseif step == "boxpaste" then
+        local box = RIG.box
+        if not (box and box:isVisible()) then error("no text box open") end
+        box.entry:setText(Clipboard.getClipboard() or "")
+    elseif step == "state" then
+        print("[pzopt-harness] joy state: " .. rigState(m))
+    elseif verb == "val" then
+        print("[pzopt-harness] joy val: " .. arg .. "=" .. tostring(getPerformance():getPzoptOption(arg)))
+    elseif verb == "shot" then -- (the render thread's capture, pzopt.BenchShot: TakeFullScreenshot writes a blank image on the flip)
+        local ok = pcall(function() getPerformance():pzoptBenchmark("shot", "joy-" .. n .. "-" .. arg) end)
+        if not ok then getCore():TakeFullScreenshot("pzopt-joy-" .. n .. "-" .. arg .. ".png") end
     elseif step == "shot" then getCore():TakeFullScreenshot("pzopt-joy-" .. n .. ".png")
+    else
+        error("unknown step")
     end
 end
 
@@ -179,7 +337,79 @@ local function pageStop(node, children)
         return more
     end }
 end
+-- (the tab layout, 2026-10-20: the preset card over the sidebar) every tab's page and its further list pages, the card of
+-- the row with the longest name, the controller cursor on each of the sidebar card's parts (their hint lines), the
+-- preset list, a benchmark scene's card, the newest report, each problem; the controller prompts drawn throughout
+local TAB_READ = { "perf", "boot", "sys", "vis", "tools", "bench/setup", "bench/compare", "bench/report", "update", "compat", "problems" }
+local function longestRow(m)
+    local best, bw = nil, -1
+    for i, it in ipairs(m.list.items or {}) do
+        local l = type(it.label) == "function" and it.label() or it.label
+        if it.kind ~= "section" and it.kind ~= "note" and type(l) == "string" and #l > bw then best, bw = i, #l end
+    end
+    return best
+end
+local function readStopsTabs(c)
+    local stops = {}
+    for _, id in ipairs(TAB_READ) do
+        local name = readName(id)
+        table.insert(stops, { name = name, fn = function()
+            local m = PzoptMainMenu.instance()
+            m.forceHints = true
+            m:selectNode(id, "master")
+            local more = listPageStops(name)
+            table.insert(more, { name = name .. "-long", fn = function()
+                local mm = PzoptMainMenu.instance()
+                local i = longestRow(mm)
+                if i then
+                    mm.list.top = math.max(1, i - 2)
+                    mm.list:setSelected(i)
+                    mm:showDetail()
+                end
+            end })
+            return more
+        end })
+    end
+    local sc = PzoptBench and PzoptBench.scenarios() or {}
+    for _, s in ipairs(sc) do
+        table.insert(stops, { name = "opt-scene-" .. s.id, fn = function()
+            local m = PzoptMainMenu.instance()
+            m:selectNode("bench/setup", "master")
+            for i, it in ipairs(m.list.items or {}) do
+                if it.id == "scen:" .. s.id then m.list:setSelected(i) m:showDetail() end
+            end
+        end })
+    end
+    for i = 1, #((PzoptSettingsLayout or {}).problems or {}) do table.insert(stops, pageStop("problems/" .. i, false)) end
+    -- (the bar under the page: BACK, the sidebar's switch, the preset box, SAVE..., the tools; barIndex its element)
+    for _, f in ipairs({ { "side-row", 1 }, { "side-clips", "clips" }, { "bar-back", "bar", 1 }, { "bar-sidebar", "bar", 2 },
+            { "bar-preset", "bar", 3 }, { "bar-tools", "bar", 5 } }) do
+        table.insert(stops, { name = "opt-" .. f[1], fn = function()
+            local m = PzoptMainMenu.instance()
+            m:selectNode("perf", "side")
+            if f[2] == "bar" then m.barIndex = f[3] end
+            local i = f[2] == "clips" and m:sideClipsIndex() or (f[2] == "bar" and m:sideBackIndex() or f[2])
+            m:focusSide(i)
+            m.pane = "side"
+            if m.traceFocus then m:traceFocus() end
+        end })
+    end
+    table.insert(stops, { name = "opt-presets", fn = function()
+        local m = PzoptMainMenu.instance()
+        m:openPresets()
+    end })
+    table.insert(stops, { name = "opt-done", fn = function()
+        local m = PzoptMainMenu.instance()
+        if m.closePresets then m:closePresets() end
+        m:selectNode("perf", "master")
+        c.readDone = true
+    end })
+    return stops
+end
+
 local function readStops(c)
+    local m0 = PzoptMainMenu.instance()
+    if m0 and m0.presetCard then return readStopsTabs(c) end
     local stops = {
         { name = "opt-home", fn = function()
             local m = PzoptMainMenu.instance()
@@ -656,7 +886,23 @@ local function optionsTick()
     elseif c.read and not c.shotMs then
         c.shotMs = now + 2000 -- the tour's last stop is logged and shot
         print("[pzopt-harness] READ: done")
+    elseif c.tour and not c.tourDone then
+        -- options_tour=1 (pzopt_harness_tour.lua, harness/menu-tour.sh): the mouse tour of the screen for a preview video
+        if now < c.openedMs + 1500 or not PzoptHarnessTour then return end
+        if PzoptHarnessTour.tick(now) then c.tourDone, c.shotMs = true, now end
     elseif c.joy and not c.joyDone then
+        local m0 = PzoptMainMenu.instance() -- (a rebuilt screen gets the rig's pad at once, as mainJoypad's pad does in show)
+        if RIG.focused and m0 and m0.joyfocus ~= JOY then
+            m0:onGainJoypadFocus(JOY)
+            if RIG.hints then m0.forceHints = true end -- (hints: the in-place prompts on the rebuilt screen too)
+        end
+        local rel = RIG.release -- (hold:x / hold:y) the button's release once held long enough, through the screen shown now
+        if rel and now >= rel.at then
+            RIG.release = nil
+            local m = PzoptMainMenu.instance()
+            local ok, err = pcall(function() m:onJoypadButtonReleased(rel.b, JOY) end)
+            print("[pzopt-harness] joy: released" .. (ok and "" or (" ERROR " .. tostring(err))) .. " -> " .. joyDescribe(m))
+        end
         if now < (c.joyAt or (c.openedMs + 1500)) then return end
         local i = (c.joyIndex or 0) + 1
         if i > #c.joy then
@@ -665,8 +911,9 @@ local function optionsTick()
         end
         local m = PzoptMainMenu.instance()
         local ok, err = pcall(joyStep, m, c.joy[i], i)
-        print("[pzopt-harness] joy: " .. i .. " " .. c.joy[i] .. (ok and "" or (" ERROR " .. tostring(err))) .. " -> " .. joyDescribe(PzoptMainMenu.instance()))
-        c.joyIndex, c.joyAt = i, now + 600
+        print("[pzopt-harness] joy: " .. i .. " " .. c.joy[i] .. (ok and "" or (" ERROR " .. tostring(err))) .. " -> " .. joyDescribe(PzoptMainMenu.instance())
+            .. " t=" .. tostring(now)) -- (the epoch ms of pzopt-ui.out's T lines: the UI cost per step)
+        c.joyIndex, c.joyAt = i, now + math.max(c.joyMs or 600, (ok and tonumber(err)) or 0)
     elseif c.shots and not c.shotsDone then
         -- one page every 1.5 s, the screenshot 1 s after showing it
         local i = c.shotIndex or 0
@@ -759,7 +1006,7 @@ local function onMainMenuEnter()
     end
     local anyOptions = false
     for _, k in ipairs({ "options_tab", "options_nav", "options_shots", "options_read", "options_joy", "options_io", "options_profile",
-                         "options_select", "options_search", "options_clips" }) do
+                         "options_select", "options_search", "options_clips", "options_tour" }) do
         if flags[k] and flags[k] ~= "" then anyOptions = true end
     end
     if anyOptions then
@@ -789,7 +1036,9 @@ local function onMainMenuEnter()
                         if secs then table.insert(t, { secs = tonumber(secs), tab = tab }) end
                     end
                     return t
-                end)() or nil }
+                end)() or nil,
+                tour = (flags.options_tour and flags.options_tour ~= "") and true or nil,
+                joyMs = tonumber(flags.options_joy_ms or "") }
         end
         return
     end

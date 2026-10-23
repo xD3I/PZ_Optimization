@@ -371,6 +371,12 @@ public final class BenchResults {
             t.append(line.startsWith(BenchSweep.NOISE + "\t") ? "SWEEPNOISE\t" + line.substring(BenchSweep.NOISE.length() + 1) : "SWEEP\t" + line).append('\n');
          }
       }
+      if ("1".equals(BenchSetup.runOption(run, "profiler"))) {
+         // (2026-10-21, maintainer) the full performance overlay was on during the passes: its own cost is in the numbers
+         t.append("PROFILER\t1\n");
+         t.append("REC\twarn\tThe full performance overlay was on during this run: drawing and sampling it cost frames, so these "
+               + "scores are lower than the same run without it. Compare them only with runs that had the overlay on too.\n");
+      }
       for (String[] rec : BenchAdvice.advise(agg, sys)) {
          t.append("REC\t").append(rec[0]).append('\t').append(rec[1]).append('\n');
       }
@@ -679,9 +685,39 @@ public final class BenchResults {
             continue;
          }
          b.append(h.get("run")).append('\t').append(h.get("date")).append('\t').append(h.get("score")).append('\t').append(h.get("label")).append('\t')
-               .append(h.get("machine")).append('\t').append(h.get("fps")).append('\t').append(BenchSetup.summary(h.get("run"))).append('\n');
+               .append(h.get("machine")).append('\t').append(h.get("fps")).append('\t').append(BenchSetup.summary(h.get("run")))
+               .append('\t').append(p99Mean(h.get("run"))).append('\t').append(BenchSetup.optText(h.get("run"))).append('\n');
       }
       return b.toString();
+   }
+
+   /**
+    * The menu's report list: the mean p99 frame time (ms) over a run's scenes measured with PZ Optimization, read from its
+    * report ("" for a run whose report was never built or has no valid pass; the list never builds one).
+    */
+   static String p99Mean(String run) {
+      File f = reportFile(run, "report.txt");
+      if (!f.isFile()) {
+         return "";
+      }
+      double sum = 0;
+      int n = 0;
+      try {
+         for (String line : Files.readAllLines(f.toPath(), StandardCharsets.UTF_8)) {
+            String[] c = line.split("\t", -1);
+            if (c[0].equals("S") && c.length > 9 && "A".equals(c[3]) && !"0".equals(c[4])) {
+               try {
+                  sum += Double.parseDouble(c[9]);
+                  n++;
+               } catch (NumberFormatException e) {
+                  // a "-" column: not measured
+               }
+            }
+         }
+      } catch (IOException e) {
+         return "";
+      }
+      return n == 0 ? "" : f2(sum / n);
    }
 
    /**

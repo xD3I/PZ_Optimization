@@ -1056,6 +1056,9 @@ public final class Pacing {
 
    private static void write(long[] row) {
       BenchRecorder.onPacing(row); // the built-in benchmark's latency: step start to GPU done
+      if (BenchCapture.armed) {
+         BenchCapture.pacing(row); // the built-in benchmark's pacing chart (a 0.1 s summary per pass)
+      }
       if (logFailed) {
          return;
       }

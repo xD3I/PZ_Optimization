@@ -1,0 +1,8 @@
+# The horde scene's key test (pzopt.HordeScene, 2026-10-22): Home pressed once the scene is armed, then the horde
+# is watched for 25 s. run.sh --mode play --source-save <a copy of pzopt-horde-pier> --inputlag harness/inputlag/horde-home.txt
+activate
+sleep 6
+mark home
+key home 0.2
+sleep 25
+done

@@ -207,6 +207,24 @@ class Remote:
         self._tables = {**getattr(self, "_tables", {}), table: (ok, now)}
         return ok
 
+    def has_tables(self, table, ttl=600):
+        """Whether the public DB has `table` yet (it gets new tables when cloud.sh applies schema.sql: seed / deploy).
+        Cached for ttl seconds; an unreachable DB counts as no, so a script that would fail there never blocks the spool."""
+        if self.env is None:
+            return False
+        now = time.time()
+        hit = getattr(self, "_tables", {}).get(table)
+        if hit and now - hit[1] < ttl:
+            return hit[0]
+        try:
+            p = subprocess.run(["psql", "-X", "-At", "-c", f"SELECT to_regclass('public.{table}') IS NOT NULL"], text=True,
+                               capture_output=True, env=self.env, timeout=30)
+            ok = p.returncode == 0 and p.stdout.strip() == "t"
+        except (subprocess.SubprocessError, OSError):
+            ok = False
+        self._tables = {**getattr(self, "_tables", {}), table: (ok, now)}
+        return ok
+
     def send_live(self, script):
         """Live samples: one persistent connection, best effort (a dropped batch only costs the live view seconds)."""
         if self.env is None or not script:

@@ -233,6 +233,23 @@ public final class InputRecorder {
       }
    }
 
+   /** Writes what is buffered now (the benchmark copies the pass's window of the log at the route's end). */
+   static void flush() {
+      if (state <= 0 || out == null) {
+         return;
+      }
+      try {
+         synchronized (buf) {
+            if (!buf.isEmpty()) {
+               out.write(buf.toString());
+               buf.setLength(0);
+            }
+            out.flush();
+         }
+      } catch (IOException ignored) {
+      }
+   }
+
    private static void flushLoop() {
       while (true) {
          try {

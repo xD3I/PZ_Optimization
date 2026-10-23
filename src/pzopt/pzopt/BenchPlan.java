@@ -369,7 +369,10 @@ public final class BenchPlan {
       }
       Properties f = new Properties();
       timedemoStep = option("timedemo") && !"W".equals(myParts[1]) && BenchSuite.timedemoApplies(scenario()) ? calibratedStep() : 0;
-      for (Map.Entry<String, String> e : BenchSuite.flagsFor(scenario(), timedemoStep).entrySet()) {
+      Properties plan = plan();
+      String id = scenario().id;
+      for (Map.Entry<String, String> e : BenchSuite.flagsFor(scenario(), timedemoStep, plan.getProperty("weather." + id),
+            plan.getProperty("fog." + id), plan.getProperty("time." + id)).entrySet()) {
          f.setProperty(e.getKey(), e.getValue());
       }
       return f;
@@ -387,12 +390,25 @@ public final class BenchPlan {
       m.put("overlay", "false");
       m.put("overlayLog", "true");
       m.put("pacingLog", "true");
+      m.put("inputLog", "true"); // every key / mouse / pad change (pzopt.InputRecorder): the report page's input panels
       m.put("updateCheck", "false");
       if ("B".equals(myParts[1])) {
          m.put("enabled", "false");
       }
       if (option("uncapped")) {
          m.put("uncappedFps", "true");
+      }
+      if (option("profiler")) {
+         // (2026-10-21, maintainer) the menu's "full performance overlay": every element of it at its fullest, sampling on
+         // (the overlay's own cost is then in the numbers; the stock pass runs without PZ Optimization, so without it)
+         m.put("profilerEnabled", "true");
+         m.put("overlay", "true");
+         m.put("overlaySampling", "true");
+         m.put("overlayStats", "full");
+         m.put("overlayTree", "8");
+         m.put("overlayVerdict", "detailed");
+         m.put("overlayGraph", "240");
+         m.put("overlayFlame", "right");
       }
       return m;
    }

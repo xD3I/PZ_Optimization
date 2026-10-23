@@ -4,6 +4,9 @@
 #   harness/queue.sh submit cmd --install opt --label bench-x ... -- harness/benchmark-run.sh <spec> <label> [prop=value ...]
 # spec = all | scenario[,scenario...][:passes[:ab]]   e.g. spin:1, louisville,horde:3, all:2:ab
 # Extra prop=value pairs go into the game dir's pzopt.properties for every process of the chain (e.g. devX=true).
+# BENCH_VMARGS="-Xmx12g -Ddeployment.user.cachedir=/x": extra JVM options for every process of the chain (each replaces the
+# launcher's option of the same key; restored after). With a cachedir, set ZOMBOID=<it>/Zomboid too (the chain's plan,
+# console and results are read from there): a separate user folder, e.g. hundreds of Workshop mods hard-linked into its mods/.
 # BENCH_USER_OPTIONS=1 keeps the player's Zomboid/pzopt/options.ini (the desktop's tab file turns HDR, DLSS, AO on);
 # by default the chain reads an empty options file, so the numbers are the build's defaults.
 # The chain: launch -> main menu plans the run and restarts -> one process per pass -> the last one writes the report
@@ -13,6 +16,8 @@
 # ui:history opens that screen at the main menu (devBenchmarkUi) without running anything -> panel.png / history.png;
 # ui:compare opens the newest A/B report with another run's share code applied (the "Compare a code" view) -> compare.png;
 # ui:runs opens Past results and compares its two newest runs (scores, settings, game settings, mods, PC) -> runs.png;
+# ui:report tours the newest run's report page (scrolled a page at a time, then the Mods row folded) -> shots/, reporttour.txt
+# (with uiProfile=true also pzopt-ui.out: the UI's render time while it draws);
 # ui:read tours every benchmark screen (harness/benchmark-readability.py reads benchread.txt + shots/, html/ every report).
 set -euo pipefail
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
@@ -114,13 +119,20 @@ restore() {
 }
 trap restore EXIT
 
-[[ -n "$LAUNCHER" ]] && python3 - "$LAUNCHER" "$empty" "${BENCH_USER_OPTIONS:-0}" <<'PY'
+[[ -n "$LAUNCHER" ]] && python3 - "$LAUNCHER" "$empty" "${BENCH_USER_OPTIONS:-0}" "${BENCH_VMARGS:-}" <<'PY'
 import json, sys
-path, empty, keep = sys.argv[1:]
+path, empty, keep, extra = sys.argv[1:]
 j = json.load(open(path))
 j["vmArgs"] = ["-Dzomboid.steam=0" if a == "-Dzomboid.steam=1" else a for a in j["vmArgs"]]
 if keep != "1":
     j["vmArgs"] = [a for a in j["vmArgs"] if not a.startswith("-Dpzopt.userOptionsFile=")] + ["-Dpzopt.userOptionsFile=" + empty]
+def key(a):  # -Dname=, -Xmx, -XX:[+-]Name: an extra argument replaces the launcher's of the same key
+    if a.startswith("-D"): return a.split("=", 1)[0]
+    if a.startswith("-Xmx") or a.startswith("-Xms"): return a[:4]
+    if a.startswith("-XX:"): return a[4:].lstrip("+-").split("=", 1)[0]
+    return a
+for a in extra.split():
+    j["vmArgs"] = [b for b in j["vmArgs"] if key(b) != key(a)] + [a]
 json.dump(j, open(path, "w"), indent="\t")
 PY
 ui=""
@@ -173,13 +185,14 @@ while true; do
   [[ "$ui" == read ]] && done_pat="benchmark: read tour done"   # the readability tour: every screen, one after the other
   [[ "$ui" == pad ]] && done_pat="benchmark: pad tour done"     # the controller check: benchmark-pad-check.sh drives the pad
   [[ "$ui" == restart ]] && done_pat="benchmark: restart tour done" # the restart rig: the restarted process checks the setting
+  [[ "$ui" == report ]] && done_pat="benchmark: report tour done"   # the report tour: the newest run's report page, page by page
   if [[ -n "$pid" ]] && grep -q "$done_pat" "$ZD/console.txt" 2>/dev/null; then
     # the game's own screenshot (Lua call("shot"), ~2 s after the dialog): the desktop capture below cannot see the game
     # on every machine (the flip's spectacle shows the wallpaper)
     for _ in $(seq 1 12); do grep -q "benchmark: screenshot pzopt-bench-ui-" "$ZD/console.txt" 2>/dev/null && break; sleep 1; done
     sleep 1
-    [[ "$ui" == read ]] && sleep 3   # the last stop's screenshot is written by the render thread a frame later
-    case "$ui" in read|pad) ;; panel) shot panel.png ;; history) shot history.png ;; compare) shot compare.png ;; runs) shot runs.png ;; *) shot report.png ;; esac
+    [[ "$ui" == read || "$ui" == report ]] && sleep 3   # the last stop's screenshot is written by the render thread a frame later
+    case "$ui" in read|pad|report) ;; panel) shot panel.png ;; history) shot history.png ;; compare) shot compare.png ;; runs) shot runs.png ;; *) shot report.png ;; esac
     kill "$pid" 2>/dev/null || true
     sleep 6
     pkill -f "$GAME_PAT" 2>/dev/null || true
@@ -238,6 +251,12 @@ if [[ "$ui" == read ]]; then  # the readability tour: its BENCHREAD lines, scree
   mkdir -p "$out/html"
   for r in "$ZD"/pzopt/benchmark/runs/*/report.html; do [[ -f "$r" ]] && cp "$r" "$out/html/$(basename "$(dirname "$r")").html"; done
   echo "read: $(grep -c "BENCHREAD-END" "$out/benchread.txt") stops, $(ls "$out/shots" | wc -l) screenshots, $(ls "$out/html" | wc -l) reports"
+  exit 0
+fi
+if [[ "$ui" == report ]]; then  # the report tour: its stops and screenshots
+  grep -a "report tour" "$out/console-last.txt" | sed 's/.*> //' > "$out/reporttour.txt" || true
+  [[ -f "$ZD/pzopt-ui.out" ]] && cp "$ZD/pzopt-ui.out" "$out/pzopt-ui.out"
+  cat "$out/reporttour.txt"; ls "$out/shots"
   exit 0
 fi
 if [[ -n "$ui" ]]; then  # a screen check: the screenshot is the result

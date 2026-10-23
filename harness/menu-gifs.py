@@ -156,6 +156,69 @@ CLIPS['ao'] = dict(stock='enh-ao-off', opt='enh-ao-on', after=1.0, counter=False
                    title='Rosewood houses at noon, zoom 1, walking: ambient occlusion off vs on')
 
 
+# The benchmark's scenes (2026-10-20, the run planner's clips): the three scenes without a clip above, cut from runs of the
+# same route. Rosewood town drive: the 120 km/h drive south through Rosewood at the 240 cap, stock vs the 09-25 release
+# (runs td-rel-stock-1 / td-rel-new-1), from route +12 s, the commercial strip into town. Horde shooting at the Riverside
+# pier: route +14 s, the horde reaching the pier (runs hs-stock-a / hs-opt-a); no counter, because that day's stock pass sat
+# at a leftover 60 fps cap (the horde-shoot bench trap), so its number would not be the stock game's. Visuals feature costs:
+# the all-enhancements showcase's clear-morning pair (ge-clear-off / -on, in-game captures, pane.mkv): every Visuals
+# feature off vs on, Rosewood at 08:00.
+CLIPS['towndrive'] = dict(stock='td-rel-stock-1', opt='td-rel-new-1', align='route', after=12.0,
+                          title='Rosewood town drive at 120 km/h, 240 fps cap')
+CLIPS['piershoot'] = dict(stock='hs-stock-a', opt='hs-opt-a', align='route', after=14.0, counter=False,
+                          title='Horde shooting at the Riverside pier')
+CLIPS['visuals'] = dict(stock='ge-clear-off', opt='ge-clear-on', kind='pane', after=2.0, counter=False, crop=PANE_CROP,
+                        title='Rosewood at 08:00: every Visuals feature off vs on')
+# The benchmark scenes from scratch (2026-10-20, the maintainer: "higher quality and higher resolution avifs that would be the
+# same size as the original gifs"): one run per scene of BenchSuite.ALL with its own flags, noon and clear, optimized defaults
+# (empty options file; the sweep with every Visuals feature it switches on, upscaling left off), devCapture of the whole
+# screen at 40 %; runs bc-<scene>. `after` = route seconds.
+for _scene, _after in (('spin', 3.0), ('drive120', 5.0), ('louisville', 7.4), ('drive120south', 12.0), ('horde', 14.0),
+                       ('sweep', 4.0)):
+    CLIPS['bench-' + _scene] = dict(opt='bc-' + _scene, kind='scene', after=_after, title='benchmark scene ' + _scene)
+# One clip per visual setting (2026-10-20, docs/menu-clips-2026-10-20.md): pairs of in-game captures (pzopt.FrameCapture,
+# devCapture at 24 fps, 1:1 screen pixels in a crop or the whole screen at 20 %), runs mc-<clip>-off / mc-<clip>-on on the
+# same build, save, spot, hour and route, an empty options file, only the setting differs. kind='capture' (frames matched by
+# route time), `after` = route seconds, `crop` in the capture's pixels; denoise off where the effect is pixel-sized detail.
+# Jev's visibility verdict per pair: harness/clip-judge.py.
+MENU_CLIPS = (
+    # clip, runs mc-<runs>-off / -on, crop (capture px), after (route s), denoise, title
+    ('ppl', 'ppl2', '0:0:1536:648', 1.0, True, 'The night lot at 23:00, torch on, turning in place, zoom 1: per-pixel lighting off vs on'),
+    ('sunshadows', 'sun', '0:0:1536:648', 1.0, True, 'Rosewood house at 16:30, zoom 1: sun shadows off vs on'),
+    ('clouds', 'clouds', '0:0:1024:432', 1.0, True, 'Rosewood at 16:00, max zoom, clouds at 8x speed: cloud shadows off vs on (sun shadows on)'),
+    ('moon', 'moon', '0:0:1536:648', 1.0, True, 'A full moon at 23:00, zoom 1: moon shadows off vs on (sun shadows on)'),
+    ('reflections', 'refl', '500:250:768:324', 1.0, False, 'The Riverside pier at 15:00, zoom 1: reflections off vs on'),
+    ('sway', 'sway', '0:0:1536:648', 1.0, True, 'A Rosewood yard at noon in the wind, zoom 1: foliage sway off vs on'),
+    ('ripples', 'ripples', '0:0:1024:432', 1.0, False, 'Walking in the rain through puddles, zoom 0.5: puddle ripples off vs on'),
+    ('occupant', 'occ', '0:94:1200:506', 1.0, True, 'Driving at 60 km/h, zoom 0.5, car glass on: the people inside off vs on'),
+    ('relief', 'relief', '900:0:636:268', 1.0, False, 'A brick facade at 11:00, zoom 1, 1:1 pixels: relief off vs on (per-pixel light and sun shadows on)'),
+    ('ao', 'ao', '384:162:768:324', 1.0, True, 'A Rosewood living room at noon, zoom 1: ambient occlusion off vs on'),
+    ('memory', 'memory', '600:0:936:395', 1.0, True, 'A Rosewood house at 13:00, zoom 1: remembered places off vs on (colour grading off)'),
+    ('grade', 'grade2', '0:0:1536:648', 1.0, True, 'A Rosewood house at 20:30, clear, zoom 1: colour grading off vs on'),
+    ('darkfloor', 'dark', '0:0:1536:648', 1.0, True, 'A Rosewood house at 01:00, zoom 1: darkness floor 0 % vs 20 %'),
+    ('wakes', 'wakes2', '0:0:1536:648', 1.0, False, 'Driving at 30 km/h through puddles, zoom 0.75: car wakes off vs on'),
+    ('treecut', 'treecut', '0:0:1536:648', 1.0, True, "Driving at 60 km/h past trees, zoom 1: the game's 42.21 tree cutaway vs trees kept"),
+    ('outlines', 'outl', '40:30:576:243', 1.0, True, 'A crowd round the church at noon, zoom 1: outlines of hidden zombies off vs on'),
+    ('mirrors', 'mirror2', '0:0:1280:540', 1.0, True, 'A Rosewood bedroom at noon, zoom 0.5, 1:1 pixels: mirrors and windows off vs on'),
+    ('props', 'props2', '520:250:944:398', 1.0, False, 'A glass case, a TV, a glass door and a fridge by the road, zoom 0.5: reflective props off vs on'),
+    ('blood', 'blood3', '0:0:768:324', 1.0, False, 'A Rosewood living room at 15:00, 800 fresh splats, turning, zoom 0.5, 1:1 pixels: wet blood off vs on (reflections on)'),
+    ('torchsource', 'tsrc2', '0:0:1024:432', 1.0, True, 'The night lot at 01:00, a torch and a lantern, zoom 0.5: torch source off vs on (per-pixel light on)'),
+)
+for name, runs, crop, after, dn, title in MENU_CLIPS:
+    CLIPS[name] = dict(stock=f'mc-{runs}-off', opt=f'mc-{runs}-on', kind='capture', after=after, counter=False, crop=crop,
+                       denoise=dn, title=title)
+for name in ('occupant', 'wakes', 'treecut'):
+    CLIPS[name]['match_window'] = 1.0  # drives: the two runs drift more than 0.35 s apart
+# size (~1.5 MB a GIF): rain, water and the moving world of a drive re-colour every pixel each frame
+for name in ('reflections', 'ripples', 'wakes', 'occupant', 'treecut'):
+    CLIPS[name].update(fps=15, denoise=True)
+CLIPS['treecut']['dur'] = CLIPS['ripples']['dur'] = 3.0
+# One run whose setting switches every few seconds (a still scene shown twice: same cars, same frame, only the setting)
+CLIPS['carglass'] = dict(kind='alternate', run='mc-glass2-alt', alt=r'car glass: alternating every (\d+) ms from epoch_ms (\d+)',
+                         phases=(2, 1), crop='200:150:1792:756', dur=3.6, counter=False, denoise=True,
+                         title='Three parked cars at 10:30, zoom 0.5: car glass off vs on (one run switching every 4 s)')
+
+
 def sh(cmd, **kw):
     print('+', ' '.join(cmd)[:300], file=sys.stderr)
     subprocess.run(cmd, check=True, **kw)
@@ -290,6 +353,7 @@ def gif(src, t0, dur, ass, out, fps=FPS, hold=0.0, extra='', crop=None, denoise=
 AVIF = os.environ.get('MENU_AVIF', '1') != '0'
 AVIF_Q, AVIF_SPEED, AVIF_CHROMA = 80, 4, '420'   # 4:2:0 decodes ~1.7x faster than 4:4:4 at the same quality
 AVIF_BYTES = {}  # GIF path -> bytes of the AVIF written beside it
+AVIF_SCENE_SPEED = 2  # the scene clips' size-matched AVIFs: the slower search packs more quality into the same bytes
 
 
 def _hable(x):
@@ -327,16 +391,18 @@ def _overlay_to_pq(rgb8):
     return np.round(np.clip(pq, 0, 1) * 65535)
 
 
-def avif(src, t0, dur, ass, out, fps=FPS, hold=0.0, crop=None, sdr=False, q=AVIF_Q):
+def avif(src, t0, dur, ass, out, fps=FPS, hold=0.0, crop=None, sdr=False, q=AVIF_Q, w=W, speed=AVIF_SPEED):
     """The GIF's cut as an animated AVIF (avifenc / libaom from a y4m: ffmpeg's own AVIF muxer writes an edit list javif
-    refuses). The counter is rendered by libass on black and on white, the pair giving its colour and coverage, and
-    blended over the scene: in 8-bit for an SDR source, in PQ codes (through _overlay_to_pq) for an HDR one."""
+    refuses), `w` px wide (the GIF's 512 unless asked; pzopt.ClipDecoder takes up to 1024). The counter is rendered by
+    libass on black and on white, the pair giving its colour and coverage, and blended over the scene: in 8-bit for an
+    SDR source, in PQ codes (through _overlay_to_pq) for an HDR one."""
     import numpy as np
+    W = w  # (the frame width below; the module's W is the GIF's)
     if crop:
         cx, cy, cw, ch = (int(v) for v in crop.split(':'))
         geo, h = f'crop={cw}:{ch}:{cx}:{cy},', max(2, round(ch * W / cw / 2) * 2)
     else:
-        geo, h = '', H
+        geo, h = '', round(H * W / 512 / 2) * 2
     pix, dt = ('rgb24', np.uint8) if sdr else ('rgb48le', np.dtype('<u2'))
     pad = f',tpad=stop_mode=clone:stop_duration={hold:.3f}' if hold > 0 else ''
     conv = 'format=rgb24' if sdr else 'scale=in_color_matrix=bt2020:in_range=tv:out_range=pc:flags=accurate_rnd+full_chroma_int,format=rgb48le'
@@ -375,10 +441,10 @@ def avif(src, t0, dur, ass, out, fps=FPS, hold=0.0, crop=None, sdr=False, q=AVIF
         '-i', raw, '-vf', f'scale=out_color_matrix={mat}:out_range=pc,format={fmt}', '-color_range', 'pc', '-strict', '-1', y4m])
     os.unlink(raw)
     sh(['avifenc', '--cicp', '1/13/1' if sdr else '9/16/9', '-r', 'full', '-d', '8' if sdr else '10', '-y', AVIF_CHROMA,
-        '--fps', str(fps), '-q', str(q), '-s', str(AVIF_SPEED), '-j', 'all', y4m, out], stdout=subprocess.DEVNULL)
+        '--fps', str(fps), '-q', str(q), '-s', str(speed), '-j', 'all', y4m, out], stdout=subprocess.DEVNULL)
     os.unlink(y4m)
     size = os.path.getsize(out)
-    print(f'wrote {out} ({size / 1e3:.0f} kB, {len(frames)} frames, {"SDR 8-bit" if sdr else "PQ 10-bit"})')
+    print(f'wrote {out} ({size / 1e3:.0f} kB, {W}x{h}, q {q}, {len(frames)} frames, {"SDR 8-bit" if sdr else "PQ 10-bit"})')
     return size
 
 
@@ -479,6 +545,7 @@ def capture_clip(name, c, work):
         raw = np.memmap(os.path.join(d, 'capture/frames.rgba'), np.uint8, mode='r')
         n = min(len(stamps), raw.size // (w * h * 4))
         caps.append((raw[:n * w * h * 4].reshape(n, h, w, 4), (stamps[:n] - r0) / 1000.0, d))
+    props.Matcher.WINDOW = c.get('match_window', 0.35)  # drives: two runs drift more than 0.35 s apart (class attribute: reset per clip)
     match = props.Matcher(caps[0][:2], caps[1][:2])
     cx, cy, cw, ch = (int(v) for v in c['crop'].split(':'))
     dur, fps = c.get('dur', DUR), c.get('fps', FPS)
@@ -500,21 +567,110 @@ def capture_clip(name, c, work):
     return res
 
 
+def scene_clip(name, c, work):
+    """A benchmark scene's clip (2026-10-20): the planner's card shows only the optimized side, so one run's devCapture
+    frames (the whole screen at 40 %, 2048x864) from route time `after`; the GIF as every other clip (512x216), the AVIF at
+    1024x432 (ClipDecoder.MAX_DIM) at the highest quality whose file is no bigger than the GIF (or `avif_bytes`), so the
+    two formats are compared at the same size. No counter: the capture's readback costs frames."""
+    import numpy as np
+    from PIL import Image
+    d = st.run_dir(c['opt'])
+    lines = open(os.path.join(d, 'capture/index.txt')).read().split('\n')
+    head = dict(x.split('=') for x in lines[0].split())
+    w, h = int(head['w']), int(head['h'])
+    stamps = np.array([int(x) for x in lines[1:] if x.strip()])
+    r0 = int(st.kv(os.path.join(d, 'pzopt-schedule.out'))['route_start_epoch_ms'])
+    raw = np.memmap(os.path.join(d, 'capture/frames.rgba'), np.uint8, mode='r')
+    n = min(len(stamps), raw.size // (w * h * 4))
+    caps, t = raw[:n * w * h * 4].reshape(n, h, w, 4), (stamps[:n] - r0) / 1000.0
+    dur, fps = c.get('dur', DUR), c.get('fps', FPS)
+    if t[0] > c['after'] or t[-1] < c['after'] + dur:
+        raise SystemExit(f'{name}: capture covers route {t[0]:.1f}..{t[-1]:.1f} s, the clip wants {c["after"]}..{c["after"] + dur} s')
+    os.makedirs(os.path.join(work, name))
+    for j in range(round(dur * fps)):
+        i = int(np.argmin(np.abs(t - (c['after'] + j / fps))))
+        Image.fromarray(np.ascontiguousarray(caps[i][::-1][:, :, :3])).save(os.path.join(work, name, f'f{j:05d}.png'), compress_level=1)
+    src = os.path.join(work, f'{name}.mkv')
+    sh(['ffmpeg', '-hide_banner', '-v', 'error', '-y', '-framerate', str(fps), '-i', os.path.join(work, name, 'f%05d.png'),
+        '-c:v', 'ffv1', src])
+    out = os.path.join(OUT, f'{name}-opt.gif')
+    global AVIF
+    keep, AVIF = AVIF, False  # (the AVIF below, not gif()'s 512 px one)
+    try:
+        gbytes = gif(src, 0, dur, None, out, fps=fps, crop=f'0:0:{w}:{h}', denoise=c.get('denoise', True), sdr=True)
+    finally:
+        AVIF = keep
+    res = dict(opt=dict(run=os.path.basename(d), route_t0=c['after'], file=os.path.basename(out), bytes=gbytes))
+    if AVIF:
+        target, aout = c.get('avif_bytes', gbytes), out[:-4] + '.avif'
+        lo, hi, best = 0, 100, None
+        while lo <= hi:  # avifenc -q 0..100: the biggest file under the target
+            q = (lo + hi) // 2
+            size = avif(src, 0, dur, None, aout, fps=fps, crop=f'0:0:{w}:{h}', sdr=True, q=q, w=1024, speed=AVIF_SCENE_SPEED)
+            if size <= target:
+                best, lo = q, q + 1
+            else:
+                hi = q - 1
+        if best is None:
+            raise SystemExit(f'{name}: no AVIF quality fits {target} bytes')
+        res['opt']['avif_bytes'] = avif(src, 0, dur, None, aout, fps=fps, crop=f'0:0:{w}:{h}', sdr=True, q=best, w=1024,
+                                        speed=AVIF_SCENE_SPEED)
+        res['opt'].update(avif_q=best, avif_target=target, avif_size='1024x432')
+    return res
+
+
+def alternate_clip(name, c, work):
+    """Both sides from ONE run whose setting alternates (a still scene: parked cars with devCarGlassAlternate): the off
+    side is phase c['phases'][1], the on side phase c['phases'][0] of the console's alternation line (`alt` regex: period
+    ms, start epoch ms), frames near a switch dropped; harness/clip-judge.py builds the frames, so the judge sees these."""
+    from PIL import Image
+    spec = importlib.util.spec_from_file_location('clip_judge', os.path.join(REPO, 'harness/clip-judge.py'))
+    cj = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(cj)
+    d = st.run_dir(c['run'])
+    dur, fps = c.get('dur', 3.6), c.get('fps', FPS)
+    pon, poff = c.get('phases', (0, 1))
+    cj.W = W
+    fa, fb = cj.frames_from_alt(d, c['alt'], c['crop'], pon, poff, dur, fps)
+    res = {}
+    for side, fr in (('stock', fa), ('opt', fb)):
+        os.makedirs(os.path.join(work, f'{name}-{side}'))
+        for j, f in enumerate(fr):
+            Image.fromarray(f).save(os.path.join(work, f'{name}-{side}', f'f{j:05d}.png'), compress_level=1)
+        src = os.path.join(work, f'{name}-{side}.mkv')
+        sh(['ffmpeg', '-hide_banner', '-v', 'error', '-y', '-framerate', str(fps), '-i',
+            os.path.join(work, f'{name}-{side}', 'f%05d.png'), '-c:v', 'ffv1', src])
+        out = os.path.join(OUT, f'{name}-{side}.gif')
+        h, w = fr[0].shape[:2]
+        res[side] = dict(run=os.path.basename(d), phase=poff if side == 'stock' else pon, file=os.path.basename(out),
+                         bytes=gif(src, 0, dur, None, out, fps=fps, crop=f'0:0:{w}:{h}', denoise=c.get('denoise', True), sdr=True))
+    return res
+
+
+# fps route clips of settings that do not change the picture: the menu says "No visual comparison available" for them
+# (2026-10-20, the maintainer), so they are no longer made or shipped; the benchmark scenes' old clips (drive, spin, horde,
+# towndrive, piershoot) gave way to the bench-* scene clips the same day
+RETIRED = {'storm', 'fog', 'torch', 'nightdrive', 'load', 'zombies', 'player', 'zgt', 'grid',
+           'drive', 'spin', 'horde', 'towndrive', 'piershoot'}
+
+
 def main():
-    names = sys.argv[1:] or list(CLIPS)
+    names = sys.argv[1:] or [n for n in CLIPS if n not in RETIRED]
     os.makedirs(OUT, exist_ok=True)
     work = tempfile.mkdtemp(prefix='menu-gifs-')
     report = {}
     for name in names:
         c = CLIPS[name]
         try:
-            st.run_dir(c['stock']); st.run_dir(c['opt'])
+            for r in ([c['run']] if c.get('kind') == 'alternate' else [c['opt']] if c.get('kind') == 'scene' else [c['stock'], c['opt']]):
+                st.run_dir(r)
         except IndexError:
-            print(f'{name}: runs {c["stock"]} / {c["opt"]} not under harness/runs, skipped', file=sys.stderr)
+            print(f'{name}: runs {c.get("run") or (c["stock"], c["opt"])} not under harness/runs, skipped', file=sys.stderr)
             continue
-        fn = {'load': load_clip, 'pane': pane_clip, 'capture': capture_clip}.get(c.get('kind'), action_clip)
+        fn = {'load': load_clip, 'pane': pane_clip, 'capture': capture_clip, 'alternate': alternate_clip,
+              'scene': scene_clip}.get(c.get('kind'), action_clip)
         report[name] = dict(title=c['title'], **fn(name, c, work))
-        for side in ('stock', 'opt'):  # the AVIF written beside each GIF
+        for side in [x for x in ('stock', 'opt') if x in report[name]]:  # the AVIF written beside each GIF
             g = os.path.join(OUT, report[name][side].get('file') or f'{name}-{side}.gif')
             if g in AVIF_BYTES:
                 report[name][side]['avif_bytes'] = AVIF_BYTES[g]

@@ -48,6 +48,9 @@ public final class BenchRecorder {
    private static long allocStart;
    static int unfocusedFrames, pausedFrames, ticks;
    private static int chunks0;
+   // the 2 Hz samples as a timeline and every collector pause (the report page's utilization, power and GC charts,
+   // written beside the frames as step-NN-...-samples.csv and the pass's gc_pauses)
+   private static final BenchTimeline timeline = new BenchTimeline();
 
    private BenchRecorder() {
    }
@@ -70,6 +73,7 @@ public final class BenchRecorder {
       allocStart = allocatedBytes();
       installGcListener();
       chunks0 = Stats.loadedChunks();
+      timeline.clear();
       startNs = System.nanoTime();
       startEpochMs = System.currentTimeMillis();
       endNs = 0;
@@ -176,6 +180,8 @@ public final class BenchRecorder {
       maxRender = Math.max(maxRender, renderLoad);
       long heap = ManagementFactory.getMemoryMXBean().getHeapMemoryUsage().getUsed();
       heapPeak = Math.max(heapPeak, heap);
+      timeline.sample((System.nanoTime() - startNs) / 1e9, systemLoad, processLoad, gameLoad, renderLoad, gpuLoad,
+            Power.totalW, Power.cpuW, Power.gpuW, Power.socW, Power.batW, heap / 1048576.0);
       if (!Float.isNaN(Power.totalW) || !Float.isNaN(Power.gpuW)) {
          powerN++;
          sumTotalW += Float.isNaN(Power.totalW) ? 0 : Power.totalW;
@@ -267,6 +273,7 @@ public final class BenchRecorder {
                return; // ZGC / Shenandoah cycles run beside the game; their pauses are reported separately
             }
             gcMaxPauseMs = Math.max(gcMaxPauseMs, info.getGcInfo().getDuration());
+            timeline.gcPause((System.nanoTime() - startNs) / 1e9, info.getGcInfo().getDuration());
          };
          for (GarbageCollectorMXBean b : ManagementFactory.getGarbageCollectorMXBeans()) {
             if (b instanceof javax.management.NotificationEmitter e) {
@@ -285,6 +292,7 @@ public final class BenchRecorder {
       BenchStats.Frames f = BenchStats.frames(frameMs, n);
       double wall = ((endNs > 0 ? endNs : System.nanoTime()) - startNs) / 1e9;
       put(m, "frames", f.frames);
+      put(m, "started_ms", startEpochMs); // (the route's start: BenchDash places the per-second logs on route time)
       put(m, "seconds", f.seconds);
       put(m, "wall_seconds", wall);
       put(m, "fps", f.avgFps);
@@ -347,6 +355,7 @@ public final class BenchRecorder {
       put(m, "gc_count", gc[0] - gcCount0);
       put(m, "gc_ms", gc[1] - gcMs0);
       put(m, "gc_max_pause_ms", gcMaxPauseMs);
+      m.put("gc_pauses", timeline.gcText());
       put(m, "heap_peak_mb", heapPeak / 1048576.0);
       put(m, "heap_start_mb", heapStart / 1048576.0);
       long alloc = allocatedBytes();
@@ -534,6 +543,28 @@ public final class BenchRecorder {
          }
       } catch (java.io.IOException e) {
          Log.warn("benchmark: could not write " + f + ": " + e);
+      }
+   }
+
+   /**
+    * The pass's timelines for the report page (BenchDash), beside its frames: {@code <base>-samples.csv} (the 2 Hz
+    * utilization / power / heap samples) and {@code <base>-gamethread.out} (the stack sampler's per-second rows of the
+    * timed window, as pzopt.GameThreadProfile wrote them). Never throws: a pass without them only shows fewer charts.
+    */
+   static void writeTimelines(java.io.File dir, String base) {
+      try {
+         timeline.writeCsv(new java.io.File(dir, base + "-samples.csv"));
+      } catch (Throwable t) {
+         Log.warn("benchmark: could not write the samples: " + t);
+      }
+      try {
+         GameThreadProfile.flushLog();
+         java.io.File src = new java.io.File(zombie.ZomboidFileSystem.instance.getCacheDir(), "pzopt-gamethread.out");
+         if (src.isFile()) {
+            BenchTimeline.copyWindow(src, new java.io.File(dir, base + "-gamethread.out"), startEpochMs, endEpochMs + 1000);
+         }
+      } catch (Throwable t) {
+         Log.warn("benchmark: could not keep the game-thread profile: " + t);
       }
    }
 

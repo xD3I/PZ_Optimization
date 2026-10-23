@@ -66,7 +66,7 @@ public final class Stats {
    }
 
    public static void onEnqueued(IsoChunk chunk) {
-      if (ENABLED) {
+      if (ENABLED || BenchCapture.armed) { // (the built-in benchmark's chunk trace too)
          enqueued.put(chunk, System.nanoTime());
       }
    }
@@ -88,6 +88,10 @@ public final class Stats {
    }
 
    public static void done(IsoChunk chunk, Timing t) {
+      if (BenchCapture.armed) { // the built-in benchmark's per-pass chunk trace (in memory, written after the pass)
+         BenchCapture.chunk(t.enqueuedNs, t.loadStartNs, t.loadEndNs, t.recalcStartNs, t.recalcEndNs, t.publishNs, chunk.wx, chunk.wy, chunk.getMinLevel(),
+               chunk.getMaxLevel(), String.valueOf(chunk.jobType), t.thread);
+      }
       if (!ENABLED) {
          return;
       }
@@ -126,10 +130,15 @@ public final class Stats {
 
    /** Called from IsoChunk.update() (every loaded chunk, every frame); only the first call per frame does anything. */
    public static void frameTick(int frameId) {
+      HordeScene.frame(frameId); // a save with pzopt-scene.txt: the horde scene for a player's own take (one compare otherwise)
       if (!HOOK_FRAMES || frameId == lastFrameId) {
          return;
       }
       long now = System.nanoTime();
+      LoadTrace.rearm(); // (the game drops the console trace whenever a character leaves the world)
+      if (BenchCapture.armed) {
+         BenchCapture.gameFrame(now); // the built-in benchmark's game frames (pzopt-frames.out's clock), one array store
+      }
       if (Harness.REQUESTED) {
          Harness.onFrame(now);
       }

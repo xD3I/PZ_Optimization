@@ -189,11 +189,17 @@ public final class UiProfile {
 
    /** UIElement: before a Lua prerender / render / update call (0 when not profiling). */
    public static long callBegin() {
+      if (ModLuaProfile.on) { // the benchmark's mod Lua profiler names the UI call for its sampler
+         ModLuaProfile.uiEnter();
+      }
       return enabled() ? System.nanoTime() : 0L;
    }
 
    /** UIElement: after it; kind 0 prerender, 1 render, 2 update; summed per element Lua Type. */
    public static void callEnd(UIElement e, int kind, long t0) {
+      if (ModLuaProfile.on) {
+         ModLuaProfile.uiExit(e, e.getTable(), kind);
+      }
       if (t0 == 0L) {
          return;
       }

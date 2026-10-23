@@ -224,6 +224,11 @@ public final class Harness {
    private static float drivenDistance;
    private static boolean rejected;
    private static String routeStatus = "complete";
+   /** Why the route ended early (a scene's failed pass, the hard timeout); written as route_reason. */
+   private static String routeReason = "";
+   /** Set off the game thread by a scene's watchdog (Showcase hard_timeout): the route ends as failed at the next frame. */
+   private static volatile String hardStopReason;
+   private static final java.util.concurrent.atomic.AtomicBoolean routeEndClaimed = new java.util.concurrent.atomic.AtomicBoolean();
    private static float maxSeconds = 90f;
    /** drive mode: cruise-control (regulator) speed in km/h the vehicle is driven at (flag kmh, default 60). */
    private static float cruiseKmh = 60f; // road speed; curves are followed by roadFollow(), so flat out is not needed
@@ -770,14 +775,27 @@ public final class Harness {
                sampleThreadCpu();
                Stats.mark("route-start");
                Benchmark.onRouteStart(); // built-in benchmark: the timed window opens
+               HarnessModLua.routeStart(); // each mod's Lua per frame over the route (pzopt-luaprof.out)
                state = RUN;
             }
          }
           case RUN -> {
+            if (hardStopReason != null && !"true".equals(HarnessFlags.get("dev_watchdog_offthread", "false"))) { // a scene's watchdog: the route ends now, as failed (frames still come); the dev flag leaves it to the watchdog thread (the no-frame path)
+               endRouteFailed(hardStopReason, false);
+               return;
+            }
             if (p == null) {
                Log.warn("harness: player vanished mid-route (world reloaded?); aborting run");
+               routeStatus = "aborted";
+               routeReason = "the player vanished mid-route";
+               if (!routeEndClaimed.compareAndSet(false, true)) return;
                Benchmark.onRouteEnd("aborted", "the player vanished mid-route");
+               HarnessModLua.routeEnd();
+               runEndEpochMs = System.currentTimeMillis();
+               writeSummary((nowNs - runStartNs) / 1e9f, Stats.chunkCount() - chunksAtStart); // 2026-10-21: it quits too (it hung here)
+               Stats.flush();
                state = DONE;
+               requestQuit();
                return;
             }
              if (driving) {
@@ -967,6 +985,11 @@ public final class Harness {
                }
             }
             if (leg >= legs.size()) {
+               if (Showcase.routeFailed()) { // showcase tactics=kite: the kill switch ended the pass (the player was hit / died)
+                  endRouteFailed(Showcase.endReason(), false);
+                  return;
+               }
+               if (!routeEndClaimed.compareAndSet(false, true)) return; // the hard-timeout watchdog ended it
                float secs = (nowNs - runStartNs) / 1e9f;
                int chunks = Stats.chunkCount() - chunksAtStart;
                Stats.mark("route-end");
@@ -974,6 +997,7 @@ public final class Harness {
                Log.info("harness: route done in " + secs + "s, " + chunks + " chunks loaded (" + chunks / secs + "/s); quitting");
                Log.info("harness: player at route end: " + Scene.visionState(p)); // blur > 0 = the screen was soft (pinWornItems)
                Benchmark.onRouteEnd("complete", ""); // built-in benchmark: results, next pass armed
+               HarnessModLua.routeEnd(); // before the summary: run.sh treats pzopt-bench.out as the end of the route
                writeThreadCpu(secs);
                writeSummary(secs, chunks);
                Stats.flush();
@@ -1084,7 +1108,7 @@ public final class Harness {
           float zoom = core.getZoom(playerIndex);
           w.write("mode=" + HarnessFlags.get("mode") + "\nroute=" + HarnessFlags.get("route", DEFAULT_ROUTE) + "\nspeed=" + speed + "\nstart=" + (int)startX + "," + (int)startY
                 + "\nroute_status=" + (rejected ? "rejected" : routeStatus)
-                + "\nroute_reason=" + HarnessFlags.get("reject_reason", "")
+                + "\nroute_reason=" + (routeReason.isEmpty() ? HarnessFlags.get("reject_reason", "") : routeReason)
                  + "\nvehicle=" + (vehicle == null ? "none" : vehicle.getScriptName()) + "\nvehicle_spawned=" + vehicleSpawned
                 + "\nmovement_source=" + (driving ? "vehicle-controller" : "teleport-control")
                 + "\nvehicle_distance=" + drivenDistance + "\ncruise_kmh=" + (driving ? cruiseKmh : 0f)
@@ -1284,6 +1308,11 @@ public final class Harness {
          lastDriveRowNs = nowNs;
          driveRows.append(pilot.row((nowNs - runStartNs) / 1e9f, in, pilotOut)).append('\n');
       }
+   }
+
+   /** The path pilot's telemetry so far (DrivePilot.HEADER rows), for the built-in benchmark's pass files; null without a pilot. */
+   static String driveRowsText() {
+      return pilot == null ? null : driveRows.toString();
    }
 
    /** pzopt-drive.out: the path driver's 20 Hz telemetry (DrivePilot.HEADER columns), for harness/drive_check.py. */
@@ -2570,6 +2599,7 @@ public final class Harness {
       runEndEpochMs = System.currentTimeMillis();
       Log.info("harness: route " + routeStatus + " in " + secs + "s, vehicle distance=" + drivenDistance + "; quitting");
       Benchmark.onRouteEnd(routeStatus, ""); // built-in benchmark: results, next pass armed
+      HarnessModLua.routeEnd(); // before the summary: run.sh treats pzopt-bench.out as the end of the route
       writeThreadCpu(secs);
       if (pilot != null) {
          writeDriveLog(); // before the summary: run.sh treats pzopt-bench.out as the end of the route
@@ -2688,6 +2718,58 @@ public final class Harness {
       }
    }
 
+   /**
+    * A scene's failed pass (showcase tactics=kite: the player was hit or died) or its hard timeout: the summary with
+    * route_status=failed and the reason, the built-in benchmark's step as failed (its plan moves on), then the quit.
+    * {@code offThread}: called by the watchdog because no frame came (a dead player stops the chunk updates that drive
+    * Harness.onFrame); the quit's own escalation (window close at 15 s, exit at 30 s) ends the process.
+    */
+   private static void endRouteFailed(String reason, boolean offThread) {
+      if (!routeEndClaimed.compareAndSet(false, true)) return;
+      float secs = (System.nanoTime() - runStartNs) / 1e9f;
+      int chunks = Stats.chunkCount() - chunksAtStart;
+      routeStatus = "failed";
+      routeReason = reason;
+      runEndEpochMs = System.currentTimeMillis();
+      Log.info("harness: route " + reason + " after " + secs + "s" + (offThread ? " (no frame came: ended by the watchdog)" : "") + "; quitting");
+      try {
+         Stats.mark("route-end");
+         Benchmark.onRouteEnd("failed", reason.startsWith("failed: ") ? reason.substring(8) : reason); // built-in benchmark: the step written as failed, the next pass armed (its line says "failed: <reason>")
+         HarnessModLua.routeEnd();
+         writeThreadCpu(secs);
+         writeSummary(secs, chunks);
+         Stats.flush();
+      } catch (RuntimeException e) {
+         Log.warn("harness: failed-route summary: " + e);
+      }
+      if (offThread) {
+         state = DONE;
+         requestQuit();
+      } else {
+         quitWhenLogsAreDone();
+      }
+   }
+
+   /**
+    * The hard timeout of a scene (Showcase hard_timeout), off the game thread: the next frame ends the route as failed;
+    * when no frame comes within 3 s, the watchdog ends it itself.
+    */
+   static void hardStop(String reason) {
+      if (state != RUN || routeEndClaimed.get()) return;
+      Log.warn("harness: HARD TIMEOUT: " + reason);
+      hardStopReason = reason;
+      long until = System.currentTimeMillis() + 3000L;
+      while (System.currentTimeMillis() < until) {
+         if (routeEndClaimed.get()) return;
+         try {
+            Thread.sleep(50L);
+         } catch (InterruptedException e) {
+            return;
+         }
+      }
+      endRouteFailed(reason, true);
+   }
+
    private static void reject(String reason) {
       rejected = true;
       HarnessFlags.setRejectReason(reason);
@@ -2695,6 +2777,7 @@ public final class Harness {
       writeSummary(0f, 0);
       Log.warn("harness: rejected driving run: " + reason);
       Benchmark.onRouteEnd("rejected", reason);
+      HarnessModLua.routeEnd();
       Stats.flush();
       state = DONE;
       requestQuit();

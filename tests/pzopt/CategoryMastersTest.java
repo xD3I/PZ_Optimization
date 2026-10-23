@@ -22,6 +22,9 @@ public class CategoryMastersTest {
          "guardedCallbacks", "modelLockPerInstance", "luaWorkerGate",
          // not optimizations
          "luaChecksumExempt", "modProfile", "modCompat", "uiRetainedMods", "updateCheck", "updatePrefetch", "updateFromWorkshop",
+         // the Java memory settings (the launcher file's heap and collector, read before Config; System > Memory since the
+         // menu-impeccable prototype, 2026-10-19): the System switch leaves them as set
+         "gcHeap", "luaGcNoop", "gcMode", "gcHeapFixed", "gcPreTouch", "gcPauseMs", "gcG1Tuned", "gcSlack", "gcSlackQueue",
          // tuning of a gated switch (inert once it is off)
          "macGlTimerQueries", "chunkGridFollowView", "treeRebakeLingerMs", "treeCutawayReachPx", "treeBakeMaxChunksPerSec",
          "treeBakeDirect", "glassTilesPerFrame", "floorDecalsPerFrame", "translucentLightsPerFrame", "bakeFrameBudget",

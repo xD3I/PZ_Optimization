@@ -20,6 +20,11 @@ public class BenchOrderTest {
          }
       }
       Check.check(a == b, "ABBA: A and B at the same mean position (" + a + " vs " + b + ")");
+      // each scenario its own passes (the menu's planner): a scenario takes part in the rounds up to its count
+      String each = BenchOrder.steps(List.of("spin", "horde"), java.util.Map.of("spin", 3, "horde", 1), false, false);
+      Check.check(each.equals("spin/A/1,horde/A/1,spin/A/2,spin/A/3"), "per-scenario passes: " + each);
+      String eachAb = BenchOrder.steps(List.of("spin", "horde"), java.util.Map.of("spin", 1, "horde", 2), true, false);
+      Check.check(eachAb.equals("spin/A/1,spin/B/1,horde/A/1,horde/B/1,horde/B/2,horde/A/2"), "per-scenario ABBA: " + eachAb);
       System.out.println("BenchOrderTest ok");
    }
 }

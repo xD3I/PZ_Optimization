@@ -120,6 +120,7 @@ public final class ModCompat {
          Set<String> shadowed = shadowedClasses();
          List<Hit> hits = new ArrayList<>();
          Map<String, String> policy = knownPolicies();
+         policyUsed = policy;
          editedSeen = edited;
          scanned.putAll(sources());
          for (Map.Entry<String, List<File>> src : scanned.entrySet()) {
@@ -162,6 +163,28 @@ public final class ModCompat {
    }
 
    /** Why compat switched this key off, or null. */
+   private static Map<String, String> policyUsed = Map.of();
+
+   /**
+    * The Java mods (not on the tested-together list) that patch one of these methods ("zombie/Lua/Event.trigger"; a
+    * class-only hit counts for every method of it): ModLuaProfile leaves its counters off when one does.
+    */
+   static List<String> patchers(String... methods) {
+      Set<String> out = new LinkedHashSet<>();
+      for (Hit h : found) {
+         if ("ok".equals(policyUsed.get(h.source))) {
+            continue;
+         }
+         for (String m : methods) {
+            int dot = m.lastIndexOf('.');
+            if (h.cls.equals(m.substring(0, dot)) && (h.method == null || h.method.equals(m.substring(dot + 1)))) {
+               out.add(h.source);
+            }
+         }
+      }
+      return new ArrayList<>(out);
+   }
+
    public static String reason(String key) {
       return reasons.get(key);
    }

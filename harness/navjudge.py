@@ -28,7 +28,7 @@ def game_log(run, given):
         return given
     c = os.path.join(run, "console.txt")
     txt = open(c, errors="replace").read() if os.path.exists(c) else ""
-    if "harness: route start (" in txt and ("harness: nav summary" in txt or "harness: mirror walk: done" in txt or "mirrors with glass" in txt):
+    if "harness: route start (" in txt and ("harness: nav summary" in txt or "harness: mirror walk: done" in txt or "harness: tour walk: done" in txt or "mirrors with glass" in txt):
         return c
     # the rotated full log: the newest DebugLog with this run's route start
     cands = sorted(glob.glob(os.path.expanduser("~/Zomboid/Logs/*/*_DebugLog.txt")) + glob.glob(os.path.expanduser("~/Zomboid/Logs/*_DebugLog.txt")),
@@ -38,7 +38,7 @@ def game_log(run, given):
         if os.path.getmtime(f) < start - 60:
             break
         t = open(f, errors="replace").read()
-        if "harness: route start" in t and "harness: mirror walk" in t:
+        if "harness: route start" in t and ("harness: mirror walk" in t or "harness: tour walk" in t or "harness: square walk" in t):
             return f
     return c
 
@@ -84,8 +84,9 @@ def main():
     failed = [l.split("[pzopt] ")[-1] for l in legs if "' arrived in" not in l]
     err_re = re.compile(r"ERROR|Exception|STACK TRACE|LuaError|attempted index|Callframe|\bat zombie\.|java\.lang\.")
     errors = [l.split("] ", 1)[-1][:220] for l in walk if err_re.search(l)]
-    done = any("harness: mirror walk: done" in l for l in walk)
-    timed_out = any("time limit passed by 5 s" in l for l in walk)
+    done = any("harness: mirror walk: done" in l or "harness: tour walk: done" in l or "harness: square walk: done" in l for l in walk)  # explore=mirror / tour / square
+    timed_out_tour = any("harness: tour walk: time limit passed" in l for l in walk)
+    timed_out = any("time limit passed by 5 s" in l for l in walk) or timed_out_tour
     stations = next((re.search(r"(\d+) of (\d+) stations visited", l) for l in walk if "stations visited" in l), None)
     skipped = [l.split("[pzopt] ")[-1] for l in walk if "no station that can be reached" in l or "circle skipped" in l or "circle cut short" in l]
     derr = []

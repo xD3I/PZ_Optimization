@@ -3609,6 +3609,10 @@ All hooks are no-ops unless `hdr=true`; findings and numbers in `docs/findings-h
   `showcase=horde`.
 - **zombie.input.GameKeyboard.isKeyDown(int)** (harness only): reports the key codes `pzopt.Showcase` holds (the movement
   keys and Run of the director's `run_to_pier`).
+- **zombie.input.GameKeyboard.isKeyDownRaw(int)** (harness only, 2026-10-22): reports the held keys too. Run is bound to
+  Left Shift, and `Core.invalidBindingShiftCtrl` voids a Shift / Ctrl / Alt binding unless the raw key is down, so the held
+  Run never counted and the horde bench's character walked every kite and close-in (the maintainer: "the character is
+  still not running").
 
 ## E-core pass: hybrid-CPU placement, AMD GPU clock, limiter sleep, vision-blur split (2026-09-24; `corePlacement`, `gpuPstate`, `limiterSleep`, `lightingSyncPark`, `visBlurReduce`, `jitSteady`)
 
