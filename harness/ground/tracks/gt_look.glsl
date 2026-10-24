@@ -99,12 +99,13 @@ vec3 gtFactor(vec2 p0, int mat, vec3 L, float sun, float wet, float snowDepth, v
    vec3 B = GT_BASE[mat];
    vec3 f = vec3(1.0);
    if (mat == 1) {
-      // grass: flattened blades show their paler sides (lighter, yellower), worn paths go straw then bare
-      float flat1 = clamp(depth * 14.0 + wear * 0.8, 0.0, 1.0);
-      f *= gtTint(B, vec3(0.47, 0.43, 0.17), 0.6 * flat1, 1.0 + 0.18 * flat1); // the dry-grass tile's straw
+      // grass: freshly pressed blades are crushed (darker, the shaded undersides up), then lie flat and pale (their lighter
+      // sides, yellowing) for a day while they stand up again; worn paths go straw, then bare earth
+      float flat1 = clamp(depth * 25.0 + wear * 1.2, 0.0, 1.0);
+      f *= gtTint(B, vec3(0.47, 0.43, 0.17), 0.75 * flat1 * (1.0 - 0.6 * fresh), 1.0 + 0.22 * flat1 * (1.0 - fresh)); // the dry-grass tile's straw
       float bare = smoothstep(0.55, 0.95, wear);
       f *= gtTint(B, vec3(0.38, 0.31, 0.17), 0.8 * bare, 0.82); // trodden earth
-      f *= 1.0 - 0.10 * fresh * (1.0 - bare); // bruised fresh blades
+      f *= 1.0 - 0.24 * fresh * flat1 * (1.0 - bare); // crushed fresh blades
    } else if (mat == 2) {
       // dirt / mud: cut soil is darker and wetter; a fresh berm's crumbs are paler
       float cut = clamp(depth * 9.0, 0.0, 1.0);
