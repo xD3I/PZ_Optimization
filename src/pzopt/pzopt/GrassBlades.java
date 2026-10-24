@@ -2,7 +2,6 @@ package pzopt;
 
 import java.nio.ByteBuffer;
 import java.nio.IntBuffer;
-import java.util.IdentityHashMap;
 import org.lwjgl.BufferUtils;
 import org.lwjgl.opengl.GL11;
 import org.lwjgl.opengl.GL12;
@@ -1642,21 +1641,12 @@ public final class GrassBlades {
     */
    static final class Movers {
       static final int MAX_STAMPS = 64;
-      private static final IdentityHashMap<Object, float[]> STATE = new IdentityHashMap<>(); // lastX, lastY, stampX, stampY, strength, seenFrame, radius
-      private static int frame;
-      private static long lastNs;
       static double now; // trail clock (s), game speed, stops while paused
-      private static final java.util.ArrayList<Object> CAND = new java.util.ArrayList<>();
-      private static final java.util.ArrayList<float[]> CANDPOS = new java.util.ArrayList<>();
+      private static final boolean[] USED = new boolean[GroundMovers.MAX_NEAR];
 
+      /** Game thread: the shared mover gather (GroundMovers, ground-common) read into this frame's stamps and push list. */
       static void update(Frame f, Opts o) {
-         frame++;
-         long t = System.nanoTime();
-         double dt = lastNs == 0L ? 0.0 : Math.min(0.1, (t - lastNs) / 1e9);
-         lastNs = t;
-         boolean paused = zombie.GameTime.isGamePaused();
-         dt *= paused ? 0.0 : Math.min(4.0, Math.max(0.0, zombie.GameTime.getInstance().getTrueMultiplier()));
-         now += dt;
+         now += GroundMovers.dt();
          f.now = (float)now;
          f.nStamps = 0;
          f.nPush = 0;
@@ -1664,116 +1654,76 @@ public final class GrassBlades {
             return;
          }
          float cx = IsoCamera.frameState.camCharacterX, cy = IsoCamera.frameState.camCharacterY;
-         float reach = o.radius + 3F;
-         float reach2 = reach * reach;
-         CAND.clear();
-         CANDPOS.clear();
-         for (zombie.characters.IsoPlayer pl : zombie.characters.IsoPlayer.players) {
-            if (pl != null && !pl.isDead()) {
-               add(pl, pl.getX(), pl.getY(), pl.getZ(), 0.32F, cx, cy, reach2);
+         GroundMovers.wantNear(o.radius + 3F);
+         int nn = GroundMovers.nNear;
+         for (int i = 0; i < nn; i++) {
+            GroundMovers.Mover m = GroundMovers.NEAR[i];
+            zombie.iso.IsoMovingObject obj = m.obj;
+            if (obj == null) {
+               continue;
             }
-         }
-         IsoCell cell = IsoWorld.instance.currentCell;
-         java.util.ArrayList<zombie.characters.IsoZombie> zs = cell.getZombieList();
-         for (int i = 0, n = zs.size(); i < n && CAND.size() < 96; i++) {
-            zombie.characters.IsoZombie z = zs.get(i);
-            if (z != null) {
-               add(z, z.getX(), z.getY(), z.getZ(), 0.32F, cx, cy, reach2);
+            float x = m.x, y = m.y;
+            if (obj.pzoptGmMarkX == 0F && obj.pzoptGmMarkY == 0F) {
+               obj.pzoptGmMarkX = x;
+               obj.pzoptGmMarkY = y;
             }
-         }
-         for (zombie.vehicles.BaseVehicle v : cell.getVehicles()) {
-            if (v != null) {
-               add(v, v.getX(), v.getY(), v.getZ(), 1.0F, cx, cy, reach2);
-            }
-         }
-         for (int i = 0; i < CAND.size(); i++) {
-            Object obj = CAND.get(i);
-            float[] pos = CANDPOS.get(i);
-            float x = pos[0], y = pos[1], r = pos[2];
-            float[] s = STATE.get(obj);
-            if (s == null) {
-               s = new float[] {x, y, x, y, 0F, frame, r};
-               STATE.put(obj, s);
-            }
-            float mx = x - s[0], my = y - s[1];
-            boolean moving = mx * mx + my * my > 1e-6F;
-            s[0] = x;
-            s[1] = y;
-            s[5] = frame;
-            float target = moving ? 1F : 0F;
-            float k = (float)Math.min(1.0, dt / (moving ? 0.15 : 0.6));
-            s[4] += (target - s[4]) * k;
-            float sx = x - s[2], sy = y - s[3];
+            float sx = x - obj.pzoptGmMarkX, sy = y - obj.pzoptGmMarkY;
             if (o.trails && sx * sx + sy * sy > 0.15F * 0.15F && f.nStamps < MAX_STAMPS) {
                float dir = (float)Math.atan2(sy, sx);
-               if (r > 0.5F) {
-                  // a car: its two axles' wheel tracks (the body's direction)
-                  float ca = (float)Math.cos(dir), sa = (float)Math.sin(dir);
+               if (m.who == GroundMovers.VEHICLE) {
+                  // a car: its four wheels (the body's own axes; the axles ~3/4 of the half length out)
+                  float ca = m.fx, sa = m.fy;
+                  float hl = m.halfLength > 0F ? m.halfLength * 0.72F : 1.2F, hw = m.halfWidth > 0F ? m.halfWidth * 0.82F : 0.8F;
                   for (int a = -1; a <= 1; a += 2) {
                      for (int b = -1; b <= 1; b += 2) {
                         if (f.nStamps < MAX_STAMPS) {
-                           stamp(f, x + ca * 1.2F * a - sa * 0.8F * b, y + sa * 1.2F * a + ca * 0.8F * b, 0.38F, dir, 0);
+                           stamp(f, x + ca * hl * a - sa * hw * b, y + sa * hl * a + ca * hw * b, 0.38F, dir, 0);
                         }
                      }
                   }
                } else {
-                  stamp(f, x, y, r, dir, 0);
+                  stamp(f, x, y, m.radius, dir, 0);
                }
-               s[2] = x;
-               s[3] = y;
+               obj.pzoptGmMarkX = x;
+               obj.pzoptGmMarkY = y;
             }
-            if (o.cut && obj instanceof zombie.characters.IsoGameCharacter ch && ch.isPerformingAttackAnimation() && f.nStamps < MAX_STAMPS - 3) {
-               zombie.inventory.InventoryItem item = ch.getPrimaryHandItem();
-               if (item instanceof zombie.inventory.types.HandWeapon hw && !hw.isRanged()) {
-                  float ang = (float)Math.atan2(ch.getForwardDirectionY(), ch.getForwardDirectionX());
-                  float range = Math.max(0.8F, Math.min(2.0F, hw.getMaxRange()));
-                  for (int a = -1; a <= 1; a++) {
-                     float aa = ang + a * 0.6F;
-                     stamp(f, x + (float)Math.cos(aa) * range * 0.7F, y + (float)Math.sin(aa) * range * 0.7F, 0.45F, ang, 1);
-                  }
+            if (o.cut && m.melee && f.nStamps < MAX_STAMPS - 3) {
+               float ang = (float)Math.atan2(m.fy, m.fx);
+               float range = Math.max(0.8F, Math.min(2.0F, m.meleeRange));
+               for (int a = -1; a <= 1; a++) {
+                  float aa = ang + a * 0.6F;
+                  stamp(f, x + (float)Math.cos(aa) * range * 0.7F, y + (float)Math.sin(aa) * range * 0.7F, 0.45F, ang, 1);
                }
             }
          }
          // the push list: the nearest movers still bending the grass
+         java.util.Arrays.fill(USED, 0, nn, false);
          for (int n = 0; n < Sway.MAX_PUSH && o.push; n++) {
-            float[] best = null;
+            int best = -1;
             float bd = Float.MAX_VALUE;
-            for (int i = 0; i < CAND.size(); i++) {
-               float[] s = STATE.get(CAND.get(i));
-               if (s == null || s[4] < 0.02F || s[6] < 0F) {
+            for (int i = 0; i < nn; i++) {
+               GroundMovers.Mover m = GroundMovers.NEAR[i];
+               if (USED[i] || m.strength < 0.02F) {
                   continue;
                }
-               float d = (s[0] - cx) * (s[0] - cx) + (s[1] - cy) * (s[1] - cy);
+               float d = (m.x - cx) * (m.x - cx) + (m.y - cy) * (m.y - cy);
                if (d < bd) {
                   bd = d;
-                  best = s;
+                  best = i;
                }
             }
-            if (best == null) {
+            if (best < 0) {
                break;
             }
+            USED[best] = true;
+            GroundMovers.Mover m = GroundMovers.NEAR[best];
             int i = f.nPush++;
-            float u = best[0] - best[1], v = best[0] + best[1];
+            float u = m.x - m.y, v = m.x + m.y;
             f.push[i * 4] = (float)(u - Sway.GUST_PERIOD_SQ * Math.floor(u / Sway.GUST_PERIOD_SQ));
             f.push[i * 4 + 1] = (float)(v - Sway.GUST_PERIOD_SQ * Math.floor(v / Sway.GUST_PERIOD_SQ));
-            f.push[i * 4 + 2] = best[6] > 0.5F ? 1.8F : 0.7F;
-            f.push[i * 4 + 3] = best[4];
-            best[6] = -best[6];
+            f.push[i * 4 + 2] = m.who == GroundMovers.VEHICLE ? 1.8F : 0.7F;
+            f.push[i * 4 + 3] = m.strength;
          }
-         for (float[] s : STATE.values()) {
-            s[6] = Math.abs(s[6]);
-         }
-         if (frame % 120 == 0) {
-            STATE.values().removeIf(s -> frame - s[5] > 600F);
-         }
-      }
-
-      private static void add(Object obj, float x, float y, float z, float r, float cx, float cy, float reach2) {
-         if (z > 0.5F || (x - cx) * (x - cx) + (y - cy) * (y - cy) > reach2) {
-            return;
-         }
-         CAND.add(obj);
-         CANDPOS.add(new float[] {x, y, r});
       }
 
       /** kind 0 trample, 1 cut. Stamps: x, y, radius (+ 10 x kind), heading. */
