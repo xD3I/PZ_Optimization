@@ -1040,7 +1040,9 @@ public final class Glints {
             tex = texs[slot];
             GL13.glActiveTexture(GL13.GL_TEXTURE1);
             GL11.glBindTexture(GL11.GL_TEXTURE_2D, tex);
-            if (fresh && !(Config.DEV_GLINT_NO_UPLOAD && uploads >= RING)) { // dev: the upload's share of the cost (stale data after the first round)
+            String dv = Ground.variant(); // dev cycle names "noupload" / "nodraw": the upload's / the draw's share of the cost
+            boolean noUpload = Config.DEV_GLINT_NO_UPLOAD || "noupload".equals(dv), noDraw = "nodraw".equals(dv);
+            if (fresh && !(noUpload && uploads >= RING)) { // dev: the upload's share of the cost (stale data after the first round)
                uploads++;
                int floats = f.n * TEXELS * 4;
                if (upload == null) {
@@ -1142,7 +1144,9 @@ public final class Glints {
                if (!CoreGl.active) {
                   GL11.glEnable(GL20.GL_POINT_SPRITE); // a compatibility context defines gl_PointCoord only for point sprites
                }
-               if (f.pass == P_PARTICLES) {
+               if (noDraw) {
+                  // dev: everything but the draw
+               } else if (f.pass == P_PARTICLES) {
                   GL11.glDrawArrays(GL11.GL_POINTS, 0, f.n * SLOTS);
                } else {
                   GL40.glDrawArraysIndirect(GL11.GL_POINTS, 0L);

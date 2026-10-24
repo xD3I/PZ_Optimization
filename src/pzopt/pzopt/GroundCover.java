@@ -1100,7 +1100,6 @@ public final class GroundCover {
 
    static void submit(IsoChunk c, ChunkCover cc) {
       long t0 = System.nanoTime();
-      BlueNoise.init();
       Sprites.resolve();
       Job j = new Job();
       j.chunk = c;
