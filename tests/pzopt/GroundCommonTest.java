@@ -144,11 +144,11 @@ public class GroundCommonTest {
       }
       Path mesa = Path.of("/usr/share/glvnd/egl_vendor.d/50_mesa.json");
       int n = 0;
-      for (String base : new String[] {"tileWithDepth", "opaqueWithDepth"}) {
+      for (String base : new String[] {"tileWithDepth", "opaqueWithDepth", "seamFix2"}) { // (seamFix2: the border strips, piece 0)
          String vert = Files.readString(game.resolve(base + ".vert"));
          String frag = Files.readString(game.resolve(base + ".frag"));
          for (int view = 0; view <= 3; view++) {
-            for (int piece = 0; piece < 3; piece++) {
+            for (int piece = 0; piece < (base.equals("seamFix2") ? 1 : 3); piece++) {
                boolean attached = piece != 0;
                List<GroundBake.FloorPatch> ps = new ArrayList<>();
                ps.add(TEST);

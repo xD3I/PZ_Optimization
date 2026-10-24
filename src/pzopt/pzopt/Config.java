@@ -1630,6 +1630,7 @@ public final class Config {
    public static final boolean DEV_GROUND_STATE_TEST = bool("devGroundStateTest", false); // dev: GroundState stamps a test pattern round the player (rig for the upload / persistence path)
    public static final int DEV_GROUND_WALKERS = integer("devGroundWalkers", 0); // dev: GroundState stamps N synthetic walkers circling the player every frame (stamping cost rig)
    public static final int DEV_GROUND_STATE_HZ = integer("devGroundStateHz", 30); // dev: GroundState's stamp batches a second (0: every frame); the GPU pass has a fixed cost per dispatch
+   public static final boolean DEV_GROUND_SEAM_STOCK = bool("devGroundSeamStock", false); // dev: the floor variant's chunk-edge seam strips stay stock on every other chunk (before / after in one picture)
    // god rays (pzopt.GodRays, docs/findings-god-rays-2026-09-27.md): light shafts in the haze and the dust of rooms, sun and moon
    // ---- ground cover (pzopt.GroundCover, pzopt.Glints; 2026-10-24): the variants of groundScatter and glints (GROUND_SCATTER,
    // GLINTS above). Every variant below is off or at its measured default.

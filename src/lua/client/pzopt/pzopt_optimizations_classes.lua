@@ -287,6 +287,7 @@ PzoptOptionClasses = {
     devGroundAlternate = { "pzopt.Ground" },
     devGroundAlternateKeys = { "pzopt.Ground" },
     devGroundCycle = { "pzopt.Ground" },
+    devGroundSeamStock = { "pzopt.GroundBake" },
     devGroundStateHz = { "pzopt.GroundState" },
     devGroundStateTest = { "pzopt.Ground", "pzopt.GroundState" },
     devGroundTemp = { "pzopt.GroundCover" },
