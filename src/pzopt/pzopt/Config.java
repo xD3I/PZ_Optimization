@@ -1629,6 +1629,7 @@ public final class Config {
    public static final boolean DEV_GROUND_ALTERNATE_REBAKE = bool("devGroundAlternateRebake", true); // dev: each switch of a bake-time ground key re-bakes the natural ground on screen (so both halves show their picture)
    public static final boolean DEV_GROUND_STATE_TEST = bool("devGroundStateTest", false); // dev: GroundState stamps a test pattern round the player (rig for the upload / persistence path)
    public static final int DEV_GROUND_WALKERS = integer("devGroundWalkers", 0); // dev: GroundState stamps N synthetic walkers circling the player every frame (stamping cost rig)
+   public static final int DEV_GROUND_STATE_HZ = integer("devGroundStateHz", 30); // dev: GroundState's stamp batches a second (0: every frame); the GPU pass has a fixed cost per dispatch
    // god rays (pzopt.GodRays, docs/findings-god-rays-2026-09-27.md): light shafts in the haze and the dust of rooms, sun and moon
    public static volatile boolean FOLIAGE_SWAY; // grass, bushes and trees sway in the wind while they stay baked in the chunk textures (the chunk composite looks each texel up through the wind's displacement; pzopt.Sway)
    public static volatile int FOLIAGE_SWAY_PCT; // foliage sway: how far the plants bend, %

@@ -142,6 +142,18 @@ public final class Ground {
       }
    }
 
+   private static final java.util.concurrent.CopyOnWriteArrayList<java.util.function.IntConsumer> FRAME_HOOKS = new java.util.concurrent.CopyOnWriteArrayList<>();
+
+   /**
+    * A feature's per-frame work (game thread, with the player index), run after the frame's switches and before the movers'
+    * gather and GroundState (a feature sets its rules and sources, calls GroundState.use(), queues primitives of its own
+    * through GroundState.prim: they are binned in this frame's GroundState turn). Runs only while Ground.frameStart gets
+    * past its "everything off" return (a ground key or a dev rig is on).
+    */
+   public static void onFrame(java.util.function.IntConsumer hook) {
+      FRAME_HOOKS.addIfAbsent(hook);
+   }
+
    /** FBORenderCell.renderInternal, game thread, once a frame per player: the frame's switches, then the shared parts. */
    public static void frameStart(int playerIndex) {
       long m = configMask();
@@ -193,6 +205,14 @@ public final class Ground {
          }
       }
       frameMask = m;
+      for (java.util.function.IntConsumer h : FRAME_HOOKS) {
+         try {
+            h.accept(playerIndex);
+         } catch (Throwable t) {
+            Log.warn("ground: a feature's frame hook failed and is off: " + t);
+            FRAME_HOOKS.remove(h);
+         }
+      }
       GroundBake.frameStart(playerIndex);
       if (playerIndex == 0) {
          GroundMovers.frameStart();
