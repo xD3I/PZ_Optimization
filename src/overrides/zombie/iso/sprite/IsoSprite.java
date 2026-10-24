@@ -135,6 +135,7 @@ public final class IsoSprite {
    public int id = 20000000;
    public IsoSpriteInstance def;
    public boolean pzoptWarm; // pzopt: tileRecordParallel, drawn once on a non-recording thread (its lazy state: depth texture, texture sizes, surface flags, is set up)
+   public int pzoptGround; // pzopt: ground and grass, the sprite's ground class (pzopt.GroundTiles; 0 = not looked up yet)
    public ModelSlot modelSlot;
    IsoSpriteManager parentManager;
    private IsoObjectType tileType = IsoObjectType.MAX;
@@ -1375,17 +1376,19 @@ public final class IsoSprite {
       float zDepthBlendToZ = farDepthZ;
       if (seamFix2 != null) {
          TileSeamShader shader = SceneShaderStore.tileSeamShader;
+         if (pzopt.GroundBake.FLOOR_ON) shader = pzopt.GroundBake.seamShader(shader, obj); // pzopt: ground and grass, a natural border floor's seam strip through the variant (its own uniform locations below)
          ShaderUniformSetter uniforms = ShaderUniformSetter.uniform1f(shader, "zDepth", frontDepthZ);
          uniforms.setNext(ShaderUniformSetter.uniform1i(shader, "drawPixels", drawPixels ? 1 : 0))
             .setNext(ShaderUniformSetter.uniform1f(shader, "zDepthBlendZ", zDepthBlendZ))
             .setNext(ShaderUniformSetter.uniform1f(shader, "zDepthBlendToZ", zDepthBlendToZ));
-         IndieGL.StartShader(SceneShaderStore.tileSeamShader.getID(), uniforms);
+         IndieGL.StartShader(shader.getID(), uniforms); // pzopt: the program chosen above (stock: SceneShaderStore.tileSeamShader)
       } else {
          TileDepthShader shader = SceneShaderStore.tileDepthShader;
          if ((this.depthFlags & 4) != 0) {
             shader = SceneShaderStore.opaqueDepthShader;
          }
 
+         if (pzopt.GroundBake.FLOOR_ON) shader = pzopt.GroundBake.shader(shader, this, obj != null && this != obj.sprite); // pzopt: ground and grass, a natural floor's variant (its own uniform locations below)
          if (pzopt.TileBatch.start(shader.getID(), zDepthBlendZ, zDepthBlendToZ)) { // pzopt: tileVertexDepth, the depth pair goes with the tile's vertices; consecutive tiles share one draw
             return; // pzopt
          } // pzopt

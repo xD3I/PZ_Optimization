@@ -663,6 +663,14 @@ public final class Harness {
                      routeZ = spot[2];
                   }
                }
+               if ("lawn".equals(HarnessFlags.get("find", ""))) {
+                  int[] spot = GrassBlades.findLawn(p); // dev: grass blades, the middle of the nearest big lawn
+                  if (spot != null) {
+                     x = spot[0] + 0.5F;
+                     y = spot[1] + 0.5F;
+                     routeZ = spot[2];
+                  }
+               }
                if ("sunwindow".equals(HarnessFlags.get("find", ""))) {
                   int[] spot = GodRays.findSunWindow(p); // dev: god rays, into a room the light comes into through its windows
                   if (spot != null) {

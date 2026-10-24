@@ -45,6 +45,7 @@ public final class NoLoadingScreen {
          if (Config.SHADER_WARMUP && Overrides.enabled()) {
             zombie.core.opengl.RenderThread.queueInvokeOnRenderContext(GodRays.Gl::warm);
             zombie.core.opengl.RenderThread.queueInvokeOnRenderContext(BloodWet.Gpu::warm);
+            zombie.core.opengl.RenderThread.queueInvokeOnRenderContext(GrassBlades.Gpu::warm);
          }
          CenterFirstLoad.onWorldEntered();
          ResumeShot.onWorldEntered();
