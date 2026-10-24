@@ -130,6 +130,9 @@ public final class Ground {
 
    private static void loadFeatures() {
       featuresLoaded = true;
+      if (Config.DEV_GROUND_NOOP) {
+         GroundBake.registerNoopProbes();
+      }
       for (String n : FEATURES) {
          try {
             Class.forName(n, true, Ground.class.getClassLoader());
@@ -156,6 +159,9 @@ public final class Ground {
 
    /** FBORenderCell.renderInternal, game thread, once a frame per player: the frame's switches, then the shared parts. */
    public static void frameStart(int playerIndex) {
+      if (Scene.snowPin) {
+         Scene.pinSnow(); // (harness snow=N: pinned after the frame's climate update, the bakes see one value)
+      }
       long m = configMask();
       if (!featuresLoaded && (m != 0L || DEV_ANY || Config.DEV_GROUND_VIEW != 0)) {
          loadFeatures();

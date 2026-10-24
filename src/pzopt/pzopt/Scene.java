@@ -82,6 +82,30 @@ public final class Scene {
    private static String torch = "";
    private static int fires; // fire=N: N fires lit near the player at the route start (HDR scenes)
    private static boolean headlights;
+   /** snow=N parsed (Ground.frameStart calls {@link #pinSnow} at every render start: after the climate update of the frame). */
+   public static volatile boolean snowPin;
+
+   /**
+    * The snow on the ground at the pinned amount (game thread). The game draws ground snow only in winter or with Core's force
+    * snow (FBORenderSnow.SnowGrid.init): outside winter the snow=N flag showed nothing (ground-tracks' snow run, 2026-10-24).
+    * Force snow makes the climate set the target to 70 on its climate ticks; pinned again at the render start (after the
+    * climate update) the bake never sees that value, so no invalidateAll churn.
+    */
+   public static void pinSnow() {
+      zombie.iso.IsoCell cell = zombie.iso.IsoWorld.instance.currentCell;
+      if (snow < 0 || cell == null) {
+         return;
+      }
+      if (snow > 0 && !zombie.core.Core.getInstance().isForceSnow()) {
+         zombie.core.Core.getInstance().setForceSnow(true);
+      }
+      if (cell.getSnowTarget() != Math.min(100, snow)) {
+         cell.setSnowTarget(Math.min(100, snow));
+      }
+   }
+
+   private static int snowLogs;
+   private static long snowLogNs;
    private static int snow = -1; // snow=0..100: the snow on the ground pinned (IsoCell snow target, the sandbox's snow-on-ground switch on; ground and grass scenes, 2026-10-24)
    private static float puddleMud = -1F; // puddle_mud=V: the puddles' mud pinned (0 = clear puddles, as in a shower's first minutes; rain raises it to muddy)
    private static float puddles = -1F; // puddles=V: wet ground and puddle size pinned to V (0..1) through the puddles' admin overrides (HDR glint scenes) // headlights=on: the player's vehicle keeps its headlights on (HDR night drives)
@@ -151,6 +175,7 @@ public final class Scene {
       puddles = Float.parseFloat(HarnessFlags.get("puddles", "-1").trim());
       puddleMud = Float.parseFloat(HarnessFlags.get("puddle_mud", "-1").trim());
       snow = Integer.parseInt(HarnessFlags.get("snow", "-1").trim());
+      snowPin = snow >= 0;
       Showcase.apply(); // showcase=horde
       RoomLightRig.init(); // room_light=auto (PR #26 HDR rig)
       Showcase.worldReady(p); // showcase=horde: god mode, unseen, power off, the area cleared until the scene starts
@@ -506,7 +531,16 @@ public final class Scene {
             zombie.SandboxOptions.instance.enableSnowOnGround.setValue(true);
             Log.info("harness: snow on the ground pinned to " + snow + " (sandbox snow on ground switched on)");
          }
-         zombie.iso.IsoWorld.instance.currentCell.setSnowTarget(Math.min(100, snow));
+         pinSnow();
+         if (snowLogs < 3 && nowNs - snowLogNs > 2_000_000_000L) {
+            snowLogNs = nowNs; // (2026-10-24: a snow=100 run showed no snow; what the game holds)
+            snowLogs++;
+            zombie.iso.weather.ClimateManager cm = zombie.iso.weather.ClimateManager.getInstance();
+            Log.info("harness: snow target " + zombie.iso.IsoWorld.instance.currentCell.getSnowTarget() + " (sandbox snow on ground "
+               + zombie.SandboxOptions.instance.enableSnowOnGround.getValue() + ", climate snow " + (cm == null ? -1F : cm.getSnowFracNow())
+               + ", force snow " + zombie.core.Core.getInstance().isForceSnow() + ", debug snow " + zombie.debug.DebugOptions.instance.weather.snow.getValue()
+               + ", snow anywhere " + zombie.iso.fboRenderChunk.FBORenderSnow.getInstance().isSnowAnywhere() + ")");
+         }
       }
       if (hideUi) {
          // what the hide-UI key does (ISUIHandler.setVisibleAllUI): every visible element hidden (the clock, the car's

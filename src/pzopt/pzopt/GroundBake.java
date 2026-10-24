@@ -3,6 +3,7 @@ package pzopt;
 import java.util.ArrayList;
 import java.util.concurrent.CopyOnWriteArrayList;
 import org.lwjgl.BufferUtils;
+import org.lwjgl.opengl.GL;
 import org.lwjgl.opengl.GL11;
 import org.lwjgl.opengl.GL13;
 import org.lwjgl.opengl.GL15;
@@ -91,12 +92,16 @@ public final class GroundBake {
       /** GLSL inserted before main (after the stock declarations and the ground helpers): uniforms, functions. */
       String declarations();
 
-      /** The name of a {@code vec4 f(vec4 texel)} applied to the floor's art texel, or null. */
+      /**
+       * The name of a {@code vec4 f(vec4 texel)} applied to the floor's art texel, or null. Texels are premultiplied (the
+       * game's pages, ImageData.performPreMultipliedAlpha) and floors bake with ONE / ONE_MINUS_SRC_ALPHA: return
+       * premultiplied colour (un-premultiply, work, return rgb * a), or partial-alpha edges come out bright (ground-tiling).
+       */
       default String texel() {
          return null;
       }
 
-      /** The name of a {@code vec4 f(vec4 colour)} applied to the colour the program writes, or null. */
+      /** The name of a {@code vec4 f(vec4 colour)} applied to the colour the program writes (premultiplied too), or null. */
       default String color() {
          return null;
       }
@@ -104,6 +109,11 @@ public final class GroundBake {
       /** {name, unit} pairs: this patch's sampler2D uniforms and the texture units they read (58-63 are free). */
       default String[][] samplers() {
          return new String[0][];
+      }
+
+      /** {@code #define} lines put at the head of the variant (before the stock source and the ground helpers), or "". */
+      default String defines() {
+         return "";
       }
 
       /** Wants {@code pzgPiece} / {@code pzgAttached} (costs two more programs: attached pieces draw with their own, by kind). */
@@ -136,6 +146,37 @@ public final class GroundBake {
 
    private static final CopyOnWriteArrayList<FloorPatch> PATCHES = new CopyOnWriteArrayList<>();
    private static final CopyOnWriteArrayList<FloorPass> PASSES = new CopyOnWriteArrayList<>();
+
+   /**
+    * Dev (devGroundNoop, 2026-10-24, ground-tiling's "the no-op variant doubles a bake's GPU time"): floor patches that
+    * change nothing, keyed by groundHexTiling and the cycle token: full (the variant as a patch gets it), nofetch (without
+    * the class-map fetch in pzgSetup), noupload (the variant, no class-map uploads while it is on). With
+    * devGroundAlternate + devGroundAlternateKeys=groundHexTiling + devGroundCycle=full,nofetch,noupload; harness/ground/bakecost.py.
+    */
+   static void registerNoopProbes() {
+      String[][] probes = {{"noopFull", "full", ""}, {"noopNoFetch", "nofetch", "#define PZG_NO_CLASS_FETCH 1"}, {"noopNoUpload", "noupload", ""}};
+      for (String[] pr : probes) {
+         register(new FloorPatch() {
+            public String id() {
+               return pr[0];
+            }
+
+            public boolean active() {
+               String t = Ground.variant();
+               return Ground.on(Ground.K_HEX) && (t == null ? pr[1].equals("full") : t.equals(pr[1]));
+            }
+
+            public String declarations() {
+               return "";
+            }
+
+            public String defines() {
+               return pr[2];
+            }
+         });
+      }
+      Log.info("ground: clock nano=" + System.nanoTime() + " epoch_ms=" + System.currentTimeMillis() + " (no-op floor probes registered)");
+   }
 
    public static void register(FloorPatch p) {
       for (FloorPatch q : PATCHES) {
@@ -195,6 +236,25 @@ public final class GroundBake {
          if (FLOOR_ON || PASS_ON || PASS_AFTER_SNOW_ON || CLASS_ON) {
             FLOOR_ON = PASS_ON = PASS_AFTER_SNOW_ON = CLASS_ON = false;
          }
+         return;
+      }
+      // the frame's active set as a key: unchanged and applied, nothing to rebuild (no strings, no lists a frame)
+      boolean sup = supported();
+      long key = sup ? (long)(Config.DEV_GROUND_VIEW & 0xFF) << 48 : 0L;
+      if (sup) {
+         for (int i = 0; i < PATCHES.size() && i < 24; i++) {
+            if (activeSafe(PATCHES.get(i))) {
+               key |= 1L << i;
+            }
+         }
+         for (int i = 0; i < PASSES.size() && i < 24; i++) {
+            if (activeSafe(PASSES.get(i))) {
+               key |= 1L << (24 + i);
+            }
+         }
+      }
+      if (key == appliedKey && PATCHES.size() == appliedPatches && PASSES.size() == appliedPasses) {
+         CLASS_ON = sup && (FLOOR_ON || PASS_ON || PASS_AFTER_SNOW_ON || classWantedFrame >= frameNo - 2);
          return;
       }
       ACTIVE.clear();
@@ -272,6 +332,30 @@ public final class GroundBake {
       PASS_ON = !ACTIVE_PASSES.isEmpty();
       PASS_AFTER_SNOW_ON = !ACTIVE_AFTER_SNOW.isEmpty();
       CLASS_ON = supported() && (FLOOR_ON || PASS_ON || PASS_AFTER_SNOW_ON || classWantedFrame >= frameNo - 2);
+      // applied once the programs of this set are the ones baking (a variant still compiling: checked again next frame)
+      boolean applied = signature.equals(s) && (s.isEmpty() || FLOOR_ON);
+      appliedKey = applied ? key : -1L;
+      appliedPatches = PATCHES.size();
+      appliedPasses = PASSES.size();
+   }
+
+   private static long appliedKey = -1L;
+   private static int appliedPatches = -1, appliedPasses = -1;
+
+   private static boolean activeSafe(FloorPatch p) {
+      try {
+         return p.active();
+      } catch (Throwable t) {
+         return false;
+      }
+   }
+
+   private static boolean activeSafe(FloorPass p) {
+      try {
+         return p.active();
+      } catch (Throwable t) {
+         return false;
+      }
    }
 
    // ------------------------------------------------------------------------------------------------ the floor draw (game / recording threads)
@@ -434,11 +518,18 @@ public final class GroundBake {
 
    static final int CLASS_N = 512, CLASS_UNIT = 56, STATE_UNIT = 57;
    private static final java.util.ArrayDeque<ClassPatch> FREE_PATCHES = new java.util.ArrayDeque<>();
-   public static long classUploads, classBytes;
+   public static long classUploads, classBytes, classSkipped;
+   /**
+    * The game thread's copy of the class map (what every queued patch leaves in it, in stream order): a bake whose 10 x 10
+    * squares the map already holds queues nothing. A re-bake of a chunk (lighting, the ground keys' alternation, tracks)
+    * uploaded every time, inside the bake, and the upload into a texture the earlier bakes sample cost the bake ~20 us of
+    * GPU on NVIDIA (gc-noop: variant with uploads 84 / 79 us a bake, without 63.5 = stock 62.5).
+    */
+   private static final byte[] CLASS_SHADOW = new byte[CLASS_N * CLASS_N * 2];
 
    /** Render-thread upload of one chunk's classes (10 x 10 squares: the chunk and a border of one). */
    private static final class ClassPatch extends TextureDraw.GenericDrawer {
-      final byte[] b = new byte[100];
+      final byte[] b = new byte[200]; // 10 x 10 squares, RG: GroundTiles.mapByte, tone + flags (toneByte)
       int x0, y0; // world square of b[0]
 
       @Override
@@ -464,6 +555,9 @@ public final class GroundBake {
       if (!CLASS_ON || c == null || level != 0) {
          return;
       }
+      if (Config.DEV_GROUND_NOOP && "noupload".equals(Ground.variant()) && Ground.on(Ground.K_HEX)) {
+         return; // dev probe: the variant without its class-map uploads
+      }
       ClassPatch p;
       synchronized (FREE_PATCHES) {
          p = FREE_PATCHES.poll();
@@ -474,7 +568,9 @@ public final class GroundBake {
       p.x0 = c.wx * 8 - 1;
       p.y0 = c.wy * 8 - 1;
       zombie.iso.IsoCell cell = zombie.iso.IsoWorld.instance.currentCell;
+      boolean changed = CLASS_DEV_ALWAYS;
       for (int y = 0; y < 10; y++) {
+         int row = Math.floorMod(p.y0 + y, CLASS_N) * CLASS_N;
          for (int x = 0; x < 10; x++) {
             IsoGridSquare sq;
             if (x >= 1 && x <= 8 && y >= 1 && y <= 8) {
@@ -482,14 +578,36 @@ public final class GroundBake {
             } else {
                sq = cell == null ? null : cell.getGridSquare(p.x0 + x, p.y0 + y, 0);
             }
-            p.b[y * 10 + x] = (byte)GroundTiles.mapByte(GroundTiles.square(sq));
+            int code = GroundTiles.square(sq);
+            byte m = (byte)GroundTiles.mapByte(code), t = (byte)GroundTiles.toneByte(code);
+            p.b[(y * 10 + x) * 2] = m;
+            p.b[(y * 10 + x) * 2 + 1] = t;
+            int o = (row + Math.floorMod(p.x0 + x, CLASS_N)) * 2;
+            if (CLASS_SHADOW[o] != m || CLASS_SHADOW[o + 1] != t) {
+               CLASS_SHADOW[o] = m;
+               CLASS_SHADOW[o + 1] = t;
+               changed = true;
+            }
          }
+      }
+      if (!changed) {
+         classSkipped++;
+         synchronized (FREE_PATCHES) {
+            if (FREE_PATCHES.size() < 256) {
+               FREE_PATCHES.add(p);
+            }
+         }
+         return;
       }
       SpriteRenderer.instance.drawGeneric(p);
    }
 
-   private static int classTex, classPbo;
-   private static java.nio.ByteBuffer classBuf;
+   /** dev (devGroundClassAlways): upload every bake's classes as before the shadow copy, for the A/B. */
+   static final boolean CLASS_DEV_ALWAYS = Config.DEV_GROUND_CLASS_ALWAYS;
+
+   private static int classTex, classPbo, classRing;
+   private static java.nio.ByteBuffer classBuf, classMapped;
+   private static final int RING = 256, RING_STRIDE = 256; // 64 KB: a slot is reused 256 uploads later (long done on the GPU)
 
    private static void uploadClass(ClassPatch p) {
       if (classTex == 0) {
@@ -501,34 +619,49 @@ public final class GroundBake {
          GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_WRAP_S, GL11.GL_REPEAT);
          GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_WRAP_T, GL11.GL_REPEAT);
          GL11.glTexParameteri(GL11.GL_TEXTURE_2D, org.lwjgl.opengl.GL12.GL_TEXTURE_MAX_LEVEL, 0);
-         java.nio.ByteBuffer zero = BufferUtils.createByteBuffer(CLASS_N * CLASS_N);
+         java.nio.ByteBuffer zero = BufferUtils.createByteBuffer(CLASS_N * CLASS_N * 2);
          GL11.glPixelStorei(GL11.GL_UNPACK_ALIGNMENT, 1);
-         GL11.glTexImage2D(GL11.GL_TEXTURE_2D, 0, GL30.GL_R8, CLASS_N, CLASS_N, 0, GL11.GL_RED, GL11.GL_UNSIGNED_BYTE, zero);
+         GL11.glTexImage2D(GL11.GL_TEXTURE_2D, 0, GL30.GL_RG8, CLASS_N, CLASS_N, 0, GL30.GL_RG, GL11.GL_UNSIGNED_BYTE, zero);
          GL11.glPixelStorei(GL11.GL_UNPACK_ALIGNMENT, 4);
          classPbo = GL15.glGenBuffers();
-         classBuf = BufferUtils.createByteBuffer(100);
+         classBuf = BufferUtils.createByteBuffer(200);
+         if (GL.getCapabilities().GL_ARB_buffer_storage) {
+            // a persistent, coherent, write-only ring: no glBufferData (a new allocation a bake) and no map / unmap per upload
+            GL15.glBindBuffer(GL21.GL_PIXEL_UNPACK_BUFFER, classPbo);
+            int fl = GL30.GL_MAP_WRITE_BIT | org.lwjgl.opengl.GL44.GL_MAP_PERSISTENT_BIT | org.lwjgl.opengl.GL44.GL_MAP_COHERENT_BIT;
+            org.lwjgl.opengl.GL44.glBufferStorage(GL21.GL_PIXEL_UNPACK_BUFFER, (long)RING * RING_STRIDE, fl);
+            classMapped = GL30.glMapBufferRange(GL21.GL_PIXEL_UNPACK_BUFFER, 0L, (long)RING * RING_STRIDE, fl);
+            GL15.glBindBuffer(GL21.GL_PIXEL_UNPACK_BUFFER, 0);
+         }
          GL13.glActiveTexture(GL13.GL_TEXTURE0);
       }
       GpuSections.markNow(Ground.section("ground.class"), false);
-      classBuf.clear();
-      classBuf.put(p.b).flip();
       // through a pixel buffer: on Mesa a client-memory sub-image waits for the driver thread
+      long base = 0L;
       GL15.glBindBuffer(GL21.GL_PIXEL_UNPACK_BUFFER, classPbo);
-      GL15.glBufferData(GL21.GL_PIXEL_UNPACK_BUFFER, classBuf, GL15.GL_STREAM_DRAW);
+      if (classMapped != null) {
+         int slot = classRing++ & (RING - 1);
+         base = (long)slot * RING_STRIDE;
+         classMapped.put((int)base, p.b, 0, 200);
+      } else {
+         classBuf.clear();
+         classBuf.put(p.b).flip();
+         GL15.glBufferData(GL21.GL_PIXEL_UNPACK_BUFFER, classBuf, GL15.GL_STREAM_DRAW);
+      }
       GL13.glActiveTexture(GL13.GL_TEXTURE0 + CLASS_UNIT);
       GL11.glBindTexture(GL11.GL_TEXTURE_2D, classTex);
       GL11.glPixelStorei(GL11.GL_UNPACK_ALIGNMENT, 1);
       int x0 = Math.floorMod(p.x0, CLASS_N), y0 = Math.floorMod(p.y0, CLASS_N);
       int w1 = Math.min(10, CLASS_N - x0), h1 = Math.min(10, CLASS_N - y0);
       GL11.glPixelStorei(GL11.GL_UNPACK_ROW_LENGTH, 10);
-      sub(x0, y0, w1, h1, 0, 0);
+      sub(base, x0, y0, w1, h1, 0, 0);
       if (w1 < 10) {
-         sub(0, y0, 10 - w1, h1, w1, 0);
+         sub(base, 0, y0, 10 - w1, h1, w1, 0);
       }
       if (h1 < 10) {
-         sub(x0, 0, w1, 10 - h1, 0, h1);
+         sub(base, x0, 0, w1, 10 - h1, 0, h1);
          if (w1 < 10) {
-            sub(0, 0, 10 - w1, 10 - h1, w1, h1);
+            sub(base, 0, 0, 10 - w1, 10 - h1, w1, h1);
          }
       }
       GL11.glPixelStorei(GL11.GL_UNPACK_ROW_LENGTH, 0);
@@ -536,12 +669,12 @@ public final class GroundBake {
       GL15.glBindBuffer(GL21.GL_PIXEL_UNPACK_BUFFER, 0);
       GL13.glActiveTexture(GL13.GL_TEXTURE0);
       classUploads++;
-      classBytes += 100;
+      classBytes += 200;
       GpuSections.markNow(Ground.section("ground.class"), true);
    }
 
-   private static void sub(int tx, int ty, int w, int h, int sx, int sy) {
-      GL11.glTexSubImage2D(GL11.GL_TEXTURE_2D, 0, tx, ty, w, h, GL11.GL_RED, GL11.GL_UNSIGNED_BYTE, (long)(sy * 10 + sx));
+   private static void sub(long base, int tx, int ty, int w, int h, int sx, int sy) {
+      GL11.glTexSubImage2D(GL11.GL_TEXTURE_2D, 0, tx, ty, w, h, GL30.GL_RG, GL11.GL_UNSIGNED_BYTE, base + (long)(sy * 10 + sx) * 2L);
    }
 
    /** Render thread: the class map on its unit (56) for a program outside the bake (left bound; returns false before the first bake made it). */
@@ -559,8 +692,12 @@ public final class GroundBake {
    public static final String GLSL_CLASS = String.join("\n",
       "#ifndef PZG_CLASS",
       "#define PZG_CLASS 1",
-      "uniform sampler2D pzgClassTex;", // GroundBake.CLASS_UNIT: R8, one texel a square, toroidal over 512 squares
+      "uniform sampler2D pzgClassTex;", // GroundBake.CLASS_UNIT: RG8, one texel a square, toroidal over 512 squares
       "int pzgClassAt(ivec2 sq) { return int(texelFetch(pzgClassTex, ivec2(sq.x & 511, sq.y & 511), 0).r * 255.0 + 0.5); }",
+      // G: the tone within the material (grass 0 light, 1 medium, 2 dark) in the low 4 bits, 16 erosion, 32 farm, 64 road, 128 sidewalk (GroundTiles.toneByte)
+      "int pzgToneByteAt(ivec2 sq) { return int(texelFetch(pzgClassTex, ivec2(sq.x & 511, sq.y & 511), 0).g * 255.0 + 0.5); }",
+      "int pzgToneAt(ivec2 sq) { return pzgToneByteAt(sq) & 15; }",
+      "int pzgPavedAt(ivec2 sq) { int b = pzgToneByteAt(sq); return (b & 64) != 0 ? 1 : (b & 128) != 0 ? 2 : 0; }", // 1 road, 2 sidewalk (GroundTiles.paved)
       "int pzgMaterialOf(int cls) { return cls & 15; }", // GroundTiles.NONE .. DARK_DIRT
       "bool pzgNatural(int cls) { int m = cls & 15; return m != 0 && m != 5 && m != 6 && m != 7 && (cls & 128) == 0; }",
       "#endif",
@@ -676,7 +813,11 @@ public final class GroundBake {
       "   vec2 fl = floor(pzgW.xy);",
       "   pzgSq = ivec2(fl);",
       "   pzgF = pzgW.xy - fl;",
+      "#ifdef PZG_NO_CLASS_FETCH",
+      "   pzgClass = 1;", // (dev probe: the variant without its class-map fetch)
+      "#else",
       "   pzgClass = pzgClassAt(pzgSq);",
+      "#endif",
       "   pzgPiece = PZG_PIECE;",
       "   pzgAttached = PZG_PIECE != 0;",
       "}",
@@ -718,6 +859,12 @@ public final class GroundBake {
       StringBuilder head = new StringBuilder();
       head.append("#define PZG_FLOOR 1\n#define PZG_VIEW ").append(view).append('\n');
       head.append("#define PZG_PIECE ").append(piece).append('\n');
+      for (FloorPatch p : patches) {
+         String d = p.defines();
+         if (d != null && !d.isEmpty()) {
+            head.append(d).append('\n');
+         }
+      }
       head.append(GroundHash.GLSL).append(GLSL_FLOOR_HEAD);
       String c = GroundHash.insertAfterHeader(stock, head.toString(), 130);
       if (c == null) {
@@ -1006,7 +1153,7 @@ public final class GroundBake {
    public static String stats() {
       StringBuilder b = new StringBuilder("ground bake: floor ").append(FLOOR_ON ? "on (" + signature + ")" : "off").append(", passes ")
          .append(PASS_ON ? passSignature : "off").append(", class map ").append(CLASS_ON ? "on" : "off").append(", natural floors ")
-         .append(naturalFloors).append(" stock ").append(stockFloors).append(", class uploads ").append(classUploads)
+         .append(naturalFloors).append(" stock ").append(stockFloors).append(", class uploads ").append(classUploads).append(" (unchanged, skipped ").append(classSkipped).append(')')
          .append(", sprites looked up ").append(GroundTiles.lookups);
       synchronized (REBAKES) {
          if (!REBAKES.isEmpty()) {

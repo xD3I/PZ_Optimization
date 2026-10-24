@@ -21,6 +21,7 @@ import org.lwjgl.opengl.GL15;
 import org.lwjgl.opengl.GL20;
 import org.lwjgl.opengl.GL21;
 import org.lwjgl.opengl.GL30;
+import org.lwjgl.opengl.GL31;
 import org.lwjgl.opengl.GL32;
 import org.lwjgl.opengl.GL42;
 import org.lwjgl.opengl.GL43;
@@ -1022,6 +1023,7 @@ public final class GroundState {
    private static final class Pending {
       long fence;
       int pbo, n;
+      ByteBuffer mapped; // persistent read mapping (client storage): the IO thread copies out of it, the render thread never does
       final long[] keys = new long[READBACK_BATCH];
       String dir;
       double hours;
@@ -1190,14 +1192,14 @@ public final class GroundState {
       if (failed || !init()) {
          return;
       }
-      GpuSections.begin(Ground.section("ground.state"));
+      GpuSections.markNow(Ground.section("ground.state"), false); // (render thread: issued in the GL stream now; begin/end would queue into the next draw list)
       try {
          pollReadbacks();
          rOx = f.ox;
          rOy = f.oy;
          int t = tex;
          if (f.nRead > 0 && canRead) {
-            GL42.glMemoryBarrier(GL42.GL_TEXTURE_UPDATE_BARRIER_BIT | GL42.GL_PIXEL_BUFFER_BARRIER_BIT);
+            GL42.glMemoryBarrier(GL42.GL_TEXTURE_UPDATE_BARRIER_BIT | GL42.GL_PIXEL_BUFFER_BARRIER_BIT | GL42.GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
             issueReadbacks(f, t);
          }
          if (f.clearAll) {
@@ -1278,11 +1280,90 @@ public final class GroundState {
          GL15.glBindBuffer(GL43.GL_SHADER_STORAGE_BUFFER, 0);
          GL20.glUseProgram(0);
          zombie.core.ShaderHelper.forgetCurrentlyBound();
-         GpuSections.end(Ground.section("ground.state"));
+         GpuSections.markNow(Ground.section("ground.state"), true);
       }
    }
 
+   private static int readFbo, readFboTex, readbackIssues, packProg, packOrgBuf, packBuf;
+   private static boolean packFailed;
+   static final int RB_GET = 0, RB_PIXELS = 1, RB_PACK = 2;
+
+   /** The read-back's packing pass: each chunk's 128 x 128 texels into one buffer (one dispatch, then one buffer copy). */
+   static final String GLSL_PACK = String.join("\n",
+      "#version 430",
+      "layout(local_size_x = 16, local_size_y = 16) in;",
+      "layout(rgba8, binding = 0) readonly uniform image2D gsMap;",
+      "layout(std430, binding = 1) readonly buffer GsOrg { ivec2 gsOrg[]; };",
+      "layout(std430, binding = 2) writeonly buffer GsOut { uint gsOut[]; };",
+      "void main() {",
+      "   uint i = gl_WorkGroupID.z;",
+      "   ivec2 t = ivec2(gl_GlobalInvocationID.xy);",
+      "   gsOut[i * " + (CHUNK_TEX * CHUNK_TEX) + "u + uint(t.y) * " + CHUNK_TEX + "u + uint(t.x)] = packUnorm4x8(imageLoad(gsMap, gsOrg[i] + t));",
+      "}",
+      "");
+
    private static void issueReadbacks(Frame f, int t) {
+      // devGroundReadback (A/B): pack (default) = a compute pass packs the chunks into a buffer, copied into the read-back
+      // buffer: two calls a batch; get = glGetTextureSubImage and pixels = glReadPixels, one call a chunk, cost the render
+      // thread ~1.6 ms a flush of ~30 chunks on NVIDIA's threaded driver (gc-statev2-cost4, gc-statev2-rb)
+      String how = Config.DEV_GROUND_READBACK;
+      int mode = "get".equals(how) ? RB_GET : "pixels".equals(how) ? RB_PIXELS : "alternate".equals(how) ? ((readbackIssues++ & 1) == 0 ? RB_PACK : RB_GET) : RB_PACK;
+      if (mode == RB_PACK && !packReady()) {
+         mode = RB_GET;
+      }
+      if (mode == RB_PIXELS && (readFbo == 0 || readFboTex != t)) {
+         if (readFbo == 0) {
+            readFbo = GL30.glGenFramebuffers();
+         }
+         readFboTex = t;
+         GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, readFbo);
+         GL30.glFramebufferTexture2D(GL30.GL_READ_FRAMEBUFFER, GL30.GL_COLOR_ATTACHMENT0, GL11.GL_TEXTURE_2D, t, 0);
+         GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, zombie.core.textures.TextureFBO.lastID);
+      }
+      String sec = Ground.section(mode == RB_PACK ? "ground.rb.pack" : mode == RB_PIXELS ? "ground.rb.pixels" : "ground.rb.get");
+      GpuSections.markNow(sec, false);
+      if (mode == RB_PIXELS) {
+         GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, readFbo);
+         GL11.glReadBuffer(GL30.GL_COLOR_ATTACHMENT0);
+      }
+      try {
+         issueReadbacks(f, t, mode);
+      } finally {
+         if (mode == RB_PIXELS) {
+            GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, zombie.core.textures.TextureFBO.lastID); // (the game binds GL_FRAMEBUFFER: read = draw)
+         }
+         if (mode == RB_PACK) {
+            GL20.glUseProgram(0);
+            GL42.glBindImageTexture(0, 0, 0, false, 0, GL15.GL_READ_ONLY, GL11.GL_RGBA8);
+            GL30.glBindBufferBase(GL43.GL_SHADER_STORAGE_BUFFER, 1, 0);
+            GL30.glBindBufferBase(GL43.GL_SHADER_STORAGE_BUFFER, 2, 0);
+            zombie.core.ShaderHelper.forgetCurrentlyBound();
+         }
+         GpuSections.markNow(sec, true);
+      }
+   }
+
+   private static boolean packReady() {
+      if (packProg != 0) {
+         return true;
+      }
+      if (packFailed) {
+         return false;
+      }
+      packProg = RipplesGpu.program(GLSL_PACK, "ground state read-back pack");
+      if (packProg == 0) {
+         packFailed = true;
+         Log.warn("ground state: the read-back pack pass did not compile, glGetTextureSubImage instead");
+         return false;
+      }
+      packOrgBuf = ssbo((long)READBACK_BATCH * 8);
+      packBuf = ssbo((long)READBACK_BATCH * CHUNK_TEX * CHUNK_TEX * 4);
+      return true;
+   }
+
+   private static final java.nio.IntBuffer PACK_ORG = BufferUtils.createIntBuffer(READBACK_BATCH * 2);
+
+   private static void issueReadbacks(Frame f, int t, int mode) {
       int i = 0;
       while (i < f.nRead) {
          Pending p;
@@ -1293,17 +1374,48 @@ public final class GroundState {
             p = new Pending();
             p.pbo = GL15.glGenBuffers();
             GL15.glBindBuffer(GL21.GL_PIXEL_PACK_BUFFER, p.pbo);
-            GL15.glBufferData(GL21.GL_PIXEL_PACK_BUFFER, (long)READBACK_BATCH * CHUNK_TEX * CHUNK_TEX * 4, GL15.GL_STREAM_READ);
+            long size = (long)READBACK_BATCH * CHUNK_TEX * CHUNK_TEX * 4;
+            int flags = GL30.GL_MAP_READ_BIT | org.lwjgl.opengl.GL44.GL_MAP_PERSISTENT_BIT | org.lwjgl.opengl.GL44.GL_MAP_COHERENT_BIT;
+            org.lwjgl.opengl.GL44.glBufferStorage(GL21.GL_PIXEL_PACK_BUFFER, size, flags | org.lwjgl.opengl.GL44.GL_CLIENT_STORAGE_BIT);
+            p.mapped = GL30.glMapBufferRange(GL21.GL_PIXEL_PACK_BUFFER, 0L, size, flags);
          } else {
             GL15.glBindBuffer(GL21.GL_PIXEL_PACK_BUFFER, p.pbo);
          }
          p.n = 0;
          p.dir = f.readDir;
          p.hours = f.readHours;
+         if (mode == RB_PACK) {
+            GL15.glBindBuffer(GL21.GL_PIXEL_PACK_BUFFER, 0);
+            PACK_ORG.clear();
+            for (; i < f.nRead && p.n < READBACK_BATCH; i++) {
+               int s = f.readSlot[i];
+               PACK_ORG.put((s & (SLOTS - 1)) * CHUNK_TEX).put((s / SLOTS) * CHUNK_TEX);
+               p.keys[p.n++] = f.readKey[i];
+            }
+            PACK_ORG.flip();
+            GL15.glBindBuffer(GL43.GL_SHADER_STORAGE_BUFFER, packOrgBuf);
+            GL15.glBufferSubData(GL43.GL_SHADER_STORAGE_BUFFER, 0L, PACK_ORG);
+            GL20.glUseProgram(packProg);
+            GL42.glBindImageTexture(0, t, 0, false, 0, GL15.GL_READ_ONLY, GL11.GL_RGBA8);
+            GL30.glBindBufferBase(GL43.GL_SHADER_STORAGE_BUFFER, 1, packOrgBuf);
+            GL30.glBindBufferBase(GL43.GL_SHADER_STORAGE_BUFFER, 2, packBuf);
+            GL43.glDispatchCompute(CHUNK_TEX / 16, CHUNK_TEX / 16, p.n);
+            GL42.glMemoryBarrier(GL42.GL_BUFFER_UPDATE_BARRIER_BIT);
+            GL15.glBindBuffer(GL31.GL_COPY_READ_BUFFER, packBuf);
+            GL15.glBindBuffer(GL31.GL_COPY_WRITE_BUFFER, p.pbo);
+            GL31.glCopyBufferSubData(GL31.GL_COPY_READ_BUFFER, GL31.GL_COPY_WRITE_BUFFER, 0L, 0L, (long)p.n * CHUNK_TEX * CHUNK_TEX * 4);
+            GL15.glBindBuffer(GL31.GL_COPY_READ_BUFFER, 0);
+            GL15.glBindBuffer(GL31.GL_COPY_WRITE_BUFFER, 0);
+         }
          for (; i < f.nRead && p.n < READBACK_BATCH; i++) {
             int s = f.readSlot[i];
-            GL45.glGetTextureSubImage(t, 0, (s & (SLOTS - 1)) * CHUNK_TEX, (s / SLOTS) * CHUNK_TEX, 0, CHUNK_TEX, CHUNK_TEX, 1, GL11.GL_RGBA,
-               GL11.GL_UNSIGNED_BYTE, CHUNK_TEX * CHUNK_TEX * 4, (long)p.n * CHUNK_TEX * CHUNK_TEX * 4);
+            if (mode == RB_PIXELS) {
+               GL11.glReadPixels((s & (SLOTS - 1)) * CHUNK_TEX, (s / SLOTS) * CHUNK_TEX, CHUNK_TEX, CHUNK_TEX, GL11.GL_RGBA, GL11.GL_UNSIGNED_BYTE,
+                  (long)p.n * CHUNK_TEX * CHUNK_TEX * 4);
+            } else {
+               GL45.glGetTextureSubImage(t, 0, (s & (SLOTS - 1)) * CHUNK_TEX, (s / SLOTS) * CHUNK_TEX, 0, CHUNK_TEX, CHUNK_TEX, 1, GL11.GL_RGBA,
+                  GL11.GL_UNSIGNED_BYTE, CHUNK_TEX * CHUNK_TEX * 4, (long)p.n * CHUNK_TEX * CHUNK_TEX * 4);
+            }
             p.keys[p.n++] = f.readKey[i];
          }
          GL15.glBindBuffer(GL21.GL_PIXEL_PACK_BUFFER, 0);
@@ -1329,24 +1441,27 @@ public final class GroundState {
          }
          GL32.glDeleteSync(p.fence);
          PENDING.remove(i--);
-         ByteBuffer b = BufferUtils.createByteBuffer(p.n * CHUNK_TEX * CHUNK_TEX * 4);
-         GL15.glBindBuffer(GL21.GL_PIXEL_PACK_BUFFER, p.pbo);
-         GL15.glGetBufferSubData(GL21.GL_PIXEL_PACK_BUFFER, 0L, b);
-         GL15.glBindBuffer(GL21.GL_PIXEL_PACK_BUFFER, 0);
+         // the bytes stay in the persistent mapping; the IO thread copies them out and only then frees the buffer (no
+         // 1 MB copy and allocation on the render thread: 188 us a flush, gc-statev2-cost3)
+         final ByteBuffer b = p.mapped.duplicate();
+         final Pending done = p;
          final int n = p.n;
          final long[] keys = java.util.Arrays.copyOf(p.keys, n);
          final File d = new File(p.dir);
          final double hours = p.hours;
-         synchronized (FREE_PENDING) {
-            FREE_PENDING.add(p);
-         }
          IO.execute(() -> {
             try {
                byte[][] raws = new byte[n][];
-               for (int k = 0; k < n; k++) {
-                  raws[k] = new byte[CHUNK_TEX * CHUNK_TEX * 4];
-                  b.position(k * CHUNK_TEX * CHUNK_TEX * 4);
-                  b.get(raws[k]);
+               try {
+                  for (int k = 0; k < n; k++) {
+                     raws[k] = new byte[CHUNK_TEX * CHUNK_TEX * 4];
+                     b.position(k * CHUNK_TEX * CHUNK_TEX * 4);
+                     b.get(raws[k]);
+                  }
+               } finally {
+                  synchronized (FREE_PENDING) {
+                     FREE_PENDING.add(done); // (the mapping is free again: the next read-back may land in it)
+                  }
                }
                int[] xs = new int[n], ys = new int[n];
                for (int k = 0; k < n; k++) {
@@ -1438,6 +1553,12 @@ public final class GroundState {
       "vec4 pzgStateAt(vec2 world) { return pzgStateDecode(pzgStateRaw(world)); }",
       "#endif",
       "");
+
+   /**
+    * {@link #GLSL} for a GLSL 1.30+ program, with texture() (2026-10-24, the blades' Mac trap): a texture2D token makes
+    * CoreGlsl (macOS GL 4.1 core) inject its wrappers, whose bias overloads Apple refuses in a vertex shader.
+    */
+   public static final String GLSL_130 = GLSL.replace("texture2D(", "texture(");
 
    // ------------------------------------------------------------------------------------------------ persistence
 
