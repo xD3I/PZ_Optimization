@@ -74,7 +74,7 @@ public final class Glints {
 
    public static String stats() {
       return "glints: frames=" + frames + " queued=" + framesQueued + " instances=" + instances + " max=" + maxInstances + " maskRebuilds=" + maskRebuilds
-            + " draws=" + draws + " queue_us=" + (frames > 0 ? String.format(java.util.Locale.ROOT, "%.1f (masks %.1f, lights %.1f)", queueNs / 1000.0 / frames, maskNs / 1000.0 / frames, lightsNs / 1000.0 / frames) : "0") + (framesFull > 0 ? String.format(java.util.Locale.ROOT, " queue_us_cached=%.1f queue_us_qfull=%.1f", (queueNs - queueFullNs) / 1000.0 / Math.max(1, frames - framesFull), queueFullNs / 1000.0 / framesFull) : "") + " mask_us=" + (maskRebuilds > 0 ? String.format(java.util.Locale.ROOT, "%.2f", maskNs / 1000.0 / maskRebuilds) : "0") + " ring=" + Gpu.ringWrites + " hdr=" + hdrQueued + "/" + Gpu.hdrDraws + " lightFrames=" + lightFrames + " noMaskFrames=" + noMaskFrames + " sunFrames=" + sunFrames + " pointSquares=" + pointSquares + " sunSquares=" + sunSquares + " model=" + model() + " pass=" + PASS_NAMES[passMode()] + " lamps=" + lampsCell + "/" + lampN + "/" + lampsActive + (failed ? " (failed)" : "");
+            + " draws=" + draws + " queue_us=" + (frames > 0 ? String.format(java.util.Locale.ROOT, "%.1f (masks %.1f, lights %.1f)", queueNs / 1000.0 / frames, maskNs / 1000.0 / frames, lightsNs / 1000.0 / frames) : "0") + (framesFull > 0 ? String.format(java.util.Locale.ROOT, " queue_us_cached=%.1f queue_us_qfull=%.1f", (queueNs - queueFullNs) / 1000.0 / Math.max(1, frames - framesFull), queueFullNs / 1000.0 / framesFull) : "") + " bulk=" + bulkCopies + " mask_us=" + (maskRebuilds > 0 ? String.format(java.util.Locale.ROOT, "%.2f", maskNs / 1000.0 / maskRebuilds) : "0") + " ring=" + Gpu.ringWrites + " hdr=" + hdrQueued + "/" + Gpu.hdrDraws + " lightFrames=" + lightFrames + " noMaskFrames=" + noMaskFrames + " sunFrames=" + sunFrames + " pointSquares=" + pointSquares + " sunSquares=" + sunSquares + " model=" + model() + " pass=" + PASS_NAMES[passMode()] + " lamps=" + lampsCell + "/" + lampN + "/" + lampsActive + (failed ? " (failed)" : "");
    }
 
    /** The model in force (devGlintCycle steps through them, then "off"). */
@@ -156,6 +156,12 @@ public final class Glints {
       final byte[] lum = new byte[64];
       long lumValid, lumMs = Long.MIN_VALUE / 2;
       int lumPlayer = -1;
+      // the chunk level's finished records of the last frame (copied whole while nothing in them changed)
+      final float[] out = new float[64 * TEXELS * 4];
+      int outN, outOx, outOy, outPoint, outSunN;
+      long outVisible;
+      float outDepth;
+      boolean outOk, outSun;
       /** per masked square, its data block's frame-independent part (the frame adds its chunk depth, origin, light bits) */
       final float[] block = new float[64 * TEXELS * 4];
    }
@@ -219,6 +225,7 @@ public final class Glints {
    private static void build(IsoChunk c, int level, LevelMask m, float wetGround, boolean snowAny) {
       m.bits = 0L;
       m.lightKeyOk = false;
+      m.outOk = false;
       m.lumValid = 0L;
       String force = Config.DEV_GLINT_FORCE;
       int forceKind = "frost".equals(force) ? K_FROST : "snow".equals(force) ? K_SNOW : "wet".equals(force) ? K_WET : -1;
@@ -465,7 +472,7 @@ public final class Glints {
     * Game thread, FBORenderCell after the players / items and before the puddles: this frame's masked squares in a light's
     * reach, queued as one draw. Nothing queued when there are none.
     */
-   public static long queueNs, maskNs, lightsNs, hdrQueued, noMaskFrames, queueFullNs, framesFull;
+   public static long queueNs, maskNs, lightsNs, hdrQueued, noMaskFrames, queueFullNs, framesFull, bulkCopies;
    private static Frame queuedFrame;
    private static int queuedFrameNo = -1;
 
@@ -630,11 +637,32 @@ public final class Glints {
             }
             boolean lightsSame = !"qfull".equals(variant) && m.lightKeyOk && m.lightKey == lk;
             int lstag = ((c.wx * 5 + c.wy * 11) & 15) * 6;
+            boolean lumFresh = true;
             if (m.lumPlayer != playerIndex || now - m.lumMs > LUM_MS + lstag || now < m.lumMs || "qfull".equals(variant)) {
                m.lumMs = now;
                m.lumPlayer = playerIndex;
                m.lumValid = 0L;
+               lumFresh = false;
             }
+            // the whole chunk level's records as last frame when nothing they hold changed: one copy
+            long visible = 0L;
+            for (long vb = bits; vb != 0L; vb &= vb - 1L) {
+               int s = Long.numberOfTrailingZeros(vb);
+               if ((flags[s] & 1) != 0) {
+                  visible |= 1L << s;
+               }
+            }
+            if (lightsSame && lumFresh && m.outOk && m.outVisible == visible && m.outDepth == chunkDepth && m.outOx == ox
+                  && m.outOy == oy && m.outSun == sunOn && f.n + m.outN <= MAX && Config.DEV_GLINT_VIEW != 1) {
+               System.arraycopy(m.out, 0, d, f.n * TEXELS * 4, m.outN * TEXELS * 4);
+               f.n += m.outN;
+               pointSquares += m.outPoint;
+               sunSquares += m.outSunN;
+               bulkCopies++;
+               continue;
+            }
+            int startN = f.n;
+            long p0 = pointSquares, s0 = sunSquares;
             boolean complete = true;
             while (bits != 0L) {
                if (f.n >= MAX) {
@@ -691,9 +719,18 @@ public final class Glints {
                f.n++;
             }
             m.lightKey = lk;
-            m.lightKeyOk = complete || lightsSame && m.lightKeyOk;
-            if (!complete) {
-               m.lightKeyOk = false;
+            m.lightKeyOk = complete;
+            m.outOk = complete;
+            if (complete) {
+               m.outN = f.n - startN;
+               System.arraycopy(d, startN * TEXELS * 4, m.out, 0, m.outN * TEXELS * 4);
+               m.outVisible = visible;
+               m.outDepth = chunkDepth;
+               m.outOx = ox;
+               m.outOy = oy;
+               m.outSun = sunOn;
+               m.outPoint = (int)(pointSquares - p0);
+               m.outSunN = (int)(sunSquares - s0);
             }
          }
       }
