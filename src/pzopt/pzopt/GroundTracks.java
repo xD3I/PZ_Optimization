@@ -150,7 +150,11 @@ public final class GroundTracks {
       if ("nowater".equals(v)) {
          return "off";
       }
-      return Config.GROUND_TRACKS_WATER;
+      String w = Config.GROUND_TRACKS_WATER;
+      if ("auto".equals(w)) {
+         return Ripples.patchedUnits > 0 && Ripples.on() ? "puddles" : "bake"; // (the puddle unit is patched at boot, with ripples on)
+      }
+      return w;
    }
 
    static String look() {
