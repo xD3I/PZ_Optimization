@@ -222,7 +222,6 @@ public final class FBORenderCell {
       pzopt.EntityShadow.frameStart(playerIndex); // pzopt: entity shadows, the frame's light and probe bricks (its compute first in the frame: the pipeline has drained at the swap)
       pzopt.Ripples.frameStart(playerIndex); // pzopt: rain rings / car wakes, last frame's compute passes first in this frame
       pzopt.Ground.frameStart(playerIndex); // pzopt: ground and grass, the frame's switches, the floor variant, the ground state's stamps and uploads
-      pzopt.GroundTracks.frameStart(playerIndex); // pzopt: ground tracks, this frame's stamps and decay (one static boolean read while off)
       if (pzopt.CharDraw.enabled()) {
          pzopt.CharDraw.walk(IsoWorld.instance.getCell().getObjectList(), this); // pzopt: charDrawPrep, the object walk on a worker from here
       }
@@ -2730,7 +2729,7 @@ public final class FBORenderCell {
                if (var59 != null) {
                   var59.close();
                }
-      if (pzopt.Config.GROUND_TRACKS) pzopt.GroundTracks.bakeFloor(c, level); // pzopt: ground tracks drawn over the floors and the snow, before the blood
+      if (pzopt.GroundBake.PASS_AFTER_SNOW_ON) pzopt.GroundBake.afterSnowPasses(c, level, IsoCamera.frameState.playerIndex); // pzopt: ground and grass, the passes drawn over the snow (tracks in snow), before the blood
    } // pzopt
 
    /** pzopt: bakeRecordParallel, stock's blood section of a bake. */

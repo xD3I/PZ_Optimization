@@ -213,6 +213,73 @@ public final class GroundTiles {
       return code;
    }
 
+   /** Surfaces for what presses into the ground (GroundState's cells, the tracks' rules): 0 none, then as named. */
+   public static final int SURF_NONE = 0, SURF_GRASS = 1, SURF_DIRT = 2, SURF_SAND = 3, SURF_GRAVEL = 4, SURF_SNOW = 5;
+
+   /**
+    * The square's surface at level 0 for tracks: its natural floor's material (grass; dirt, dark dirt and clay as dirt; sand;
+    * gravel), else its floor's FloorMaterial / FootstepMaterial property (Grass, Dirt, Clay, Sand, Gravel: grass sheets the
+    * name rules do not know), {@link #SURF_SNOW} over any of them when {@code snow}; farmland, water and built floors none.
+    */
+   public static int surface(IsoGridSquare sq, boolean snow) {
+      int code = square(sq);
+      if ((code & F_EXCLUDED) != 0) {
+         return SURF_NONE;
+      }
+      int s;
+      switch (code & 15) {
+         case GRASS:
+            s = SURF_GRASS;
+            break;
+         case DIRT:
+         case DARK_DIRT:
+         case CLAY:
+            s = SURF_DIRT;
+            break;
+         case SAND:
+            s = SURF_SAND;
+            break;
+         case GRAVEL:
+            s = SURF_GRAVEL;
+            break;
+         default:
+            s = sq == null ? SURF_NONE : byProperty(sq.getFloor());
+            break;
+      }
+      return s != SURF_NONE && snow ? SURF_SNOW : s;
+   }
+
+   private static int byProperty(IsoObject floor) {
+      if (floor == null || floor.sprite == null) {
+         return SURF_NONE;
+      }
+      try {
+         zombie.core.properties.PropertyContainer p = floor.getProperties();
+         String fm = p == null ? null : p.get(zombie.core.properties.IsoPropertyType.FLOOR_MATERIAL);
+         if (fm == null && p != null) {
+            fm = p.get(zombie.core.properties.IsoPropertyType.FOOTSTEP_MATERIAL);
+         }
+         if (fm == null) {
+            return SURF_NONE;
+         }
+         switch (fm) {
+            case "Grass":
+               return SURF_GRASS;
+            case "Dirt":
+            case "Clay":
+               return SURF_DIRT;
+            case "Sand":
+               return SURF_SAND;
+            case "Gravel":
+               return SURF_GRAVEL;
+            default:
+               return SURF_NONE;
+         }
+      } catch (Throwable t) {
+         return SURF_NONE;
+      }
+   }
+
    /** The class map's byte of a code: material (4 bits), base (bit 4), blend (bit 5), overlay (bit 6), excluded (bit 7). */
    public static int mapByte(int code) {
       return (code & 15) | ((code & F_BASE) != 0 ? 16 : 0) | ((code & F_BLEND) != 0 ? 32 : 0) | ((code & F_OVERLAY) != 0 ? 64 : 0)
