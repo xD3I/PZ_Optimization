@@ -488,6 +488,14 @@ public final class Glints {
       float view = (camera.offscreenWidth + 2F * camera.offscreenHeight) * zoom / (64F * ts) + 4F;
       // the frame origin: a multiple of 64 squares (the shader's world positions stay small)
       int ox = (int)Math.floor(cx / 64F) * 64, oy = (int)Math.floor(cy / 64F) * 64;
+      float wet = zombie.iso.IsoPuddles.getInstance().getWetGroundFinalValue();
+      boolean snowAny = IsoWorld.instance.currentCell.getSnowTarget() > 0;
+      // nothing can carry a mask (no frost potential, no snow, a dry road, nothing forced): no light gathering, no walk over the chunks
+      if (Config.DEV_GLINT_FORCE.isEmpty() && !snowAny && wet <= 0.05F && Config.DEV_GLINT_VIEW != 1
+            && !(GroundCover.on() && Config.GROUND_COVER_FROST && GroundCover.season.frost > 0F)) {
+         noMaskFrames++;
+         return;
+      }
       Frame f = FRAMES[frameIndex++ & 3];
       Lights L = f.lights;
       long tl = System.nanoTime();
@@ -509,14 +517,6 @@ public final class Glints {
       }
       if (L.n == 0 && L.sun[3] <= 0F && Config.DEV_GLINT_VIEW != 1) {
          return; // no light: no glint anywhere
-      }
-      float wet = zombie.iso.IsoPuddles.getInstance().getWetGroundFinalValue();
-      boolean snowAny = IsoWorld.instance.currentCell.getSnowTarget() > 0;
-      // nothing can carry a mask (no frost potential, no snow, a dry road, nothing forced): no walk over the chunks at all
-      if (Config.DEV_GLINT_FORCE.isEmpty() && !snowAny && wet <= 0.05F && Config.DEV_GLINT_VIEW != 1
-            && !(GroundCover.on() && Config.GROUND_COVER_FROST && GroundCover.season.frost > 0F)) {
-         noMaskFrames++;
-         return;
       }
       int camCX = zombie.core.math.PZMath.fastfloor(cx / 8F), camCY = zombie.core.math.PZMath.fastfloor(cy / 8F);
       float K = BloodDecals.K;
