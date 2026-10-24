@@ -47,6 +47,7 @@ public final class NoLoadingScreen {
             zombie.core.opengl.RenderThread.queueInvokeOnRenderContext(BloodWet.Gpu::warm);
             zombie.core.opengl.RenderThread.queueInvokeOnRenderContext(Glints.Gpu::warm);
             zombie.core.opengl.RenderThread.queueInvokeOnRenderContext(GroundCover.Gpu::warm);
+            zombie.core.opengl.RenderThread.queueInvokeOnRenderContext(WindLeaves.Gpu::warm);
          }
          CenterFirstLoad.onWorldEntered();
          ResumeShot.onWorldEntered();

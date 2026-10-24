@@ -420,6 +420,7 @@ public final class Glints {
    }
 
    public static void queue(int playerIndex, java.util.List<IsoChunk> chunks) {
+      WindLeaves.queue(playerIndex); // the ground cover's wind-blown leaves draw at this spot too
       if (!on() || chunks == null) {
          return;
       }
@@ -675,7 +676,7 @@ public final class Glints {
          "      vec2 o = vec2(0.5);",
          "      vec2 scr = a.xy + vec2((o.x - o.y) * 32.0 * uTs, (o.x + o.y) * 16.0 * uTs);",
          "      clip = uMVP * vec4(scr + uJ.xy, 0.0, 1.0);",
-         "      clip.z = ((a.z - (o.x + o.y) * uJ.z - uJ.w) * 2.0 - 1.0) * clip.w;",
+         "      clip.z = clamp((a.z - (o.x + o.y) * uJ.z - uJ.w) * 2.0 - 1.0, -1.0, 1.0) * clip.w;",
          "      return true;",
          "   }",
          "   vec3 P = vec3(b.xy + 0.5, a.w * 2.4494897);",
@@ -723,7 +724,7 @@ public final class Glints {
          "   vec2 scr = a.xy + vec2((o.x - o.y) * 32.0 * uTs, (o.x + o.y) * 16.0 * uTs);",
          "   clip = uMVP * vec4(scr + uJ.xy, 0.0, 1.0);",
          "   float depth = a.z - (o.x + o.y) * uJ.z - uJ.w;",
-         "   clip.z = (depth * 2.0 - 1.0) * clip.w;",
+         "   clip.z = clamp(depth * 2.0 - 1.0, -1.0, 1.0) * clip.w; // clamped here: GL_DEPTH_CLAMP on points cost 50 us (gcv-cost-state)",
          "   return true;",
          "}");
 
@@ -1132,22 +1133,37 @@ public final class Glints {
                GL30.glDisablei(GL11.GL_BLEND, 1); // HdrGlint's target is replaced, never blended (its encoding is not additive)
                GL30.glColorMaski(0, false, false, false, false);
             }
-            GL11.glEnable(GL11.GL_DEPTH_TEST);
+            // dev cycle names (cost split): pnodepth / pnoclamp / pnosprite / phalf
+            if ("pnodepth".equals(dv)) {
+               GL11.glDisable(GL11.GL_DEPTH_TEST);
+            } else {
+               GL11.glEnable(GL11.GL_DEPTH_TEST);
+            }
             GL11.glDepthFunc(GL11.GL_LEQUAL);
             GL11.glDepthMask(false);
-            GL11.glEnable(GL32.GL_DEPTH_CLAMP);
+            // GL_DEPTH_CLAMP for the floor diamonds only: with points on NVIDIA it cost ~50 us of the particle pass's 66 even
+            // for the culled slots (gcv-cost-state 2026-10-24: 66 -> 12 us); the point programs clamp their depth themselves
+            boolean clampHw = f.pass == P_DIAMONDS ? !"dnoclamp".equals(dv) : "pclamp".equals(dv);
+            if (clampHw) {
+               GL11.glEnable(GL32.GL_DEPTH_CLAMP);
+            }
             GL30.glBindVertexArray(vao);
             if (f.pass == P_DIAMONDS) {
                GL31.glDrawArraysInstanced(GL11.GL_TRIANGLE_FAN, 0, 4, f.n);
             } else {
-               GL11.glEnable(GL32.GL_PROGRAM_POINT_SIZE);
-               if (!CoreGl.active) {
-                  GL11.glEnable(GL20.GL_POINT_SPRITE); // a compatibility context defines gl_PointCoord only for point sprites
+               boolean sprite = !"pnosprite".equals(dv);
+               if (sprite) {
+                  GL11.glEnable(GL32.GL_PROGRAM_POINT_SIZE);
+                  if (!CoreGl.active) {
+                     GL11.glEnable(GL20.GL_POINT_SPRITE); // a compatibility context defines gl_PointCoord only for point sprites
+                  }
+               } else {
+                  GL11.glPointSize(2F);
                }
                if (noDraw) {
                   // dev: everything but the draw
                } else if (f.pass == P_PARTICLES) {
-                  GL11.glDrawArrays(GL11.GL_POINTS, 0, f.n * SLOTS);
+                  GL11.glDrawArrays(GL11.GL_POINTS, 0, "phalf".equals(dv) ? f.n * SLOTS / 2 : f.n * SLOTS);
                } else {
                   GL40.glDrawArraysIndirect(GL11.GL_POINTS, 0L);
                   GL15.glBindBuffer(GL40.GL_DRAW_INDIRECT_BUFFER, 0);

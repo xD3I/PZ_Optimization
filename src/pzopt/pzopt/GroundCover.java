@@ -943,6 +943,13 @@ public final class GroundCover {
    }
 
    /** For Glints: a square's sun visibility and frost as the cover's last build saw them (no cover built: full sun, no frost). */
+   /** Did square (x, y) of chunk c's level 0 take cover (its last build)? */
+   static boolean hasCover(IsoChunk c, int x, int y) {
+      LevelCover lc = built(c, 0);
+      int i = (x - c.wx * 8) + (y - c.wy * 8) * 8;
+      return lc != null && i >= 0 && i < 64 && lc.n > lc.frostN && (lc.squares >>> i & 1L) != 0L;
+   }
+
    public static float squareSun(IsoChunk c, int level, int i) {
       LevelCover lc = built(c, level);
       return lc == null ? 1F : (lc.sunSq[i] & 255) / 255F;

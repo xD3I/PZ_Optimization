@@ -73,6 +73,7 @@ public class GroundCoverTest {
             continue;
          }
          programs += link(check, useMesa, mesa, "ground cover", GroundCover.VERT, GroundCover.FRAG);
+         programs += link(check, useMesa, mesa, "wind leaves", WindLeaves.VERT, WindLeaves.FRAG);
          for (java.util.Map.Entry<String, String[]> e : Glints.sources().entrySet()) {
             if (e.getValue()[0] != null) {
                programs += link(check, useMesa, mesa, "glints " + e.getKey(), e.getValue()[0], e.getValue()[1]);
