@@ -236,6 +236,8 @@ public final class IsoChunk {
    public final ArrayList<IsoFloorBloodSplat> floorBloodSplatsFade = new ArrayList<>();
    public Object pzoptBlood; // pzopt: bloodBake, the chunk's sorted splat cache (pzopt.BloodDecals.Cache)
    public int pzoptBloodVersion; // pzopt: bloodBake, bumped whenever the splat queue changes
+   public Object[] pzoptGround; // pzopt: ground features' per-chunk slots (pzopt.GroundChunk), dropped on reuse
+   public int pzoptGroundGen; // pzopt: pzopt.GroundChunk, bumped on every reuse (asynchronous builds compare it)
    private static final int MAX_BLOOD_SPLATS = 1000;
    private int nextSplatIndex;
    public static final byte[][] renderByIndex = new byte[][]{
@@ -5604,6 +5606,7 @@ public final class IsoChunk {
       this.floorBloodSplats.clear();
       this.floorBloodSplatsFade.clear();
       pzopt.BloodDecals.reset(this); // pzopt: bloodBake, the splat cache and its atlas row go
+      pzopt.GroundChunk.reused(this); // pzopt: the ground features' per-chunk slots belong to the previous chunk
       this.jobType = IsoChunk.JobType.None;
 
       for (int z = this.minLevel; z <= this.maxLevel; z++) {

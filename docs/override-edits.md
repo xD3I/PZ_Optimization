@@ -8577,6 +8577,10 @@ one is a static boolean read while no ground key is on (all are off by default),
   piece, overlay / dug soil), else the stock shader. The variant is built from the stock program's final source (every
   other pzopt patch in it) as a TileDepthShader of its own, and the uniform setters of the draw come from it: NVIDIA
   assigns uniform locations in name order, so the variant's extra uniforms move the stock ones (pzoptVD 5 -> 7).
+  The seam branch of the same method (a floor on a chunk's south / east border drawn again, shifted, through
+  `seamFix2`'s mask, `IsoSprite.seamFix2` set) takes `GroundBake.seamShader(stock)` the same way: the variant of
+  `seamFix2` for a natural floor, so the strip shows the ground feature's art and not the stock tile (a line along every
+  chunk edge otherwise); `StartShader` gets the chosen program's id instead of `SceneShaderStore.tileSeamShader`'s.
 - `FBORenderCell.pzoptBakeFloors`: after the floor tiles, `GroundBake.floorPasses` (extra draws of a feature, e.g. leaves),
   deferred to the game thread at its place in the stream on a recording thread (`BakeRecord.DEFER_GROUND`, a new case of
   `pzoptBakeDeferredDraw`); then snow and blood as before.
@@ -8597,5 +8601,10 @@ one is a static boolean read while no ground key is on (all are off by default),
   `pzoptGt*` fields): a character's stride anchor, the foot that stepped last, the body imprint done, the near-mover
   tracking (last position, its frame, the smoothed moving strength), a vehicle's wheel points, and two floats a consumer
   keeps per mover (the blades' last trail stamp). No initializers: 0 / null are the "none yet" values.
+- `IsoChunk`: new fields `pzoptGround` (an array of per-chunk slots, `pzopt.GroundChunk`: the ground cover's and the
+  glints' per-chunk caches, which were IdentityHashMaps keyed by chunk) and `pzoptGroundGen` (a counter); `resetForStore`
+  calls `GroundChunk.reused`, which drops the slots, hands each value to its feature's release hook and bumps the counter,
+  so an asynchronous build that still holds the chunk object can tell that the chunk was reused and drop its result. One
+  static read while no feature registered a slot.
 - `pzopt.Scene` (harness, no override): `snow=0..100` pins the snow on the ground; `ground_map=N` prints natural ground by
   material.

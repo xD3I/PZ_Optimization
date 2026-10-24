@@ -176,6 +176,7 @@ public final class GroundState {
    private static final CopyOnWriteArrayList<ChangeListener> LISTENERS = new CopyOnWriteArrayList<>();
    private static boolean rebakeOnChange;
    private static int usedFrame = -100;
+   private static int fullRebakeFrame = -100;
 
    public static void setRules(Rules r) {
       rules = r == null ? new DefaultRules() : r;
@@ -196,6 +197,15 @@ public final class GroundState {
    /** Changed chunks re-bake their level 0 (low priority) through GroundBake, whatever the rules say. */
    public static void rebakeOnChange(boolean on) {
       rebakeOnChange = on;
+   }
+
+   /**
+    * Game thread, every frame it applies (e.g. from {@link Ground#onFrame}): a feature whose floor pass reads the state (the
+    * cover crushed in the ruts) needs changed chunks re-baked whole, not only their after-snow decals; the full re-bake then
+    * replaces the rules' DIRTY_BLOOD one, so a change costs one re-bake whoever reads it.
+    */
+   public static void wantFullRebakes() {
+      fullRebakeFrame = frame;
    }
 
    /** Game thread, once a frame: a feature reads or writes the map (keeps it on into the next frame). */
@@ -302,7 +312,9 @@ public final class GroundState {
    private static final AtomicInteger inFlight = new AtomicInteger();
    public static long frames, primsTotal, primsDropped, cellsTotal, dispatches, decayPasses, decayCells, rebakesAsked, clears, readbacks, chunksSaved,
       chunksLoaded, loadsDropped, uploads;
-   public static long gameNs;
+   public static long gameNs, sourcesNs, rigNs, binNs, batches;
+   private static long lastStampNs, lastWeatherMs;
+   private static final long STAMP_PERIOD_NS = Config.DEV_GROUND_STATE_HZ <= 0 ? 0L : 1_000_000_000L / Config.DEV_GROUND_STATE_HZ;
 
    static {
       java.util.Arrays.fill(slotKey, NONE);
@@ -336,11 +348,13 @@ public final class GroundState {
          return; // (split screen: the map follows player 1)
       }
       frame++;
-      boolean want = usedFrame >= frame - 2 || Ground.on(Ground.K_TRACKS) || Config.DEV_GROUND_STATE_TEST || Config.DEV_GROUND_WALKERS > 0;
+      boolean rigs = (Config.DEV_GROUND_STATE_TEST || Config.DEV_GROUND_WALKERS > 0) && !Ground.offHalf(); // (the rigs follow the cost alternation)
+      boolean want = usedFrame >= frame - 2 || Ground.on(Ground.K_TRACKS) || rigs;
       want &= supported();
       zombie.characters.IsoPlayer pl = zombie.characters.IsoPlayer.players[0];
       IsoCell cell = IsoWorld.instance.currentCell;
       if (!want || pl == null || cell == null) {
+         nP = 0;
          if (wasActive) {
             wasActive = false;
             activeNow = false;
@@ -380,21 +394,41 @@ public final class GroundState {
          saveId = sid;
       }
       window(f, pl.getX(), pl.getY());
-      weather();
       long nowMs = System.currentTimeMillis();
+      if (nowMs - lastWeatherMs >= 1000L) {
+         lastWeatherMs = nowMs;
+         weather();
+      }
       applyLoads(f, nowMs);
-      nP = 0;
+      boolean inst = Config.INSTRUMENT;
+      long ta = inst ? System.nanoTime() : 0L;
       if (SOURCES.on) {
          GroundMovers.wantEvents();
          sources();
       }
-      if (Config.DEV_GROUND_WALKERS > 0) {
+      long tb = inst ? System.nanoTime() : 0L;
+      if (Config.DEV_GROUND_WALKERS > 0 && rigs) {
          walkers(pl, Config.DEV_GROUND_WALKERS);
       }
-      if (Config.DEV_GROUND_STATE_TEST && frame % 60 == 0) {
+      if (Config.DEV_GROUND_STATE_TEST && rigs && frame % 60 == 0) {
          testPattern(pl);
       }
-      bin(f, nowMs);
+      long tc = inst ? System.nanoTime() : 0L;
+      // the stamps go to the GPU in batches (devGroundStateHz a second, or a half-full list): a dispatch has a fixed cost and
+      // nobody sees a print 30 ms late (the bake re-bakes at most every 300 ms, the blades read the map as it is)
+      long nowNs = tc != 0L ? tc : System.nanoTime();
+      if (nP > 0 && (nP >= MAX_PRIMS / 2 || nowNs - lastStampNs >= STAMP_PERIOD_NS)) {
+         lastStampNs = nowNs;
+         bin(f, nowMs);
+         nP = 0; // (cleared after binning: a feature's frame hook queues before this turn)
+         batches++;
+      }
+      if (inst) {
+         long td = System.nanoTime();
+         sourcesNs += tb - ta;
+         rigNs += tc - tb;
+         binNs += td - tc;
+      }
       decay(f, nowMs);
       changes(nowMs);
       if (Config.GROUND_TRACKS_PERSIST && nowMs - lastSaveMs > 30_000L) {
@@ -693,6 +727,8 @@ public final class GroundState {
    /** The primitives binned per square: cells (one work group each) and their primitive lists, counting-sorted by cell. */
    private static void bin(Frame f, long nowMs) {
       int ox = wcx * CS, oy = wcy * CS;
+      int lastCx = Integer.MIN_VALUE, lastCy = Integer.MIN_VALUE;
+      byte[] lastMats = null;
       int nPairs = 0;
       f.nPrims = 0;
       f.nCells = 0;
@@ -710,7 +746,12 @@ public final class GroundState {
          for (int sy = y0; sy <= y1; sy++) {
             for (int sx = x0; sx <= x1; sx++) {
                int cx = sx >> 3, cy = sy >> 3;
-               int mat = surfaces(cx, cy, nowMs)[(sx & 7) + (sy & 7) * CS];
+               if (cx != lastCx || cy != lastCy) { // (a primitive's squares are mostly in one chunk)
+                  lastCx = cx;
+                  lastCy = cy;
+                  lastMats = surfaces(cx, cy, nowMs);
+               }
+               int mat = lastMats[(sx & 7) + (sy & 7) * CS];
                if (mat == GroundTiles.SURF_NONE) {
                   continue;
                }
@@ -857,7 +898,8 @@ public final class GroundState {
    private static void changes(long nowMs) {
       Rules r = rules;
       boolean viewRebake = Config.DEV_GROUND_VIEW == 3; // (the state view draws the map into the bake)
-      boolean rebake = r.rebakes() || rebakeOnChange || viewRebake;
+      boolean full = rebakeOnChange || fullRebakeFrame >= frame - 2;
+      boolean rebake = r.rebakes() || full || viewRebake;
       if (!rebake && LISTENERS.isEmpty()) {
          return;
       }
@@ -883,7 +925,7 @@ public final class GroundState {
             if (rebake) {
                IsoChunk c = cell == null ? null : cell.getChunk(cx, cy);
                if (c != null) {
-                  if (rebakeOnChange || viewRebake && !r.rebakes()) {
+                  if (full || viewRebake && !r.rebakes()) {
                      GroundBake.rebakeChunk(cx, cy, "tracks", true);
                   } else {
                      c.invalidateRenderChunkLevel(0, 1L); // DIRTY_BLOOD: a floor decal changed
@@ -1632,7 +1674,11 @@ public final class GroundState {
       return "ground state: " + (activeNow ? "on" : "off") + " rules " + rules.id() + ", frames " + frames + ", prims " + primsTotal + " (dropped " + primsDropped
          + "), cells " + cellsTotal + ", dispatches " + dispatches + ", decay passes " + decayPasses + " (" + decayCells + " cells), clears " + clears
          + ", read-backs " + readbacks + " (in flight " + inFlight.get() + "), chunks saved " + chunksSaved + " loaded " + chunksLoaded + " dropped "
-         + loadsDropped + ", re-bakes " + rebakesAsked + ", game " + (frames == 0 ? "0" : String.format(java.util.Locale.ROOT, "%.2f", gameNs / 1e3 / frames))
-         + " us/frame" + (failed ? " (failed)" : "");
+         + loadsDropped + ", re-bakes " + rebakesAsked + ", stamp batches " + batches + ", game " + us(gameNs) + " us/frame (sources " + us(sourcesNs)
+         + ", dev rigs " + us(rigNs) + ", binning " + us(binNs) + ")" + (failed ? " (failed)" : "");
+   }
+
+   private static String us(long ns) {
+      return frames == 0 ? "0" : String.format(java.util.Locale.ROOT, "%.2f", ns / 1e3 / frames);
    }
 }
