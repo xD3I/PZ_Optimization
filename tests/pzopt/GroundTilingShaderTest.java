@@ -16,7 +16,7 @@ public class GroundTilingShaderTest {
       Path tool = GroundCommonTest.tool();
       String decl = GroundTilingPatch.INSTANCE.declarations();
       for (String u : new String[] {"pzGtPeriod", "pzGtHex", "pzGtBlend", "pzGtMacro", "pzGtDryTint", "pzGtWorld", "pzGtOI", "pzGtOF", "pzGtBakeI",
-         "pzGtBakeF", "pzGtSpr", "pzGtSprCode", "pzGtSprTex", "pzGtArt", "pzGtGauss", "pzGtLut"}) {
+         "pzGtBakeF", "pzGtSprTex", "pzGtArt", "pzGtGauss", "pzGtLut"}) {
          Check.check(decl.contains(" " + u + ";") || decl.contains(" " + u + "["), "declared: " + u);
       }
       if (game == null || tool == null) {

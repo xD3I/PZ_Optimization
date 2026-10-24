@@ -200,8 +200,6 @@ public final class GroundTilingPatch implements GroundBake.FloorPatch {
    static final String GLSL = """
       #define GT_SPR_N %d
       #define GT_SPR_GRID %d
-      uniform vec4 pzGtSpr[GT_SPR_N];       // the natural sprites' page rects (uv x0, y0, x1, y1)
-      uniform ivec4 pzGtSprCode[GT_SPR_N / 4]; // layer | kind << 4, -1 unused (four a vector)
       uniform sampler2D pzGtSprTex;         // per row: probe colours (texels 0..2), probe page texels (3: x1 y1 x2 y2, 4: x3 y3)
       uniform ivec4 pzGtBakeI;              // x, y: the exemplar pixel of the bake's logical pixel 0 (mod the period); z texels a
                                             //   logical pixel (1, 2); w the grass layers (bits)
@@ -209,9 +207,10 @@ public final class GroundTilingPatch implements GroundBake.FloorPatch {
 
       // the drawn sprite's table row, or -1: the page's lookup grid lists the rows whose rect touches the fragment's cell;
       // the rect test and three probe texels of the bound page confirm one (the same uv on another page fails the probes)
+      int gtSprCode(int i) { return int(texelFetch(pzGtSprTex, ivec2(6, i), 0).x); } // layer | kind << 4, -1 unused
       bool gtSprAt(int i) {
-         vec4 r = pzGtSpr[i];
-         if (texCoord.x < r.x || texCoord.x >= r.z || texCoord.y < r.y || texCoord.y >= r.w || pzGtSprCode[i >> 2][i & 3] < 0) return false;
+         vec4 r = texelFetch(pzGtSprTex, ivec2(5, i), 0); // the page rect (uv x0, y0, x1, y1)
+         if (texCoord.x < r.x || texCoord.x >= r.z || texCoord.y < r.y || texCoord.y >= r.w || gtSprCode(i) < 0) return false;
          vec4 q = texelFetch(pzGtSprTex, ivec2(3, i), 0), q2 = texelFetch(pzGtSprTex, ivec2(4, i), 0);
          vec4 d0 = abs(texelFetch(DIFFUSE, ivec2(q.xy), 0) - texelFetch(pzGtSprTex, ivec2(0, i), 0));
          vec4 d1 = abs(texelFetch(DIFFUSE, ivec2(q.zw), 0) - texelFetch(pzGtSprTex, ivec2(1, i), 0));
@@ -292,7 +291,7 @@ public final class GroundTilingPatch implements GroundBake.FloorPatch {
          if (mode == 10) return t; // dev cost split: the variant's own overhead (no lookup)
          int row = gtSpriteRow();
          if (row < 0 || mode == 9) return t; // (9: dev cost split, the lookup alone)
-         int code = pzGtSprCode[row >> 2][row & 3];
+         int code = gtSprCode(row);
          int layer = code & 15, kind = code >> 4;
          ivec2 px = gtWrap(ivec2(gl_FragCoord.xy) / pzGtBakeI.z + pzGtBakeI.xy);
          vec2 uv = vec2(gl_FragCoord.x * pzGtBakeF.x + pzGtBakeF.y, gl_FragCoord.y * pzGtBakeF.z + pzGtBakeF.w);
@@ -373,16 +372,12 @@ public final class GroundTilingPatch implements GroundBake.FloorPatch {
    // ---------------------------------------------------------------------------------------------- render thread
 
    private static final class Locs {
-      int period, hex, blend, macro, dry, world, oi, of, bakeI, bakeF, spr, sprCode;
-      int tableVersion = -1;
+      int period, hex, blend, macro, dry, world, oi, of, bakeI, bakeF;
    }
 
    private static final HashMap<Integer, Locs> LOCS = new HashMap<>();
-   private static int tableVersion;
    private static final int[] OI = new int[4];
    private static final float[] OF = new float[4];
-   private static java.nio.FloatBuffer rectBuf;
-   private static java.nio.IntBuffer codeBuf;
 
    private static Locs locs(int program) {
       Locs l = LOCS.get(program);
@@ -398,8 +393,6 @@ public final class GroundTilingPatch implements GroundBake.FloorPatch {
          l.of = GL20.glGetUniformLocation(program, "pzGtOF");
          l.bakeI = GL20.glGetUniformLocation(program, "pzGtBakeI");
          l.bakeF = GL20.glGetUniformLocation(program, "pzGtBakeF");
-         l.spr = GL20.glGetUniformLocation(program, "pzGtSpr");
-         l.sprCode = GL20.glGetUniformLocation(program, "pzGtSprCode");
          LOCS.put(program, l);
       }
       return l;
@@ -412,23 +405,6 @@ public final class GroundTilingPatch implements GroundBake.FloorPatch {
          return;
       }
       Locs l = locs(program);
-      if (l.tableVersion != tableVersion || l.tableVersion < 0) {
-         if (rectBuf == null) {
-            rectBuf = org.lwjgl.BufferUtils.createFloatBuffer(GroundTileArt.SPR_MAX * 4);
-            codeBuf = org.lwjgl.BufferUtils.createIntBuffer(GroundTileArt.SPR_MAX);
-         }
-         rectBuf.clear();
-         rectBuf.put(GroundTileArt.sprRects).flip();
-         codeBuf.clear();
-         codeBuf.put(GroundTileArt.sprCodes).flip();
-         if (l.spr >= 0) {
-            GL20.glUniform4fv(l.spr, rectBuf);
-         }
-         if (l.sprCode >= 0) {
-            GL20.glUniform4iv(l.sprCode, codeBuf);
-         }
-         l.tableVersion = tableVersion;
-      }
       int mode = (int)p[0];
       float cell = p[1];
       GL20.glUniform4i(l.period, GroundTileArt.periodW, GroundTileArt.periodH, mode, (int)p[16]);

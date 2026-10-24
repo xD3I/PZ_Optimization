@@ -118,7 +118,7 @@ public final class GroundTileArt {
     */
    public static final int SPR_GRID = 128;
 
-   /** pzGtSprTex: rows 0..SPR_MAX-1 the probes (texels 0..4), rows SPR_MAX.. the lookup grid (RGBA = four rows). */
+   /** pzGtSprTex: rows 0..SPR_MAX-1 the probes (texels 0..4), the rect (5), the code (6); rows SPR_MAX.. the lookup grid (RGBA = four rows). */
    static float[] sprTexData(float[] probes, float[] rects, int[] codes, int n) {
       int w = SPR_GRID;
       float[] d = new float[w * (SPR_MAX + SPR_GRID) * 4];
@@ -126,6 +126,10 @@ public final class GroundTileArt {
          for (int k = 0; k < 20; k++) {
             d[(i * w) * 4 + k] = probes[i * 20 + k];
          }
+         for (int k = 0; k < 4; k++) {
+            d[(i * w + 5) * 4 + k] = rects[i * 4 + k]; // texel 5: the rect (in the texture: GL 4.1 has no room for 160 uniform vec4)
+         }
+         d[(i * w + 6) * 4] = i < n ? codes[i] : -1; // texel 6: the code
       }
       float[] g = sprGrid(rects, codes, n);
       System.arraycopy(g, 0, d, w * SPR_MAX * 4, g.length);
