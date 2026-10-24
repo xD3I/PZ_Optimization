@@ -73,6 +73,7 @@ public final class GrassBlades {
       boolean trails = true, cut = true, push = true, wear = true;
       float lodPx = 0F;
       int genEvery = 1;
+      float genMs; // regenerate at most every genMs of wall time (0 = by genEvery): bounded lag at any frame rate
       boolean genOnStamp = true;
       int drawMode; // 0 instanced strips, 1 one strip with degenerate joins
       int lodSegments = 1;
@@ -108,6 +109,7 @@ public final class GrassBlades {
          o.lodPx = lodPx;
          o.drawMode = drawMode;
          o.genEvery = genEvery;
+         o.genMs = genMs;
          o.genOnStamp = genOnStamp;
          o.lodSegments = lodSegments;
          o.layerDiv = layerDiv;
@@ -157,6 +159,7 @@ public final class GrassBlades {
                   case "lodPx" -> lodPx = Float.parseFloat(v);
                   case "drawMode" -> drawMode = Integer.parseInt(v);
                   case "genEvery" -> genEvery = Integer.parseInt(v);
+                  case "genMs" -> genMs = Float.parseFloat(v);
                   case "genOnStamp" -> genOnStamp = Boolean.parseBoolean(v);
                   case "lodSegments" -> lodSegments = Integer.parseInt(v);
                   case "layerDiv" -> layerDiv = Integer.parseInt(v);
@@ -216,6 +219,7 @@ public final class GrassBlades {
       o.lodPx = Config.GRASS_BLADE_LOD_PX;
       o.drawMode = Config.GRASS_BLADE_DRAW_MODE;
       o.genEvery = Math.max(1, Config.GRASS_BLADE_GEN_EVERY);
+      o.genMs = Math.max(0, Config.GRASS_BLADE_GEN_MS);
       o.lodSegments = Config.GRASS_BLADE_LOD_SEGMENTS;
       o.layerDiv = Config.GRASS_BLADE_LAYER_DIV;
       o.layerEvery = Math.max(1, Config.GRASS_BLADE_LAYER_EVERY);
@@ -955,6 +959,7 @@ public final class GrassBlades {
 
       static final Params P = new Params();
       private static int genAge = 1 << 20, genVariant = -1, genSquares = -1, genOx, genOy;
+      private static long genNs;
       private static float genKA;
       static long gens;
 
@@ -981,7 +986,9 @@ public final class GrassBlades {
          // temporal amortisation (grassBladeGenEvery): the blades are regenerated every N frames, or at once when the view's
          // scale, the knob set or the square list changed; between, the last blades draw (world-anchored, shifted to the new origin)
          genAge++;
-         boolean doGen = genAge >= Math.max(1, o.genEvery) || p.variant != genVariant || kA != genKA || p.n != genSquares
+         long nowNs = System.nanoTime();
+         boolean due = o.genMs > 0F ? nowNs - genNs >= (long)(o.genMs * 1.0E6F) : genAge >= Math.max(1, o.genEvery);
+         boolean doGen = due || p.variant != genVariant || kA != genKA || p.n != genSquares
             || Math.abs(p.ox - genOx) > 2 || Math.abs(p.oy - genOy) > 2 || p.nStamps > 0 && o.genOnStamp;
          // trails: this frame's stamps into the trail map
          boolean trails = (o.trails || o.cut) && Trails.ready();
@@ -990,6 +997,7 @@ public final class GrassBlades {
          }
          if (doGen) {
             genAge = 0;
+            genNs = nowNs;
             genVariant = p.variant;
             genKA = kA;
             genSquares = p.n;
