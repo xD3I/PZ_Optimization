@@ -286,7 +286,7 @@ public final class GroundTilingPatch implements GroundBake.FloorPatch {
 
       vec4 pzGtTexel(vec4 t) {
       #if defined(PZG_PIECE) && PZG_PIECE == 2
-         return t; // a grass / erosion overlay or dug soil on the natural floor: stock
+         return t; // a grass / erosion overlay or dug soil on the natural floor: stock (with the attached flag only)
       #endif
          int mode = pzGtPeriod.z;
          if (mode == 10) return t; // dev cost split: the variant's own overhead (no lookup)
@@ -350,10 +350,14 @@ public final class GroundTilingPatch implements GroundBake.FloorPatch {
       }
       """.formatted(GroundTileArt.SPR_MAX, GroundTileArt.SPR_GRID);
 
-   /** The overlays on a natural floor get their own program, which keeps them stock without the table walk. */
+   /**
+    * No: the sprite table already tells the floor from its edge pieces, and an overlay is not in it (stock). The per-piece
+    * programs cost more than they save (gt-cost15: the floor variant returning the texel at once was 135 vs 63 us a bake;
+    * a program switch per attached sprite breaks the SpriteRenderer's batches). -Dpzopt.devGroundTilingAttached=true for the A/B.
+    */
    @Override
    public boolean wantsAttachedFlag() {
-      return true;
+      return Boolean.getBoolean("pzopt.devGroundTilingAttached");
    }
 
    @Override
