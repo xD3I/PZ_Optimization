@@ -1022,6 +1022,7 @@ public final class GroundState {
    private static final class Pending {
       long fence;
       int pbo, n;
+      ByteBuffer mapped; // persistent read mapping (client storage): the IO thread copies out of it, the render thread never does
       final long[] keys = new long[READBACK_BATCH];
       String dir;
       double hours;
@@ -1293,7 +1294,10 @@ public final class GroundState {
             p = new Pending();
             p.pbo = GL15.glGenBuffers();
             GL15.glBindBuffer(GL21.GL_PIXEL_PACK_BUFFER, p.pbo);
-            GL15.glBufferData(GL21.GL_PIXEL_PACK_BUFFER, (long)READBACK_BATCH * CHUNK_TEX * CHUNK_TEX * 4, GL15.GL_STREAM_READ);
+            long size = (long)READBACK_BATCH * CHUNK_TEX * CHUNK_TEX * 4;
+            int flags = GL30.GL_MAP_READ_BIT | org.lwjgl.opengl.GL44.GL_MAP_PERSISTENT_BIT | org.lwjgl.opengl.GL44.GL_MAP_COHERENT_BIT;
+            org.lwjgl.opengl.GL44.glBufferStorage(GL21.GL_PIXEL_PACK_BUFFER, size, flags | org.lwjgl.opengl.GL44.GL_CLIENT_STORAGE_BIT);
+            p.mapped = GL30.glMapBufferRange(GL21.GL_PIXEL_PACK_BUFFER, 0L, size, flags);
          } else {
             GL15.glBindBuffer(GL21.GL_PIXEL_PACK_BUFFER, p.pbo);
          }
@@ -1329,24 +1333,27 @@ public final class GroundState {
          }
          GL32.glDeleteSync(p.fence);
          PENDING.remove(i--);
-         ByteBuffer b = BufferUtils.createByteBuffer(p.n * CHUNK_TEX * CHUNK_TEX * 4);
-         GL15.glBindBuffer(GL21.GL_PIXEL_PACK_BUFFER, p.pbo);
-         GL15.glGetBufferSubData(GL21.GL_PIXEL_PACK_BUFFER, 0L, b);
-         GL15.glBindBuffer(GL21.GL_PIXEL_PACK_BUFFER, 0);
+         // the bytes stay in the persistent mapping; the IO thread copies them out and only then frees the buffer (no
+         // 1 MB copy and allocation on the render thread: 188 us a flush, gc-statev2-cost3)
+         final ByteBuffer b = p.mapped.duplicate();
+         final Pending done = p;
          final int n = p.n;
          final long[] keys = java.util.Arrays.copyOf(p.keys, n);
          final File d = new File(p.dir);
          final double hours = p.hours;
-         synchronized (FREE_PENDING) {
-            FREE_PENDING.add(p);
-         }
          IO.execute(() -> {
             try {
                byte[][] raws = new byte[n][];
-               for (int k = 0; k < n; k++) {
-                  raws[k] = new byte[CHUNK_TEX * CHUNK_TEX * 4];
-                  b.position(k * CHUNK_TEX * CHUNK_TEX * 4);
-                  b.get(raws[k]);
+               try {
+                  for (int k = 0; k < n; k++) {
+                     raws[k] = new byte[CHUNK_TEX * CHUNK_TEX * 4];
+                     b.position(k * CHUNK_TEX * CHUNK_TEX * 4);
+                     b.get(raws[k]);
+                  }
+               } finally {
+                  synchronized (FREE_PENDING) {
+                     FREE_PENDING.add(done); // (the mapping is free again: the next read-back may land in it)
+                  }
                }
                int[] xs = new int[n], ys = new int[n];
                for (int k = 0; k < n; k++) {

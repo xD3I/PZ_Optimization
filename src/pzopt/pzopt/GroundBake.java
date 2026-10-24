@@ -201,6 +201,25 @@ public final class GroundBake {
          }
          return;
       }
+      // the frame's active set as a key: unchanged and applied, nothing to rebuild (no strings, no lists a frame)
+      boolean sup = supported();
+      long key = sup ? (long)(Config.DEV_GROUND_VIEW & 0xFF) << 48 : 0L;
+      if (sup) {
+         for (int i = 0; i < PATCHES.size() && i < 24; i++) {
+            if (activeSafe(PATCHES.get(i))) {
+               key |= 1L << i;
+            }
+         }
+         for (int i = 0; i < PASSES.size() && i < 24; i++) {
+            if (activeSafe(PASSES.get(i))) {
+               key |= 1L << (24 + i);
+            }
+         }
+      }
+      if (key == appliedKey && PATCHES.size() == appliedPatches && PASSES.size() == appliedPasses) {
+         CLASS_ON = sup && (FLOOR_ON || PASS_ON || PASS_AFTER_SNOW_ON || classWantedFrame >= frameNo - 2);
+         return;
+      }
       ACTIVE.clear();
       StringBuilder sig = new StringBuilder();
       boolean attached = false;
@@ -276,6 +295,30 @@ public final class GroundBake {
       PASS_ON = !ACTIVE_PASSES.isEmpty();
       PASS_AFTER_SNOW_ON = !ACTIVE_AFTER_SNOW.isEmpty();
       CLASS_ON = supported() && (FLOOR_ON || PASS_ON || PASS_AFTER_SNOW_ON || classWantedFrame >= frameNo - 2);
+      // applied once the programs of this set are the ones baking (a variant still compiling: checked again next frame)
+      boolean applied = signature.equals(s) && (s.isEmpty() || FLOOR_ON);
+      appliedKey = applied ? key : -1L;
+      appliedPatches = PATCHES.size();
+      appliedPasses = PASSES.size();
+   }
+
+   private static long appliedKey = -1L;
+   private static int appliedPatches = -1, appliedPasses = -1;
+
+   private static boolean activeSafe(FloorPatch p) {
+      try {
+         return p.active();
+      } catch (Throwable t) {
+         return false;
+      }
+   }
+
+   private static boolean activeSafe(FloorPass p) {
+      try {
+         return p.active();
+      } catch (Throwable t) {
+         return false;
+      }
    }
 
    // ------------------------------------------------------------------------------------------------ the floor draw (game / recording threads)

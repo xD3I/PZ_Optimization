@@ -1,7 +1,7 @@
 // GroundState's GPU half without the game (2026-10-24): compiles the compute source (GroundState.computeSource), clears a
 // TN x TN RGBA8 map to the rest texel, runs the decay and stamp dispatches the way GroundState.renderFrame does (relax after
 // each when asked), then reads a region back the way the persistence does (glGetTextureSubImage into a pixel pack buffer,
-// a fence polled with a zero timeout) and writes it out. tests/pzopt/GroundCommonTest drives it with the game thread's own
+// a fence polled with a zero timeout, read through a persistent coherent mapping) and writes it out. tests/pzopt/GroundCommonTest drives it with the game thread's own
 // binning; run under Mesa too (__EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/50_mesa.json).
 //   cc -O2 -o build/gsrun tools/ground/gsrun.c -lEGL -lGL
 //   build/gsrun <job file>
@@ -118,7 +118,11 @@ int main(int argc, char **argv) {
    GLuint pbo; glGenBuffers(1, &pbo);
    glBindBuffer(GL_PIXEL_PACK_BUFFER, pbo);
    long bytes = (long)rw * rh * 4;
-   glBufferData(GL_PIXEL_PACK_BUFFER, bytes, NULL, GL_STREAM_READ);
+   // as GroundState: immutable client storage, mapped persistent + coherent for reading, read after the fence (no glGetBufferSubData)
+   GLbitfield fl = GL_MAP_READ_BIT | GL_MAP_PERSISTENT_BIT | GL_MAP_COHERENT_BIT;
+   glBufferStorage(GL_PIXEL_PACK_BUFFER, bytes, NULL, fl | GL_CLIENT_STORAGE_BIT);
+   unsigned char *map = glMapBufferRange(GL_PIXEL_PACK_BUFFER, 0, bytes, fl);
+   if (!map) { fprintf(stderr, "map failed\n"); return 1; }
    glGetTextureSubImage(tex, 0, rx, ry, 0, rw, rh, 1, GL_RGBA, GL_UNSIGNED_BYTE, (GLsizei)bytes, (void *)0);
    glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
    GLsync fence = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
@@ -132,8 +136,7 @@ int main(int argc, char **argv) {
    }
    glDeleteSync(fence);
    unsigned char *px = malloc(bytes);
-   glBindBuffer(GL_PIXEL_PACK_BUFFER, pbo);
-   glGetBufferSubData(GL_PIXEL_PACK_BUFFER, 0, bytes, px);
+   memcpy(px, map, bytes);
    GLenum e = glGetError();
    if (e != GL_NO_ERROR) { fprintf(stderr, "gl error 0x%x\n", e); return 1; }
    FILE *of = fopen(out, "wb");
