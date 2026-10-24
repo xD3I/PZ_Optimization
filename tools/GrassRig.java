@@ -34,6 +34,7 @@ public class GrassRig {
       int frames = 60, crop = 900, scale = 2;
       float time = -1F;
       boolean off = false, trail = false;
+      int load = 1;
       for (int i = 3; i < a.length; i++) {
          switch (a[i]) {
             case "--knobs" -> knobs = a[++i];
@@ -43,6 +44,7 @@ public class GrassRig {
             case "--time" -> time = Float.parseFloat(a[++i]);
             case "--off" -> off = true;
             case "--trail" -> trail = true;
+            case "--load" -> load = Integer.parseInt(a[++i]);
             default -> throw new IllegalArgumentException(a[i]);
          }
       }
@@ -82,6 +84,7 @@ public class GrassRig {
       int[] squares = new int[n];
       ByteBuffer.wrap(sqb).order(ByteOrder.LITTLE_ENDIAN).asIntBuffer().get(squares);
 
+      pzopt.GrassBlades.Gpu.rig = true;
       pzopt.GrassBlades.Params p = pzopt.GrassBlades.rigParams();
       p.colorTex = src[1]; // the generation reads the pristine world (the game reads the target before drawing into it)
       p.depthTex = src[2];
@@ -140,22 +143,26 @@ public class GrassRig {
       int[] q = new int[2];
       GL15.glGenQueries(q);
       long[] ns = new long[frames];
-      for (int f = 0; f < frames; f++) {
+      int warm = 400; // the GPU ramps its clocks first (idle P5 ~400 MHz)
+      for (int f0 = -warm; f0 < frames; f0++) {
+         int f = Math.max(0, f0);
          GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, src[0]);
          GL30.glBindFramebuffer(GL30.GL_DRAW_FRAMEBUFFER, dst[0]);
-         GL30.glBlitFramebuffer(0, 0, fw, fh, 0, 0, fw, fh, GL11.GL_COLOR_BUFFER_BIT | GL11.GL_DEPTH_BUFFER_BIT, GL11.GL_NEAREST);
+         for (int k = 0; k < load; k++) {
+            GL30.glBlitFramebuffer(0, 0, fw, fh, 0, 0, fw, fh, GL11.GL_COLOR_BUFFER_BIT | GL11.GL_DEPTH_BUFFER_BIT, GL11.GL_NEAREST); // keeps the clocks up (outside the timing)
+         }
          GL30.glBindFramebuffer(GL30.GL_FRAMEBUFFER, dst[0]);
          GL11.glViewport(vx, vy, w, h);
          GL33.glQueryCounter(q[0], GL33.GL_TIMESTAMP);
          if (!off) {
-            if (trail && f == 1) {
+            if (trail && f0 == -warm + 1) {
                p.nStamps = 0; // stamped once (at now = 100 s); the frames read it 5 s later
                p.now = 105F;
             }
             pzopt.GrassBlades.Gpu.run(p);
          }
          GL33.glQueryCounter(q[1], GL33.GL_TIMESTAMP);
-         ns[f] = GL33.glGetQueryObjecti64(q[1], GL15.GL_QUERY_RESULT) - GL33.glGetQueryObjecti64(q[0], GL15.GL_QUERY_RESULT);
+         if (f0 >= 0) ns[f] = GL33.glGetQueryObjecti64(q[1], GL15.GL_QUERY_RESULT) - GL33.glGetQueryObjecti64(q[0], GL15.GL_QUERY_RESULT);
       }
       java.util.Arrays.sort(ns);
       System.out.printf(java.util.Locale.ROOT, "squares %d, gpu us median %.1f p10 %.1f p90 %.1f (frames %d)%n", n, ns[frames / 2] / 1e3, ns[frames / 10] / 1e3, ns[frames * 9 / 10] / 1e3, frames);
