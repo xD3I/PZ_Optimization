@@ -121,6 +121,17 @@ public final class GroundBake {
          return false;
       }
 
+      /**
+       * Also runs on the grass / plant OBJECTS of level 0 ({@link GroundTiles#F_OVERLAY} sprites: erosion grass, grass
+       * overlays, ground-cover plants), drawn in the bake's object pass over the floor (2026-10-24, for the tracks: trodden
+       * grass fades and goes to straw). Their programs are built with {@code PZG_PIECE 3} and only the patches that answer
+       * true here in the chain (two more programs; nothing when no active patch asks). The world position of such a texel is
+       * the ground plane's under the fragment: the upper part of a tall sprite maps to the squares behind its own.
+       */
+      default boolean overlayObjects() {
+         return false;
+      }
+
       /** Render thread, each bake into a chunk texture while the variant exists: set this patch's uniforms on {@code program}. */
       default void bakeStart(int program, FBORenderChunk rc) {
       }
@@ -211,6 +222,9 @@ public final class GroundBake {
 
    /** The floor variant is bound for natural floors this frame. */
    public static volatile boolean FLOOR_ON;
+   /** The variant has programs for level-0 grass objects (a patch wants {@link FloorPatch#overlayObjects()}). */
+   public static volatile boolean OVERLAY_ON;
+   public static long overlayObjects;
    /** A floor pass draws this frame. */
    public static volatile boolean PASS_ON;
    /** An after-snow floor pass draws this frame. */
@@ -234,7 +248,7 @@ public final class GroundBake {
       frameNo++;
       if (PATCHES.isEmpty() && PASSES.isEmpty() && classWantedFrame < frameNo - 2 && Config.DEV_GROUND_VIEW == 0) {
          if (FLOOR_ON || PASS_ON || PASS_AFTER_SNOW_ON || CLASS_ON) {
-            FLOOR_ON = PASS_ON = PASS_AFTER_SNOW_ON = CLASS_ON = false;
+            FLOOR_ON = PASS_ON = PASS_AFTER_SNOW_ON = CLASS_ON = OVERLAY_ON = false;
          }
          return;
       }
@@ -307,6 +321,8 @@ public final class GroundBake {
          }
       }
       FLOOR_ON = floorOn && signature.equals(s);
+      Variant cv = current;
+      OVERLAY_ON = FLOOR_ON && cv != null && cv.overlay && cv.prog[6] != 0;
       ACTIVE_PASSES.clear();
       ACTIVE_AFTER_SNOW.clear();
       StringBuilder ps = new StringBuilder();
@@ -361,7 +377,7 @@ public final class GroundBake {
    // ------------------------------------------------------------------------------------------------ the floor draw (game / recording threads)
 
    /** Per thread: the floor being drawn takes the variant. */
-   private static final ThreadLocal<boolean[]> CUR = ThreadLocal.withInitial(() -> new boolean[1]);
+   private static final ThreadLocal<boolean[]> CUR = ThreadLocal.withInitial(() -> new boolean[2]); // [0] in a ground draw, [1] a level-0 grass object
    private static volatile Variant current;
    public static long naturalFloors, stockFloors;
 
@@ -384,6 +400,28 @@ public final class GroundBake {
       CUR.get()[0] = false;
    }
 
+   /** FBORenderCell.renderMinusFloor (object pass, grass at level 0 included): a grass / plant object over natural ground draws with piece 3. */
+   public static boolean overlayBegin(IsoObject object) {
+      if (!OVERLAY_ON || object == null || object.sprite == null) {
+         return false;
+      }
+      IsoGridSquare sq = object.square;
+      if (sq == null || sq.z != 0 || (GroundTiles.of(object.sprite) & GroundTiles.F_OVERLAY) == 0 || zombie.iso.fboRenderChunk.FBORenderCell.pzoptTranslucentOnly()) {
+         return false;
+      }
+      boolean[] c = CUR.get();
+      c[0] = true;
+      c[1] = true;
+      overlayObjects++;
+      return true;
+   }
+
+   public static void overlayEnd() {
+      boolean[] c = CUR.get();
+      c[0] = false;
+      c[1] = false;
+   }
+
    /**
     * IsoSprite.startTileDepthShader: the program a floor tile starts ({@code stock}: the stock tile-depth program the game
     * chose; the caller builds its uniform setters from the shader returned, so a variant whose uniforms sit at other
@@ -391,7 +429,8 @@ public final class GroundBake {
     * overlay). The variant for a natural floor between {@link #floorBegin} and {@link #floorEnd}, else {@code program}.
     */
    public static zombie.tileDepth.TileDepthShader shader(zombie.tileDepth.TileDepthShader stock, zombie.iso.sprite.IsoSprite sprite, boolean attached) {
-      if (!FLOOR_ON || stock == null || !CUR.get()[0]) {
+      boolean[] cur;
+      if (!FLOOR_ON || stock == null || !(cur = CUR.get())[0]) {
          return stock;
       }
       Variant v = current;
@@ -400,7 +439,9 @@ public final class GroundBake {
       }
       int program = stock.getID();
       int piece = 0;
-      if (attached && v.attachedFlag) {
+      if (cur[1]) {
+         piece = 3;
+      } else if (attached && v.attachedFlag) {
          int code = GroundTiles.of(sprite);
          piece = GroundTiles.natural(code) && (code & (GroundTiles.F_OVERLAY | GroundTiles.F_FARM)) == 0 ? 1 : 2;
       }
@@ -715,12 +756,13 @@ public final class GroundBake {
       final String sig;
       final ArrayList<FloorPatch> patches;
       final boolean attachedFlag;
+      final boolean overlay; // programs for level-0 grass objects (piece 3)
       final int view;
       volatile int state = PENDING;
-      final int[] prog = new int[6]; // [piece * 2 + (0 tile, 1 opaque)], 0 = none (the stock program)
-      final zombie.tileDepth.TileDepthShader[] shaders = new zombie.tileDepth.TileDepthShader[6];
+      final int[] prog = new int[8]; // [piece * 2 + (0 tile, 1 opaque)], 0 = none (the stock program)
+      final zombie.tileDepth.TileDepthShader[] shaders = new zombie.tileDepth.TileDepthShader[8];
       int stockTile, stockOpaque;
-      final int[] mapLoc = new int[6];
+      final int[] mapLoc = new int[8];
       // the chunk-edge seam strips (IsoSprite.seamFix2: a border floor drawn again, shifted, through seamFix2's mask)
       int seamProg, stockSeam = -1, seamMapLoc = -1;
       zombie.tileDepth.TileSeamShader seamShader;
@@ -729,6 +771,11 @@ public final class GroundBake {
          this.sig = sig;
          this.patches = patches;
          this.attachedFlag = attachedFlag;
+         boolean o = false;
+         for (FloorPatch p : patches) {
+            o |= p.overlayObjects();
+         }
+         this.overlay = o;
          this.view = view;
       }
 
@@ -850,9 +897,119 @@ public final class GroundBake {
       "}",
       "");
 
+   /**
+    * A patch's {@code const int NAME[N] = int[N](...)} tables (values -1..254) become functions over packed uint constants,
+    * and every {@code NAME[i]} in the declarations a call {@code NAME_F(i)}. NVIDIA puts a dynamically indexed const array in
+    * local memory and fills it at the start of every fragment, taken branch or not: ground tiling's four tables (~100 ints)
+    * cost its bake ~50 us of GPU even with the patch returning the stock texel at once (gc-int-cost 116 vs gc-int-packed 65.5
+    * us a bake, stock 61.4). Left alone: other types, values out of range, a table never indexed.
+    */
+   static String packConstTables(String src) {
+      if (src == null || !src.contains("const int ")) {
+         return src;
+      }
+      java.util.regex.Matcher m = java.util.regex.Pattern.compile("const\\s+int\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*\\[\\s*(\\d+)\\s*\\]\\s*=\\s*int\\s*\\[\\s*\\d*\\s*\\]\\s*\\(([^)]*)\\)\\s*;").matcher(src);
+      StringBuilder sb = new StringBuilder();
+      java.util.List<String> names = new java.util.ArrayList<>();
+      while (m.find()) {
+         String name = m.group(1);
+         String[] vs = m.group(3).split(",");
+         int[] v = new int[vs.length];
+         boolean ok = vs.length == Integer.parseInt(m.group(2));
+         for (int i = 0; ok && i < vs.length; i++) {
+            try {
+               v[i] = Integer.parseInt(vs[i].trim());
+               ok = v[i] >= -1 && v[i] <= 254;
+            } catch (NumberFormatException e) {
+               ok = false;
+            }
+         }
+         if (!ok) {
+            m.appendReplacement(sb, java.util.regex.Matcher.quoteReplacement(m.group()));
+            continue;
+         }
+         m.appendReplacement(sb, java.util.regex.Matcher.quoteReplacement(packedTable(name, v)));
+         names.add(name);
+      }
+      m.appendTail(sb);
+      String r = sb.toString();
+      for (String n : names) {
+         String prev = null;
+         while (!r.equals(prev)) { // (outermost first: a nested index is replaced by the next pass)
+            prev = r;
+            r = indexToCall(r, n);
+         }
+      }
+      return r;
+   }
+
+   private static String indexToCall(String r, String n) {
+      {
+         StringBuilder o = new StringBuilder();
+         int i = 0;
+         for (;;) {
+            int at = r.indexOf(n + "[", i);
+            if (at < 0) {
+               o.append(r, i, r.length());
+               break;
+            }
+            boolean word = at == 0 || !(Character.isLetterOrDigit(r.charAt(at - 1)) || r.charAt(at - 1) == '_');
+            int open = at + n.length(), depth = 0, close = -1;
+            for (int k = open; k < r.length() && word; k++) {
+               char ch = r.charAt(k);
+               if (ch == '[') {
+                  depth++;
+               } else if (ch == ']' && --depth == 0) {
+                  close = k;
+                  break;
+               }
+            }
+            if (!word || close < 0) {
+               o.append(r, i, open);
+               i = open;
+               continue;
+            }
+            o.append(r, i, at).append(n).append("_F(").append(r, open + 1, close).append(')');
+            i = close + 1;
+         }
+         return o.toString();
+      }
+   }
+
+   /** GLSL: {@code int name_F(int i)}, entry i of {@code v} (-1..254) from four bytes a uint constant (255 = -1). */
+   static String packedTable(String name, int[] v) {
+      int words = (v.length + 3) / 4;
+      StringBuilder f = new StringBuilder("int ").append(name).append("_F(int i) { int w = i >> 2; uint x = ");
+      for (int w = 0; w < words; w++) {
+         long word = 0;
+         for (int b = 0; b < 4; b++) {
+            int idx = w * 4 + b;
+            int x = idx < v.length ? v[idx] : -1;
+            word |= (long)(x < 0 ? 255 : x) << (8 * b);
+         }
+         if (w < words - 1) {
+            f.append("w == ").append(w).append(" ? ");
+         }
+         f.append(word).append('u');
+         if (w < words - 1) {
+            f.append(" : ");
+         }
+      }
+      return f.append("; int r = int((x >> uint(8 * (i & 3))) & 255u); return r == 255 ? -1 : r; }").toString();
+   }
+
    /** The variant's fragment source from the stock program's final source; null if the source is not as expected. */
    static String variantSource(String stock, Variant v, int piece) {
-      return variantSource(stock, v.patches, v.view, piece);
+      java.util.List<FloorPatch> ps = v.patches;
+      if (piece == 3) { // grass objects: only the patches that asked for them
+         ps = new ArrayList<>();
+         for (FloorPatch p : v.patches) {
+            if (p.overlayObjects()) {
+               ps.add(p);
+            }
+         }
+      }
+      return variantSource(stock, ps, v.view, piece);
    }
 
    static String variantSource(String stock, java.util.List<FloorPatch> patches, int view, int piece) {
@@ -874,7 +1031,7 @@ public final class GroundBake {
       StringBuilder texelChain = new StringBuilder("vec4 pzgTexel(vec4 t) {\n");
       StringBuilder colorChain = new StringBuilder("vec4 pzgColor(vec4 c) {\n");
       for (FloorPatch p : patches) {
-         pre.append("// ground patch ").append(p.id()).append('\n').append(p.declarations()).append('\n');
+         pre.append("// ground patch ").append(p.id()).append('\n').append(packConstTables(p.declarations())).append('\n');
          if (p.texel() != null) {
             texelChain.append("   t = ").append(p.texel()).append("(t);\n");
          }
@@ -944,7 +1101,10 @@ public final class GroundBake {
       v.stockOpaque = so != null && so.isCompiled() ? so.getID() : -1;
       try {
          boolean opaque = v.stockOpaque > 0 && opaqueFrag != null && opaqueVert != null;
-         for (int piece = 0; piece < (v.attachedFlag ? 3 : 1); piece++) {
+         for (int piece = 0; piece < 4; piece++) {
+            if (piece > 0 && piece < 3 && !v.attachedFlag || piece == 3 && !v.overlay) {
+               continue;
+            }
             v.prog[piece * 2] = compile(v, piece * 2, st);
             v.prog[piece * 2 + 1] = opaque ? compile(v, piece * 2 + 1, so) : 0;
             for (int k = 0; k < 2; k++) {
@@ -961,7 +1121,7 @@ public final class GroundBake {
          }
          compileSeam(v);
          v.state = Variant.READY;
-         Log.info("ground: floor variant " + v.sig + " = programs " + java.util.Arrays.toString(v.prog) + " (tile / opaque per piece: floor, natural edge, overlay), seam " + v.seamProg + ", stock " + v.stockTile + " / " + v.stockOpaque + " / " + v.stockSeam);
+         Log.info("ground: floor variant " + v.sig + " = programs " + java.util.Arrays.toString(v.prog) + " (tile / opaque per piece: floor, natural edge, overlay, grass object), seam " + v.seamProg + ", stock " + v.stockTile + " / " + v.stockOpaque + " / " + v.stockSeam);
       } catch (Throwable t) {
          Log.warn("ground: floor variant " + v.sig + " failed: " + t);
          v.state = Variant.FAILED;
@@ -1094,14 +1254,14 @@ public final class GroundBake {
       GpuSections.markNow(Ground.section("ground.bakeStart"), false);
       int prev = Ssr.boundProgram();
       boolean bound = false;
-      for (int k = 0; k < 7; k++) {
-         int id = k < 6 ? v.prog[k] : v.seamProg;
+      for (int k = 0; k < 9; k++) {
+         int id = k < 8 ? v.prog[k] : v.seamProg;
          if (id == 0) {
             continue;
          }
          GL20.glUseProgram(id);
          bound = true;
-         int l = k < 6 ? v.mapLoc[k] : v.seamMapLoc;
+         int l = k < 8 ? v.mapLoc[k] : v.seamMapLoc;
          if (l >= 0) {
             GL20.glUniform4f(l, MAP[0], MAP[1], MAP[2], MAP[3]);
          }

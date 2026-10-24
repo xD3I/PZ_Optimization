@@ -8581,11 +8581,19 @@ one is a static boolean read while no ground key is on (all are off by default),
   `seamFix2`'s mask, `IsoSprite.seamFix2` set) takes `GroundBake.seamShader(stock)` the same way: the variant of
   `seamFix2` for a natural floor, so the strip shows the ground feature's art and not the stock tile (a line along every
   chunk edge otherwise); `StartShader` gets the chosen program's id instead of `SceneShaderStore.tileSeamShader`'s.
+- `FBORenderCell.renderMinusFloor(IsoObject)` (the object pass of a bake, flattened vegetation included): while a ground
+  patch asks for grass objects (`FloorPatch.overlayObjects`, `GroundBake.OVERLAY_ON`), a level-0 object whose sprite is a
+  grass / plant overlay (`GroundTiles.F_OVERLAY`: erosion grass, grass overlays, ground-cover plants) is drawn between
+  `GroundBake.overlayBegin` / `overlayEnd`, so its tile draws take the variant's grass-object programs (piece 3, only the
+  patches that asked): the tracks fade and tint trodden grass. Trees never qualify (their sprites are not overlays), so the
+  tree branch below is skipped only for objects it would not have taken.
 - `FBORenderCell.pzoptBakeFloors`: after the floor tiles, `GroundBake.floorPasses` (extra draws of a feature, e.g. leaves),
   deferred to the game thread at its place in the stream on a recording thread (`BakeRecord.DEFER_GROUND`, a new case of
   `pzoptBakeDeferredDraw`); then snow and blood as before.
 - `FBORenderCell.renderOneLevel`: a level-0 bake queues its chunk's ground classes (`GroundBake.bakeBegin`: 10 x 10 texels of
-  two bytes, class and tone, the chunk and a border of one) into the class map texture ahead of its draws.
+  two bytes, class and tone, the chunk and a border of one) into the class map texture ahead of its draws, only when a
+  texel differs from the game thread's copy of the map (a re-bake of a loaded chunk uploads nothing: an upload into the
+  texture the bake's earlier draws sampled cost ~20 us of GPU a bake on NVIDIA).
 - `FBORenderCell.pzoptRenderInternal`: `pzopt.Ground.frameStart` once a frame per player (the frame's ground switches, the
   variant compile request, the movers' gather, the ground state's primitives and its GPU frame).
 - `TextureDraw` (FBORenderChunkStart): `GroundBake.chunkStart` gives the variant programs the texture's world mapping

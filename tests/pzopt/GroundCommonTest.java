@@ -17,12 +17,33 @@ public class GroundCommonTest {
       tiles();
       regions();
       chunkSlots();
+      packedTables();
       int n = shaders();
       int g = stateGpu();
       System.out.println("GroundCommonTest ok (" + n + " variant programs linked, " + g + " GroundState GPU runs)");
    }
 
    /** GroundChunk: slots per chunk, dropped and released on reuse, a stale asynchronous result refused. */
+   /** GroundBake.packConstTables: tables to functions (nested indices too), the packed bytes decode to the table. */
+   static void packedTables() {
+      String src = "const int A_T[6] = int[6](3, -1, 0, 254, 7, 12);\nconst int B[2] = int[2](1, 300);\nint f(int i) { return A_T[A_T[i] & 3] + B[i] + XA_T[0]; }";
+      String r = GroundBake.packConstTables(src);
+      Check.check(r.contains("int A_T_F(int i)") && !r.contains("const int A_T[") && r.contains("A_T_F(A_T_F(i) & 3)"), "table packed, nested index: " + r);
+      Check.check(r.contains("const int B[2]") && r.contains("B[i]"), "out-of-range table left alone: " + r);
+      Check.check(r.contains("XA_T[0]"), "another name ending in the table's left alone: " + r);
+      // decode the generated words the way the GLSL does
+      java.util.regex.Matcher m = java.util.regex.Pattern.compile("(\\d+)u").matcher(GroundBake.packedTable("T", new int[] {3, -1, 0, 254, 7, 12}));
+      java.util.List<Long> w = new java.util.ArrayList<>();
+      while (m.find()) {
+         w.add(Long.parseLong(m.group(1)));
+      }
+      int[] want = {3, -1, 0, 254, 7, 12};
+      for (int i = 0; i < want.length; i++) {
+         int x = (int)((w.get(i >> 2) >> (8 * (i & 3))) & 255);
+         Check.check((x == 255 ? -1 : x) == want[i], "packed entry " + i);
+      }
+   }
+
    static void chunkSlots() throws Exception {
       java.lang.reflect.Field uf = sun.misc.Unsafe.class.getDeclaredField("theUnsafe");
       uf.setAccessible(true);
@@ -116,13 +137,15 @@ public class GroundCommonTest {
          return String.join("\n",
             "uniform float pzgTestAmount;",
             "uniform sampler2D pzgTestTex;",
+            "const int PZG_TEST_TABLE[6] = int[6](3, -1, 0, 254, 7, 12);", // GroundBake.packConstTables makes it a function
+            "const float PZG_TEST_F[2] = float[2](0.5, 1.0);",
             "vec4 pzgTestTexel(vec4 t) {",
             "   float n = pzgFbm(pzgW.xy * 0.125, 3, PZG_SEED_TILING);",
             "   vec3 cell = pzgCell(pzgW.xy, 0.8, PZG_SEED_MACRO);",
             "   vec4 st = pzgStateAt(pzgW.xy);",
             "   float age = st.z;",
             "   int nb = pzgClassAt(pzgSq + ivec2(1, 0));",
-            "   if (pzgMaterial() == 1 && pzgNatural(nb) && !pzgAttached) t.rgb *= 0.9 + 0.1 * n + 0.01 * cell.z + 0.001 * float(pzgToneAt(pzgSq));",
+            "   if (pzgMaterial() == 1 && pzgNatural(nb) && !pzgAttached) t.rgb *= 0.9 + 0.1 * n + 0.01 * cell.z + 0.001 * float(pzgToneAt(pzgSq) + PZG_TEST_TABLE[PZG_TEST_TABLE[nb & 3] & 3]) * PZG_TEST_F[nb & 1];",
             "   return t * (1.0 - st.r * 0.3 * pzgTestAmount) + texture2D(pzgTestTex, pzgF) * 0.0 + vec4(age * 0.0);",
             "}",
             "vec4 pzgTestColor(vec4 c) { return c * (1.0 + 0.01 * pzgU01(pzgHash2(pzgSq, PZG_SEED_COMMON))); }");
@@ -154,7 +177,7 @@ public class GroundCommonTest {
          String vert = Files.readString(game.resolve(base + ".vert"));
          String frag = Files.readString(game.resolve(base + ".frag"));
          for (int view = 0; view <= 3; view++) {
-            for (int piece = 0; piece < (base.equals("seamFix2") ? 1 : 3); piece++) {
+            for (int piece = 0; piece < (base.equals("seamFix2") ? 1 : 4); piece++) {
                boolean attached = piece != 0;
                List<GroundBake.FloorPatch> ps = new ArrayList<>();
                ps.add(TEST);

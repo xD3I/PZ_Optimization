@@ -4832,6 +4832,14 @@ public final class FBORenderCell {
       if (pzopt.ResumeShot.noTrees && object instanceof IsoTree) {
          return; // pzopt: resumeShot's exit capture (buildings): no trees
       }
+      if (pzopt.GroundBake.OVERLAY_ON && pzopt.GroundBake.overlayBegin(object)) { // pzopt: ground and grass, a level-0 grass / plant object bakes with the ground variant's grass-object programs (GroundBake)
+         try { // pzopt
+            this.pzoptRenderMinusFloorInner(object); // pzopt
+         } finally { // pzopt
+            pzopt.GroundBake.overlayEnd(); // pzopt
+         } // pzopt
+         return; // pzopt
+      } // pzopt
       if (object instanceof IsoTree && pzopt.Config.TREES_IN_CHUNK_TEXTURE && pzopt.Overrides.enabled() && pzopt.Config.TREE_BAKE_DIRECT) {
          // pzopt: bake the tree through the plain sprite path (IsoTree.render without a FBORenderTrees batch)
          FBORenderTrees batch = FBORenderTrees.current;
