@@ -74,7 +74,7 @@ public final class Glints {
 
    public static String stats() {
       return "glints: frames=" + frames + " queued=" + framesQueued + " instances=" + instances + " max=" + maxInstances + " maskRebuilds=" + maskRebuilds
-            + " draws=" + draws + " queue_us=" + (frames > 0 ? String.format(java.util.Locale.ROOT, "%.1f (masks %.1f, lights %.1f)", queueNs / 1000.0 / frames, maskNs / 1000.0 / frames, lightsNs / 1000.0 / frames) : "0") + " mask_us=" + (maskRebuilds > 0 ? String.format(java.util.Locale.ROOT, "%.2f", maskNs / 1000.0 / maskRebuilds) : "0") + " ring=" + Gpu.ringWrites + " hdr=" + hdrQueued + "/" + Gpu.hdrDraws + " lightFrames=" + lightFrames + " sunFrames=" + sunFrames + " pointSquares=" + pointSquares + " sunSquares=" + sunSquares + " model=" + model() + " pass=" + PASS_NAMES[passMode()] + (failed ? " (failed)" : "");
+            + " draws=" + draws + " queue_us=" + (frames > 0 ? String.format(java.util.Locale.ROOT, "%.1f (masks %.1f, lights %.1f)", queueNs / 1000.0 / frames, maskNs / 1000.0 / frames, lightsNs / 1000.0 / frames) : "0") + " mask_us=" + (maskRebuilds > 0 ? String.format(java.util.Locale.ROOT, "%.2f", maskNs / 1000.0 / maskRebuilds) : "0") + " ring=" + Gpu.ringWrites + " hdr=" + hdrQueued + "/" + Gpu.hdrDraws + " lightFrames=" + lightFrames + " sunFrames=" + sunFrames + " pointSquares=" + pointSquares + " sunSquares=" + sunSquares + " model=" + model() + " pass=" + PASS_NAMES[passMode()] + " lamps=" + lampsCell + "/" + lampN + "/" + lampsActive + (failed ? " (failed)" : "");
    }
 
    /** The model in force (devGlintCycle steps through them, then "off"). */
@@ -160,7 +160,7 @@ public final class Glints {
    static final int SLOT = GroundChunk.id("glint masks");
    static final int REFRESH_MS = 400; // + a chunk stagger of up to 250 ms (milliseconds: at 800 fps 30 frames was 40 ms)
 
-   static LevelMask mask(IsoChunk c, int level, int frameNo, float wetGround, boolean snowAny) {
+   static ChunkMasks masks(IsoChunk c, long now) {
       ChunkMasks cm = (ChunkMasks)GroundChunk.get(c, SLOT);
       if (cm == null || cm.wx != c.wx || cm.wy != c.wy) {
          cm = new ChunkMasks();
@@ -168,8 +168,11 @@ public final class Glints {
          cm.wy = c.wy;
          GroundChunk.put(c, SLOT, cm);
       }
-      long now = System.currentTimeMillis();
       cm.seenMs = now;
+      return cm;
+   }
+
+   static LevelMask mask(IsoChunk c, ChunkMasks cm, int level, long now, float wetGround, boolean snowAny) {
       int li = level + 32;
       if (li < 0 || li >= 64) {
          return null;
@@ -253,6 +256,10 @@ public final class Glints {
       final float[] sunC = new float[4];
    }
 
+   private static long skyMs = Long.MIN_VALUE / 2, lampScanMs = Long.MIN_VALUE / 2;
+   private static float lampScanX = Float.NaN, lampScanY;
+   private static int lampN, lampsCell, lampsActive;
+   private static final IsoLightSource[] lamps = new IsoLightSource[2048];
    private static final float[] candD = new float[2048];
    private static final IsoLightSource[] candL = new IsoLightSource[2048];
 
@@ -261,7 +268,11 @@ public final class Glints {
       L.sun[3] = 0F;
       if (Config.GLINT_SUN) {
          ClimateManager cm = ClimateManager.getInstance();
-         Sky.update(-1F);
+         long nowMs = System.currentTimeMillis();
+         if (nowMs - skyMs > 100L || nowMs < skyMs) { // the sun and the moon move slowly: 10 times a second is plenty
+            skyMs = nowMs;
+            Sky.update(-1F);
+         }
          float day = cm != null ? Math.max(0F, Math.min(1F, cm.getDayLightStrength())) : 1F;
          float cloud = cm != null ? Math.max(0F, Math.min(1F, cm.getCloudIntensity())) : 0F;
          float clear = 1F - 0.85F * cloud;
@@ -313,11 +324,31 @@ public final class Glints {
          L.c[k + 3] = car ? 2F : 1F;
          L.n++;
       }
+      // the cell's lamps near the view, rescanned 4 times a second or after a 4-square camera move (the list holds the cell's every lamp)
       IsoCell cell = IsoWorld.instance.currentCell;
-      java.util.Stack<IsoLightSource> list = cell.getLamppostPositions();
+      long nowL = System.currentTimeMillis();
+      if (nowL - lampScanMs > 250L || nowL < lampScanMs || Math.abs(cx - lampScanX) > 4F || Math.abs(cy - lampScanY) > 4F) {
+         lampScanMs = nowL;
+         lampScanX = cx;
+         lampScanY = cy;
+         lampN = 0;
+         java.util.Stack<IsoLightSource> list = cell.getLamppostPositions();
+         lampsCell = list.size();
+         for (int i = 0; i < list.size() && lampN < lamps.length; i++) {
+            IsoLightSource l = list.get(i);
+            float r = Math.min(l.radius, 20);
+            if (Math.abs(l.x + 0.5F - cx) <= view + r + 6F && Math.abs(l.y + 0.5F - cy) <= view + r + 6F) {
+               lamps[lampN++] = l;
+            }
+         }
+         for (int i = lampN; i < lamps.length && lamps[i] != null; i++) {
+            lamps[i] = null;
+         }
+      }
       int nc = 0;
-      for (int i = 0; i < list.size() && nc < candL.length; i++) {
-         IsoLightSource l = list.get(i);
+      lampsActive = 0;
+      for (int i = 0; i < lampN && nc < candL.length; i++) {
+         IsoLightSource l = lamps[i];
          if (!l.active || l.radius <= 0) {
             continue;
          }
@@ -328,6 +359,7 @@ public final class Glints {
          }
          candD[nc] = dx * dx + dy * dy;
          candL[nc++] = l;
+         lampsActive++;
       }
       while (L.n < MAX_LIGHTS && nc > 0) {
          int best = 0;
@@ -342,7 +374,11 @@ public final class Glints {
          int k = L.n * 4;
          L.p[k] = l.x + 0.5F - ox;
          L.p[k + 1] = l.y + 0.5F - oy;
-         L.p[k + 2] = (l.z + 0.9F) * METRIC_Z; // a lamp's bulb near the top of its level (street lamps, wall lamps)
+         // a lamp's bulb: near the top of its level when it stands on a floor (wall / room lamps); a street lamp's light sits
+         // one level up in open air (gcv-dbg-lamps: z = 1 over a level-0 road), its bulb at that level's foot = the post's top
+         IsoGridSquare ls = cell.getGridSquare(l.x, l.y, l.z);
+         boolean hung = l.z > 0 && (ls == null || ls.getFloor() == null);
+         L.p[k + 2] = (hung ? l.z + 0.05F : l.z + 0.9F) * METRIC_Z;
          L.p[k + 3] = Math.min(l.radius, 20);
          L.d[k] = 0F;
          L.d[k + 1] = 0F;
@@ -460,6 +496,14 @@ public final class Glints {
       if (L.n > 0) {
          lightFrames++;
       }
+      if (Config.DEV_GLINT_VIEW == 1 && frames == 600) { // dev: the lights of one frame (gating checks)
+         StringBuilder sb = new StringBuilder("glints: lights at frame 600, camera " + cx + "," + cy + " origin " + ox + "," + oy + ":");
+         for (int i = 0; i < L.n; i++) {
+            sb.append(String.format(java.util.Locale.ROOT, " [%d] p=%.1f,%.1f,%.2f r=%.1f cone=%.2f s=%.2f c=%.2f,%.2f,%.2f w=%.0f", i, L.p[i * 4] + ox, L.p[i * 4 + 1] + oy,
+                  L.p[i * 4 + 2], L.p[i * 4 + 3], L.d[i * 4 + 2], L.d[i * 4 + 3], L.c[i * 4], L.c[i * 4 + 1], L.c[i * 4 + 2], L.c[i * 4 + 3]));
+         }
+         Log.info(sb.append(" sun=").append(L.sun[3]).toString());
+      }
       if (L.sun[3] > 0F) {
          sunFrames++;
       }
@@ -472,14 +516,19 @@ public final class Glints {
       float K = BloodDecals.K;
       f.n = 0;
       float[] d = f.data;
+      long now = System.currentTimeMillis();
       for (int ci = 0; ci < chunks.size() && f.n < MAX; ci++) {
          IsoChunk c = chunks.get(ci);
          zombie.iso.fboRenderChunk.FBORenderLevels levels = c.getRenderLevels(playerIndex);
+         ChunkMasks cms = null;
          for (int level = c.minLevel; level <= c.maxLevel && f.n < MAX; level++) {
             if (camZ < 0F && level > zombie.core.math.PZMath.fastfloor(camZ) || !levels.isOnScreen(level)) {
                continue;
             }
-            LevelMask m = mask(c, level, frameNo, wet, snowAny);
+            if (cms == null) {
+               cms = masks(c, now);
+            }
+            LevelMask m = mask(c, cms, level, now, wet, snowAny);
             if (m == null || m.bits == 0L) {
                continue;
             }
@@ -496,7 +545,8 @@ public final class Glints {
                int k = li * 4;
                float qx = Math.max(bx0, Math.min(bx0 + 8F, L.p[k])) - L.p[k], qy = Math.max(by0, Math.min(by0 + 8F, L.p[k + 1])) - L.p[k + 1];
                float r = L.p[k + 3] + 0.75F;
-               if (qx * qx + qy * qy <= r * r && Math.abs(pz - L.p[k + 2]) <= METRIC_Z * 1.5F) {
+               // a light lights its own level and the levels under it within its reach (a street lamp's light sits a level up)
+               if (qx * qx + qy * qy <= r * r && L.p[k + 2] >= pz - METRIC_Z * 0.5F && L.p[k + 2] - pz <= METRIC_Z * 2.5F) {
                   cb |= 1 << li;
                }
             }
@@ -1073,12 +1123,18 @@ public final class Glints {
                }
                upload.clear();
                upload.put(f.data, 0, floats);
-               int texels = f.n * TEXELS, rows = (texels + 4095) / 4096;
-               while (upload.position() < rows * 4096 * 4) {
-                  upload.put(0F); // the last row's tail
-               }
                upload.flip();
-               GL11.glTexSubImage2D(GL11.GL_TEXTURE_2D, 0, 0, 0, 4096, rows, GL11.GL_RGBA, GL11.GL_FLOAT, upload);
+               // only the texels in use: the full rows, then the last row's used part (a full 4096-texel row was 64 KB a
+               // frame for a handful of squares)
+               int texels = f.n * TEXELS, full = texels / 4096, rest = texels - full * 4096;
+               if (full > 0) {
+                  upload.limit(full * 4096 * 4);
+                  GL11.glTexSubImage2D(GL11.GL_TEXTURE_2D, 0, 0, 0, 4096, full, GL11.GL_RGBA, GL11.GL_FLOAT, upload);
+               }
+               if (rest > 0) {
+                  upload.limit(floats).position(full * 4096 * 4);
+                  GL11.glTexSubImage2D(GL11.GL_TEXTURE_2D, 0, 0, full, rest, 1, GL11.GL_RGBA, GL11.GL_FLOAT, upload);
+               }
                lastStamp = f.stamp;
             }
             zombie.core.ShaderHelper.glUseProgramObjectARB(prog);

@@ -460,7 +460,7 @@ def mode_kinds():
     pp = ctx.program(vertex_shader=rd("glints-particles.vert"), fragment_shader=rd("glints-particles.frag"))
     va = ctx.vertex_array(pp, [])
     rho = float(os.environ.get("FLAKES", "3072")) / 1024.0
-    kinds = np.array([[rho, 1.6, 0.04, 0.018], [rho * 1.6, 1.3, 0.035, 0.018], [rho * 0.6, 0.22, 0.025, 0.02]], "f4")
+    kinds = np.array([[rho, 1.6, 0.04, 0.018], [rho * 1.6, 1.3, 0.035, 0.018], [rho * 0.6, float(os.environ.get("WET_ROUGH", "0.22")), 0.025, 0.02]], "f4")
     tex = None
 
     def put(k, v, raw=False):
