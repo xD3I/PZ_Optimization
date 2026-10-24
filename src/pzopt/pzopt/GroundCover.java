@@ -456,7 +456,7 @@ public final class GroundCover {
 
    static final int M_NONE = 0, M_GRASS = 1, M_DIRT = 2, M_ROAD = 3, M_WALK = 4, M_BUILT = 5, M_GRAVEL = 6;
 
-   /** Material of a square's floor (interim, by sprite name; pzopt.GroundTiles once ground-common's API is merged). */
+   /** Material of a square's floor (pzopt.GroundTiles: natural materials, paved road / sidewalk). */
    static int material(IsoGridSquare sq) {
       if (sq == null) {
          return M_NONE;
@@ -468,7 +468,6 @@ public final class GroundCover {
       if (!sq.isOutside() || sq.has(IsoFlagType.water)) {
          return M_NONE;
       }
-      String n = floor.sprite.name;
       int code = GroundTiles.square(sq);
       if ((code & GroundTiles.F_EXCLUDED) != 0) {
          return M_NONE; // farmland, dug soil, water
@@ -485,40 +484,9 @@ public final class GroundCover {
          default:
             return M_DIRT; // dirt, sand, clay, dark dirt (snow: the game's)
       }
-      Integer cached = NAME_MAT.get(floor.sprite);
-      if (cached != null) {
-         return cached;
-      }
-      int m = nameMaterial(n);
-      NAME_MAT.put(floor.sprite, m);
-      return m;
-   }
-
-   /** Paved / built floors by sprite name, memoised per sprite (the gather runs on the game thread). */
-   private static final java.util.IdentityHashMap<Object, Integer> NAME_MAT = new java.util.IdentityHashMap<>();
-
-   private static int nameMaterial(String n) {
-      if (n.startsWith("blends_street_01_") || n.startsWith("floors_exterior_street")) {
-         int i = index(n);
-         // blends_street_01: asphalt rows; floors_exterior_street: sidewalk / pavement
-         return n.startsWith("floors_exterior_street") ? M_WALK : i >= 64 && i < 80 ? M_WALK : M_ROAD;
-      }
-      if (n.startsWith("floors_exterior_tilesandstone") || n.contains("sidewalk") || n.startsWith("street_trafficlines")) {
-         return M_WALK;
-      }
-      if (n.startsWith("carpentry_") || n.startsWith("floors_interior") || n.startsWith("constructedobjects")) {
-         return M_BUILT;
-      }
-      return M_BUILT;
-   }
-
-   private static int index(String n) {
-      int u = n.lastIndexOf('_');
-      try {
-         return Integer.parseInt(n.substring(u + 1));
-      } catch (RuntimeException e) {
-         return 0;
-      }
+      // paved floors: ground-common's classification (road / sidewalk rows, cached on the sprite); the rest is built
+      int pv = GroundTiles.paved(code);
+      return pv == 1 ? M_ROAD : pv == 2 ? M_WALK : M_BUILT;
    }
 
    public static boolean isRoad(IsoGridSquare sq) {
