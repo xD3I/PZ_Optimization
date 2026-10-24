@@ -68,7 +68,7 @@ public final class Glints {
 
    public static String stats() {
       return "glints: frames=" + frames + " queued=" + framesQueued + " instances=" + instances + " max=" + maxInstances + " maskRebuilds=" + maskRebuilds
-            + " draws=" + draws + " lightFrames=" + lightFrames + " sunFrames=" + sunFrames + " pointSquares=" + pointSquares + " sunSquares=" + sunSquares + " model=" + model() + " pass=" + PASS_NAMES[passMode()] + (failed ? " (failed)" : "");
+            + " draws=" + draws + " queue_us=" + (frames > 0 ? String.format(java.util.Locale.ROOT, "%.1f", queueNs / 1000.0 / frames) : "0") + " ring=" + Gpu.ringWrites + " lightFrames=" + lightFrames + " sunFrames=" + sunFrames + " pointSquares=" + pointSquares + " sunSquares=" + sunSquares + " model=" + model() + " pass=" + PASS_NAMES[passMode()] + (failed ? " (failed)" : "");
    }
 
    /** The model in force (devGlintCycle steps through them, then "off"). */
@@ -373,12 +373,16 @@ public final class Glints {
     * Game thread, FBORenderCell after the players / items and before the puddles: this frame's masked squares in a light's
     * reach, queued as one draw. Nothing queued when there are none.
     */
+   public static long queueNs;
+
    public static void queue(int playerIndex, java.util.List<IsoChunk> chunks) {
       if (!on() || chunks == null) {
          return;
       }
+      long t0 = System.nanoTime();
       try {
          build(playerIndex, chunks);
+         queueNs += System.nanoTime() - t0;
       } catch (RuntimeException e) {
          failed = true;
          Log.warn("glints: frame build failed, glints off: " + e);
@@ -839,7 +843,10 @@ public final class Glints {
    static final class Gpu {
       private static final int[] programs = new int[MODELS.length + 3];
       private static final int[][] locs = new int[MODELS.length + 3][];
-      private static int tex, vao, lastStamp = -1;
+      /** A ring of three data textures (and compact buffers): a frame never writes what the GPU may still read (an implicit sync). */
+      static final int RING = 3;
+      private static final int[] texs = new int[RING], ssbos = new int[RING], indirects = new int[RING];
+      private static int tex, vao, lastStamp = -1, slot;
       private static FloatBuffer upload;
       private static final FloatBuffer mat = BufferUtils.createFloatBuffer(16);
       private static final FloatBuffer v8 = BufferUtils.createFloatBuffer(MAX_LIGHTS * 4);
@@ -864,6 +871,7 @@ public final class Glints {
 
       static final int PROG_PARTICLES = MODELS.length, PROG_COMPACT = MODELS.length + 1, PROG_COMPACT_DRAW = MODELS.length + 2;
       private static int ssbo, indirect;
+      public static long ringWrites;
       private static final java.nio.IntBuffer CMD = BufferUtils.createIntBuffer(4);
 
       /** Compute shaders and indirect draws (GL 4.3; not on the Mac's 4.1). */
@@ -910,18 +918,26 @@ public final class Glints {
                return;
             }
             int[] l = locs[which];
-            if (tex == 0) {
-               tex = GL11.glGenTextures();
+            if (texs[0] == 0) {
                GL13.glActiveTexture(GL13.GL_TEXTURE1);
-               GL11.glBindTexture(GL11.GL_TEXTURE_2D, tex);
-               GL11.glTexImage2D(GL11.GL_TEXTURE_2D, 0, GL30.GL_RGBA32F, 4096, MAX * TEXELS / 4096, 0, GL11.GL_RGBA, GL11.GL_FLOAT, (FloatBuffer)null);
-               GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MIN_FILTER, GL11.GL_NEAREST);
-               GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MAG_FILTER, GL11.GL_NEAREST);
+               for (int r = 0; r < RING; r++) {
+                  texs[r] = GL11.glGenTextures();
+                  GL11.glBindTexture(GL11.GL_TEXTURE_2D, texs[r]);
+                  GL11.glTexImage2D(GL11.GL_TEXTURE_2D, 0, GL30.GL_RGBA32F, 4096, MAX * TEXELS / 4096, 0, GL11.GL_RGBA, GL11.GL_FLOAT, (FloatBuffer)null);
+                  GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MIN_FILTER, GL11.GL_NEAREST);
+                  GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MAG_FILTER, GL11.GL_NEAREST);
+               }
                vao = GL30.glGenVertexArrays();
             }
+            boolean fresh = lastStamp != f.stamp;
+            if (fresh) {
+               slot = (slot + 1) % Math.max(1, Math.min(RING, Config.DEV_GLINT_RING));
+               ringWrites++;
+            }
+            tex = texs[slot];
             GL13.glActiveTexture(GL13.GL_TEXTURE1);
             GL11.glBindTexture(GL11.GL_TEXTURE_2D, tex);
-            if (lastStamp != f.stamp) {
+            if (fresh) {
                int floats = f.n * TEXELS * 4;
                if (upload == null) {
                   upload = BufferUtils.createFloatBuffer(MAX * TEXELS * 4);
@@ -965,14 +981,19 @@ public final class Glints {
             GL20.glUniform4f(l[10], f.zoom / f.ts, Config.GLINT_PCT / 100F, Config.DEV_GLINT_VIEW, 1024F * f.ts * f.ts / (f.zoom * f.zoom));
             if (f.pass == P_COMPACT) {
                // the lit flakes into a list (compute), then one indirect draw of exactly those
-               if (ssbo == 0) {
-                  ssbo = GL15.glGenBuffers();
-                  GL15.glBindBuffer(GL43.GL_SHADER_STORAGE_BUFFER, ssbo);
-                  GL15.glBufferData(GL43.GL_SHADER_STORAGE_BUFFER, (long)COMPACT_MAX * 32L, GL15.GL_DYNAMIC_COPY);
-                  indirect = GL15.glGenBuffers();
-                  GL15.glBindBuffer(GL40.GL_DRAW_INDIRECT_BUFFER, indirect);
-                  GL15.glBufferData(GL40.GL_DRAW_INDIRECT_BUFFER, 16L, GL15.GL_DYNAMIC_COPY);
+               if (ssbos[0] == 0) {
+                  for (int r = 0; r < RING; r++) {
+                     ssbos[r] = GL15.glGenBuffers();
+                     GL15.glBindBuffer(GL43.GL_SHADER_STORAGE_BUFFER, ssbos[r]);
+                     GL15.glBufferData(GL43.GL_SHADER_STORAGE_BUFFER, (long)COMPACT_MAX * 32L, GL15.GL_DYNAMIC_COPY);
+                     indirects[r] = GL15.glGenBuffers();
+                     GL15.glBindBuffer(GL40.GL_DRAW_INDIRECT_BUFFER, indirects[r]);
+                     GL15.glBufferData(GL40.GL_DRAW_INDIRECT_BUFFER, 16L, GL15.GL_DYNAMIC_COPY);
+                  }
+                  GL15.glBindBuffer(GL43.GL_SHADER_STORAGE_BUFFER, 0);
                }
+               ssbo = ssbos[slot];
+               indirect = indirects[slot];
                CMD.clear();
                CMD.put(0).put(1).put(0).put(0).flip();
                GL15.glBindBuffer(GL40.GL_DRAW_INDIRECT_BUFFER, indirect);

@@ -1643,10 +1643,12 @@ public final class Config {
    public static volatile int DEV_GLINT_VIEW; // dev: 1 masks (frost blue, snow white, wet cyan), 2 the lights reaching each square, 3 glints x 20
    public static final int DEV_GLINT_CYCLE = integer("devGlintCycle", 0); // dev: ms; the glint model cycles db23 -> db23iso -> jamsi -> sparkle -> explicit -> off (GPU section ground.glints.<model>)
    public static final int DEV_GLINT_ALTERNATE = integer("devGlintAlternate", 0); // dev: ms; glints switch on and off every period (GPU section ground.glints / ground.glints.off)
+   public static final int DEV_GLINT_RING = integer("devGlintRing", 3); // dev: glint data textures in the ring (1 = one texture rewritten each frame, the implicit-sync A/B)
    public static final String DEV_GLINT_FORCE = string("devGlintForce", "").trim(); // dev: frost | snow | wet: every outdoor floor square in view gets that mask (cost and look rigs)
    public static volatile String GROUND_COVER_PLACEMENT; // ground cover: jitter (6 x 6 jittered grid a square, hashed thresholds) | bluenoise (a progressive blue-noise 4 x 4 square tile, rank-dithered)
    public static volatile String GROUND_COVER_ASSETS; // ground cover: mixed (procedural shapes + the game's leaf-clump and litter decals) | procedural | sprites
    public static volatile boolean GROUND_COVER_FROST; // ground cover: morning frost in the shade (cold clear nights; melts where the sun has shone)
+   public static volatile boolean GROUND_COVER_ASYNC; // ground cover: level-0 cover built on a worker (squares gathered on the game thread), prefetched for the loaded chunks; false = built in the bake
    public static volatile int GROUND_REBAKE_PER_FRAME; // ground cover: chunk levels re-baked a frame at a season / frost step
    public static volatile int DEV_GROUND_COVER_VIEW; // dev: 1 cover kinds in flat colours
    public static final int DEV_GROUND_TEMP = integer("devGroundTemp", -999); // dev: the temperature (C) the cover and the frost see
@@ -2357,6 +2359,7 @@ public final class Config {
       GROUND_COVER_PLACEMENT = string("groundCoverPlacement", "bluenoise").trim().toLowerCase(java.util.Locale.ROOT);
       GROUND_COVER_ASSETS = string("groundCoverAssets", "mixed").trim().toLowerCase(java.util.Locale.ROOT);
       GROUND_COVER_FROST = bool("groundCoverFrost", true);
+      GROUND_COVER_ASYNC = bool("groundCoverAsync", true);
       GROUND_REBAKE_PER_FRAME = Math.max(1, Math.min(32, integer("groundRebakePerFrame", 2)));
       DEV_GROUND_COVER_VIEW = integer("devGroundCoverView", 0);
       FOLIAGE_SWAY = bool("foliageSway", false);

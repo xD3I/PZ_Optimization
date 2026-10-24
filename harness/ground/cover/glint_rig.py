@@ -9,6 +9,8 @@ dimetric camera, on the desktop GPU through headless EGL (moderngl):
   stats  mean D_P over a large patch against the smooth NDF (energy, bias)           -> printed
   flakes the particle / compact passes' flake model (the game's compute shader, build/shader-dump from GroundCoverTest)
          on a 48 x 48-square frosty patch: energy of the drawn flakes against the smooth NDF's, flakes lit per square
+  pcost  GPU time of the particle / compact passes alone (shader-dump programs) over SQUARES (5225) sun-lit squares,
+         the data texture's upload timed apart (timer queries, median of 30)              -> printed
   pan    temporal stability: the camera pans 0.37 px a frame, the light still;       -> printed
          flicker = mean |I_t - I_t-1| / mean I over 48 frames, per model and zoom
 
@@ -284,9 +286,92 @@ def mode_flakes():
     print("flakes energy / smooth: %.3f" % (got / ref))
 
 
+def mode_pcost():
+    import moderngl
+    ctx = moderngl.create_standalone_context(backend="egl", require=430)
+    dump = os.path.join(ROOT, "build", "shader-dump")
+    rd = lambda f: open(os.path.join(dump, f)).read()
+    n = int(os.environ.get("SQUARES", "5225"))
+    W = int(np.ceil(np.sqrt(n)))
+    data = np.zeros((n * 4, 4), dtype="f4")
+    for i in range(n):
+        x, y = i % W, i // W
+        data[i * 4 + 0] = ((x - y) * 64.0, (x + y) * 32.0, 0.5, 0.0)
+        data[i * 4 + 1] = (x, y, ((x - y) * 32) % 4096, ((x + y) * 16) % 4096)
+        data[i * 4 + 2] = (0.0, 1.0, 1.0, 1.0)
+        data[i * 4 + 3] = (float(os.environ.get("BITS", "0")), 0.0, 0.0, 0.0)
+    rows = (n * 4 + 4095) // 4096
+    pad = np.zeros((rows * 4096, 4), dtype="f4")
+    pad[: n * 4] = data
+    tex = ctx.texture((4096, 16), 4, dtype="f4")
+    tex.filter = (moderngl.NEAREST, moderngl.NEAREST)
+    tex.write(pad.tobytes(), viewport=(0, 0, 4096, rows))
+    fbo = ctx.framebuffer(color_attachments=[ctx.texture((5120, 2160), 4, dtype="f2")])
+    fbo.use()
+    ctx.enable(moderngl.BLEND)
+    ctx.blend_func = moderngl.ONE, moderngl.ONE
+    rho = float(os.environ.get("FLAKES", "3072")) / 1024.0
+    kinds = np.array([[rho, 1.6, 0.04, 0.018], [rho * 1.6, 1.3, 0.035, 0.018], [rho * 0.6, 0.22, 0.025, 0.02]], "f4")
+    mvp = np.eye(4, dtype="f4")
+    mvp[0, 0] = 2.0 / 5120.0; mvp[1, 1] = -2.0 / 2160.0; mvp[3, 0] = -0.5; mvp[3, 1] = 0.6
+    sun = (-0.35, -0.55, 0.76)
+
+    def setup(prog):
+        def put(k, v, raw=False):
+            if k in prog:
+                if raw:
+                    prog[k].write(v)
+                else:
+                    prog[k] = v
+        put("uData", 1); put("uTotal", n * 64)
+        put("uMVP", mvp.tobytes(), True); put("uJ", (0.0, 0.0, 0.0, 0.0)); put("uTs", 1.0)
+        lp = np.zeros((8, 4), "f4"); lp[0] = (W / 2, W / 2, 2.5, 30.0)
+        ld = np.zeros((8, 4), "f4"); ld[0] = (0, 0, -2, 1)
+        lc = np.zeros((8, 4), "f4"); lc[0] = (1, 1, 1, 0)
+        put("uLp", lp.tobytes(), True); put("uLd", ld.tobytes(), True); put("uLc", lc.tobytes(), True)
+        put("uSun", (sun[0], sun[1], sun[2], 1.0)); put("uSunC", (1.0, 0.95, 0.9, 1.0))
+        put("uKind", kinds.tobytes(), True)
+        put("uView", (1.0, 1.0, 0.0, 2048.0))
+    q = ctx.query(time=True)
+
+    def timed(fn, reps=36):
+        ts = []
+        for i in range(reps):
+            with q:
+                fn()
+            if i >= 6:
+                ts.append(q.elapsed / 1000.0)
+        return np.median(ts)
+    tex.use(1)
+    up = pad.tobytes()
+    print("pcost: %d squares, %d slots, flakes %.0f" % (n, n * 64, rho * 1024))
+    print("  upload %d KB:            %7.1f us" % (len(up) // 1024, timed(lambda: tex.write(up, viewport=(0, 0, 4096, rows)))))
+    pp = ctx.program(vertex_shader=rd("glints-particles.vert"), fragment_shader=rd("glints-particles.frag"))
+    setup(pp)
+    va = ctx.vertex_array(pp, [])
+    ctx.enable(moderngl.PROGRAM_POINT_SIZE)
+    print("  particles draw:           %7.1f us" % timed(lambda: va.render(moderngl.POINTS, vertices=n * 64)))
+    cs = ctx.compute_shader(rd("glints-compact.comp"))
+    setup(cs)
+    flakes = ctx.buffer(reserve=262144 * 32)
+    cmd = ctx.buffer(np.array([0, 1, 0, 0], dtype="u4").tobytes())
+    flakes.bind_to_storage_buffer(0)
+    cmd.bind_to_storage_buffer(1)
+    zero = np.array([0, 1, 0, 0], dtype="u4").tobytes()
+
+    def comp():
+        cmd.write(zero)
+        cs.run((n * 64 + 63) // 64)
+    print("  compact compute:          %7.1f us" % timed(comp))
+    cnt = int(np.frombuffer(cmd.read(), "u4")[0])
+    dp = ctx.program(vertex_shader=rd("glints-compact-draw.vert"), fragment_shader=rd("glints-compact-draw.frag"))
+    dva = ctx.vertex_array(dp, [])
+    print("  compact draw (%6d lit):  %7.1f us" % (cnt, timed(lambda: dva.render(moderngl.POINTS, vertices=cnt))))
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("mode", choices=["img", "cost", "stats", "pan", "src", "flakes"])
+    ap.add_argument("mode", choices=["img", "cost", "stats", "pan", "src", "flakes", "pcost"])
     ap.add_argument("--out", default=os.path.join(ROOT, "build", "glint-rig"))
     a = ap.parse_args()
     if a.mode == "src":
@@ -297,6 +382,8 @@ def main():
         mode_cost()
     elif a.mode == "flakes":
         mode_flakes()
+    elif a.mode == "pcost":
+        mode_pcost()
     elif a.mode == "stats":
         mode_stats()
     else:

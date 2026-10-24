@@ -138,6 +138,7 @@ public final class GroundCover {
 
    public static String stats() {
       return "ground cover: bakes=" + bakes + " skipped=" + bakesSkipped + " builds=" + builds + " build_us=" + (builds > 0 ? buildNs / 1000 / builds : 0) + " (hood " + (builds > 0 ? hoodNs / 1000 / builds : 0) + " corners " + (builds > 0 ? cornersNs / 1000 / builds : 0) + ") build_min_us=" + (builds > 0 ? buildMinNs / 1000 : 0) + " build_late_us=" + (buildLate > 0 ? buildLateNs / 1000 / buildLate : 0)
+            + " async=" + asyncBuilds + " sync=" + syncBuilds + " submit_us=" + (submits > 0 ? submitNs / 1000 / submits : 0) + " gathers=" + gathers + " land_rebakes=" + landRebakes + " stale_draws=" + staleDraws + " dropped=" + droppedBuilds
             + " instances=" + instancesDrawn + " rebakes=" + rebakesIssued + " tracksRebakes=" + tracksRebakes + " step=" + step + " frostStep=" + frostStep + " month=" + season.month
             + String.format(java.util.Locale.ROOT, " fall=%.2f flowers=%.2f frost=%.2f tmin=%.1f", season.leafFall, season.flowers, season.frost, season.tMin)
             + (failed ? " (failed)" : "");
@@ -186,9 +187,69 @@ public final class GroundCover {
       float driftX = 0.70710678F, driftY = -0.70710678F;
       float sunX, sunY, sunZ = 1F; // the sun now (Sky)
       float sunUpHours; // hours since sunrise (0 before)
+      String placement = "bluenoise", assets = "mixed"; // a builder's settings (a snapshot's own; the live season reads Config)
+      boolean frostOn = true;
+      int density = 100;
+      boolean live;
+
+      String placement() {
+         return this.live ? GroundCover.placement() : this.placement;
+      }
+
+      String assets() {
+         return this.live ? GroundCover.assets() : this.assets;
+      }
+
+      boolean frostOn() {
+         return this.live ? Config.GROUND_COVER_FROST : this.frostOn;
+      }
+
+      int density() {
+         return this.live ? Config.GROUND_SCATTER_DENSITY_PCT : this.density;
+      }
    }
 
-   static final Season season = new Season();
+   static final Season season = newLive();
+
+   private static Season newLive() {
+      Season s = new Season();
+      s.live = true;
+      return s;
+   }
+   /** The season a builder reads: the live one on the game thread, a snapshot on the cover worker. */
+   private static final ThreadLocal<Season> CUR = ThreadLocal.withInitial(() -> season);
+
+   static Season S() {
+      return CUR.get();
+   }
+
+   static Season snapshot() {
+      Season a = season, b = new Season();
+      b.month = a.month;
+      b.day = a.day;
+      b.year = a.year;
+      b.hour = a.hour;
+      b.tempC = a.tempC;
+      b.tMin = a.tMin;
+      b.cloud = a.cloud;
+      b.rain = a.rain;
+      b.leafFall = a.leafFall;
+      b.leafAge = a.leafAge;
+      b.flowers = a.flowers;
+      b.accum = a.accum;
+      b.frost = a.frost;
+      b.driftX = a.driftX;
+      b.driftY = a.driftY;
+      b.sunX = a.sunX;
+      b.sunY = a.sunY;
+      b.sunZ = a.sunZ;
+      b.sunUpHours = a.sunUpHours;
+      b.placement = placement();
+      b.assets = assets();
+      b.frostOn = Config.GROUND_COVER_FROST;
+      b.density = Config.GROUND_SCATTER_DENSITY_PCT;
+      return b;
+   }
    static int step = Integer.MIN_VALUE, frostStep = Integer.MIN_VALUE;
    private static float lastTempHour = -1F;
 
@@ -199,7 +260,11 @@ public final class GroundCover {
       }
       try {
          updateSeason();
-         rebakeStep();
+         if (on()) {
+            land();
+            rebakeStep();
+            prefetch();
+         }
          sweep();
       } catch (RuntimeException e) {
          failed = true;
@@ -303,6 +368,17 @@ public final class GroundCover {
    private static final ArrayList<int[]> pendingLevels = new ArrayList<>();
    private static long lastRebakeMs;
 
+   /** A landed build's re-bake, through the step's nearest-first, budgeted list. */
+   static void queueRebake(IsoChunk c) {
+      for (int i = 0; i < pending.size(); i++) {
+         if (pending.get(i) == c && pendingLevels.get(i)[0] == 0) {
+            return;
+         }
+      }
+      pending.add(c);
+      pendingLevels.add(new int[] {0});
+   }
+
    private static void rebakeStep() {
       int sk = seasonKey(), fk = frostKey();
       boolean seasonChanged = step != Integer.MIN_VALUE && sk != step;
@@ -327,6 +403,10 @@ public final class GroundCover {
                   continue;
                }
                boolean need = settings || seasonChanged && lc.n > 0 || frostChanged && (lc.frostN > 0 || fk != 0 && lc.outdoor);
+               if (need && li == 32 && async()) {
+                  cc.baked = true; // the prefetch rebuilds it; its landing re-bakes
+                  continue;
+               }
                if (need) {
                   pending.add(c);
                   pendingLevels.add(new int[] {li - 32});
@@ -485,57 +565,76 @@ public final class GroundCover {
       }
    }
 
-   private static final Hood hood = new Hood();
+   /** A builder's scratch (the game thread's and the worker's own). */
+   static final class Scratch {
+      final Hood hood = new Hood();
+      final Corners corners = new Corners();
+      final int[] sp = new int[1];
+      final ArrayList<float[]> frost = new ArrayList<>();
+      long[] sortKeys = new long[256];
+      float[] sortTmp = new float[256 * FLOATS];
+   }
 
-   static Hood hood(IsoChunk c, int z) {
-      Hood h = hood;
-      h.ox = c.wx * 8 - Hood.R;
-      h.oy = c.wy * 8 - Hood.R;
-      h.z = z;
-      h.trees.clear();
-      h.forest = h.town = h.farm = 0;
-      zombie.iso.IsoCell cell = IsoWorld.instance.currentCell;
-      for (int iy = 0; iy < Hood.W; iy++) {
-         for (int ix = 0; ix < Hood.W; ix++) {
-            int x = h.ox + ix, y = h.oy + iy, k = ix + iy * Hood.W;
-            IsoGridSquare sq = cell.getGridSquare(x, y, z);
-            h.mat[k] = (byte)material(sq);
-            int e = 0;
-            float ht = 0F;
-            if (sq != null) {
-               if (sq.has(IsoFlagType.collideN)) {
-                  e |= 1;
-               }
-               if (sq.has(IsoFlagType.collideW)) {
-                  e |= 2;
-               }
-               if (!sq.isOutside()) {
-                  e |= 4;
-                  zombie.iso.BuildingDef bd = sq.getBuildingDef();
-                  ht = bd != null ? (bd.getMaxLevel() - z + 1) * Glints.METRIC_Z + 1.2F : Glints.METRIC_Z;
-               } else if ((e & 3) != 0) {
-                  ht = 1.0F; // a fence or a low wall
-               }
-               IsoObject[] objs = sq.getObjects().getElements();
-               int n = sq.getObjects().size();
-               for (int i = 0; i < n; i++) {
-                  if (objs[i] instanceof IsoTree t && t.sprite != null) {
-                     Tree tr = new Tree();
-                     int size = Math.max(1, t.getSize());
-                     tr.x = x + 0.5F;
-                     tr.y = y + 0.5F;
-                     tr.r = 0.9F + 0.42F * size;
-                     tr.h = 2.0F + 1.1F * size;
-                     tr.species = species(t.sprite.name);
-                     h.trees.add(tr);
-                  }
+   private static final ThreadLocal<Scratch> SCR = ThreadLocal.withInitial(Scratch::new);
+
+   /** One chunk's level-0 squares as the rules need them, gathered on the game thread (the worker reads only these). */
+   static final class ChunkInfo {
+      int wx, wy;
+      final byte[] mat = new byte[64], edge = new byte[64], height = new byte[64];
+      Tree[] trees = new Tree[0];
+      int forest, town, farm;
+      int frame;
+   }
+
+   public static long gathers;
+
+   /** Game thread: chunk c's squares (64 lookups) and its zone. */
+   static ChunkInfo gather(IsoChunk c) {
+      ChunkInfo info = new ChunkInfo();
+      info.wx = c.wx;
+      info.wy = c.wy;
+      info.frame = IsoWorld.instance.getFrameNo();
+      ArrayList<Tree> trees = new ArrayList<>();
+      for (int i = 0; i < 64; i++) {
+         int x = c.wx * 8 + (i & 7), y = c.wy * 8 + (i >> 3);
+         IsoGridSquare sq = c.getGridSquare(i & 7, i >> 3, 0);
+         info.mat[i] = (byte)material(sq);
+         int e = 0;
+         float ht = 0F;
+         if (sq != null) {
+            if (sq.has(IsoFlagType.collideN)) {
+               e |= 1;
+            }
+            if (sq.has(IsoFlagType.collideW)) {
+               e |= 2;
+            }
+            if (!sq.isOutside()) {
+               e |= 4;
+               zombie.iso.BuildingDef bd = sq.getBuildingDef();
+               ht = bd != null ? (bd.getMaxLevel() + 1) * Glints.METRIC_Z + 1.2F : Glints.METRIC_Z;
+            } else if ((e & 3) != 0) {
+               ht = 1.0F; // a fence or a low wall
+            }
+            IsoObject[] objs = sq.getObjects().getElements();
+            int n = sq.getObjects().size();
+            for (int k = 0; k < n; k++) {
+               if (objs[k] instanceof IsoTree t && t.sprite != null) {
+                  Tree tr = new Tree();
+                  int size = Math.max(1, t.getSize());
+                  tr.x = x + 0.5F;
+                  tr.y = y + 0.5F;
+                  tr.r = 0.9F + 0.42F * size;
+                  tr.h = 2.0F + 1.1F * size;
+                  tr.species = species(t.sprite.name);
+                  trees.add(tr);
                }
             }
-            h.edge[k] = (byte)e;
-            h.height[k] = (byte)Math.min(127, Math.round(ht * 4F));
          }
+         info.edge[i] = (byte)e;
+         info.height[i] = (byte)Math.min(127, Math.round(ht * 4F));
       }
-      // the zone at the chunk's centre (forest / town / farm), sampled at five points
+      info.trees = trees.toArray(new Tree[0]);
+      // the zone (forest / town / farm), sampled at five points
       zombie.iso.IsoMetaGrid mg = IsoWorld.instance.getMetaGrid();
       for (int i = 0; i < 5; i++) {
          int x = c.wx * 8 + (i == 0 ? 4 : i == 1 ? 0 : i == 2 ? 7 : i == 3 ? 0 : 7), y = c.wy * 8 + (i == 0 ? 4 : i < 3 ? 0 : 7);
@@ -545,13 +644,67 @@ public final class GroundCover {
             continue;
          }
          if (t.contains("Forest") || t.equals("Vegitation")) {
-            h.forest++;
+            info.forest++;
          } else if (t.contains("Town") || t.equals("TrailerPark") || t.equals("Nav")) {
-            h.town++;
+            info.town++;
          } else if (t.contains("Farm") || t.equals("Ranch")) {
-            h.farm++;
+            info.farm++;
          }
       }
+      gathers++;
+      return info;
+   }
+
+   /** Game thread: the 3 x 3 chunks' infos round c (index (dx + 1) + (dy + 1) * 3), gathered where missing; c's own afresh. */
+   static ChunkInfo[] nine(IsoChunk c) {
+      ChunkInfo[] out = new ChunkInfo[9];
+      zombie.iso.IsoCell cell = IsoWorld.instance.currentCell;
+      for (int dy = -1; dy <= 1; dy++) {
+         for (int dx = -1; dx <= 1; dx++) {
+            IsoChunk n = dx == 0 && dy == 0 ? c : cell.getChunk(c.wx + dx, c.wy + dy);
+            if (n == null) {
+               continue;
+            }
+            ChunkCover cc = coverOf(n);
+            if (cc.info == null || cc.info.wx != n.wx || cc.info.wy != n.wy || n == c || IsoWorld.instance.getFrameNo() - cc.info.frame > 600) {
+               cc.info = gather(n);
+            }
+            out[(dx + 1) + (dy + 1) * 3] = cc.info;
+         }
+      }
+      return out;
+   }
+
+   /** The neighbourhood from the 3 x 3 chunks' infos (any thread). */
+   static Hood hood(ChunkInfo[] nine, int wx, int wy) {
+      Hood h = SCR.get().hood;
+      h.ox = wx * 8 - Hood.R;
+      h.oy = wy * 8 - Hood.R;
+      h.z = 0;
+      h.trees.clear();
+      java.util.Arrays.fill(h.mat, (byte)0);
+      java.util.Arrays.fill(h.edge, (byte)0);
+      java.util.Arrays.fill(h.height, (byte)0);
+      for (int ci = 0; ci < 9; ci++) {
+         ChunkInfo info = nine[ci];
+         if (info == null) {
+            continue;
+         }
+         int bx = (ci % 3) * 8, by = (ci / 3) * 8;
+         for (int i = 0; i < 64; i++) {
+            int k = bx + (i & 7) + (by + (i >> 3)) * Hood.W;
+            h.mat[k] = info.mat[i];
+            h.edge[k] = info.edge[i];
+            h.height[k] = info.height[i];
+         }
+         for (Tree t : info.trees) {
+            h.trees.add(t);
+         }
+      }
+      ChunkInfo me = nine[4];
+      h.forest = me != null ? me.forest : 0;
+      h.town = me != null ? me.town : 0;
+      h.farm = me != null ? me.farm : 0;
       return h;
    }
 
@@ -561,7 +714,7 @@ public final class GroundCover {
    static float canopy(Hood h, float x, float y, float drift, int[] speciesOut) {
       float sum = 0F, best = 0F;
       int sp = 0;
-      Season s = season;
+      Season s = S();
       for (int i = 0; i < h.trees.size(); i++) {
          Tree t = h.trees.get(i);
          float cx = t.x + s.driftX * t.r * drift, cy = t.y + s.driftY * t.r * drift;
@@ -615,7 +768,7 @@ public final class GroundCover {
    static float bank(Hood h, float x, float y) {
       int ix = (int)Math.floor(x), iy = (int)Math.floor(y);
       float fx = x - ix, fy = y - iy;
-      Season s = season;
+      Season s = S();
       float b = 0F;
       // north edge of this square (wall on this square's N side): the wind blowing north (driftY < 0) piles here
       if ((h.e(ix, iy) & 1) != 0) {
@@ -671,7 +824,7 @@ public final class GroundCover {
     * azimuth on the grid, and the tree crowns the sun shines through (leafless crowns in winter let more through).
     */
    static float sunVis(Hood h, float x, float y) {
-      Season s = season;
+      Season s = S();
       if (s.sunZ <= 0.02F) {
          return 0F;
       }
@@ -691,7 +844,7 @@ public final class GroundCover {
       }
       if (vis > 0F && !h.trees.isEmpty()) {
          // crowns: the canopy at the point where the ray crosses the crowns' middle height
-         float leafy = season.month >= 10 || season.month <= 2 ? 0.45F : 1.2F;
+         float leafy = s.month >= 10 || s.month <= 2 ? 0.45F : 1.2F;
          float sum = 0F;
          for (int i = 0; i < h.trees.size(); i++) {
             Tree t = h.trees.get(i);
@@ -732,16 +885,15 @@ public final class GroundCover {
       }
    }
 
-   private static final Corners corners = new Corners();
-
-   static Corners corners(Hood h, IsoChunk c) {
-      Corners k = corners;
-      Season s = season;
-      boolean frostOn = s.frost > 0F && Config.GROUND_COVER_FROST;
+   static Corners corners(Hood h, int wx, int wy) {
+      Corners k = SCR.get().corners;
+      int[] sp = SCR.get().sp;
+      Season s = S();
+      boolean frostOn = s.frost > 0F && s.frostOn();
       for (int cy = 0; cy < 9; cy++) {
          for (int cx = 0; cx < 9; cx++) {
             int i = cx + cy * 9;
-            int X = c.wx * 8 + cx, Y = c.wy * 8 + cy;
+            int X = wx * 8 + cx, Y = wy * 8 + cy;
             k.can[i] = canopy(h, X, Y, 0.45F, sp);
             k.species[i] = sp[0];
             k.open[i] = 1F - 0.7F * Math.min(1F, canopy(h, X, Y, 0F, null));
@@ -865,11 +1017,13 @@ public final class GroundCover {
       final LevelCover[] levels = new LevelCover[64];
       int wx = Integer.MIN_VALUE, wy;
       int seen;
+      ChunkInfo info; // level 0's squares as last gathered
+      boolean inFlight; // a worker build of level 0 is queued or running
+      boolean rebakeOnLand; // a bake drew the stale (or no) cover meanwhile: re-bake when the build lands
+      boolean baked; // level 0 was baked since its cover was built
    }
 
-   private static final java.util.IdentityHashMap<IsoChunk, ChunkCover> covers = new java.util.IdentityHashMap<>();
-
-   static LevelCover cover(IsoChunk c, int level) {
+   static ChunkCover coverOf(IsoChunk c) {
       ChunkCover cc = covers.get(c);
       if (cc == null || cc.wx != c.wx || cc.wy != c.wy) {
          cc = new ChunkCover();
@@ -877,48 +1031,229 @@ public final class GroundCover {
          cc.wy = c.wy;
          covers.put(c, cc);
       }
+      return cc;
+   }
+
+   // ------------------------------------------------------------------------------------------------ builds off the game thread
+
+   /** A level-0 build for the worker: the gathered squares, the season snapshot, the keys it answers. */
+   static final class Job {
+      IsoChunk chunk;
+      ChunkCover cc;
+      ChunkInfo[] nine;
+      Season season;
+      int key, fkey, skey;
+      final LevelCover out = new LevelCover();
+      long ns;
+   }
+
+   private static final java.util.concurrent.ConcurrentLinkedQueue<Job> landed = new java.util.concurrent.ConcurrentLinkedQueue<>();
+   private static java.util.concurrent.ExecutorService worker;
+   private static int inFlight;
+   public static long asyncBuilds, syncBuilds, landRebakes, staleDraws, droppedBuilds, asyncNs;
+
+   static boolean async() {
+      return Config.GROUND_COVER_ASYNC;
+   }
+
+   private static java.util.concurrent.ExecutorService worker() {
+      if (worker == null) {
+         worker = java.util.concurrent.Executors.newSingleThreadExecutor(r -> {
+            Thread t = new Thread(r, "pzopt-ground-cover");
+            t.setDaemon(true);
+            t.setPriority(Thread.MIN_PRIORITY + 1);
+            return t;
+         });
+      }
+      return worker;
+   }
+
+   /** Game thread: queue chunk c's level-0 build on the worker (its squares and its neighbours' gathered here). */
+   public static long submits, submitNs;
+
+   static void submit(IsoChunk c, ChunkCover cc) {
+      long t0 = System.nanoTime();
+      BlueNoise.init();
+      Sprites.resolve();
+      Job j = new Job();
+      j.chunk = c;
+      j.cc = cc;
+      j.nine = nine(c);
+      j.season = snapshot();
+      j.key = seasonKey();
+      j.fkey = frostKey();
+      j.skey = settingsKey();
+      cc.inFlight = true;
+      inFlight++;
+      submits++;
+      submitNs += System.nanoTime() - t0;
+      worker().execute(() -> {
+         CUR.set(j.season);
+         long w0 = System.nanoTime();
+         try {
+            build(j.nine, j.cc.wx, j.cc.wy, 0, j.out);
+         } catch (RuntimeException e) {
+            j.out.n = j.out.frostN = j.out.runs = 0; // failed: lands empty
+            Log.warn("ground cover: build failed: " + e);
+         } finally {
+            CUR.remove();
+         }
+         j.ns = System.nanoTime() - w0;
+         landed.add(j);
+      });
+   }
+
+   /** Game thread, once a frame: install the landed builds (re-baking a chunk that drew a stale cover), then prefetch. */
+   static void land() {
+      Job j;
+      int k = seasonKey(), fk = frostKey(), sk = settingsKey();
+      while ((j = landed.poll()) != null) {
+         inFlight--;
+         ChunkCover cc = j.cc;
+         cc.inFlight = false;
+         IsoChunk c = j.chunk;
+         if (covers.get(c) != cc || cc.wx != c.wx || cc.wy != c.wy) {
+            droppedBuilds++; // the chunk left (or its slot was reused) meanwhile
+            continue;
+         }
+         asyncBuilds++;
+         asyncNs += j.ns;
+         buildNs += j.ns;
+         builds++;
+         if (builds > 40) {
+            buildLateNs += j.ns;
+            buildLate++;
+         }
+         LevelCover prev = cc.levels[32];
+         boolean changed = prev == null || prev.n != j.out.n || prev.n > 0;
+         j.out.key = j.key;
+         j.out.fkey = j.fkey;
+         j.out.skey = j.skey;
+         cc.levels[32] = j.out;
+         if (j.key != k || j.fkey != fk || j.skey != sk) {
+            continue; // stale already: the prefetch builds it again (and its landing re-bakes)
+         }
+         if (cc.rebakeOnLand || cc.baked && changed) {
+            cc.rebakeOnLand = false;
+            queueRebake(c);
+            landRebakes++;
+         }
+         cc.baked = false;
+      }
+   }
+
+   private static int prefetchFrame;
+
+   /** Game thread: the nearest loaded chunks whose level-0 cover is missing or stale go to the worker, two at a time. */
+   static void prefetch() {
+      if (!async() || inFlight >= 2 || (++prefetchFrame & 3) != 0) {
+         return;
+      }
+      zombie.iso.IsoChunkMap cm = IsoWorld.instance.currentCell.getChunkMap(0);
+      if (cm == null) {
+         return;
+      }
+      int k = seasonKey(), fk = frostKey(), sk = settingsKey();
+      float cx = IsoCamera.frameState.camCharacterX, cy = IsoCamera.frameState.camCharacterY;
+      int w = zombie.iso.IsoChunkMap.chunkGridWidth;
+      for (int round = inFlight; round < 2; round++) {
+         IsoChunk best = null;
+         float bd = Float.MAX_VALUE;
+         for (int gy = 0; gy < w; gy++) {
+            for (int gx = 0; gx < w; gx++) {
+               IsoChunk c = cm.getChunk(gx, gy);
+               if (c == null || !c.loaded) {
+                  continue;
+               }
+               ChunkCover cc = covers.get(c);
+               if (cc != null && cc.wx == c.wx && cc.wy == c.wy) {
+                  if (cc.inFlight) {
+                     continue;
+                  }
+                  LevelCover lc = cc.levels[32];
+                  if (lc != null && lc.key == k && lc.fkey == fk && lc.skey == sk) {
+                     continue;
+                  }
+               }
+               float dx = c.wx * 8 + 4 - cx, dy = c.wy * 8 + 4 - cy;
+               float d = dx * dx + dy * dy;
+               if (d < bd) {
+                  bd = d;
+                  best = c;
+               }
+            }
+         }
+         if (best == null) {
+            return;
+         }
+         ChunkCover cc = coverOf(best);
+         cc.seen = IsoWorld.instance.getFrameNo();
+         submit(best, cc);
+      }
+   }
+
+   static LevelCover cover(IsoChunk c, int level) {
+      ChunkCover cc = coverOf(c);
       cc.seen = IsoWorld.instance.getFrameNo();
       int li = level + 32;
       LevelCover lc = cc.levels[li];
+      int k = seasonKey(), fk = frostKey(), sk = settingsKey();
+      boolean fresh = lc != null && lc.key == k && lc.fkey == fk && lc.skey == sk;
+      if (fresh) {
+         cc.baked = true;
+         return lc;
+      }
+      if (async() && level == 0) {
+         // the worker builds it (prefetched, or now): the bake draws what there is and re-bakes when the build lands
+         if (!cc.inFlight) {
+            submit(c, cc);
+         }
+         cc.rebakeOnLand = true;
+         if (lc != null) {
+            staleDraws++;
+         }
+         return lc;
+      }
       if (lc == null) {
          lc = cc.levels[li] = new LevelCover();
       }
-      int k = seasonKey(), fk = frostKey(), sk = settingsKey();
-      if (lc.key != k || lc.fkey != fk || lc.skey != sk) {
-         long t0 = System.nanoTime();
-         build(c, level, lc);
-         long dt = System.nanoTime() - t0;
-         buildNs += dt;
-         builds++;
-         buildMinNs = Math.min(buildMinNs, dt);
-         if (builds > 40) { // past the JIT's warm-up
-            buildLateNs += dt;
-            buildLate++;
-         }
-         lc.key = k;
-         lc.fkey = fk;
-         lc.skey = sk;
+      long t0 = System.nanoTime();
+      build(nine(c), c.wx, c.wy, level, lc);
+      long dt = System.nanoTime() - t0;
+      syncBuilds++;
+      buildNs += dt;
+      builds++;
+      buildMinNs = Math.min(buildMinNs, dt);
+      if (builds > 40) { // past the JIT's warm-up
+         buildLateNs += dt;
+         buildLate++;
       }
+      lc.key = k;
+      lc.fkey = fk;
+      lc.skey = sk;
+      cc.baked = true;
       return lc;
    }
 
-   private static final int[] sp = new int[1];
+   private static final java.util.IdentityHashMap<IsoChunk, ChunkCover> covers = new java.util.IdentityHashMap<>();
+
+
 
    /** Leaf colours per species (yellow, red, orange, purple-red), fresh; old leaves fade to brown. */
    static final float[][] LEAF = {
       {0.86F, 0.66F, 0.18F}, {0.80F, 0.26F, 0.12F}, {0.85F, 0.45F, 0.15F}, {0.55F, 0.18F, 0.22F}, {0.42F, 0.36F, 0.22F}};
    static final float[] OLD = {0.36F, 0.25F, 0.15F};
 
-   static void build(IsoChunk c, int level, LevelCover lc) {
+   static void build(ChunkInfo[] nine, int wx, int wy, int level, LevelCover lc) {
       lc.n = 0;
       lc.frostN = 0;
       lc.squares = 0L;
       lc.outdoor = false;
       long t0 = System.nanoTime();
-      Hood h = hood(c, level);
+      Hood h = hood(nine, wx, wy);
       long t1 = System.nanoTime();
-      Season s = season;
-      Corners K = corners(h, c);
+      Season s = S();
+      Corners K = corners(h, wx, wy);
       long t2 = System.nanoTime();
       hoodNs += t1 - t0;
       cornersNs += t2 - t1;
@@ -927,22 +1262,22 @@ public final class GroundCover {
          lc.sunSq[i] = (byte)Math.round(64F * (K.sun[k0] + K.sun[k0 + 1] + K.sun[k0 + 9] + K.sun[k0 + 10]) - 0.5F);
          lc.frostSq[i] = (byte)Math.round(64F * (K.frost[k0] + K.frost[k0 + 1] + K.frost[k0 + 9] + K.frost[k0 + 10]) - 0.5F);
       }
-      float dens = Config.GROUND_SCATTER_DENSITY_PCT / 100F;
-      boolean blue = "bluenoise".equals(placement());
-      boolean useSprites = !"procedural".equals(assets());
-      boolean useShapes = !"sprites".equals(assets());
+      float dens = s.density() / 100F;
+      boolean blue = "bluenoise".equals(s.placement());
+      boolean useSprites = !"procedural".equals(s.assets());
+      boolean useShapes = !"sprites".equals(s.assets());
       if (blue) {
          BlueNoise.init();
       }
-      boolean scatterOn = on();
+      boolean scatterOn = true;
       int townBias = h.town > 0 ? 1 : 0;
       float forest = h.forest / 5F, farm = h.farm / 5F, town = h.town / 5F;
       // frost first in the list but drawn last (a second run): collected separately
-      ArrayList<float[]> frostQuads = FROST_SCRATCH;
+      ArrayList<float[]> frostQuads = SCR.get().frost;
       frostQuads.clear();
       for (int sy = 0; sy < 8; sy++) {
          for (int sx = 0; sx < 8; sx++) {
-            int x = c.wx * 8 + sx, y = c.wy * 8 + sy;
+            int x = wx * 8 + sx, y = wy * 8 + sy;
             int mat = h.m(x, y);
             if (mat == M_NONE) {
                continue;
@@ -996,7 +1331,7 @@ public final class GroundCover {
                      }
                      continue;
                   }
-                  float lx = px - c.wx * 8, ly = py - c.wy * 8;
+                  float lx = px - wx * 8, ly = py - wy * 8;
                   float canopy = K.bil(K.can, lx, ly);
                   int species = K.nearestSpecies(lx, ly);
                   float gut = gutter(h, px, py);
@@ -1105,8 +1440,8 @@ public final class GroundCover {
                   lc.grow(lc.n + 1);
                   int o = lc.n * FLOATS;
                   float[] d = lc.data;
-                  d[o] = px - c.wx * 8;
-                  d[o + 1] = py - c.wy * 8;
+                  d[o] = px - wx * 8;
+                  d[o + 1] = py - wy * 8;
                   d[o + 2] = level;
                   d[o + 3] = type;
                   d[o + 4] = size;
@@ -1135,8 +1470,8 @@ public final class GroundCover {
          float[] q = frostQuads.get(i);
          lc.grow(lc.n + 1);
          System.arraycopy(q, 0, lc.data, lc.n * FLOATS, FLOATS);
-         lc.data[lc.n * FLOATS] -= c.wx * 8;
-         lc.data[lc.n * FLOATS + 1] -= c.wy * 8;
+         lc.data[lc.n * FLOATS] -= wx * 8;
+         lc.data[lc.n * FLOATS + 1] -= wy * 8;
          lc.data[lc.n * FLOATS + 2] = level;
          lc.n++;
          lc.frostN++;
@@ -1154,10 +1489,9 @@ public final class GroundCover {
       }
    }
 
-   private static final ArrayList<float[]> FROST_SCRATCH = new ArrayList<>();
-
    private static void addFrostQuad(Corners K, int sx, int sy, int x, int y, int mat, ArrayList<float[]> out) {
-      if (season.frost <= 0F || !Config.GROUND_COVER_FROST) {
+      Season s = S();
+      if (s.frost <= 0F || !s.frostOn()) {
          return;
       }
       // frost at the four corners, shared with the neighbours: the quad interpolates them
@@ -1186,16 +1520,16 @@ public final class GroundCover {
       out.add(q);
    }
 
-   private static long[] sortKeys = new long[256];
-   private static float[] sortTmp = new float[256 * FLOATS];
-
    /** Instances in runs by texture page: shapes first (page 0), then each sprite page; the order inside a page kept. */
    private static void sortRuns(LevelCover lc) {
       int n = lc.n;
-      if (sortKeys.length < n) {
-         sortKeys = new long[Math.max(n, sortKeys.length * 2)];
-         sortTmp = new float[sortKeys.length * FLOATS];
+      Scratch scr = SCR.get();
+      if (scr.sortKeys.length < n) {
+         scr.sortKeys = new long[Math.max(n, scr.sortKeys.length * 2)];
+         scr.sortTmp = new float[scr.sortKeys.length * FLOATS];
       }
+      long[] sortKeys = scr.sortKeys;
+      float[] sortTmp = scr.sortTmp;
       for (int i = 0; i < n; i++) {
          int page = (int)lc.data[i * FLOATS + 3] == T_SPRITE ? Sprites.page((int)lc.data[i * FLOATS + 6]) : 0;
          sortKeys[i] = ((long)page << 32) | i;
@@ -1308,7 +1642,7 @@ public final class GroundCover {
       }
       bakes++;
       LevelCover lc = cover(c, level);
-      if (lc.n == 0) {
+      if (lc == null || lc.n == 0) {
          bakesSkipped++;
          return;
       }
