@@ -245,6 +245,30 @@ recover_props() {
   return 0
 }
 recover_props
+# The launcher JSON the same way (2026-10-24, the flip: "PZ OPTIMIZATION settings reset after a restart"). A run that
+# dies before its EXIT trap (job 14338, ssh to the flip lost mid-run, 2026-10-23 01:07) leaves its edited JSON in place
+# with the player's copy beside it as ProjectZomboid64.json.pzopt-orig; the next run's `cp "$LAUNCHER" "$LAUNCHER.pzopt-orig"`
+# then overwrote that copy with the edited JSON and "restored" it, so the run's --vmarg -Dpzopt.userOptionsFile=/dev/null
+# (and -Dzomboid.steam=0, its -Xlog:gc) stayed in every later launch of the player: every menu change was saved to
+# /dev/null and the next boot read nothing. A .pzopt-orig at start is the player's file: put it back first.
+recover_launcher() {
+  local json="$PZ_DIR/ProjectZomboid64.json"
+  [[ -f "$json.pzopt-orig" ]] || return 0
+  local added
+  added=$(python3 - "$json.pzopt-orig" "$json" <<'PY' 2>/dev/null
+import json, sys
+try:
+    orig = json.load(open(sys.argv[1]))["vmArgs"]; cur = json.load(open(sys.argv[2]))["vmArgs"]
+    print(" ".join(a for a in cur if a not in orig))
+except Exception:
+    pass
+PY
+)
+  mv -f "$json.pzopt-orig" "$json"
+  echo "previous run died before cleanup: restored the player's ProjectZomboid64.json (dropped: ${added:-nothing})"
+  return 0
+}
+recover_launcher
 steam_logged_in() {
   pgrep -x steam >/dev/null || return 1
   local log="$HOME/.local/share/Steam/logs/connection_log.txt"
@@ -527,7 +551,8 @@ if [[ -n "$mangohud_secs" ]]; then
 fi
 
 # launcher JSON (vmArgs) edits for --jfr / --gc: the original comes back on exit
-# (if a run dies mid-way, ProjectZomboid64.json.pzopt-orig is the copy to restore by hand).
+# (if a run dies mid-way, ProjectZomboid64.json.pzopt-orig is the player's copy: recover_launcher puts it back at the
+# next run's start, before the backup below would overwrite it).
 # Paths inside the JVM are Wine paths: the install dir is S:/common/ProjectZomboid (see the gc.log line).
 LAUNCHER="$PZ_DIR/ProjectZomboid64.json"
 JFR_OUT="$PZ_DIR/pzopt.jfr"
