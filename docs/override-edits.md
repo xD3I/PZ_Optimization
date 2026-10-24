@@ -8572,21 +8572,39 @@ one is a static boolean read while no ground key is on (all are off by default),
 - `FBORenderCell.renderFloor(IsoObject)`: between `pzopt.GroundBake.floorBegin` / `floorEnd` a natural floor (level 0,
   `pzopt.GroundTiles.natural`: grass, dirt, sand, gravel, clay; not farmland, water, roads or built floors) is marked on
   the drawing thread (a bake unit's recording thread too), so its tile draws take the ground floor variant.
-- `IsoSprite.startTileDepthShader`: the tile-depth program a floor starts goes through `GroundBake.program(id, attached)`:
-  the variant of `tileWithDepth` / `opaqueWithDepth` for a marked floor, else the stock program. The variant is built from
-  the stock program's final source (every other pzopt patch in it) and checked to have every stock uniform at the same
-  location, so the stock `ShaderUniformSetter` values and TileBatch's merged starts apply to it unchanged.
+- `IsoSprite.startTileDepthShader`: the tile-depth shader a floor starts goes through `GroundBake.shader(stock, sprite,
+  attached)`: the variant of `tileWithDepth` / `opaqueWithDepth` for a marked floor (by piece kind: floor, natural edge
+  piece, overlay / dug soil), else the stock shader. The variant is built from the stock program's final source (every
+  other pzopt patch in it) as a TileDepthShader of its own, and the uniform setters of the draw come from it: NVIDIA
+  assigns uniform locations in name order, so the variant's extra uniforms move the stock ones (pzoptVD 5 -> 7).
+  The seam branch of the same method (a floor on a chunk's south / east border drawn again, shifted, through
+  `seamFix2`'s mask, `IsoSprite.seamFix2` set) takes `GroundBake.seamShader(stock)` the same way: the variant of
+  `seamFix2` for a natural floor, so the strip shows the ground feature's art and not the stock tile (a line along every
+  chunk edge otherwise); `StartShader` gets the chosen program's id instead of `SceneShaderStore.tileSeamShader`'s.
 - `FBORenderCell.pzoptBakeFloors`: after the floor tiles, `GroundBake.floorPasses` (extra draws of a feature, e.g. leaves),
   deferred to the game thread at its place in the stream on a recording thread (`BakeRecord.DEFER_GROUND`, a new case of
   `pzoptBakeDeferredDraw`); then snow and blood as before.
 - `FBORenderCell.renderOneLevel`: a level-0 bake queues its chunk's ground classes (`GroundBake.bakeBegin`: 10 x 10 bytes,
   the chunk and a border of one) into the class map texture ahead of its draws.
 - `FBORenderCell.pzoptRenderInternal`: `pzopt.Ground.frameStart` once a frame per player (the frame's ground switches, the
-  variant compile request, the ground state's stamps and uploads).
+  variant compile request, the movers' gather, the ground state's primitives and its GPU frame).
 - `TextureDraw` (FBORenderChunkStart): `GroundBake.chunkStart` gives the variant programs the texture's world mapping
   (`pzgMap`: gl_FragCoord to u = x - y, v = x + y - 6z, Sway's mapping) on the render thread.
 - `ShaderUnit.compile`: `GroundBake.patchShader` outermost but for the dev dump: records the final tile sources and
   returns the variant source for the `pzopt_grTile` placeholder.
 - `IsoSprite`: new field `pzoptGround`, the sprite's ground class cached by `GroundTiles.of` (0 = not looked up yet).
+- `FBORenderCell.pzoptBakeSnow` (the stock snow section of a bake, in place or deferred to the game thread): at its end
+  `GroundBake.afterSnowPasses`, the floor passes of phase `PHASE_AFTER_SNOW` (tracks pressed into the snow are drawn over
+  it, before the blood); a static boolean read while none is on.
+- `IsoMovingObject`: new fields `pzoptGm*` for `pzopt.GroundMovers`, the one gather a frame of what moves over the ground
+  that the tracks, the blades and the ground state share (it replaces two IdentityHashMaps and the tracks branch's own
+  `pzoptGt*` fields): a character's stride anchor, the foot that stepped last, the body imprint done, the near-mover
+  tracking (last position, its frame, the smoothed moving strength), a vehicle's wheel points, and two floats a consumer
+  keeps per mover (the blades' last trail stamp). No initializers: 0 / null are the "none yet" values.
+- `IsoChunk`: new fields `pzoptGround` (an array of per-chunk slots, `pzopt.GroundChunk`: the ground cover's and the
+  glints' per-chunk caches, which were IdentityHashMaps keyed by chunk) and `pzoptGroundGen` (a counter); `resetForStore`
+  calls `GroundChunk.reused`, which drops the slots, hands each value to its feature's release hook and bumps the counter,
+  so an asynchronous build that still holds the chunk object can tell that the chunk was reused and drop its result. One
+  static read while no feature registered a slot.
 - `pzopt.Scene` (harness, no override): `snow=0..100` pins the snow on the ground; `ground_map=N` prints natural ground by
   material.

@@ -16,8 +16,31 @@ public class GroundCommonTest {
    public static void main(String[] args) throws Exception {
       tiles();
       regions();
+      chunkSlots();
       int n = shaders();
-      System.out.println("GroundCommonTest ok (" + n + " variant programs linked)");
+      int g = stateGpu();
+      System.out.println("GroundCommonTest ok (" + n + " variant programs linked, " + g + " GroundState GPU runs)");
+   }
+
+   /** GroundChunk: slots per chunk, dropped and released on reuse, a stale asynchronous result refused. */
+   static void chunkSlots() throws Exception {
+      java.lang.reflect.Field uf = sun.misc.Unsafe.class.getDeclaredField("theUnsafe");
+      uf.setAccessible(true);
+      sun.misc.Unsafe unsafe = (sun.misc.Unsafe) uf.get(null);
+      zombie.iso.IsoChunk c = (zombie.iso.IsoChunk) unsafe.allocateInstance(zombie.iso.IsoChunk.class);
+      List<Object> released = new ArrayList<>();
+      int a = GroundChunk.id("test.a", released::add), b = GroundChunk.id("test.b");
+      Check.check(a != b && GroundChunk.id("test.a") == a, "slot ids");
+      Check.check(GroundChunk.get(c, a) == null, "empty slot");
+      GroundChunk.put(c, a, "A");
+      GroundChunk.put(c, b, "B");
+      Check.check("A".equals(GroundChunk.get(c, a)) && "B".equals(GroundChunk.get(c, b)), "put / get");
+      int g = GroundChunk.gen(c);
+      Check.check(GroundChunk.putIf(c, b, g, "B2") && "B2".equals(GroundChunk.get(c, b)), "putIf same generation");
+      GroundChunk.reused(c);
+      Check.check(GroundChunk.get(c, a) == null && GroundChunk.get(c, b) == null, "reuse drops the slots");
+      Check.check(released.size() == 1 && "A".equals(released.get(0)), "release hook gets the dropped value");
+      Check.check(!GroundChunk.putIf(c, a, g, "late") && GroundChunk.get(c, a) == null, "a stale result is refused");
    }
 
    static void tiles() {
@@ -47,22 +70,29 @@ public class GroundCommonTest {
       File d = Files.createTempDirectory("pzg-region").toFile();
       byte[] raw = new byte[GroundState.CHUNK_TEX * GroundState.CHUNK_TEX * 4];
       for (int i = 0; i < raw.length; i += 4) {
-         raw[i] = (byte)(i * 7);
-         raw[i + 3] = (byte)5;
+         raw[i] = GroundState.REST_R;
+         raw[i + 1] = (byte)(i * 7);
       }
-      GroundState.writeChunk(d, -3, 17, raw, 0.0);
+      GroundState.writeChunk(d, -3, 17, raw, 12.5);
       byte[] other = raw.clone();
-      other[0] = 99;
-      GroundState.writeChunk(d, -4, 17, other, 0.0); // same region: the first must survive
-      byte[] back = GroundState.readChunk(d, -3, 17);
-      Check.check(back != null && java.util.Arrays.equals(back, raw), "region round trip");
-      byte[] back2 = GroundState.readChunk(d, -4, 17);
-      Check.check(back2 != null && back2[0] == 99, "second chunk in the same region");
-      Check.check(GroundState.readChunk(d, -5, 17) == null, "absent chunk");
-      GroundState.writeChunk(d, -3, 17, new byte[raw.length], 0.0); // an empty chunk is dropped from the region
-      Check.check(GroundState.readChunk(d, -3, 17) == null, "an empty chunk is removed");
-      Check.check(GroundState.readChunk(d, -4, 17) != null, "its neighbour stays");
-      Check.check(GroundState.regionFiles(d) == 1, "one region file");
+      other[1] = 99;
+      GroundState.writeChunk(d, -4, 17, other, 13.0); // same region: the first must survive
+      double[] at = new double[1];
+      byte[] back = GroundState.readChunk(d, -3, 17, at);
+      Check.check(back != null && java.util.Arrays.equals(back, raw) && at[0] == 12.5, "region round trip with its hour");
+      byte[] back2 = GroundState.readChunk(d, -4, 17, at);
+      Check.check(back2 != null && back2[1] == 99 && at[0] == 13.0, "second chunk in the same region");
+      Check.check(GroundState.readChunk(d, -5, 17, at) == null, "absent chunk");
+      byte[] rest = new byte[raw.length];
+      for (int i = 0; i < rest.length; i += 4) {
+         rest[i] = GroundState.REST_R;
+      }
+      // several chunks in one call, two regions: the one at rest is removed from its region
+      GroundState.writeChunks(d, new int[] {-3, 40}, new int[] {17, 17}, new byte[][] {rest, raw}, 20.0);
+      Check.check(GroundState.readChunk(d, -3, 17, at) == null, "a chunk at rest is removed");
+      Check.check(GroundState.readChunk(d, -4, 17, at) != null, "its neighbour stays");
+      Check.check(GroundState.readChunk(d, 40, 17, at) != null && at[0] == 20.0, "the other region written in the same call");
+      Check.check(GroundState.regionFiles(d) == 2, "two region files");
       Check.check(GroundState.dir("Sandbox/../x y").getPath().endsWith("Sandbox" + File.separator + "_" + File.separator + "x_y"), "save id sanitised: " + GroundState.dir("Sandbox/../x y"));
    }
 
@@ -84,7 +114,7 @@ public class GroundCommonTest {
             "   float n = pzgFbm(pzgW.xy * 0.125, 3, PZG_SEED_TILING);",
             "   vec3 cell = pzgCell(pzgW.xy, 0.8, PZG_SEED_MACRO);",
             "   vec4 st = pzgStateAt(pzgW.xy);",
-            "   float age = pzgStateAge(st.a);",
+            "   float age = st.z;",
             "   int nb = pzgClassAt(pzgSq + ivec2(1, 0));",
             "   if (pzgMaterial() == 1 && pzgNatural(nb) && !pzgAttached) t.rgb *= 0.9 + 0.1 * n + 0.01 * cell.z;",
             "   return t * (1.0 - st.r * 0.3 * pzgTestAmount) + texture2D(pzgTestTex, pzgF) * 0.0 + vec4(age * 0.0);",
@@ -114,11 +144,11 @@ public class GroundCommonTest {
       }
       Path mesa = Path.of("/usr/share/glvnd/egl_vendor.d/50_mesa.json");
       int n = 0;
-      for (String base : new String[] {"tileWithDepth", "opaqueWithDepth"}) {
+      for (String base : new String[] {"tileWithDepth", "opaqueWithDepth", "seamFix2"}) { // (seamFix2: the border strips, piece 0)
          String vert = Files.readString(game.resolve(base + ".vert"));
          String frag = Files.readString(game.resolve(base + ".frag"));
-         for (int view = 0; view <= 2; view++) {
-            for (int piece = 0; piece < 3; piece++) {
+         for (int view = 0; view <= 3; view++) {
+            for (int piece = 0; piece < (base.equals("seamFix2") ? 1 : 3); piece++) {
                boolean attached = piece != 0;
                List<GroundBake.FloorPatch> ps = new ArrayList<>();
                ps.add(TEST);
@@ -184,4 +214,147 @@ public class GroundCommonTest {
       }
       return bin;
    }
+
+   // ------------------------------------------------------------------------------------------------ GroundState on the GPU
+
+   /** Rules with a relax pass (links the framework's GS_RELAX path; the height is pulled to the neighbours' mean). */
+   static final GroundState.Rules RELAX_RULES = new GroundState.Rules() {
+      public String id() {
+         return "test-relax";
+      }
+
+      public String glsl() {
+         return GroundState.GLSL_DEFAULT_RULES + "float gsRelaxHeight(float h, vec4 nb, int mat) { return mix(h, dot(nb, vec4(0.25)), 0.5); }\n";
+      }
+
+      public boolean relax() {
+         return true;
+      }
+   };
+
+   /**
+    * The game thread's binning (GroundState.testFrame: the window, the surfaces, the counting sort) run through the real
+    * compute source on the driver and on Mesa, read back the way the persistence does: a wheel line and a print wear the
+    * grass they cross and nothing else, a square without a surface keeps the rest texel, a long decay brings the wear back
+    * to zero, and the relax rules link and run.
+    */
+   static int stateGpu() throws Exception {
+      Path root = Path.of("").toAbsolutePath();
+      while (root != null && !Files.exists(root.resolve("tools/ground/gsrun.c"))) {
+         root = root.getParent();
+      }
+      if (root == null) {
+         System.out.println("GroundCommonTest: GroundState GPU part skipped (no tools/ground/gsrun.c)");
+         return 0;
+      }
+      Path bin = root.resolve("build/gsrun");
+      Path src = root.resolve("tools/ground/gsrun.c");
+      if (!Files.exists(bin) || Files.getLastModifiedTime(bin).compareTo(Files.getLastModifiedTime(src)) < 0) {
+         Files.createDirectories(bin.getParent());
+         Process p = new ProcessBuilder("cc", "-O2", "-o", bin.toString(), src.toString(), "-lEGL", "-lGL").redirectErrorStream(true).start();
+         String o = new String(p.getInputStream().readAllBytes());
+         if (p.waitFor() != 0) {
+            System.out.println("GroundCommonTest: GroundState GPU part skipped (gsrun does not build: " + o + ")");
+            return 0;
+         }
+      }
+      // grass everywhere but the column x == 1005 (no surface: e.g. a road)
+      GroundState.testSurface = (x, y) -> x == 1005 ? GroundTiles.SURF_NONE : GroundTiles.SURF_GRASS;
+      final float px = 1000.5F, py = 2000.5F;
+      GroundState.Frame f = GroundState.testFrame(px, py, () -> {
+         GroundState.wheel(996.0, 2000.5, 1008.0, 2000.5, 0.12F, 0.1F, 0.04F, 0F);
+         GroundState.ellipse(1000.5, 2004.5, 1F, 0F, 0.14F, 0.055F, 0.05F, 0.012F, 1F, 1F);
+      });
+      Check.check(f.nCells > 0 && f.nPrims == 2, "binned: " + f.nCells + " cells, " + f.nPrims + " prims");
+      for (int c = 0; c < f.nCells; c++) {
+         int sx = (f.cells[c * 4 + 1] & 0xFFFF) - 32768 + f.ox;
+         Check.check(sx != 1005, "no cell on a square without a surface");
+      }
+      Path dir = Files.createTempDirectory("pzg-gs");
+      Path cells = ints(dir.resolve("cells"), f.cells, f.nCells * 4);
+      Path index = ints(dir.resolve("index"), f.index, f.nIndex);
+      Path prims = floats(dir.resolve("prims"), f.prims, f.nPrims * 12);
+      // the read-back: squares 994..1009 x 1996..2011 (a 256 x 256 texel region, inside the map)
+      int rx = (994 * GroundState.TPS) & (GroundState.TN - 1), ry = (1996 * GroundState.TPS) & (GroundState.TN - 1);
+      Path mesa = Path.of("/usr/share/glvnd/egl_vendor.d/50_mesa.json");
+      int runs = 0;
+      for (boolean useMesa : new boolean[] {false, true}) {
+         if (useMesa && !Files.exists(mesa)) {
+            continue;
+         }
+         for (GroundState.Rules rules : new GroundState.Rules[] {new GroundState.DefaultRules(), RELAX_RULES}) {
+            for (boolean decay : new boolean[] {false, true}) {
+               Path srcf = Files.writeString(dir.resolve("cs-" + rules.id() + ".comp"), GroundState.computeSource(rules));
+               StringBuilder job = new StringBuilder();
+               job.append("src ").append(srcf).append("\ntn ").append(GroundState.TN).append("\nrelax ").append(rules.relax() ? 1 : 0).append("\n");
+               job.append("cells ").append(cells).append(' ').append(f.nCells).append("\nprims ").append(prims).append(' ').append(f.nPrims).append('\n');
+               job.append("index ").append(index).append(' ').append(f.nIndex).append('\n');
+               if (decay) {
+                  GroundState.Frame d = GroundState.testFrame(px, py, () -> {
+                  });
+                  int ccx = (int)Math.floor(px / 8), ccy = (int)Math.floor(py / 8);
+                  for (int cy = ccy - 1; cy <= ccy + 1; cy++) {
+                     for (int cx = ccx - 1; cx <= ccx + 1; cx++) {
+                        GroundState.testDecay(d, cx, cy, 1e5F);
+                     }
+                  }
+                  job.append("decay ").append(ints(dir.resolve("decay"), d.decay, d.nDecay * 4)).append(' ').append(d.nDecay).append('\n');
+               }
+               Path out = dir.resolve("out.rgba");
+               job.append("readback ").append(rx).append(' ').append(ry).append(" 256 256 ").append(out).append('\n');
+               Path jf = Files.writeString(dir.resolve("job.txt"), job.toString());
+               ProcessBuilder pb = new ProcessBuilder(bin.toString(), jf.toString());
+               if (useMesa) {
+                  pb.environment().put("__EGL_VENDOR_LIBRARY_FILENAMES", mesa.toString());
+                  pb.environment().put("LIBGL_ALWAYS_SOFTWARE", "1");
+               }
+               Process p = pb.redirectErrorStream(true).start();
+               String o = new String(p.getInputStream().readAllBytes());
+               p.waitFor();
+               if (!useMesa && o.contains("no context")) {
+                  continue;
+               }
+               String tag = rules.id() + (decay ? " + decay" : "") + (useMesa ? " (Mesa)" : " (driver)");
+               Check.check(o.contains("ran ok"), tag + ":\n" + o);
+               byte[] px8 = Files.readAllBytes(out);
+               // texel of world (x, y) in the read-back
+               java.util.function.BiFunction<Double, Double, int[]> at = (wx, wy) -> {
+                  int tx = (int)Math.floor(wx * GroundState.TPS) - 994 * GroundState.TPS, ty = (int)Math.floor(wy * GroundState.TPS) - 1996 * GroundState.TPS;
+                  int o4 = (ty * 256 + tx) * 4;
+                  return new int[] {px8[o4] & 255, px8[o4 + 1] & 255, px8[o4 + 2] & 255, px8[o4 + 3] & 255};
+               };
+               int[] onLine = at.apply(1001.5, 2000.5), off = at.apply(1001.5, 2003.0), road = at.apply(1005.5, 2000.5), print = at.apply(1000.5, 2004.5);
+               if (!decay) {
+                  Check.check(onLine[1] > 0 && onLine[2] > 0, tag + ": the wheel wears the grass it crosses " + java.util.Arrays.toString(onLine));
+                  Check.check(print[1] > 0, tag + ": the print wears its grass " + java.util.Arrays.toString(print));
+               } else {
+                  Check.check(onLine[1] == 0 && onLine[2] == 0, tag + ": a long decay clears the wear " + java.util.Arrays.toString(onLine));
+               }
+               Check.check(off[0] == 192 && off[1] == 0, tag + ": a texel away from both is at rest " + java.util.Arrays.toString(off));
+               Check.check(road[0] == 192 && road[1] == 0 && road[2] == 0, tag + ": a square without a surface is untouched " + java.util.Arrays.toString(road));
+               Check.check(onLine[0] == 192, tag + ": the default rules keep the height " + java.util.Arrays.toString(onLine));
+               runs++;
+            }
+         }
+      }
+      GroundState.testSurface = null;
+      return runs;
+   }
+
+   static Path ints(Path p, int[] a, int n) throws Exception {
+      java.nio.ByteBuffer b = java.nio.ByteBuffer.allocate(Math.max(4, n * 4)).order(java.nio.ByteOrder.LITTLE_ENDIAN);
+      for (int i = 0; i < n; i++) {
+         b.putInt(a[i]);
+      }
+      return Files.write(p, b.array());
+   }
+
+   static Path floats(Path p, float[] a, int n) throws Exception {
+      java.nio.ByteBuffer b = java.nio.ByteBuffer.allocate(Math.max(4, n * 4)).order(java.nio.ByteOrder.LITTLE_ENDIAN);
+      for (int i = 0; i < n; i++) {
+         b.putFloat(a[i]);
+      }
+      return Files.write(p, b.array());
+   }
+
 }

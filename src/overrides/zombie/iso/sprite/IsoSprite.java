@@ -1376,11 +1376,12 @@ public final class IsoSprite {
       float zDepthBlendToZ = farDepthZ;
       if (seamFix2 != null) {
          TileSeamShader shader = SceneShaderStore.tileSeamShader;
+         if (pzopt.GroundBake.FLOOR_ON) shader = pzopt.GroundBake.seamShader(shader, obj); // pzopt: ground and grass, a natural border floor's seam strip through the variant (its own uniform locations below)
          ShaderUniformSetter uniforms = ShaderUniformSetter.uniform1f(shader, "zDepth", frontDepthZ);
          uniforms.setNext(ShaderUniformSetter.uniform1i(shader, "drawPixels", drawPixels ? 1 : 0))
             .setNext(ShaderUniformSetter.uniform1f(shader, "zDepthBlendZ", zDepthBlendZ))
             .setNext(ShaderUniformSetter.uniform1f(shader, "zDepthBlendToZ", zDepthBlendToZ));
-         IndieGL.StartShader(SceneShaderStore.tileSeamShader.getID(), uniforms);
+         IndieGL.StartShader(shader.getID(), uniforms); // pzopt: the program chosen above (stock: SceneShaderStore.tileSeamShader)
       } else {
          TileDepthShader shader = SceneShaderStore.tileDepthShader;
          if ((this.depthFlags & 4) != 0) {

@@ -2729,6 +2729,7 @@ public final class FBORenderCell {
                if (var59 != null) {
                   var59.close();
                }
+      if (pzopt.GroundBake.PASS_AFTER_SNOW_ON) pzopt.GroundBake.afterSnowPasses(c, level, IsoCamera.frameState.playerIndex); // pzopt: ground and grass, the passes drawn over the snow (tracks in snow), before the blood
    } // pzopt
 
    /** pzopt: bakeRecordParallel, stock's blood section of a bake. */
