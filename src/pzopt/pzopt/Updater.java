@@ -198,6 +198,7 @@ public final class Updater {
          return;
       }
       Restart.logRestarted();
+      PadLog.start();
       synchronized (Updater.class) {
          if (started) {
             return;

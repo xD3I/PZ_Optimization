@@ -265,6 +265,7 @@ public final class InputLag {
    /** Game thread, GameWindow.logic right after GameInput.updateGameThread: the input this game frame sees. */
    public static void afterGameInput() {
       InputRecorder.frame(); // every input change of this frame (inputLog), independent of the input-lag probe
+      PadLog.frame(); // the controllers the game sees, the first minutes of a boot
       if (!on()) {
          return;
       }
