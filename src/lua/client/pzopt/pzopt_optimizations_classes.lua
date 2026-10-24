@@ -606,6 +606,7 @@ PzoptOptionClasses = {
     grassBladeDepthCheck = { "pzopt.GrassBlades" },
     grassBladeDrawMode = { "pzopt.GrassBlades" },
     grassBladeFeedback = { "pzopt.GrassBlades" },
+    grassBladeFeetPct = { "pzopt.GrassBlades" },
     grassBladeGenEvery = { "pzopt.GrassBlades" },
     grassBladeHeightPct = { "pzopt.GrassBlades" },
     grassBladeLayerDiv = { "pzopt.GrassBlades" },

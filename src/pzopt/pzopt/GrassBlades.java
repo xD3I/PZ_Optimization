@@ -50,6 +50,7 @@ public final class GrassBlades {
    static final int LANES = 64; // blade candidates per square (one compute workgroup)
    static final int MAX_SQUARES = 8192;
    static final int MAX_BLADES = MAX_SQUARES * LANES;
+   static final int MAX_FEET = 8;
    static final int MESH_BLADES = 16; // blades a mesh shader workgroup (4 segments: 144 vertices, 112 triangles)
 
    // ----------------------------------------------------------------------------------------------- knobs (game thread)
@@ -77,7 +78,8 @@ public final class GrassBlades {
       int lodSegments = 1;
       int layerDiv; // the layer path: blades drawn into a 1 / N resolution layer, composited depth-aware (0 = off)
       int layerEvery = 1;
-      boolean feedback; // squares whose on-screen blades were all hidden by the static scene are skipped for a while (persistent buffer, no sync) // the layer is redrawn every N frames, reprojected (pan) between: the impostor / cache variant
+      boolean feedback;
+      int feetPct = 100; // the feet push (characters stand in the grass), % of the depth push // squares whose on-screen blades were all hidden by the static scene are skipped for a while (persistent buffer, no sync) // the layer is redrawn every N frames, reprojected (pan) between: the impostor / cache variant
       float trailSeconds = 45F, regrowSeconds = 900F;
       int view; // dev: 1 = flat debug colour
       int devGen; // dev (rig): generation bisection 1 = empty, 2 = after the clumps, 3 = nothing kept
@@ -111,6 +113,7 @@ public final class GrassBlades {
          o.layerDiv = layerDiv;
          o.layerEvery = layerEvery;
          o.feedback = feedback;
+         o.feetPct = feetPct;
          o.trailSeconds = trailSeconds;
          o.regrowSeconds = regrowSeconds;
          o.view = view;
@@ -159,6 +162,7 @@ public final class GrassBlades {
                   case "layerDiv" -> layerDiv = Integer.parseInt(v);
                   case "layerEvery" -> layerEvery = Integer.parseInt(v);
                   case "feedback" -> feedback = Boolean.parseBoolean(v);
+                  case "feet" -> feetPct = Integer.parseInt(v);
                   case "trailSeconds" -> trailSeconds = Float.parseFloat(v);
                   case "regrowSeconds" -> regrowSeconds = Float.parseFloat(v);
                   case "view" -> view = Integer.parseInt(v);
@@ -176,7 +180,21 @@ public final class GrassBlades {
       boolean off;
    }
 
+   private static Opts aCache, bCache;
+   private static int aAge;
+
+   /** The launch's knobs (Config), rebuilt every 120 frames (the live keys) instead of a new set a frame. */
    private static Opts optsA() {
+      if (aCache != null && ++aAge < 120) {
+         return aCache;
+      }
+      aAge = 0;
+      aCache = buildA();
+      bCache = null;
+      return aCache;
+   }
+
+   private static Opts buildA() {
       Opts o = new Opts();
       o.radius = Math.max(2, Math.min(40, Config.GRASS_BLADE_RADIUS));
       o.densityPct = Math.max(5, Math.min(400, Config.GRASS_BLADE_DENSITY_PCT));
@@ -202,6 +220,7 @@ public final class GrassBlades {
       o.layerDiv = Config.GRASS_BLADE_LAYER_DIV;
       o.layerEvery = Math.max(1, Config.GRASS_BLADE_LAYER_EVERY);
       o.feedback = Config.GRASS_BLADE_FEEDBACK;
+      o.feetPct = Config.GRASS_BLADE_FEET_PCT;
       o.trailSeconds = Math.max(1, Config.GRASS_BLADE_TRAIL_SECONDS);
       o.regrowSeconds = Math.max(1, Config.GRASS_BLADE_REGROW_SECONDS);
       o.view = Config.DEV_GRASS_VIEW;
@@ -400,11 +419,15 @@ public final class GrassBlades {
          }
          altB = (now - toggleT0) / Config.DEV_GRASS_ALTERNATE % 2L == 1L;
          if (altB) {
-            if (Config.DEV_GRASS_ALT_B.isEmpty()) {
-               o.off = true;
-            } else {
-               o.apply(Config.DEV_GRASS_ALT_B);
+            if (bCache == null) {
+               bCache = o.copy();
+               if (Config.DEV_GRASS_ALT_B.isEmpty()) {
+                  bCache.off = true;
+               } else {
+                  bCache.apply(Config.DEV_GRASS_ALT_B);
+               }
             }
+            o = bCache;
          }
       }
       float zoom = Core.getInstance().getZoom(playerIndex);
@@ -514,6 +537,8 @@ public final class GrassBlades {
       public final float[] ph = new float[4];
       public final float[] push = new float[Sway.MAX_PUSH * 4];
       public int nPush;
+      public final float[] feet = new float[MAX_FEET * 4];
+      public int nFeet;
       public float[] stamps = new float[0];
       public int nStamps;
       public float now;
@@ -528,7 +553,7 @@ public final class GrassBlades {
    /** The offline rig's parameters: the knobs of the launch's Config (A set). */
    public static Params rigParams() {
       Params p = new Params();
-      p.o = optsA();
+      p.o = buildA();
       return p;
    }
 
@@ -656,6 +681,8 @@ public final class GrassBlades {
       int nStamps;
       final float[] push = new float[Sway.MAX_PUSH * 4];
       int nPush;
+      final float[] feet = new float[MAX_FEET * 4];
+      int nFeet;
       float now;
 
       @Override
@@ -696,7 +723,7 @@ public final class GrassBlades {
       static final String[] GU_NAMES = {"uColor", "uDepth", "uMapA", "uMapB", "uVp", "uOrigin", "uParams", "uFade", "uHasDepth", "uTrail", "uTrailK",
          "pzgStateInfo", "uLod", "uDraw", "uCopy", "uFb"};
       static final String[] DU_NAMES = {"uMapA", "uMapB", "uVp", "uWind", "uPh", "uGust", "uPush", "uPushN", "uOriginW", "uShape", "uSun", "uShade", "uTs",
-         "uBase", "uStrip", "uWave"};
+         "uBase", "uStrip", "uWave", "uFeet", "uFeetN"};
       /** OpenGL 4.3 (compute, storage buffers, indirect draws): the compute path; else (4.1) only the vertex-only path. */
       static boolean gl43;
       private static int inlineProgram, copyProgram, copyFbo, copyColor, copyDepth, copyW, copyH, squareVbo, inlineVao;
@@ -901,6 +928,8 @@ public final class GrassBlades {
          }
          System.arraycopy(f.push, 0, p.push, 0, p.push.length);
          p.nPush = f.nPush;
+         System.arraycopy(f.feet, 0, p.feet, 0, p.feet.length);
+         p.nFeet = f.nFeet;
          p.stamps = f.stamps;
          p.nStamps = f.nStamps;
          p.now = f.now;
@@ -1504,6 +1533,10 @@ public final class GrassBlades {
          PUSH.put(p.push, 0, p.push.length).flip();
          GL20.glUniform4fv(u[6], PUSH);
          GL20.glUniform1f(u[7], o.push ? p.nPush : 0F);
+         FEET.clear();
+         FEET.put(p.feet, 0, p.feet.length).flip();
+         GL20.glUniform4fv(u[16], FEET);
+         GL20.glUniform1f(u[17], o.feetPct > 0 ? p.nFeet : 0F);
          float ou = (float)Math.floorMod(gx - gy, 256), ov = (float)Math.floorMod(gx + gy, 256);
          GL20.glUniform4f(u[8], ou, ov, gx - p.ox, gy - p.oy);
          GL20.glUniform4f(u[9], o.segments, o.widthPct / 100F, o.view, o.devDraw);
@@ -1527,6 +1560,7 @@ public final class GrassBlades {
       }
 
       private static final java.nio.FloatBuffer PUSH = BufferUtils.createFloatBuffer(Sway.MAX_PUSH * 4);
+      private static final java.nio.FloatBuffer FEET = BufferUtils.createFloatBuffer(MAX_FEET * 4);
       static final double WAVE_SPEED = 3.4; // rad/s: crests ~2 squares a second downwind
    }
 
@@ -1641,6 +1675,7 @@ public final class GrassBlades {
     */
    static final class Movers {
       static final int MAX_STAMPS = 64;
+      static final float FEET_PUSH_W = 0.8F; // w units (x + y squares): ahead of a model's front
       static double now; // trail clock (s), game speed, stops while paused
       private static final boolean[] USED = new boolean[GroundMovers.MAX_NEAR];
 
@@ -1650,7 +1685,8 @@ public final class GrassBlades {
          f.now = (float)now;
          f.nStamps = 0;
          f.nPush = 0;
-         if (!o.trails && !o.cut && !o.push) {
+         f.nFeet = 0;
+         if (!o.trails && !o.cut && !o.push && o.feetPct <= 0) {
             return;
          }
          float cx = IsoCamera.frameState.camCharacterX, cy = IsoCamera.frameState.camCharacterY;
@@ -1695,6 +1731,32 @@ public final class GrassBlades {
                   stamp(f, x + (float)Math.cos(aa) * range * 0.7F, y + (float)Math.sin(aa) * range * 0.7F, 0.45F, ang, 1);
                }
             }
+         }
+         // the feet list: the characters nearest the player (standing ones too), their feet's depth push
+         java.util.Arrays.fill(USED, 0, nn, false);
+         for (int n = 0; n < MAX_FEET && o.feetPct > 0; n++) {
+            int best = -1;
+            float bd = Float.MAX_VALUE;
+            for (int i = 0; i < nn; i++) {
+               GroundMovers.Mover m = GroundMovers.NEAR[i];
+               if (USED[i] || m.who == GroundMovers.VEHICLE) {
+                  continue;
+               }
+               float d = (m.x - cx) * (m.x - cx) + (m.y - cy) * (m.y - cy);
+               if (d < bd) {
+                  bd = d;
+                  best = i;
+               }
+            }
+            if (best < 0) {
+               break;
+            }
+            USED[best] = true;
+            GroundMovers.Mover m = GroundMovers.NEAR[best];
+            int i = f.nFeet++;
+            f.feet[i * 4] = m.x - f.view.ox;
+            f.feet[i * 4 + 1] = m.y - f.view.oy;
+            f.feet[i * 4 + 2] = FEET_PUSH_W * o.feetPct / 100F;
          }
          // the push list: the nearest movers still bending the grass
          java.util.Arrays.fill(USED, 0, nn, false);
@@ -2008,6 +2070,8 @@ public final class GrassBlades {
       "uniform vec4 uPh;",
       "uniform vec4 uGust;",
       "uniform vec4 uPush[" + Sway.MAX_PUSH + "];",
+      "uniform vec4 uFeet[" + MAX_FEET + "];", // characters near the player: x, y (squares, relative to the origin square), depth push (w)
+      "uniform float uFeetN;",
       "uniform float uPushN;",
       "uniform vec4 uSun;", // direction to the sun (x east, y south, z up), translucency
       "uniform vec4 uShade;", // ao, sheen
@@ -2042,8 +2106,9 @@ public final class GrassBlades {
       "   return x;",
       "}",
       // world (squares; z: height in squares, 3 to a level) -> clip
+      "float gbNear = 0.0;", // the feet push: depth toward the camera (w units) for a blade standing just in front of a character
       "vec4 gbClip(vec3 q) {",
-      "   float u = q.x - q.y, v = q.x + q.y - 2.0 * q.z, w = q.x + q.y + q.z * (2.0 / 3.0) + 0.03;",
+      "   float u = q.x - q.y, v = q.x + q.y - 2.0 * q.z, w = q.x + q.y + q.z * (2.0 / 3.0) + 0.03 + gbNear;",
       "   vec2 px = vec2((u - uMapA.y) / uMapA.x, (v - uMapA.w) / uMapA.z);",
       "   float d = (w - uMapB.y) / uMapB.x;",
       "   return vec4((px - uVp.xy) / uVp.zw * 2.0 - 1.0, d * 2.0 - 1.0, 1.0);",
@@ -2055,6 +2120,15 @@ public final class GrassBlades {
       // one vertex of blade (A, B): vertex vid of its strip
       "void gbVertex(vec4 A, vec4 B, int vid, out vec4 P, out vec3 C) {",
       "   vec3 root = vec3(A.xy + uOriginW.zw, 0.0);", // generated against an older origin square (amortised generation)
+      // characters stand in the grass: a blade rooted just in front of a character's feet is drawn nearer than the model
+      // (the models' depth runs ahead of their position), so it covers the shoes and shins it stands before
+      "   gbNear = 0.0;",
+      "   for (int i = 0; i < " + MAX_FEET + "; i++) {",
+      "      if (float(i) >= uFeetN) break;",
+      "      vec2 d = root.xy - uFeet[i].xy;",
+      "      float ahead = d.x + d.y;",
+      "      if (ahead > -0.05 && dot(d, d) < 0.5) gbNear = max(gbNear, uFeet[i].z);",
+      "   }",
       "   float h = A.z;",
       "   vec4 col = unpackUnorm4x8(floatBitsToUint(A.w));",
       "   vec4 pk = unpackUnorm4x8(floatBitsToUint(B.w));", // phase, stiffness, facing
