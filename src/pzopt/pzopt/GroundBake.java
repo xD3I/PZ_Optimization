@@ -560,9 +560,43 @@ public final class GroundBake {
       return n;
    }
 
-   /** Game thread: chunk (wx, wy)'s level 0 re-bakes. */
+   /**
+    * Game thread: chunk (wx, wy)'s level 0 re-bakes. pzopt ground-tracks 2026-10-24: the chunk looked up in each player's
+    * map instead of rebakeArea's walk of the whole grid, and no log line a call (the stats count them): the tracks' re-bakes
+    * as a horde walks over persisted tracks were most of GroundState's changes() time in the Louisville horde.
+    */
    public static int rebakeChunk(int wx, int wy, String reason, boolean low) {
-      return rebakeArea(wx * 8, wy * 8, wx * 8 + 7, wy * 8 + 7, reason, low);
+      int n = 0;
+      try {
+         zombie.iso.IsoCell cell = zombie.iso.IsoWorld.instance.getCell();
+         if (cell == null) {
+            return 0;
+         }
+         long flag = low && BakeScheduler.ON ? BakeScheduler.DIRTY_SEAM_LOW : FBORenderChunk.DIRTY_REDRAW;
+         for (int p = 0; p < zombie.characters.IsoPlayer.numPlayers; p++) {
+            if (zombie.characters.IsoPlayer.players[p] == null) {
+               continue;
+            }
+            zombie.iso.IsoChunkMap cm = cell.getChunkMap(p);
+            IsoChunk c = cm == null ? null : cm.getChunk(wx - cm.getWorldXMin(), wy - cm.getWorldYMin());
+            if (c == null || c.wx != wx || c.wy != wy || c.minLevel > 0 || c.maxLevel < 0) {
+               continue;
+            }
+            c.getRenderLevels(p).invalidateLevel(0, flag);
+            n++;
+         }
+      } catch (Throwable e) {
+         Log.warn("ground: re-bake (" + reason + ") failed: " + e);
+      }
+      synchronized (REBAKES) {
+         long[] r = REBAKES.computeIfAbsent(reason.length() > 40 ? reason.substring(0, 40) : reason, k -> new long[2]);
+         r[0]++;
+         r[1] += n;
+         if (REBAKES.size() > 64) {
+            REBAKES.remove(REBAKES.keySet().iterator().next());
+         }
+      }
+      return n;
    }
 
    // ------------------------------------------------------------------------------------------------ the class map
@@ -577,6 +611,7 @@ public final class GroundBake {
     * GPU on NVIDIA (gc-noop: variant with uploads 84 / 79 us a bake, without 63.5 = stock 62.5).
     */
    private static final byte[] CLASS_SHADOW = new byte[CLASS_N * CLASS_N * 2];
+   private static final byte[] BAKED_SURF = new byte[64]; // (game thread: the baking chunk's GroundTiles surfaces, no snow)
 
    /** Render-thread upload of one chunk's classes (10 x 10 squares: the chunk and a border of one). */
    private static final class ClassPatch extends TextureDraw.GenericDrawer {
@@ -631,6 +666,9 @@ public final class GroundBake {
                sq = cell == null ? null : cell.getGridSquare(p.x0 + x, p.y0 + y, 0);
             }
             int code = GroundTiles.square(sq);
+            if (x >= 1 && x <= 8 && y >= 1 && y <= 8) {
+               BAKED_SURF[(y - 1) * 8 + x - 1] = (byte)GroundTiles.surfaceFrom(code, sq); // pzopt ground-tracks 2026-10-24: GroundState's surface cache
+            }
             byte m = (byte)GroundTiles.mapByte(code), t = (byte)GroundTiles.toneByte(code);
             p.b[(y * 10 + x) * 2] = m;
             p.b[(y * 10 + x) * 2 + 1] = t;
@@ -642,6 +680,7 @@ public final class GroundBake {
             }
          }
       }
+      GroundState.bakedSurfaces(c, BAKED_SURF); // pzopt ground-tracks 2026-10-24: the squares' surfaces read here for free
       if (!changed) {
          classSkipped++;
          synchronized (FREE_PATCHES) {

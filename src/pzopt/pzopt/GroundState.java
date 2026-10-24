@@ -320,7 +320,34 @@ public final class GroundState {
       chunksLoaded, loadsDropped, uploads;
    public static long gameNs, sourcesNs, rigNs, binNs, batches, winNs, loadNs, decayNs, changesNs, tailNs;
    private static boolean anyPending; // a slot waits for its listeners / re-bake (changes() scans the window only then)
-   private static long lastScanMs;
+   // pzopt ground-tracks 2026-10-24: the earliest a pending slot can be due; changes() scans the window only from then (a
+   // horde's dozens of pending slots kept the 256-slot scan running every 20 ms while every one waited out its interval:
+   // changes 2.6 us/frame in the Louisville horde, gtr-lou5)
+   private static long nextChangeMs;
+   private static String sidMode, sidWorld, sidNow;
+   private static long lastTickNs;
+   public static long ticks;
+   public static long headNs, changeScans, rebakeCallNs, framesNew;
+
+   private static long pendEvery = CHANGE_MS; // (the re-bake interval as of the tick: pend() must not bring every touched slot forward to 250 ms)
+
+   // pzopt ground-tracks 2026-10-24: the pending slots as a list (changes() walked all 256 slots, ~5 us cold, gtr-lou8)
+   private static final int[] PENDING_SLOTS = new int[SLOTS * SLOTS];
+   private static final long[] PENDING_LAST = new long[SLOTS * SLOTS]; // (the entry's slotRebakeMs: the walk reads the list only)
+   private static final boolean[] slotListed = new boolean[SLOTS * SLOTS];
+   private static int nPending;
+
+   /** Slot s changed: pending for its listeners / re-bake. */
+   private static void pend(int s) {
+      slotPending[s] = true;
+      anyPending = true;
+      if (!slotListed[s]) {
+         slotListed[s] = true;
+         PENDING_LAST[nPending] = slotRebakeMs[s];
+         PENDING_SLOTS[nPending++] = s;
+      }
+      nextChangeMs = Math.min(nextChangeMs, slotRebakeMs[s] + pendEvery);
+   }
    private static long lastStampNs, lastWeatherMs;
    private static final long STAMP_PERIOD_NS = Config.DEV_GROUND_STATE_HZ <= 0 ? 0L : 1_000_000_000L / Config.DEV_GROUND_STATE_HZ;
 
@@ -384,8 +411,39 @@ public final class GroundState {
       }
       activeNow = true;
       BIND_ON = true;
+      String gm = zombie.core.Core.gameMode, gw = zombie.core.Core.gameSaveWorld;
+      if (gm != sidMode || gw != sidWorld) { // pzopt ground-tracks 2026-10-24: the save id built only when it changes
+         sidMode = gm;
+         sidWorld = gw;
+         sidNow = gm + "/" + gw;
+      }
+      String sid = sidNow;
+      // pzopt ground-tracks 2026-10-24: the state's game-side work (window, loads, binning, decay, changes) runs at the stamp
+      // rate (devGroundStateHz, 30 a second) instead of every frame; a frame between only turns its events into primitives
+      // (kept for the next batch). The Louisville horde at 60 fps: every piece of it was cold-cache bound, ~12 us a frame
+      boolean tick = STAMP_PERIOD_NS == 0L || t0 - lastTickNs >= STAMP_PERIOD_NS || nP >= MAX_PRIMS / 2 || sid != saveId || !LOADS.isEmpty() && t0 - lastTickNs >= STAMP_PERIOD_NS / 4;
+      if (!tick) {
+         if (SOURCES.on) {
+            GroundMovers.wantEvents();
+            if (GroundMovers.nEvents > 0) {
+               long ta = Config.INSTRUMENT ? System.nanoTime() : 0L;
+               sources();
+               if (ta != 0L) {
+                  sourcesNs += System.nanoTime() - ta;
+               }
+            }
+         }
+         if (inFlight.get() > 0) {
+            submit(alloc()); // the render thread polls the read-backs' fences
+         }
+         gameNs += System.nanoTime() - t0;
+         return;
+      }
+      lastTickNs = t0;
+      ticks++;
+      GroundMovers.dropPaved = SOURCES.on; // (the gather drops prints on known pavement: sources() would)
+      pendEvery = Math.max(CHANGE_MS, rules.rebakeMs());
       Frame f = alloc();
-      String sid = zombie.core.Core.gameMode + "/" + zombie.core.Core.gameSaveWorld;
       if (!sid.equals(saveId)) {
          if (saveId != null) {
             readbackModified(f, true); // the old save's chunks, then everything cleared
@@ -395,9 +453,12 @@ public final class GroundState {
          java.util.Arrays.fill(slotLive, false);
          java.util.Arrays.fill(slotModified, false);
          java.util.Arrays.fill(slotPending, false);
+         java.util.Arrays.fill(slotListed, false);
+         nPending = 0;
          java.util.Arrays.fill(slotBaked, false);
          java.util.Arrays.fill(slotFromLoad, false);
          java.util.Arrays.fill(slotMat, null);
+         java.util.Arrays.fill(PEEK_KEY, NONE);
          LOADS.clear();
          wcx = Integer.MIN_VALUE;
          lastDecayHours = -1.0;
@@ -405,8 +466,13 @@ public final class GroundState {
       }
       boolean inst = Config.INSTRUMENT;
       long tw = inst ? System.nanoTime() : 0L;
+      if (inst) {
+         headNs += tw - t0;
+      }
       window(f, pl.getX(), pl.getY());
       long nowMs = System.currentTimeMillis();
+      frameNowMs = nowMs;
+      frameSnow = zombie.iso.fboRenderChunk.FBORenderSnow.getInstance().isSnowAnywhere();
       if (nowMs - lastWeatherMs >= 1000L) {
          lastWeatherMs = nowMs;
          weather();
@@ -424,14 +490,14 @@ public final class GroundState {
       if (Config.DEV_GROUND_WALKERS > 0 && rigs) {
          walkers(pl, Config.DEV_GROUND_WALKERS);
       }
-      if (Config.DEV_GROUND_STATE_TEST && rigs && frame % 60 == 0) {
+      if (Config.DEV_GROUND_STATE_TEST && rigs && ticks % 30 == 0) { // (pzopt ground-tracks 2026-10-24: once a second at the tick rate)
          testPattern(pl);
       }
       long tc = inst ? System.nanoTime() : 0L;
       // the stamps go to the GPU in batches (devGroundStateHz a second, or a half-full list): a dispatch has a fixed cost and
       // nobody sees a print 30 ms late (the bake re-bakes at most every 300 ms, the blades read the map as it is)
       long nowNs = tc != 0L ? tc : System.nanoTime();
-      if (nP > 0 && (nP >= MAX_PRIMS / 2 || nowNs - lastStampNs >= STAMP_PERIOD_NS)) {
+      if (nP > 0) { // (a tick: the period is the tick's)
          lastStampNs = nowNs;
          bin(f, nowMs);
          nP = 0; // (cleared after binning: a feature's frame hook queues before this turn)
@@ -447,8 +513,8 @@ public final class GroundState {
       }
       decay(f, nowMs);
       long te = inst ? System.nanoTime() : 0L;
-      if (anyPending && nowMs - lastScanMs >= 20L) {
-         lastScanMs = nowMs;
+      if (anyPending && nowMs >= nextChangeMs) {
+         changeScans++;
          changes(nowMs);
       }
       long tf = inst ? System.nanoTime() : 0L;
@@ -478,6 +544,60 @@ public final class GroundState {
    }
 
    /** GroundBake.bakeBegin (game thread): chunk c's level 0 bakes. */
+   /**
+    * GroundBake.bakeBegin (game thread): the baking chunk's surfaces (no snow), read by the class map's own walk of its
+    * squares. pzopt ground-tracks 2026-10-24: a chunk the horde walks in is re-baked every second or two, so its surfaces()
+    * stay fresh without a read of their own (~6 us of cold squares each, 0.3 a frame in the Louisville horde). Not while
+    * there is snow (the snow flag is surfaces()'s own read).
+    */
+   static void bakedSurfaces(IsoChunk c, byte[] m) {
+      if (!activeNow || frameSnow) {
+         return;
+      }
+      int s = slot(c.wx, c.wy);
+      if (slotKey[s] != key(c.wx, c.wy)) {
+         return;
+      }
+      byte[] d = slotMat[s];
+      if (d == null) {
+         d = slotMat[s] = new byte[64];
+      }
+      System.arraycopy(m, 0, d, 0, 64);
+      slotMatMs[s] = frameNowMs;
+      slotMatSnow[s] = false;
+      surfBaked++;
+      publishPeek(c.wx, c.wy, d);
+   }
+
+   // pzopt ground-tracks 2026-10-24: the window's surfaces as GroundMovers' worker reads them, to drop a print on pavement
+   // before it is an event (a city horde: ~60 % of its prints, each one taken, converted and checked on the game thread).
+   // Racy by design: a byte per square (0 not known, 1 natural, 2 none), written before its slot's key; a reader that sees a
+   // key without its bytes, or the reverse at a recentre, misfiles one print at most. 0 (an array's first state) is "not
+   // known": the print goes to sources()' own check.
+   static final byte[] PEEK = new byte[SQUARES * SQUARES];
+   private static final long[] PEEK_KEY = new long[SLOTS * SLOTS];
+
+   static {
+      java.util.Arrays.fill(PEEK_KEY, NONE);
+   }
+
+   private static void publishPeek(int cx, int cy, byte[] m) {
+      int bx = (cx & (SLOTS - 1)) * CS, by = (cy & (SLOTS - 1)) * CS;
+      for (int q = 0; q < 64; q++) {
+         PEEK[(by + (q >> 3)) * SQUARES + bx + (q & 7)] = (byte)(m[q] == GroundTiles.SURF_NONE ? 2 : 1);
+      }
+      PEEK_KEY[slot(cx, cy)] = key(cx, cy);
+   }
+
+   /** Any thread: the square under (x, y) as last read: 1 a natural surface, 2 none (pavement, a floor), 0 not known. */
+   public static int peek(float x, float y) {
+      int sx = (int)Math.floor(x), sy = (int)Math.floor(y);
+      if (PEEK_KEY[slot(sx >> 3, sy >> 3)] != key(sx >> 3, sy >> 3)) {
+         return 0;
+      }
+      return PEEK[(sy & (SQUARES - 1)) * SQUARES + (sx & (SQUARES - 1))];
+   }
+
    static void baked(IsoChunk c) {
       if (!activeNow) {
          return;
@@ -524,6 +644,7 @@ public final class GroundState {
             slotBaked[s] = false;
             slotFromLoad[s] = false;
             slotMat[s] = null;
+            PEEK_KEY[s] = NONE;
             if (Config.GROUND_TRACKS_PERSIST && saveId != null) {
                load(cx, cy);
             }
@@ -550,9 +671,14 @@ public final class GroundState {
    static byte[] surfaces(int cx, int cy, long nowMs) {
       int s = slot(cx, cy);
       byte[] m = slotMat[s];
-      if (m != null && nowMs - slotMatMs[s] < 5000L && slotKey[s] == key(cx, cy)) {
+      boolean snowNow = frameSnow;
+      // (snow comes and goes: 5 s while there is any; without snow a floor changes only by digging / building: 60 s, a
+      // horde's binning re-read every touched chunk's 64 squares every 5 s, gtr-lou1: binning 8.55 us/frame)
+      long keep = snowNow || slotMatSnow[s] ? 5000L : 60000L;
+      if (m != null && nowMs - slotMatMs[s] < keep && slotKey[s] == key(cx, cy)) {
          return m;
       }
+      long tSurf = System.nanoTime();
       if (m == null) {
          m = new byte[64];
       }
@@ -562,24 +688,35 @@ public final class GroundState {
          }
          slotMat[s] = m;
          slotMatMs[s] = nowMs;
+         publishPeek(cx, cy, m);
          return m;
       }
       IsoCell cell = IsoWorld.instance.getCell();
-      boolean snowAnywhere = zombie.iso.fboRenderChunk.FBORenderSnow.getInstance().isSnowAnywhere();
+      boolean snowAnywhere = snowNow;
+      // pzopt ground-tracks 2026-10-24: the chunk looked up once, its squares read from its own array (64 cell lookups were
+      // a third of a read's ~8 us in the Louisville horde); a chunk not loaded is not cached (its squares come later)
+      IsoChunk ch = cell == null ? null : cell.getChunk(cx, cy);
       for (int y = 0; y < CS; y++) {
          for (int x = 0; x < CS; x++) {
             int wx = cx * CS + x, wy = cy * CS + y;
-            IsoGridSquare sq = cell == null ? null : cell.getGridSquare(wx, wy, 0);
-            boolean snow = snowAnywhere && cell != null && sq != null && cell.gridSquareIsSnow(wx, wy, 0);
+            IsoGridSquare sq = ch == null ? null : ch.getGridSquare(x, y, 0);
+            boolean snow = snowAnywhere && sq != null && cell.gridSquareIsSnow(wx, wy, 0);
             m[x + y * CS] = (byte)(sq == null ? GroundTiles.SURF_NONE : GroundTiles.surface(sq, snow));
          }
       }
-      if (slotKey[s] == key(cx, cy)) {
+      if (ch != null && slotKey[s] == key(cx, cy)) {
          slotMat[s] = m;
          slotMatMs[s] = nowMs;
+         slotMatSnow[s] = snowAnywhere;
+         publishPeek(cx, cy, m);
       }
+      surfReads++;
+      surfNs += System.nanoTime() - tSurf;
       return m;
    }
+
+   private static final boolean[] slotMatSnow = new boolean[SLOTS * SLOTS];
+   public static long surfReads, surfNs, surfBaked;
 
    /** Tests: the surface of world square (x, y) instead of the world's. */
    static java.util.function.IntBinaryOperator testSurface;
@@ -699,6 +836,10 @@ public final class GroundState {
                }
                float ux = ev[o + 2], uy = ev[o + 3], size = ev[o + 5];
                float side = ev[o + 4] * 0.09F * size;
+               if (ev[o + 7] != 1F && paved(ev[o], ev[o + 1])) { // (1: the gather saw natural ground under it)
+                  pavedSkipped++; // (a print is 0.14 squares: on pavement it bins to nothing; a city horde is mostly there)
+                  break;
+               }
                float depth = who == GroundMovers.PLAYER ? 0.05F : who == GroundMovers.ANIMAL ? 0.04F : 0.045F;
                ellipse(ev[o] - uy * side, ev[o + 1] + ux * side, ux, uy, 0.14F * size, 0.055F * size, depth, 0.012F, 1F, 1F);
                break;
@@ -718,6 +859,20 @@ public final class GroundState {
                break;
          }
       }
+   }
+
+   public static long pavedSkipped;
+   private static long frameNowMs;
+   private static boolean frameSnow; // (FBORenderSnow.isSnowAnywhere once a frame)
+
+   /** The square under (x, y) is in the window and has no natural surface (its chunk's cached surfaces). */
+   private static boolean paved(float x, float y) {
+      int sx = (int)Math.floor(x), sy = (int)Math.floor(y);
+      int cx = sx >> 3, cy = sy >> 3;
+      if (!inWindow(cx, cy)) {
+         return false;
+      }
+      return surfaces(cx, cy, frameNowMs)[(sx & 7) + (sy & 7) * CS] == GroundTiles.SURF_NONE;
    }
 
    private static float[] walkerState = new float[0];
@@ -814,9 +969,8 @@ public final class GroundState {
                   int s = slot(cx, cy);
                   slotLive[s] = true;
                   slotModified[s] = true;
-                  slotPending[s] = true;
+                  pend(s);
                   slotFromLoad[s] = false;
-                  anyPending = true;
                } else {
                   ci = cellOf[li];
                }
@@ -930,8 +1084,7 @@ public final class GroundState {
                continue; // (a chunk loaded this frame has its own catch-up decay in the list)
             }
             decayChunk(f, cx, cy, dt, nowMs);
-            slotPending[s] = true;
-            anyPending = true;
+            pend(s);
             slotFromLoad[s] = false;
             // (not slotModified: the saved state and its hours give the same catch-up decay at its next load; saving a slot
             // only decay touched rewrote the region files of every chunk driven past)
@@ -955,16 +1108,24 @@ public final class GroundState {
       int budget = 4;
       boolean left = false;
       boolean known = GroundBake.CLASS_ON; // (bakeBegin reports level-0 bakes only while the class map is on)
-      for (int cy = wcy; cy < wcy + SLOTS && budget > 0; cy++) {
-         for (int cx = wcx; cx < wcx + SLOTS && budget > 0; cx++) {
-            int s = slot(cx, cy);
-            if (!slotPending[s]) {
-               continue;
-            }
-            if (nowMs - slotRebakeMs[s] < every) {
-               left = true;
-               continue;
-            }
+      long due = Long.MAX_VALUE;
+      int w = 0;
+      for (int i = 0; i < nPending; i++) {
+         int s = PENDING_SLOTS[i];
+         long last = PENDING_LAST[i];
+         if (budget <= 0 || nowMs - last < every) {
+            due = Math.min(due, last + every);
+            PENDING_LAST[w] = last;
+            PENDING_SLOTS[w++] = s;
+            continue;
+         }
+         slotListed[s] = false;
+         long sk = slotKey[s];
+         if (!slotPending[s] || sk == NONE) {
+            continue; // (cleared by a recentre or a save change)
+         }
+         int cx = (int)(sk >> 32), cy = (int)sk;
+         {
             slotPending[s] = false;
             slotRebakeMs[s] = nowMs;
             for (ChangeListener l : LISTENERS) {
@@ -980,6 +1141,7 @@ public final class GroundState {
             if (rebake && known && !slotBaked[s]) {
                rebakesSkippedUnbaked++; // (its first bake reads the state as it is now)
             } else if (rebake) {
+               long tr = System.nanoTime();
                IsoChunk c = cell == null ? null : cell.getChunk(cx, cy);
                if (c != null && fromLoad && !full) {
                   GroundBake.rebakeChunk(cx, cy, "tracks load", true);
@@ -990,15 +1152,24 @@ public final class GroundState {
                   if (full || viewRebake && !r.rebakes()) {
                      GroundBake.rebakeChunk(cx, cy, "tracks", true);
                   } else {
-                     c.invalidateRenderChunkLevel(0, 1L); // DIRTY_BLOOD: a floor decal changed
+                     // DIRTY_BLOOD: a floor decal changed (pzopt ground-tracks 2026-10-24: the players that are there only;
+                     // IsoChunk.invalidateRenderChunkLevel walks all four player slots)
+                     for (int p = 0; p < zombie.characters.IsoPlayer.numPlayers; p++) {
+                        if (zombie.characters.IsoPlayer.players[p] != null) {
+                           c.getRenderLevels(p).invalidateLevel(0, 1L);
+                        }
+                     }
                   }
                   rebakesAsked++;
                   budget--;
                }
+               rebakeCallNs += System.nanoTime() - tr;
             }
          }
       }
-      anyPending = left || budget == 0; // (budget spent: the rest of the window not looked at)
+      nPending = w;
+      anyPending = w > 0;
+      nextChangeMs = budget <= 0 ? 0L : due; // (pend() brings it forward for a slot that changes meanwhile)
    }
 
    // ------------------------------------------------------------------------------------------------ the frame's GPU work
@@ -1013,10 +1184,16 @@ public final class GroundState {
             return f;
          }
       }
+      framesNew++;
       return new Frame();
    }
 
    static void release(Frame f) {
+      for (int i = 0; i < f.nLoad; i++) {
+         poolLoad(f.loadData[i]);
+         f.loadData[i] = null;
+      }
+      f.nLoad = 0;
       synchronized (POOL) {
          if (POOL.size() < 6) {
             POOL.add(f);
@@ -1033,7 +1210,7 @@ public final class GroundState {
       final int[] readSlot = new int[SLOTS * SLOTS];
       final long[] readKey = new long[SLOTS * SLOTS];
       final int[] loadSlot = new int[MAX_LOADS_PER_FRAME];
-      final ByteBuffer loadBuf = BufferUtils.createByteBuffer(MAX_LOADS_PER_FRAME * CHUNK_TEX * CHUNK_TEX * 4);
+      final ByteBuffer[] loadData = new ByteBuffer[MAX_LOADS_PER_FRAME]; // (the IO thread's buffers, back to LOAD_POOL at release)
       int nCells, nPrims, nIndex, nDecay, nClear, nRead, nLoad, ox, oy, tick;
       boolean clearAll, on;
       String readDir;
@@ -1044,7 +1221,6 @@ public final class GroundState {
          nCells = nPrims = nIndex = nDecay = nClear = nRead = nLoad = 0;
          clearAll = false;
          readDir = null;
-         loadBuf.clear();
       }
 
       void read(int s, long k) {
@@ -1054,7 +1230,8 @@ public final class GroundState {
          readSlot[nRead] = s;
          readKey[nRead] = k;
          nRead++;
-         readDir = dir(saveId).getPath();
+         saveDir(saveId);
+         readDir = dirPath;
          readHours = worldHours();
       }
 
@@ -1273,9 +1450,11 @@ public final class GroundState {
                REST);
          }
          if (f.nLoad > 0) {
-            f.loadBuf.flip();
             GL15.glBindBuffer(GL21.GL_PIXEL_UNPACK_BUFFER, uploadPbo);
-            GL15.glBufferData(GL21.GL_PIXEL_UNPACK_BUFFER, f.loadBuf, GL15.GL_STREAM_DRAW);
+            GL15.glBufferData(GL21.GL_PIXEL_UNPACK_BUFFER, (long)f.nLoad * CHUNK_BYTES, GL15.GL_STREAM_DRAW);
+            for (int i = 0; i < f.nLoad; i++) {
+               GL15.glBufferSubData(GL21.GL_PIXEL_UNPACK_BUFFER, (long)i * CHUNK_BYTES, f.loadData[i]);
+            }
             GL11.glBindTexture(GL11.GL_TEXTURE_2D, t);
             GL11.glPixelStorei(GL11.GL_UNPACK_ALIGNMENT, 4);
             for (int i = 0; i < f.nLoad; i++) {
@@ -1634,6 +1813,21 @@ public final class GroundState {
    private static final int MAGIC = 0x475A5352; // "GZSR"
    private static final int VERSION = 2; // 2: 16 texels a square, (h, wear, freshness, slip) with rest 192
 
+   // pzopt ground-tracks 2026-10-24: the directory kept per save id (a window recentre asked it for each of ~48 chunk loads,
+   // a regex compile and a File each: part of the window's 2 us/frame in the Louisville horde)
+   private static String dirSid;
+   private static File dirFile;
+   private static String dirPath;
+
+   private static File saveDir(String sid) {
+      if (!sid.equals(dirSid)) {
+         dirFile = dir(sid);
+         dirPath = dirFile.getPath();
+         dirSid = sid;
+      }
+      return dirFile;
+   }
+
    static File dir(String sid) {
       String safe = sid.replaceAll("[^A-Za-z0-9._/-]", "_").replace("..", "_");
       return new File(zombie.ZomboidFileSystem.instance.getCacheDir(), "pzopt" + File.separator + "ground" + File.separator + safe.replace('/', File.separatorChar));
@@ -1652,15 +1846,36 @@ public final class GroundState {
    }
 
    private static void load(int cx, int cy) {
-      final File d = dir(saveId);
+      final File d = saveDir(saveId);
       final String sid = saveId;
       IO.execute(() -> {
          double[] at = new double[1];
          byte[] b = readChunk(d, cx, cy, at);
          if (b != null) {
-            LOADS.add(new Object[] {sid, cx, cy, b, at[0]});
+            // pzopt ground-tracks 2026-10-24: copied into a direct buffer here, on the IO thread (the game thread's 64 KB put
+            // into the frame was most of "loads", ~6 us a chunk, in the Louisville horde walking over persisted tracks)
+            ByteBuffer bb = LOAD_POOL.poll();
+            if (bb != null) {
+               LOAD_POOL_N.decrementAndGet();
+            } else {
+               bb = BufferUtils.createByteBuffer(CHUNK_BYTES);
+            }
+            bb.clear();
+            bb.put(b, 0, Math.min(b.length, CHUNK_BYTES)).flip();
+            LOADS.add(new Object[] {sid, cx, cy, bb, at[0]});
          }
       });
+   }
+
+   private static final int CHUNK_BYTES = CHUNK_TEX * CHUNK_TEX * 4;
+   private static final ConcurrentLinkedQueue<ByteBuffer> LOAD_POOL = new ConcurrentLinkedQueue<>();
+   private static final AtomicInteger LOAD_POOL_N = new AtomicInteger();
+
+   private static void poolLoad(ByteBuffer b) {
+      if (b != null && LOAD_POOL_N.get() < 32) {
+         LOAD_POOL_N.incrementAndGet();
+         LOAD_POOL.add(b);
+      }
    }
 
    private static void applyLoads(Frame f, long nowMs) {
@@ -1669,22 +1884,23 @@ public final class GroundState {
       Rules r = rules;
       while (f.nLoad < MAX_LOADS_PER_FRAME && (l = LOADS.poll()) != null) {
          if (!l[0].equals(saveId)) {
+            poolLoad((ByteBuffer)l[3]);
             continue;
          }
          int cx = (Integer)l[1], cy = (Integer)l[2];
-         byte[] b = (byte[])l[3];
+         ByteBuffer b = (ByteBuffer)l[3];
          double age = hours - (Double)l[4];
          int s = slot(cx, cy);
          if (slotKey[s] != key(cx, cy) || slotLive[s] || age > r.maxAgeHours() || age < -1.0) {
             loadsDropped++; // left the window, stamped meanwhile (the new stamps win), or too old
+            poolLoad(b);
             continue;
          }
+         f.loadData[f.nLoad] = b;
          f.loadSlot[f.nLoad++] = s;
-         f.loadBuf.put(b);
          slotLive[s] = true;
          slotModified[s] = false;
-         slotPending[s] = true;
-         anyPending = true;
+         pend(s);
          slotFromLoad[s] = true;
          slotLoadedFrame[s] = frame;
          if (age > 0.0) {
@@ -1859,8 +2075,8 @@ public final class GroundState {
       return "ground state: " + (activeNow ? "on" : "off") + " rules " + rules.id() + ", frames " + frames + ", prims " + primsTotal + " (dropped " + primsDropped
          + "), cells " + cellsTotal + ", dispatches " + dispatches + ", decay passes " + decayPasses + " (" + decayCells + " cells), clears " + clears
          + ", read-backs " + readbacks + " (in flight " + inFlight.get() + "), chunks saved " + chunksSaved + " loaded " + chunksLoaded + " dropped "
-         + loadsDropped + ", re-bakes " + rebakesAsked + " (load, low priority " + rebakesLoadLow + "; before the first bake, skipped " + rebakesSkippedUnbaked + "), stamp batches " + batches + ", game " + us(gameNs) + " us/frame (sources " + us(sourcesNs)
-         + ", dev rigs " + us(rigNs) + ", binning " + us(binNs) + ", window " + us(winNs) + ", loads " + us(loadNs) + ", decay " + us(decayNs) + ", changes " + us(changesNs)
+         + loadsDropped + ", re-bakes " + rebakesAsked + " (load, low priority " + rebakesLoadLow + "; before the first bake, skipped " + rebakesSkippedUnbaked + "), stamp batches " + batches + ", ticks " + ticks + ", frames made " + framesNew + ", game " + us(gameNs) + " us/frame (paved prints skipped " + pavedSkipped + ", surface reads " + surfReads + " = " + us(surfNs) + " (from bakes " + surfBaked + "), head " + us(headNs) + ", sources " + us(sourcesNs)
+         + ", dev rigs " + us(rigNs) + ", binning " + us(binNs) + ", window " + us(winNs) + ", loads " + us(loadNs) + ", decay " + us(decayNs) + ", changes " + us(changesNs) + " (scans " + changeScans + ", re-bake calls " + us(rebakeCallNs) + ")"
          + ", tail " + us(tailNs) + ")" + (failed ? " (failed)" : "");
    }
 

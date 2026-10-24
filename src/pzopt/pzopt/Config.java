@@ -1929,6 +1929,7 @@ public final class Config {
    public static volatile int DEV_GROUND_TRACKS_RIG_SECONDS; // devGroundTracksRigSeconds: the look rig stamps for this many seconds, then stops (0: all the run)
    public static volatile int DEV_GROUND_TRACKS_RIG; // devGroundTracksRig: 1 a scripted scene round the player (a car pass with a skid, three walkers, a body, a drag), the look rig
    public static volatile boolean DEV_GROUND_TRACKS_LOG; // devGroundTracksLog: a stats line every 600 frames
+   public static volatile boolean DEV_GROUND_MOVERS_SYNC; // devGroundMoversSync: the characters' footprint gather on the game thread again (A/B of GroundMovers' worker)
    public static final int DEV_RAIN_SCALE_PCT = integer("devRainScalePct", 40); // dev: a raindrop's ring against a footstep's (% in space; time sqrt of it); read at launch
    public static final int DEV_RAIN_AMP_PCT = integer("devRainAmpPct", 150); // dev: a raindrop's slope against a footstep's (%); read at launch
    public static final int DEV_RAIN_LIT_PCT = integer("devRainLitPct", 120); // dev: how much a rain ring's / wake's slope brightens / darkens the puddle's final colour (%); read at launch
@@ -2457,6 +2458,7 @@ public final class Config {
       DEV_GROUND_TRACKS_COMP_BIAS_PCT = integer("devGroundTracksCompBiasPct", 5);
       DEV_GROUND_TRACKS_RIG_SECONDS = integer("devGroundTracksRigSeconds", 0);
       DEV_GROUND_TRACKS_LOG = bool("devGroundTracksLog", false);
+      DEV_GROUND_MOVERS_SYNC = bool("devGroundMoversSync", false);
       DEV_GROUND_TRACKS_RIG = integer("devGroundTracksRig", 0);
       DEV_GROUND_TRACKS_TIME_SCALE = Math.max(1, integer("devGroundTracksTimeScale", 1));
       DEV_GROUND_TRACKS_WET_PCT = integer("devGroundTracksWetPct", -1);
