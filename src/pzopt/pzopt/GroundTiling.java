@@ -38,6 +38,10 @@ public final class GroundTiling {
                                         //   0..1); row 3: texels 0..2 the PCA basis columns, texel 3 the mean colour
       uniform ivec4 pzGtPeriod;         // x, y exemplar period px (128N, 64N); z mode; w seed
       uniform vec4 pzGtHex;             // x cell size (squares), y height contrast, z weight exponent, w gain r
+      uniform vec4 pzGtBlend;           // height blend: x depth (0 = stock alpha), y boundary noise amplitude, z noise scale (squares), w height weight
+      uniform vec4 pzGtMacro;           // macro: x brightness amplitude, y dryness amount, z brightness scale (squares), w dryness scale
+      uniform vec3 pzGtDryTint;         // colour factor of fully dry grass (the game's dry grass over its green grass)
+      uniform ivec2 pzGtWorld;          // the chunk origin in world squares (exact integers)
       uniform ivec4 pzGtOI;             // chunk origin split exactly by the CPU: xy floor(skew(origin)), zw floor(origin / cell)
       uniform vec4 pzGtOF;              //   and the fractions: xy fract(skew(origin)), zw fract(origin / cell)
 
@@ -182,6 +186,70 @@ public final class GroundTiling {
          vec4 a = gtFetch(px, gtOffset(ivec2(int(i), 0), 7u), layer), b = gtFetch(px, gtOffset(ivec2(int(i) + 1, 0), 7u), layer);
          float t = smoothstep(0.2, 0.8, f - 0.1 * ((a.a + a.r) - (b.a + b.r)) * pzGtHex.y);
          return mix(a, b, t);
+      }
+
+      // a lattice of cells of s squares: the chunk origin's cell (exact enough: float error ~1e-3 cell at 20000 squares)
+      void gtSplit(float s, out ivec2 oi, out vec2 of) { vec2 q = vec2(pzGtWorld) / s; vec2 f = floor(q); oi = ivec2(f); of = q - f; }
+
+      // value noise, 2 octaves, on a lattice whose exact origin split is (oi, of) for octave 1 (octave 2 derived exactly)
+      float gtFbm2(vec2 q, ivec2 oi, vec2 of, uint salt) {
+         float a = gtValueNoise(q + of, oi, salt);
+         vec2 of2 = of * 2.0; vec2 f2 = floor(of2);
+         float b = gtValueNoise(q * 2.0 + (of2 - f2), oi * 2 + ivec2(f2), salt + 101u);
+         return (a + 0.5 * b) / 1.5;
+      }
+
+      // Macro variation: brightness and dryness drifting over tens of squares (world-space, so every chunk agrees)
+      vec3 gtMacro(vec3 c, vec2 wLocal, float grassy) {
+         if (pzGtMacro.x <= 0.0 && pzGtMacro.y <= 0.0) return c;
+         ivec2 i1, i2; vec2 f1, f2; gtSplit(pzGtMacro.z, i1, f1); gtSplit(pzGtMacro.w, i2, f2);
+         float m1 = gtFbm2(wLocal / pzGtMacro.z, i1, f1, 11u);
+         float m2 = gtFbm2(wLocal / pzGtMacro.w, i2, f2, 12u);
+         c *= 1.0 + pzGtMacro.x * (m1 * 2.0 - 1.0);
+         float dry = grassy * pzGtMacro.y * smoothstep(0.48, 0.78, m2);
+         return mix(c, c * pzGtDryTint, dry);
+      }
+
+      // Height-based blending of an overlay (material B over base A): the material whose height is higher wins (grass
+      // blades over the dirt, sand into the cracks). t = B's coverage before the heights (0..1). Returns B's alpha.
+      float gtHeightLerp(float t, float hB, float hA) {
+         float wb = hB * pzGtBlend.w + t, wa = hA * pzGtBlend.w + (1.0 - t);
+         float m = max(wa, wb) - pzGtBlend.x;
+         float bb = max(wb - m, 0.0), ba = max(wa - m, 0.0);
+         return bb / max(bb + ba, 1e-5);
+      }
+
+      // The coverage of a blends_natural overlay from the square's geometry instead of the sprite's even fade: kind 1..4 a
+      // half toward the north / south / west / east corner (two edges of B), 5..8 a strip along the -y / -x / +x / +y
+      // edge; the boundary moved by world noise (pzGtBlend.y squares, cells of pzGtBlend.z squares), softened over
+      // GT_EDGE_SOFT squares. Other kinds keep the sprite's alpha a (bent by the noise).
+      #ifndef GT_STRIP_WIDTH
+      #define GT_STRIP_WIDTH 0.2
+      #endif
+      #ifndef GT_EDGE_SOFT
+      #define GT_EDGE_SOFT 0.08
+      #endif
+      float gtOverlayCover(int kind, float a, vec2 wLocal) {
+         ivec2 bi; vec2 bf; gtSplit(pzGtBlend.z, bi, bf);
+         float n = (gtFbm2(wLocal / pzGtBlend.z, bi, bf, 21u) - 0.5) * 2.0 * pzGtBlend.y;
+         vec2 f = fract(wLocal);
+         float s; // signed distance (squares) from the boundary, < 0 inside B
+         if (kind >= 1 && kind <= 4) {
+            float diag = kind == 1 ? f.x + f.y : kind == 2 ? 2.0 - f.x - f.y : kind == 3 ? f.x + 1.0 - f.y : 1.0 - f.x + f.y;
+            s = (diag - 1.0) * 0.70710678;
+         } else if (kind >= 5 && kind <= 8) {
+            float d = kind == 5 ? f.y : kind == 6 ? f.x : kind == 7 ? 1.0 - f.x : 1.0 - f.y;
+            s = d - GT_STRIP_WIDTH;
+         } else {
+            return clamp(a + n, 0.0, 1.0);
+         }
+         return clamp(0.5 - (s - n) / GT_EDGE_SOFT, 0.0, 1.0);
+      }
+
+      // an overlay's alpha: stock (pzGtBlend.x == 0: the sprite's alpha) or the geometric coverage through the height lerp
+      float gtOverlayAlpha(int kind, float a, float hB, float hA, vec2 wLocal) {
+         if (pzGtBlend.x <= 0.0) return a;
+         return gtHeightLerp(gtOverlayCover(kind, a, wLocal), hB, hA);
       }
 
       vec4 gtSample(ivec2 px, vec2 wLocal, float layer, int mode) {
