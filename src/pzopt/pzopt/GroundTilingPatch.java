@@ -103,7 +103,7 @@ public final class GroundTilingPatch implements GroundBake.FloorPatch {
       float[] p = {
          mode, Config.DEV_GROUND_TILING_CELL_PCT / 100F, 0.6F, 7F, 0.5F, // tiling
          height ? 0.12F : 0F, 0.18F, 1.1F, 0.35F, // blend: softness (score units), noise amplitude, noise cell (squares), height weight
-         0.12F * macro / 100F, 0.3F * dry * macro / 100F, 8F, 24F, // macro
+         0.18F * macro / 100F, 0.3F * dry * macro / 100F, 8F, 24F, // macro: brightness drift, dry patches (season), scales (squares)
          GroundTileArt.DRY_TINT[0], GroundTileArt.DRY_TINT[1], GroundTileArt.DRY_TINT[2],
          seed()};
       String sig = java.util.Arrays.toString(p);
