@@ -60,8 +60,8 @@ public final class GroundTracks {
    }
 
    public static String stats() {
-      return "ground tracks: " + (on() ? "on" : "off") + " frames=" + frames + " bakeDraws=" + bakeDraws + " game_us/frame="
-         + (frames == 0 ? 0 : gameNs / 1000L / frames) + (failed ? " (failed)" : "") + " | " + GroundState.stats();
+      return "ground tracks: " + (on() ? "on" : "off") + " frames=" + frames + " bakeDraws=" + bakeDraws + " grassObjects=" + GroundBake.overlayObjects
+         + " game_us/frame=" + (frames == 0 ? 0 : gameNs / 1000L / frames) + (failed ? " (failed)" : "") + " | " + GroundState.stats();
    }
 
    // ------------------------------------------------------------------------------------------------ the rules (GroundState)
@@ -211,8 +211,69 @@ public final class GroundTracks {
       }
    };
 
+   /**
+    * The game's grass OBJECTS over the tracks (erosion grass, grass overlays, ground-cover plants: drawn after the floors, so
+    * the look under them is hidden): trodden grass fades toward the floor and goes to straw, crushed fresh blades darker.
+    * Any look; the floors are untouched (PZG_PIECE 3 only). A texel's world point is the ground plane under it: the upper
+    * part of a tall sprite maps to the squares behind its foot, which stands K t (1, 1) further for a texel t squares up, so
+    * the state is read over a soft footprint along that line.
+    */
+   static final GroundBake.FloorPatch GRASS = new GroundBake.FloorPatch() {
+      @Override
+      public String id() {
+         return "tracks-grass";
+      }
+
+      @Override
+      public boolean active() {
+         return on() && Config.GROUND_TRACKS_GRASS && !"nograss".equals(Ground.variant()); // (dev variant nograss: the A/B)
+      }
+
+      @Override
+      public boolean overlayObjects() {
+         return true;
+      }
+
+      @Override
+      public String declarations() {
+         return String.join("\n",
+            "vec4 gtgGrass(vec4 c) {",
+            "#if PZG_PIECE == 3",
+            "   if (c.a <= 0.0) return c;",
+            "   float cr = 0.0, fr = 0.0;",
+            "   const float W[3] = float[3](0.4, 0.35, 0.25);",
+            "   for (int i = 0; i < 3; i++) {",
+            "      vec4 s = pzgStateAt(pzgW.xy + vec2(1.22474 * 0.17 * float(i)));",
+            "      cr += W[i] * clamp(max(-s.x, 0.0) * 25.0 + s.y * 1.2, 0.0, 1.0);",
+            "      fr += W[i] * s.z;",
+            "   }",
+            "   if (cr < 0.01) return c;",
+            "   vec3 rgb = c.rgb / c.a;",
+            "   float l = dot(rgb, vec3(0.299, 0.587, 0.114));",
+            "   vec3 straw = vec3(0.47, 0.43, 0.17) * (l / 0.4123) * 1.12;", // the dry-grass tile's straw at the blade's luminance
+            "   rgb = mix(rgb, straw, 0.65 * cr * (1.0 - 0.5 * fr)) * (1.0 - 0.22 * fr * cr);",
+            "   float a = c.a * (1.0 - 0.8 * cr);", // pressed flat: the floor (tinted by the look) shows through
+            "   return vec4(rgb * a, a);",
+            "#else",
+            "   return c;",
+            "#endif",
+            "}",
+            "");
+      }
+
+      @Override
+      public String color() {
+         return "gtgGrass";
+      }
+
+      @Override
+      public void bakeStart(int program, zombie.iso.fboRenderChunk.FBORenderChunk rc) {
+      }
+   };
+
    static {
       GroundBake.register(PATCH);
+      GroundBake.register(GRASS);
       GroundBake.register(PASS);
       Ground.onFrame(GroundTracks::frameStart);
    }

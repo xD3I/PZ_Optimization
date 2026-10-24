@@ -1920,6 +1920,7 @@ public final class Config {
    public static volatile int GROUND_TRACKS_REBAKE_MS; // groundTracksRebakeMs: a chunk being stamped re-bakes at most this often (bake look)
    public static volatile int GROUND_TRACKS_DECAY_MINUTES; // groundTracksDecayMinutes: game minutes between decay passes
    public static volatile boolean GROUND_TRACKS_VEHICLES, GROUND_TRACKS_FEET, GROUND_TRACKS_BODIES; // the stamp sources
+   public static volatile boolean GROUND_TRACKS_GRASS; // groundTracksGrass: the game's grass objects (erosion grass, overlays) fade and go to straw where trodden
    public static volatile int DEV_GROUND_TRACKS_VIEW; // devGroundTracksView: 1 the height field drawn as colour (blue ruts, red berms)
    public static volatile int DEV_GROUND_TRACKS_TIME_SCALE; // devGroundTracksTimeScale: the decay runs this many times faster than the game clock (the recovery in seconds)
    public static volatile int DEV_GROUND_TRACKS_WET_PCT; // devGroundTracksWetPct: the ground's wetness pinned (0..100; -1 = from the rain)
@@ -2449,6 +2450,7 @@ public final class Config {
       GROUND_TRACKS_VEHICLES = bool("groundTracksVehicles", true);
       GROUND_TRACKS_FEET = bool("groundTracksFeet", true);
       GROUND_TRACKS_BODIES = bool("groundTracksBodies", true);
+      GROUND_TRACKS_GRASS = bool("groundTracksGrass", true);
       DEV_GROUND_TRACKS_VIEW = integer("devGroundTracksView", 0);
       DEV_GROUND_TRACKS_COMP_BIAS_PCT = integer("devGroundTracksCompBiasPct", 5);
       DEV_GROUND_TRACKS_RIG_SECONDS = integer("devGroundTracksRigSeconds", 0);

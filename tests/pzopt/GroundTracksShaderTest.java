@@ -38,6 +38,26 @@ public class GroundTracksShaderTest {
       } else {
          n += checkBoth(check, mesa, "compute program (tracks rules)", cp.toString());
       }
+      // the floor tile program's variant with the patch look and the grass-object patch: floors (piece 0) and grass objects (3)
+      Path game = GroundCommonTest.gameShaders();
+      if (game != null) {
+         String vert = Files.readString(game.resolve("tileWithDepth.vert"));
+         String frag = Files.readString(game.resolve("tileWithDepth.frag"));
+         Path vp = Files.writeString(Files.createTempFile("pzgt", ".vert"), vert);
+         for (int piece : new int[] {0, 3}) {
+            java.util.List<GroundBake.FloorPatch> ps = new java.util.ArrayList<>();
+            if (piece == 0) {
+               ps.add(GroundTracks.PATCH);
+            }
+            ps.add(GroundTracks.GRASS);
+            String v = GroundBake.variantSource(frag, ps, 0, piece);
+            Check.check(v != null, "floor variant source, piece " + piece);
+            Path fp = Files.writeString(Files.createTempFile("pzgt", ".frag"), v);
+            n += checkBoth(check, mesa, "floor variant piece " + piece + " (patch + grass)", vp.toString(), fp.toString());
+         }
+      } else {
+         System.out.println("GroundTracksShaderTest: no game shaders, the floor variant skipped");
+      }
       System.out.println("GroundTracksShaderTest ok (" + n + " programs)");
    }
 
