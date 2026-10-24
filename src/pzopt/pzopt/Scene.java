@@ -842,6 +842,21 @@ public final class Scene {
          }
          Log.info("harness: ground map y=" + y + " x=" + (px - n) + ".." + (px + n) + ": " + row);
       }
+      // the floor sprites of the area, most common first, with their ground class (GroundTiles)
+      java.util.HashMap<String, int[]> census = new java.util.HashMap<>();
+      for (int y = py - n; y <= py + n; y++) {
+         for (int x = px - n; x <= px + n; x++) {
+            zombie.iso.IsoGridSquare s2 = cell.getGridSquare(x, y, 0);
+            zombie.iso.IsoObject f2 = s2 == null ? null : s2.getFloor();
+            if (f2 != null && f2.getSprite() != null) {
+               census.computeIfAbsent(String.valueOf(f2.getSprite().getName()), k -> new int[] {0, GroundTiles.of(f2.getSprite())})[0]++;
+            }
+         }
+      }
+      StringBuilder cs = new StringBuilder();
+      census.entrySet().stream().sorted((a, b) -> b.getValue()[0] - a.getValue()[0]).limit(16)
+         .forEach(e -> cs.append(' ').append(e.getKey()).append('=').append(e.getValue()[0]).append("(0x").append(Integer.toHexString(e.getValue()[1])).append(')'));
+      Log.info("harness: ground map floors:" + cs);
       zombie.iso.IsoGridSquare sq = cell.getGridSquare(px, py, 0);
       zombie.iso.IsoObject floor = sq == null ? null : sq.getFloor();
       Log.info("harness: ground under the player " + px + "," + py + ": floor=" + (floor == null || floor.getSprite() == null ? "none" : floor.getSprite().getName())
