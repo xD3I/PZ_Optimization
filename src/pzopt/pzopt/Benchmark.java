@@ -305,6 +305,7 @@ public final class Benchmark {
       Map<String, String> weather = perScenario(o.get("weather"));
       Map<String, String> hour = perScenario(o.get("time"));
       Map<String, String> fog = perScenario(o.get("fog"));
+      Map<String, String> season = perScenario(o.get("season")); // (2026-10-24) "spin:winter,horde:start"
       String pv = o.getOrDefault("passes", "1");
       Map<String, String> each = pv.contains(":") ? perScenario(pv) : null;
       for (String id : ids) {
@@ -342,6 +343,7 @@ public final class Benchmark {
          p.setProperty("weather." + id, BenchSuite.WEATHERS.contains(w) ? w : "clear");
          p.setProperty("time." + id, Integer.toString(BenchSuite.hourOf(hour.get(id))));
          p.setProperty("fog." + id, BenchSuite.fogOf(fog.get(id)));
+         p.setProperty("season." + id, BenchSuite.seasonOf(season.get(id)));
       }
       BenchPlan.backupLatestSave(p);
       BenchPlan.backupUserOptions(p);
@@ -391,7 +393,8 @@ public final class Benchmark {
          return ""; // a run is under way (this process may be one of its passes)
       }
       // scenarios[:passes[:standard|ab[:options]]], options joined by '+': timedemo, nohud, noseed, capped, warmup,
-      // shots, cool<seconds> (the profiling runs of docs/plan-builtin-benchmark.md toggle one technique at a time)
+      // shots, cool<seconds> (the profiling runs of docs/plan-builtin-benchmark.md toggle one technique at a time),
+      // spring|summer|autumn|winter (every scenario in that season, 2026-10-24)
       String[] sp = v.split(":");
       String ids = "all".equals(sp[0]) ? allIds() : sp[0];
       String passes = sp.length > 1 ? sp[1] : "1";
@@ -403,11 +406,19 @@ public final class Benchmark {
             cool = s.substring(4);
          }
       }
+      String season = "";
+      for (String s : opt) {
+         if (!"start".equals(BenchSuite.seasonOf(s))) {
+            for (String id : ids.split(",")) {
+               season += (season.isEmpty() ? "" : ",") + id.trim() + ":" + BenchSuite.seasonOf(s);
+            }
+         }
+      }
       String autoFlag = opt.contains("report") ? "0" : "1"; // report: end on the report screen as a player would (UI check)
       String r = start("scenarios=" + ids + ";passes=" + passes + ";mode=" + mode + ";uncapped=" + (opt.contains("capped") ? "0" : "1") + ";auto=" + autoFlag
             + ";screenshot=" + (opt.contains("shots") ? "1" : "0") + ";timedemo=" + (opt.contains("timedemo") ? "1" : "0") + ";hud=" + (opt.contains("nohud") ? "0" : "1")
             + ";seed=" + (opt.contains("noseed") ? "0" : "1") + ";warmup=" + (opt.contains("warmup") ? "1" : "0") + ";cooldown=" + cool + ";label=" + v
-            + ";modlua=" + (opt.contains("nomodlua") ? "0" : "1"));
+            + ";modlua=" + (opt.contains("nomodlua") ? "0" : "1") + (season.isEmpty() ? "" : ";season=" + season));
       return r.startsWith("ok") ? "started" : r;
    }
 

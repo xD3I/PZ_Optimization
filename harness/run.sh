@@ -8,6 +8,12 @@
 #                  [--refresh-template] [--retries N] [--renderer nvidia|zink] [--env K=V]... [--mod ID]... [--vmarg ARG]...
 #                  [--lead secs] [--route-seconds secs] [--launcher auto|steam|direct] [--option key=value]...
 #                  [--preset night-torch|night-dark|storm|fog|storm-fog|louisville|helicopter]
+#                  [--season spring|summer|autumn|winter]
+#
+# --season NAME    the world runs on a date in that season (flag season=, pzopt.Season): the bench save's date moves
+#                  while the world loads, so erosion's trees and plants (blossom, green, autumn colours, bare), the climate
+#                  (temperature, dawn / dusk, light colours) and the sun follow it; winter also lays snow on the ground and
+#                  any --flag weather=rain|storm falls as snow. Combines with every preset; season= in pzopt-bench.out.
 #
 # --preset NAME    scene preset: bench mode on the spinning game-thread route (route=S:450 turn=90 zoom=max,
 #                  --route-seconds 25) plus the scene flags pzopt.Scene reads (time_of_day, torch, weather).
@@ -110,7 +116,7 @@ NATIVE_FLAG_FILE="${NATIVE_ZOMBOID:-$HOME/Zomboid}/Lua/pzopt-harness.txt"
 shot_at=""; label=""; quit_after=""; mode="verify"; source_save=""; extra_flags=(); props=(); mangohud_secs=""; mangohud_config=""
 overrides_jar=0; resume_shot=""; keep_save=0; resume_from=""; record=0; jfr=0; jfr_period=""; jfr_settings=(); game_profiler=0; gc=""; no_dashboard=0; refresh_template=0; retries=2; renderer="nvidia"; game_env=(); lead=""; route_seconds=""; launcher="auto"; game_options=(); extra_mods=(); vmargs=()
 schedmon=""; asprof=""
-preset=""; mode_set=0; pad_script=""; inputlag=0
+preset=""; season=""; mode_set=0; pad_script=""; inputlag=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --label) label="$2"; shift 2 ;;
@@ -119,6 +125,7 @@ while [[ $# -gt 0 ]]; do
     --preset) preset="$2"; shift 2 ;;              # scene preset (see the header); expanded after parsing
     --source-save) source_save="$2"; shift 2 ;;
     --flag) extra_flags+=("$2"); shift 2 ;;   # extra key=value for pzopt-harness.txt
+    --season) case "$2" in spring|summer|autumn|fall|winter) season="$2" ;; *) echo "unknown season: $2 (spring|summer|autumn|winter)" >&2; exit 2 ;; esac; shift 2 ;; # the world's date moved into that season (pzopt.Season)
     --prop) props+=("$2"); shift 2 ;;         # key=value for the game dir's pzopt.properties (see pzopt.Config)
     --mangohud) mangohud_secs="$2"; shift 2 ;; # external frame-time log via MangoHud for N seconds from launch
     --mangohud-config) mangohud_config="$2"; shift 2 ;; # config file used for this MangoHud run
@@ -172,6 +179,7 @@ if [[ -n "$preset" ]]; then
   [[ $mode_set -eq 1 ]] || mode=bench
   [[ -n "$route_seconds" ]] || route_seconds=25
 fi
+[[ -z "$season" ]] || extra_flags=("season=$season" "${extra_flags[@]}")   # a --flag season= given too wins
 if [[ -z "$route_seconds" ]]; then
   if [[ "$mode" == drive ]]; then route_seconds=90; else route_seconds=100; fi
 fi

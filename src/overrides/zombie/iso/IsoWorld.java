@@ -2076,6 +2076,7 @@ public final class IsoWorld {
 
          DebugType.General.println("ErosionGlobals.Boot() start");
          ErosionGlobals.Boot(spriteManager);
+         pzopt.Season.afterErosionBoot(); // pzopt: season= (harness / built-in benchmark), the date moved into that season before the climate and the chunks load
          DebugType.General.println("ErosionGlobals.Boot() end");
          DebugType.General.println("WorldDictionary.init() start");
          WorldDictionary.init();

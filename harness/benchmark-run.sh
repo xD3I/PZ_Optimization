@@ -3,6 +3,8 @@
 # and collects its results into harness/runs/bench-<label>-<ts>/. Submit as a queue cmd job:
 #   harness/queue.sh submit cmd --install opt --label bench-x ... -- harness/benchmark-run.sh <spec> <label> [prop=value ...]
 # spec = all | scenario[,scenario...][:passes[:ab]]   e.g. spin:1, louisville,horde:3, all:2:ab
+#        [:option+option...] after the mode (Benchmark.autoRequested): timedemo, nohud, capped, warmup, shots, cool<s>, report,
+#        spring|summer|autumn|winter (every scenario in that season), e.g. spin:1:standard:winter
 # Extra prop=value pairs go into the game dir's pzopt.properties for every process of the chain (e.g. devX=true).
 # BENCH_VMARGS="-Xmx12g -Ddeployment.user.cachedir=/x": extra JVM options for every process of the chain (each replaces the
 # launcher's option of the same key; restored after). With a cachedir, set ZOMBOID=<it>/Zomboid too (the chain's plan,
