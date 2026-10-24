@@ -6,6 +6,9 @@ vec4 gtS(vec2 p);
 #ifndef GT_RELIGHT
 #define GT_RELIGHT 1
 #endif
+#ifndef GT_WATER
+#define GT_WATER 1
+#endif
 
 // The view ray: a point h squares above the rest surface shows where the rest surface would be 2.449 h further toward +x+y
 // (one square of height moves the screen like 2.449 units of x + y; SunShadow's WZ / WX). So the pixel whose rest-surface
@@ -147,7 +150,7 @@ vec3 gtFactor(vec2 p0, int mat, vec3 L, float sun, float wet, float snowDepth, v
 #endif
    f *= relight * ao;
    // water standing in the ruts (mud, sand, slush): a flat surface at the pooled level; brown, opaque, the sky at grazing
-   if ((mat == 2 || mat == 3 || mat == 5) && wet > 0.0) {
+   if (GT_WATER == 1 && (mat == 2 || mat == 3 || mat == 5) && wet > 0.0) {
       float level = mix(0.035, 0.012, wet); // deeper water the wetter it has been
       float wd = depth - level;
       if (wd > 0.0) {

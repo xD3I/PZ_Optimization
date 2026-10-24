@@ -1909,6 +1909,7 @@ public final class Config {
    public static volatile int RIPPLES_RAIN_PCT; // puddle ripples: the raindrops' rings, how strongly they tilt the surface (live)
    // ground tracks (2026-10-24, pzopt.GroundTracks, the "Ground and grass" Visuals): ruts, footprints, worn paths that persist and fade
    public static volatile String GROUND_TRACKS_LOOK; // groundTracksLook: bake (drawn into the chunk textures, 0 a frame) | composite (drawn over the picture each frame where tracks are)
+   public static volatile String GROUND_TRACKS_WATER; // groundTracksWater: bake (murky water drawn with the look) | puddles (the game's puddle pass fills the ruts, with ripples on) | off
    public static volatile boolean GROUND_TRACKS_POM; // groundTracksPom: relief offset sampling along the fixed view ray (the near wall of a rut hides its floor)
    public static volatile int GROUND_TRACKS_SHADOW_STEPS; // groundTracksShadowSteps: the self-shadow march toward the key light (0 off)
    public static volatile boolean GROUND_TRACKS_AO; // groundTracksAo: the cavity term in ruts
@@ -2435,6 +2436,7 @@ public final class Config {
       OVERLAY_FPS_COLOR_YELLOW = string("overlayFpsColorYellow", "yellow");
       OVERLAY_FPS_COLOR_RED = string("overlayFpsColorRed", "red");
       GROUND_TRACKS_LOOK = string("groundTracksLook", "bake").trim().toLowerCase(java.util.Locale.ROOT);
+      GROUND_TRACKS_WATER = string("groundTracksWater", "bake").trim().toLowerCase(java.util.Locale.ROOT);
       GROUND_TRACKS_POM = bool("groundTracksPom", true);
       GROUND_TRACKS_SHADOW_STEPS = Math.max(0, Math.min(16, integer("groundTracksShadowSteps", 8)));
       GROUND_TRACKS_AO = bool("groundTracksAo", true);

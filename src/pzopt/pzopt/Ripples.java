@@ -1007,6 +1007,7 @@ public final class Ripples {
       Frame f = renderFrame;
       RainRipples.uniforms(prog, f);
       Wakes.uniforms(prog, f);
+      GroundTracks.puddleUniforms(prog); // the water in the ground tracks' ruts (groundTracksWater=puddles)
       boolean sim = f != null && f.mode == SIM && f.sim.any;
       boolean world = f != null && f.mode == WORLD && f.world.any;
       if (f == null || f.n == 0 && !sim && !world || !on()) {
@@ -1212,7 +1213,7 @@ public final class Ripples {
       if (sm < 0 || !code.contains(anchor) || !code.contains("float levelf =") || !code.contains("uniform vec4 WOffset;") || !code.contains("float puddlesZCoordinate")) {
          return null;
       }
-      String c = code.substring(0, sm) + RING_GLSL + "\n" + RainRipples.glsl(binding) + "\n" + Wakes.glsl() + "\n" + code.substring(sm);
+      String c = code.substring(0, sm) + RING_GLSL + "\n" + RainRipples.glsl(binding) + "\n" + Wakes.glsl() + "\n" + GroundTracks.puddleGlsl() + "\n" + code.substring(sm);
       if (binding) {
          // right after the version line (Mesa refuses a declaration before an #extension; Ssr keeps what follows its own header)
          int eol = c.indexOf('\n');
@@ -1222,6 +1223,7 @@ public final class Ripples {
       if (c == null) {
          return null;
       }
+      c = c.replace("float levelf =min(pow(level, 0.3), 1.0) + level;", "float levelf =min(pow(level, 0.3), 1.0) + level;\n    levelf = pzGtLevel(fragCoord, levelf); // pzopt: water in the ground tracks' ruts (pzopt.GroundTracks)");
       c = c.replace(anchor, anchor + "\n    if (pzRipP.z > 0.5 && (levelf*puddlesSize > 0.28 || pzRipT.w > 0.5)) { pzRipG = pzRipGrad(fragCoord) * pzRipP.y * (1.0 + " + RAIN_BOOST + " * rainIntensity); gm.xz -= pzRipG; } // pzopt: puddle ripples (a footstep stirs more than the raindrops' rings: stronger in rain)\n    pzWakeG = pzWake(fragCoord, levelf*puddlesSize); pzRipG += pzRainG + pzWakeG; gm.xz -= pzRainG + pzWakeG; // pzopt: rain rings (pzopt.RainRipples), car wakes (pzopt.Wakes)");
       // the crests catch the light (the overcast sky the puddle mirrors in rain is flat: the tilt alone hardly shows)
       String refl = "vec3 reflection = fragColor.rgb;";

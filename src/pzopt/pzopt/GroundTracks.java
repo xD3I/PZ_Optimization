@@ -138,6 +138,21 @@ public final class GroundTracks {
     * colour hook, {@link #PATCH}: no extra draw, but under the snow), composite (over the picture each frame), stamp (none:
     * the stamping alone). devGroundCycle variants of these names override the key in-run.
     */
+   /**
+    * Water in the ruts: bake (a flat murky surface drawn with the look), puddles (the game's puddle pass fills the ruts: its
+    * ripples, raindrop rings and reflections; needs ripples on, which patches the puddle program), off. devGroundCycle
+    * variants puddlewater / nowater override the key.
+    */
+   static String water(String v) {
+      if ("puddlewater".equals(v)) {
+         return "puddles";
+      }
+      if ("nowater".equals(v)) {
+         return "off";
+      }
+      return Config.GROUND_TRACKS_WATER;
+   }
+
    static String look() {
       String v = Ground.variant();
       if ("stamp".equals(v) || "patch".equals(v) || "bake".equals(v) || "composite".equals(v)) {
@@ -240,6 +255,7 @@ public final class GroundTracks {
       src.bodies = Config.GROUND_TRACKS_BODIES;
       src.strengthPct = Config.GROUND_TRACKS_STRENGTH_PCT;
       wetness();
+      puddleWet = wet;
       zombie.characters.IsoPlayer pl = zombie.characters.IsoPlayer.players[playerIndex];
       if (Config.DEV_GROUND_TRACKS_RIG > 0 && pl != null) {
          rig(pl);
@@ -453,7 +469,8 @@ public final class GroundTracks {
       int shadow = "noshadow".equals(v) || "flat".equals(v) || "colour".equals(v) ? 0 : Config.GROUND_TRACKS_SHADOW_STEPS;
       boolean ao = Config.GROUND_TRACKS_AO && !"noao".equals(v) && !"colour".equals(v);
       return "#version 430\n#define GT_TPS " + TPS + ".0\n#define GT_TN " + TN + "\n#define GT_POM " + (pom ? 1 : 0) + "\n#define GT_SHADOW " + shadow
-         + "\n#define GT_AO " + (ao ? 1 : 0) + "\n#define GT_RELIGHT " + ("colour".equals(v) ? 0 : 1) + "\n";
+         + "\n#define GT_AO " + (ao ? 1 : 0) + "\n#define GT_RELIGHT " + ("colour".equals(v) ? 0 : 1) + "\n#define GT_WATER " + ("bake".equals(water(v)) ? 1 : 0)
+         + "\n";
    }
 
    static String bakeVert(String h) {
@@ -819,5 +836,54 @@ public final class GroundTracks {
          SpriteRenderer.ringBuffer.restoreBoundTextures = true;
          GpuSections.markNow("ground.comp", true);
       }
+   }
+
+   // ------------------------------------------------------------------------------------------------ water in the ruts, by the puddle pass
+
+   /**
+    * GLSL for the puddle unit (Ripples.patchText includes it; GLSL 1.20): {@code pzGtLevel(fragCoord, levelf)} raises the
+    * puddle level where a rut is deeper than the water the ground holds, so the game's own puddle draws its water there, with
+    * the ripples, the raindrop rings, the wakes and the reflections of the rest of the puddles.
+    */
+   public static String puddleGlsl() {
+      return GroundState.GLSL + String.join("\n",
+         "uniform vec4 pzGtW; // the world square of the view's px (0, 0) at level 0, 1 / (32 tile scale), on (0: off)",
+         "uniform vec4 pzGtWet; // x the ground's wetness 0..1, y the water level below the rest (squares) at it",
+         "float pzGtLevel(vec2 fc, float levelf) {",
+         "   if (pzGtW.w < 0.5 || puddlesZCoordinate > 0.5) return levelf;",
+         "   vec2 d = fc * WOffset.zw * pzGtW.z;",
+         "   vec2 w = pzGtW.xy + vec2(d.x * 0.5 + d.y, d.y - d.x * 0.5);",
+         "   float depth = -pzgStateAt(w).x;",
+         "   float a = smoothstep(pzGtWet.y, pzGtWet.y + 0.012, depth) * clamp(pzGtWet.x * 1.5, 0.0, 1.0);",
+         "   return max(levelf, a * 0.36 / max(puddlesSize, 0.05)); // 0.35: the stock's full reflection",
+         "}",
+         "");
+   }
+
+   private static final java.util.HashMap<Integer, int[]> PUDDLE_LOCS = new java.util.HashMap<>();
+   static volatile float puddleWet;
+   static long puddleDraws;
+
+   /** Render thread, the puddle program bound (Ripples.puddleUniforms): the rut water's uniforms, the ground map on its unit. */
+   public static void puddleUniforms(int prog) {
+      int[] l = PUDDLE_LOCS.get(prog);
+      if (l == null) {
+         l = new int[] {GL20.glGetUniformLocation(prog, "pzGtW"), GL20.glGetUniformLocation(prog, "pzGtWet")};
+         PUDDLE_LOCS.put(prog, l);
+      }
+      if (l[0] < 0) {
+         return;
+      }
+      float wetNow = puddleWet;
+      if (failed || !on() || !"puddles".equals(water(Ground.variant())) || wetNow <= 0F || !GroundState.bindTexture()) {
+         GL20.glUniform4f(l[0], 0F, 0F, 0F, 0F);
+         return;
+      }
+      GroundState.applyUniforms(prog);
+      org.joml.Vector4f off = zombie.iso.IsoPuddles.getInstance().getShaderOffset();
+      double a = off.x / (32.0 * Core.tileScale), b = off.y / (16.0 * Core.tileScale);
+      GL20.glUniform4f(l[0], (float)((a + b) * 0.5), (float)((b - a) * 0.5), 1F / (32F * Core.tileScale), 1F);
+      GL20.glUniform4f(l[1], wetNow, 0.035F + (0.012F - 0.035F) * wetNow, 0F, 0F);
+      puddleDraws++;
    }
 }
