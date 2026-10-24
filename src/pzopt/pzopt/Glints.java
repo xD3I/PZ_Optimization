@@ -7,10 +7,14 @@ import org.lwjgl.BufferUtils;
 import org.lwjgl.opengl.GL11;
 import org.lwjgl.opengl.GL13;
 import org.lwjgl.opengl.GL14;
+import org.lwjgl.opengl.GL15;
 import org.lwjgl.opengl.GL20;
 import org.lwjgl.opengl.GL30;
 import org.lwjgl.opengl.GL31;
 import org.lwjgl.opengl.GL32;
+import org.lwjgl.opengl.GL40;
+import org.lwjgl.opengl.GL42;
+import org.lwjgl.opengl.GL43;
 import zombie.characters.IsoGameCharacter;
 import zombie.core.Core;
 import zombie.core.SpriteRenderer;
@@ -94,8 +98,33 @@ public final class Glints {
       return 1;
    }
 
+   static final String[] PASS_NAMES = {"diamonds", "particles", "compact"};
+   static final int P_DIAMONDS = 0, P_PARTICLES = 1, P_COMPACT = 2;
+   /** Flake slots a square: 4 lights (the key light first) x 4 angular cells x 4 flakes a cell. */
+   static final int SLOTS = 64;
+
+   /** The pass in force (glintPass, or a devGroundCycle name). */
+   static int passMode() {
+      String v = Ground.variant();
+      String m = Config.GLINT_PASS;
+      for (int i = 0; i < PASS_NAMES.length; i++) {
+         if (PASS_NAMES[i].equals(v)) {
+            m = v;
+         }
+      }
+      int p = "particles".equals(m) ? P_PARTICLES : "compact".equals(m) ? P_COMPACT : P_DIAMONDS;
+      if (p == P_COMPACT && !Gpu.computeOk()) {
+         p = P_PARTICLES;
+      }
+      return p;
+   }
+
    static String section(int model) {
       return Ground.section(model < 0 ? "ground.glints.off" : "ground.glints." + MODELS[model]);
+   }
+
+   static String section(int model, int pass) {
+      return pass == P_DIAMONDS || model < 0 ? section(model) : Ground.section("ground.glints." + PASS_NAMES[pass]);
    }
 
    // ------------------------------------------------------------------------------------------------ the masks
@@ -162,7 +191,7 @@ public final class Glints {
          }
          int kind = -1;
          float s = 0F;
-         float sunVis = GroundCover.sunVisibility(sq);
+         float sunVis = GroundCover.squareSun(c, level, i);
          if (forceKind >= 0) {
             kind = forceKind;
             s = 1F;
@@ -170,7 +199,7 @@ public final class Glints {
             kind = K_SNOW;
             s = 1F;
          } else {
-            float frost = GroundCover.frost(sq, sunVis);
+            float frost = GroundCover.on() ? GroundCover.squareFrost(c, level, i) : 0F;
             if (frost > 0.05F) {
                kind = K_FROST;
                s = frost;
@@ -321,7 +350,7 @@ public final class Glints {
       final float[] data = new float[MAX * TEXELS * 4];
       int n;
       final Lights lights = new Lights();
-      int model;
+      int model, pass;
       float zoom, jx, jy;
       int ts;
       int stamp;
@@ -361,6 +390,7 @@ public final class Glints {
       int frameNo = IsoWorld.instance.getFrameNo();
       sweep(frameNo);
       int model = model();
+      int passMode = passMode();
       if (model < 0) {
          GpuSections.begin(section(-1));
          GpuSections.end(section(-1));
@@ -471,6 +501,7 @@ public final class Glints {
       }
       framesQueued++;
       f.model = model;
+      f.pass = passMode;
       f.zoom = zoom;
       f.ts = ts;
       f.jx = camera.fixJigglyModelsX * zoom;
@@ -481,7 +512,7 @@ public final class Glints {
          p = PASSES[(passIndex - 1) & 7] = new Pass();
       }
       p.frame = f;
-      String sec = section(model);
+      String sec = section(model, passMode);
       GpuSections.begin(sec);
       SpriteRenderer.instance.drawGeneric(p);
       GpuSections.end(sec);
@@ -497,6 +528,7 @@ public final class Glints {
    static final String VERT = String.join("\n",
          "#version 330",
          "uniform sampler2D uData;",
+         "vec4 pzgTexel(int i) { return texelFetch(uData, ivec2(i & 4095, i >> 12), 0); }",
          "uniform mat4 uMVP;",
          "uniform vec4 uJ;    // jiggle x, y, K per unit x + y, bias",
          "uniform float uTs;",
@@ -506,10 +538,10 @@ public final class Glints {
          "flat out ivec2 vB;  // light bits, level",
          "void main() {",
          "   int i = gl_InstanceID;",
-         "   vec4 a = texelFetch(uData, ivec2(i * 4, 0), 0);",
-         "   vec4 b = texelFetch(uData, ivec2(i * 4 + 1, 0), 0);",
-         "   vec4 c = texelFetch(uData, ivec2(i * 4 + 2, 0), 0);",
-         "   vec4 e = texelFetch(uData, ivec2(i * 4 + 3, 0), 0);",
+         "   vec4 a = pzgTexel(i * 4);",
+         "   vec4 b = pzgTexel(i * 4 + 1);",
+         "   vec4 c = pzgTexel(i * 4 + 2);",
+         "   vec4 e = pzgTexel(i * 4 + 3);",
          "   int v = gl_VertexID;",
          "   vec2 o = v == 0 ? vec2(0.0) : v == 1 ? vec2(1.0, 0.0) : v == 2 ? vec2(1.0) : vec2(0.0, 1.0);",
          "   vec2 scr = a.xy + vec2((o.x - o.y) * 32.0 * uTs, (o.x + o.y) * 16.0 * uTs);",
@@ -521,6 +553,192 @@ public final class Glints {
          "   vM = c;",
          "   vB = ivec2(int(e.x + 0.5), int(e.y + 0.5));",
          "}");
+
+   /**
+    * glintPass=particles: the glinting flakes alone, as points (one vertex a flake slot, {@link #SLOTS} a square). Deliot and
+    * Belcour's counting at the scale of a square: for each light the half vector's slope falls between four angular cells of
+    * width b; each cell's number of facets is a binomial draw (pzgBinom: N = facets a square, p = P22 x b^2) hashed from the
+    * square and the cell, so a cell's count never changes while the light stays in it and the bilinear weights fade glints in
+    * and out as it moves. Up to four of a cell's facets are drawn (more are folded into their energy), each at its own
+    * hashed spot in the square, as a 2 x 2 pixel tent (bilinear splat: the energy is kept as the camera pans by sub-pixels).
+    * Energy: the square's smooth reflection (area x F D / (4 cos^4 V.z) E) shared by the facets. A slot with nothing to draw
+    * leaves the clip volume (no fragment).
+    */
+   static final String FLAKE = String.join("\n",
+         "uniform sampler2D uData;",
+         "vec4 pzgTexel(int i) { return texelFetch(uData, ivec2(i & 4095, i >> 12), 0); }",
+         "uniform mat4 uMVP;",
+         "uniform vec4 uJ;    // jiggle x, y, K per unit x + y, bias",
+         "uniform float uTs;",
+         "uniform vec4 uLp[" + MAX_LIGHTS + "];",
+         "uniform vec4 uLd[" + MAX_LIGHTS + "];",
+         "uniform vec4 uLc[" + MAX_LIGHTS + "];",
+         "uniform vec4 uSun;",
+         "uniform vec4 uSunC;",
+         "uniform vec4 uKind[3];",
+         "uniform vec4 uView; // footprint (grid units per pixel), brightness, dev view, square area in screen px",
+         "const vec3 V = vec3(0.61237244, 0.61237244, 0.5);",
+         "// one flake slot: its clip position and energy (rgb; 0 = nothing to draw)",
+         "bool pzgFlake(int vid, out vec4 clip, out vec3 energy) {",
+         "   int sq = vid / " + SLOTS + ", k = vid - sq * " + SLOTS + ";",
+         "   int li = k >> 4, cell = (k >> 2) & 3, fi = k & 3;",
+         "   vec4 a = pzgTexel(sq * 4);",
+         "   vec4 b = pzgTexel(sq * 4 + 1);",
+         "   vec4 c = pzgTexel(sq * 4 + 2);",
+         "   vec4 e = pzgTexel(sq * 4 + 3);",
+         "   int bits = int(e.x + 0.5), level = int(e.y + 0.5);",
+         "   int kind = int(c.x + 0.5);",
+         "   vec4 kp = uKind[kind];",
+         "   // the slot's light: 0 = the key light (when it reaches the square), then the point lights by bit",
+         "   int slot = li, light = -2;",
+         "   bool sun = uSun.w > 0.0 && c.z > 0.03;",
+         "   if (sun) { if (slot == 0) light = -1; else slot -= 1; }",
+         "   if (light == -2) {",
+         "      for (int i = 0; i < " + MAX_LIGHTS + "; i++) {",
+         "         if ((bits & (1 << i)) == 0) continue;",
+         "         if (slot == 0) { light = i; break; }",
+         "         slot--;",
+         "      }",
+         "   }",
+         "   if (light == -2) return false;",
+         "   vec3 P = vec3(b.xy + 0.5, a.w * 2.4494897);",
+         "   vec3 L, E;",
+         "   if (light == -1) { L = uSun.xyz; E = uSunC.rgb * (uSun.w * c.z); }",
+         "   else {",
+         "      vec3 d = uLp[light].xyz - P;",
+         "      float r = length(d), hr = length(d.xy);",
+         "      L = d / max(r, 1e-4);",
+         "      float att = clamp(1.0 - hr / uLp[light].w, 0.0, 1.0);",
+         "      if (uLd[light].z > -1.5) {",
+         "         float cs = hr > 1e-3 ? dot(-d.xy / hr, uLd[light].xy) : 1.0;",
+         "         att *= smoothstep(uLd[light].z - 0.04, uLd[light].z + 0.04, cs);",
+         "      }",
+         "      E = uLc[light].rgb * (uLd[light].w * att * c.w * 1.6);",
+         "   }",
+         "   if (L.z <= 0.0 || dot(E, vec3(1.0)) <= 0.0) return false;",
+         "   vec3 H = normalize(L + V);",
+         "   vec2 m = H.xy / H.z;",
+         "   float c2 = H.z * H.z;",
+         "   float F = kp.w + (1.0 - kp.w) * pow(1.0 - clamp(dot(L, H), 0.0, 1.0), 5.0);",
+         "   vec3 lobe = E * (F / (c2 * c2) / (4.0 * V.z)) * uView.w * c.y * uView.y; // the square's smooth reflection / P22",
+         "#ifdef PZG_SMOOTH",
+         "   if (cell != 0 || fi != 0) return false; // the rig's reference: the smooth NDF's energy, one slot a light",
+         "   energy = lobe * pzgP22(m, kp.y); clip = vec4(0.0); return true;",
+         "#endif",
+         "   float bw = kp.z;",
+         "   vec2 q = m / bw - 0.5;",
+         "   vec2 c0 = floor(q), f = q - c0;",
+         "   ivec2 off = ivec2(cell & 1, cell >> 1);",
+         "   vec2 cc = c0 + vec2(off);",
+         "   float w = (off.x == 1 ? f.x : 1.0 - f.x) * (off.y == 1 ? f.y : 1.0 - f.y);",
+         "   float N = kp.x * 1024.0; // facets a square (1024 grid units^2)",
+         "   float p = pzgP22((cc + 0.5) * bw, kp.y) * bw * bw;",
+         "   if (w <= 0.0 || N * p < 1e-4) return false;",
+         "   ivec2 gs = ivec2(b.zw + 0.5);",
+         "   vec4 u = pzgRand4(ivec4(gs, int(cc.x) * 977 + int(cc.y) * 131 + kind * 7 + level * 71, " + "1013));",
+         "   float n = pzgBinom(N, p, u.xy);",
+         "   if (float(fi) >= n) return false;",
+         "   float share = max(n, 4.0) / 4.0; // a cell with more than four facets: the four drawn carry the rest's energy",
+         "   vec4 v = pzgRand4(ivec4(gs, int(cc.x) * 31 + int(cc.y) * 17 + fi * 5 + kind, " + "4099 + level));",
+         "   vec2 o = v.xy;",
+         "   // the square's discrete P22 is (sum of w n) / (N b^2); its reflection over the square's screen area, one facet's share",
+         "   energy = lobe * (w * share / (N * bw * bw));",
+         "   vec2 scr = a.xy + vec2((o.x - o.y) * 32.0 * uTs, (o.x + o.y) * 16.0 * uTs);",
+         "   clip = uMVP * vec4(scr + uJ.xy, 0.0, 1.0);",
+         "   float depth = a.z - (o.x + o.y) * uJ.z - uJ.w;",
+         "   clip.z = (depth * 2.0 - 1.0) * clip.w;",
+         "   return true;",
+         "}");
+
+   static final String PVERT = String.join("\n",
+         "#version 330",
+         GlintGlsl.LIB,
+         FLAKE,
+         "flat out vec3 vE;",
+         "void main() {",
+         "   vec4 clip; vec3 en;",
+         "   if (!pzgFlake(gl_VertexID, clip, en)) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); gl_PointSize = 1.0; vE = vec3(0.0); return; }",
+         "   gl_Position = clip;",
+         "   gl_PointSize = 2.0;",
+         "   vE = uView.z == 3.0 ? en * 20.0 : en;",
+         "}");
+
+   static final String PFRAG = String.join("\n",
+         "#version 330",
+         "flat in vec3 vE;",
+         "out vec4 fragColor;",
+         "void main() {",
+         "   // a 2 x 2 bilinear splat: the point's four pixels share the energy by their distance to its centre",
+         "   vec2 d = abs(gl_PointCoord - 0.5) * 2.0;",
+         "   vec2 t = max(1.0 - d, 0.0);",
+         "   fragColor = vec4(vE * (t.x * t.y), 0.0);",
+         "}");
+
+   static final int COMPACT_MAX = 262144;
+
+   /** Every glint program's sources by name (GroundCoverTest links them and dumps them for harness/ground/cover/glint_rig.py). */
+   static java.util.LinkedHashMap<String, String[]> sources() {
+      java.util.LinkedHashMap<String, String[]> m = new java.util.LinkedHashMap<>();
+      for (int i = 0; i < MODELS.length; i++) {
+         m.put("diamonds-" + MODELS[i], new String[] {VERT, frag(i)});
+      }
+      m.put("particles", new String[] {PVERT, PFRAG});
+      m.put("compact-draw", new String[] {CVERT, PFRAG});
+      m.put("compact", new String[] {null, CCOMP});
+      return m;
+   }
+
+   /** glintPass=compact: the same flakes evaluated by a compute shader into a list of the lit ones, drawn by one indirect draw. */
+   static final String CCOMP = String.join("\n",
+         "#version 430",
+         "layout(local_size_x = 64) in;",
+         GlintGlsl.LIB,
+         FLAKE,
+         "uniform int uTotal;",
+         "layout(std430, binding = 0) buffer Flakes { vec4 flakes[]; };",
+         "layout(std430, binding = 1) buffer Cmd { uint count; uint instances; uint first; uint baseInstance; };",
+         "void main() {",
+         "   int vid = int(gl_GlobalInvocationID.x);",
+         "   if (vid >= uTotal) return;",
+         "   vec4 clip; vec3 en;",
+         "   if (!pzgFlake(vid, clip, en)) return;",
+         "   uint i = atomicAdd(count, 1u);",
+         "   if (i >= " + COMPACT_MAX + "u) return;",
+         "   flakes[i * 2u] = clip;",
+         "   flakes[i * 2u + 1u] = vec4(uView.z == 3.0 ? en * 20.0 : en, 0.0);",
+         "}");
+
+   static final String CVERT = String.join("\n",
+         "#version 430",
+         "layout(std430, binding = 0) readonly buffer Flakes { vec4 flakes[]; };",
+         "flat out vec3 vE;",
+         "void main() {",
+         "   gl_Position = flakes[gl_VertexID * 2];",
+         "   vE = flakes[gl_VertexID * 2 + 1].rgb;",
+         "   gl_PointSize = 2.0;",
+         "}");
+
+   /** A compute program (Shaders has graphics programs only). */
+   static int computeProgram(String src) {
+      int sh = GL20.glCreateShader(GL43.GL_COMPUTE_SHADER);
+      GL20.glShaderSource(sh, src);
+      GL20.glCompileShader(sh);
+      if (GL20.glGetShaderi(sh, GL20.GL_COMPILE_STATUS) == 0) {
+         Log.warn("glints: compute shader: " + GL20.glGetShaderInfoLog(sh));
+         GL20.glDeleteShader(sh);
+         return 0;
+      }
+      int p = GL20.glCreateProgram();
+      GL20.glAttachShader(p, sh);
+      GL20.glLinkProgram(p);
+      GL20.glDeleteShader(sh);
+      if (GL20.glGetProgrami(p, GL20.GL_LINK_STATUS) == 0) {
+         Log.warn("glints: compute program: " + GL20.glGetProgramInfoLog(p));
+         GL20.glDeleteProgram(p);
+         return 0;
+      }
+      return p;
+   }
 
    /** The fragment shader of one model (MODEL 0..4, as MODELS). */
    static String frag(int model) {
@@ -598,15 +816,15 @@ public final class Glints {
    }
 
    static final class Gpu {
-      private static final int[] programs = new int[MODELS.length];
-      private static final int[][] locs = new int[MODELS.length][];
+      private static final int[] programs = new int[MODELS.length + 3];
+      private static final int[][] locs = new int[MODELS.length + 3][];
       private static int tex, vao, lastStamp = -1;
       private static FloatBuffer upload;
       private static final FloatBuffer mat = BufferUtils.createFloatBuffer(16);
       private static final FloatBuffer v8 = BufferUtils.createFloatBuffer(MAX_LIGHTS * 4);
       private static final FloatBuffer v3 = BufferUtils.createFloatBuffer(12);
       private static final Matrix4f mvp = new Matrix4f();
-      static final String[] NAMES = {"uData", "uMVP", "uJ", "uTs", "uLp", "uLd", "uLc", "uSun", "uSunC", "uKind", "uView"};
+      static final String[] NAMES = {"uData", "uMVP", "uJ", "uTs", "uLp", "uLd", "uLc", "uSun", "uSunC", "uKind", "uView", "uTotal"};
 
       /** Render thread, at world entry (shaderWarmup) or on the first draw: every model's program. */
       static void warm() {
@@ -616,16 +834,37 @@ public final class Glints {
          for (int i = 0; i < MODELS.length; i++) {
             program(i);
          }
+         program(PROG_PARTICLES);
+         if (computeOk()) {
+            program(PROG_COMPACT);
+            program(PROG_COMPACT_DRAW);
+         }
+      }
+
+      static final int PROG_PARTICLES = MODELS.length, PROG_COMPACT = MODELS.length + 1, PROG_COMPACT_DRAW = MODELS.length + 2;
+      private static int ssbo, indirect;
+      private static final java.nio.IntBuffer CMD = BufferUtils.createIntBuffer(4);
+
+      /** Compute shaders and indirect draws (GL 4.3; not on the Mac's 4.1). */
+      static boolean computeOk() {
+         try {
+            return org.lwjgl.opengl.GL.getCapabilities().OpenGL43;
+         } catch (Throwable t) {
+            return false;
+         }
       }
 
       static int program(int model) {
          if (programs[model] != 0) {
             return programs[model];
          }
-         int p = Shaders.program("glints " + MODELS[model], VERT, frag(model));
+         String name = model < MODELS.length ? MODELS[model] : model == PROG_PARTICLES ? "particles" : model == PROG_COMPACT ? "compact" : "compact draw";
+         int p = model < MODELS.length ? Shaders.program("glints " + name, VERT, frag(model))
+            : model == PROG_PARTICLES ? Shaders.program("glints " + name, PVERT, PFRAG)
+            : model == PROG_COMPACT ? computeProgram(CCOMP) : Shaders.program("glints " + name, CVERT, PFRAG);
          if (p == 0) {
             programs[model] = -1;
-            Log.warn("glints: the " + MODELS[model] + " program did not build");
+            Log.warn("glints: the " + name + " program did not build");
             return -1;
          }
          programs[model] = p;
@@ -634,7 +873,7 @@ public final class Glints {
             l[i] = GL20.glGetUniformLocation(p, NAMES[i]);
          }
          locs[model] = l;
-         Log.info("glints: " + MODELS[model] + " program " + p);
+         Log.info("glints: " + name + " program " + p);
          return p;
       }
 
@@ -644,16 +883,17 @@ public final class Glints {
             return;
          }
          try {
-            int prog = program(f.model);
-            if (prog <= 0) {
+            int which = f.pass == P_PARTICLES ? PROG_PARTICLES : f.pass == P_COMPACT ? PROG_COMPACT : f.model;
+            int prog = program(which);
+            if (prog <= 0 || f.pass == P_COMPACT && program(PROG_COMPACT_DRAW) <= 0) {
                return;
             }
-            int[] l = locs[f.model];
+            int[] l = locs[which];
             if (tex == 0) {
                tex = GL11.glGenTextures();
                GL13.glActiveTexture(GL13.GL_TEXTURE1);
                GL11.glBindTexture(GL11.GL_TEXTURE_2D, tex);
-               GL11.glTexImage2D(GL11.GL_TEXTURE_2D, 0, GL30.GL_RGBA32F, MAX * TEXELS, 1, 0, GL11.GL_RGBA, GL11.GL_FLOAT, (FloatBuffer)null);
+               GL11.glTexImage2D(GL11.GL_TEXTURE_2D, 0, GL30.GL_RGBA32F, 4096, MAX * TEXELS / 4096, 0, GL11.GL_RGBA, GL11.GL_FLOAT, (FloatBuffer)null);
                GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MIN_FILTER, GL11.GL_NEAREST);
                GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MAG_FILTER, GL11.GL_NEAREST);
                vao = GL30.glGenVertexArrays();
@@ -666,8 +906,13 @@ public final class Glints {
                   upload = BufferUtils.createFloatBuffer(MAX * TEXELS * 4);
                }
                upload.clear();
-               upload.put(f.data, 0, floats).flip();
-               GL11.glTexSubImage2D(GL11.GL_TEXTURE_2D, 0, 0, 0, f.n * TEXELS, 1, GL11.GL_RGBA, GL11.GL_FLOAT, upload);
+               upload.put(f.data, 0, floats);
+               int texels = f.n * TEXELS, rows = (texels + 4095) / 4096;
+               while (upload.position() < rows * 4096 * 4) {
+                  upload.put(0F); // the last row's tail
+               }
+               upload.flip();
+               GL11.glTexSubImage2D(GL11.GL_TEXTURE_2D, 0, 0, 0, 4096, rows, GL11.GL_RGBA, GL11.GL_FLOAT, upload);
                lastStamp = f.stamp;
             }
             zombie.core.ShaderHelper.glUseProgramObjectARB(prog);
@@ -696,7 +941,30 @@ public final class Glints {
             kindParams(v3);
             v3.flip();
             GL20.glUniform4fv(l[9], v3);
-            GL20.glUniform4f(l[10], f.zoom / f.ts, Config.GLINT_PCT / 100F, Config.DEV_GLINT_VIEW, 0F);
+            GL20.glUniform4f(l[10], f.zoom / f.ts, Config.GLINT_PCT / 100F, Config.DEV_GLINT_VIEW, 1024F * f.ts * f.ts / (f.zoom * f.zoom));
+            if (f.pass == P_COMPACT) {
+               // the lit flakes into a list (compute), then one indirect draw of exactly those
+               if (ssbo == 0) {
+                  ssbo = GL15.glGenBuffers();
+                  GL15.glBindBuffer(GL43.GL_SHADER_STORAGE_BUFFER, ssbo);
+                  GL15.glBufferData(GL43.GL_SHADER_STORAGE_BUFFER, (long)COMPACT_MAX * 32L, GL15.GL_DYNAMIC_COPY);
+                  indirect = GL15.glGenBuffers();
+                  GL15.glBindBuffer(GL40.GL_DRAW_INDIRECT_BUFFER, indirect);
+                  GL15.glBufferData(GL40.GL_DRAW_INDIRECT_BUFFER, 16L, GL15.GL_DYNAMIC_COPY);
+               }
+               CMD.clear();
+               CMD.put(0).put(1).put(0).put(0).flip();
+               GL15.glBindBuffer(GL40.GL_DRAW_INDIRECT_BUFFER, indirect);
+               GL15.glBufferSubData(GL40.GL_DRAW_INDIRECT_BUFFER, 0L, CMD);
+               GL30.glBindBufferBase(GL43.GL_SHADER_STORAGE_BUFFER, 0, ssbo);
+               GL30.glBindBufferBase(GL43.GL_SHADER_STORAGE_BUFFER, 1, indirect);
+               int total = f.n * SLOTS;
+               GL20.glUniform1i(l[11], total);
+               GL43.glDispatchCompute((total + 63) / 64, 1, 1);
+               GL42.glMemoryBarrier(GL42.GL_COMMAND_BARRIER_BIT | GL43.GL_SHADER_STORAGE_BARRIER_BIT);
+               prog = programs[PROG_COMPACT_DRAW];
+               zombie.core.ShaderHelper.glUseProgramObjectARB(prog);
+            }
             GL11.glEnable(GL11.GL_BLEND);
             GL14.glBlendFuncSeparate(GL11.GL_ONE, GL11.GL_ONE, GL11.GL_ZERO, GL11.GL_ONE);
             GL11.glEnable(GL11.GL_DEPTH_TEST);
@@ -704,7 +972,18 @@ public final class Glints {
             GL11.glDepthMask(false);
             GL11.glEnable(GL32.GL_DEPTH_CLAMP);
             GL30.glBindVertexArray(vao);
-            GL31.glDrawArraysInstanced(GL11.GL_TRIANGLE_FAN, 0, 4, f.n);
+            if (f.pass == P_DIAMONDS) {
+               GL31.glDrawArraysInstanced(GL11.GL_TRIANGLE_FAN, 0, 4, f.n);
+            } else {
+               GL11.glEnable(GL32.GL_PROGRAM_POINT_SIZE);
+               if (f.pass == P_PARTICLES) {
+                  GL11.glDrawArrays(GL11.GL_POINTS, 0, f.n * SLOTS);
+               } else {
+                  GL40.glDrawArraysIndirect(GL11.GL_POINTS, 0L);
+                  GL15.glBindBuffer(GL40.GL_DRAW_INDIRECT_BUFFER, 0);
+               }
+               GL11.glDisable(GL32.GL_PROGRAM_POINT_SIZE);
+            }
             GL30.glBindVertexArray(0);
             GL11.glDisable(GL32.GL_DEPTH_CLAMP);
             draws++;
@@ -712,6 +991,10 @@ public final class Glints {
             failed = true;
             Log.warn("glints: draw failed, glints off: " + t);
          } finally {
+            if (f.pass == P_COMPACT && ssbo != 0) {
+               GL30.glBindBufferBase(GL43.GL_SHADER_STORAGE_BUFFER, 0, 0);
+               GL30.glBindBufferBase(GL43.GL_SHADER_STORAGE_BUFFER, 1, 0);
+            }
             zombie.core.ShaderHelper.glUseProgramObjectARB(0);
             GL13.glActiveTexture(GL13.GL_TEXTURE1);
             GL11.glBindTexture(GL11.GL_TEXTURE_2D, 0);

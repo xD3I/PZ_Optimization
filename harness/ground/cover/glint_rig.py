@@ -7,6 +7,8 @@ dimetric camera, on the desktop GPU through headless EGL (moderngl):
   img    PNGs of every model at several zooms under a point light and the sun        -> <out>/img-*.png
   cost   GPU time of a full 5120x2160 floor per model (timer queries, median of 30)   -> printed
   stats  mean D_P over a large patch against the smooth NDF (energy, bias)           -> printed
+  flakes the particle / compact passes' flake model (the game's compute shader, build/shader-dump from GroundCoverTest)
+         on a 48 x 48-square frosty patch: energy of the drawn flakes against the smooth NDF's, flakes lit per square
   pan    temporal stability: the camera pans 0.37 px a frame, the light still;       -> printed
          flicker = mean |I_t - I_t-1| / mean I over 48 frames, per model and zoom
 
@@ -221,9 +223,70 @@ def mode_pan():
             print("pan %-10s %-9s flicker: %s" % (name, model, "  ".join(out)))
 
 
+def mode_flakes():
+    import moderngl
+    ctx = moderngl.create_standalone_context(backend="egl", require=430)
+    src = open(os.path.join(ROOT, "build", "shader-dump", "glints-compact.comp")).read()
+    W = 48
+    n = W * W
+    data = np.zeros((n * 4, 4), dtype="f4")
+    for i in range(n):
+        x, y = i % W, i // W
+        data[i * 4 + 0] = ((x - y) * 64.0, (x + y) * 32.0, 0.5, 0.0)
+        data[i * 4 + 1] = (x, y, ((x - y) * 32) % 4096, ((x + y) * 16) % 4096)
+        data[i * 4 + 2] = (0.0, 1.0, 1.0, 1.0)  # frost, full strength, full sun, lit
+        data[i * 4 + 3] = (1.0, 0.0, 0.0, 0.0)  # light 0 reaches it, level 0
+    rows = (n * 4 + 4095) // 4096
+    pad = np.zeros((rows * 4096, 4), dtype="f4")
+    pad[: n * 4] = data
+    tex = ctx.texture((4096, rows), 4, pad.tobytes(), dtype="f4")
+    tex.filter = (moderngl.NEAREST, moderngl.NEAREST)
+    rho, a, b = float(os.environ.get("FLAKES", "1536")) / 1024.0, 0.45, 0.035
+    for smooth in (False, True):
+        code = src.replace("#version 430", "#version 430\n#define PZG_SMOOTH", 1) if smooth else src
+        cs = ctx.compute_shader(code)
+        flakes = ctx.buffer(reserve=262144 * 32)
+        cmd = ctx.buffer(np.array([0, 1, 0, 0], dtype="u4").tobytes())
+        tex.use(1)
+
+        def put(k, v, raw=False):
+            if k in cs:
+                if raw:
+                    cs[k].write(v)
+                else:
+                    cs[k] = v
+        put("uData", 1)
+        put("uTotal", n * 64)
+        put("uMVP", np.eye(4, dtype="f4").tobytes(), True)
+        put("uJ", (0.0, 0.0, 0.0, 0.0))
+        put("uTs", 2.0)
+        lp = np.zeros((8, 4), "f4"); lp[0] = (W / 2, W / 2, 2.5, 30.0)
+        ld = np.zeros((8, 4), "f4"); ld[0] = (0, 0, -2, 1)
+        lc = np.zeros((8, 4), "f4"); lc[0] = (1, 1, 1, 0)
+        put("uLp", lp.tobytes(), True); put("uLd", ld.tobytes(), True); put("uLc", lc.tobytes(), True)
+        put("uSun", (0.0, 0.0, 1.0, 0.0))
+        kinds = np.array([[rho, a, b, 0.018], [rho * 1.6, 0.55, 0.03, 0.018], [rho * 0.6, 0.22, 0.025, 0.02]], "f4")
+        put("uKind", kinds.tobytes(), True)
+        put("uView", (0.5, 1.0, 0.0, 4096.0))
+        flakes.bind_to_storage_buffer(0)
+        cmd.bind_to_storage_buffer(1)
+        cs.run((n * 64 + 63) // 64)
+        ctx.finish()
+        cnt = int(np.frombuffer(cmd.read(), "u4")[0])
+        f = np.frombuffer(flakes.read(), "f4").reshape(-1, 8)[:cnt]
+        e = f[:, 4:7].sum()
+        if smooth:
+            print("flakes smooth reference: energy %.1f (%d slots)" % (e, cnt))
+            ref = e
+        else:
+            print("flakes: %d lit (%.3f a square), energy %.1f" % (cnt, cnt / n, e))
+            got = e
+    print("flakes energy / smooth: %.3f" % (got / ref))
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("mode", choices=["img", "cost", "stats", "pan", "src"])
+    ap.add_argument("mode", choices=["img", "cost", "stats", "pan", "src", "flakes"])
     ap.add_argument("--out", default=os.path.join(ROOT, "build", "glint-rig"))
     a = ap.parse_args()
     if a.mode == "src":
@@ -232,6 +295,8 @@ def main():
         mode_img(a.out)
     elif a.mode == "cost":
         mode_cost()
+    elif a.mode == "flakes":
+        mode_flakes()
     elif a.mode == "stats":
         mode_stats()
     else:

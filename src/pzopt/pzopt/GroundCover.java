@@ -691,52 +691,83 @@ public final class GroundCover {
       return vis;
    }
 
-   /** For Glints (no Hood at hand): the square's centre, its own neighbourhood. */
-   public static float sunVisibility(IsoGridSquare sq) {
-      if (sq == null || sq.chunk == null) {
-         return 1F;
-      }
-      Hood h = hoodFor(sq.chunk, sq.z);
-      return sunVis(h, sq.x + 0.5F, sq.y + 0.5F);
-   }
-
-   private static IsoChunk hoodChunk;
-   private static int hoodZ, hoodFrame = -1;
-
-   private static Hood hoodFor(IsoChunk c, int z) {
-      int f = IsoWorld.instance.getFrameNo();
-      if (hoodChunk != c || hoodZ != z || hoodFrame != f) {
-         hood(c, z);
-         hoodChunk = c;
-         hoodZ = z;
-         hoodFrame = f;
-      }
-      return hood;
+   /** Frost's hold on a surface: grass and leaves most, bare ground, pavement, asphalt (warm, dark) least. */
+   static float surf(int mat) {
+      return mat == M_GRASS ? 1F : mat == M_DIRT || mat == M_GRAVEL ? 0.7F : mat == M_WALK ? 0.45F : mat == M_ROAD ? 0.3F : mat == M_BUILT ? 0.6F : 0F;
    }
 
    /**
-    * Frost at a floor point (0..1): the night's radiative frost (open sky: less under crowns, none indoors or on roads'
-    * dark warm asphalt until it is cold), melted by the sun the point has had since sunrise; grass and leaves hold it best.
+    * The chunk's 9 x 9 square corners: crown cover (drifted and not), the nearest crown's species, the meadow mask, the sun
+    * visibility and the frost. Shared corners make every rule continuous across squares and chunks; candidates interpolate.
     */
-   static float frostAt(Hood h, float x, float y, int mat, float sunVis) {
-      Season s = season;
-      if (s.frost <= 0F || !Config.GROUND_COVER_FROST) {
-         return 0F;
+   static final class Corners {
+      final float[] can = new float[81], open = new float[81], meadow = new float[81], sun = new float[81], frost = new float[81];
+      final int[] species = new int[81];
+
+      float bil(float[] a, float fx, float fy) {
+         int ix = Math.min(7, (int)fx), iy = Math.min(7, (int)fy);
+         float tx = fx - ix, ty = fy - iy;
+         int k = ix + iy * 9;
+         return (a[k] * (1F - tx) + a[k + 1] * tx) * (1F - ty) + (a[k + 9] * (1F - tx) + a[k + 10] * tx) * ty;
       }
-      float open = 1F - 0.7F * Math.min(1F, canopy(h, x, y, 0F, null));
-      float surf = mat == M_GRASS ? 1F : mat == M_DIRT || mat == M_GRAVEL ? 0.7F : mat == M_WALK ? 0.45F : mat == M_ROAD ? 0.3F : mat == M_BUILT ? 0.6F : 0F;
-      // the morning's sun: exposure = visibility x hours since sunrise; ~1.5 h of direct sun clears it
-      float melt = smooth(0.4F, 1.6F, sunVis * s.sunUpHours * 1.2F + s.sunUpHours * 0.12F);
-      float n = 0.75F + 0.5F * fbm(x * 0.7F, y * 0.7F, 77);
-      return Math.max(0F, Math.min(1F, s.frost * open * surf * (1F - melt) * n));
+
+      int nearestSpecies(float fx, float fy) {
+         return this.species[Math.min(8, Math.round(fx)) + Math.min(8, Math.round(fy)) * 9];
+      }
    }
 
-   public static float frost(IsoGridSquare sq, float sunVis) {
-      if (sq == null || sq.chunk == null || season.frost <= 0F || !Config.GROUND_COVER_FROST || !on()) {
-         return 0F;
+   private static final Corners corners = new Corners();
+
+   static Corners corners(Hood h, IsoChunk c) {
+      Corners k = corners;
+      Season s = season;
+      boolean frostOn = s.frost > 0F && Config.GROUND_COVER_FROST;
+      for (int cy = 0; cy < 9; cy++) {
+         for (int cx = 0; cx < 9; cx++) {
+            int i = cx + cy * 9;
+            int X = c.wx * 8 + cx, Y = c.wy * 8 + cy;
+            k.can[i] = canopy(h, X, Y, 0.45F, sp);
+            k.species[i] = sp[0];
+            k.open[i] = 1F - 0.7F * Math.min(1F, canopy(h, X, Y, 0F, null));
+            k.meadow[i] = smooth(0.45F, 0.62F, fbm(X * 0.35F + 9F, Y * 0.35F + 2F, 21));
+            float sun = sunVis(h, X, Y);
+            k.sun[i] = sun;
+            if (frostOn) {
+               // the four squares that share the corner: their surfaces' mean
+               float sf = 0.25F * (surf(h.m(X - 1, Y - 1)) + surf(h.m(X, Y - 1)) + surf(h.m(X - 1, Y)) + surf(h.m(X, Y)));
+               // the morning's sun: exposure = visibility x hours since sunrise; ~1.5 h of direct sun clears it
+               float melt = smooth(0.4F, 1.6F, sun * s.sunUpHours * 1.2F + s.sunUpHours * 0.12F);
+               float n = 0.55F + 0.9F * fbm(X * 0.45F + 3.1F, Y * 0.45F - 7.7F, 77);
+               k.frost[i] = Math.max(0F, Math.min(1F, s.frost * k.open[i] * sf * (1F - melt) * n));
+            } else {
+               k.frost[i] = 0F;
+            }
+         }
       }
-      Hood h = hoodFor(sq.chunk, sq.z);
-      return frostAt(h, sq.x + 0.5F, sq.y + 0.5F, h.m(sq.x, sq.y), sunVis);
+      return k;
+   }
+
+   /** For Glints: a square's sun visibility and frost as the cover's last build saw them (no cover built: full sun, no frost). */
+   public static float squareSun(IsoChunk c, int level, int i) {
+      LevelCover lc = built(c, level);
+      return lc == null ? 1F : (lc.sunSq[i] & 255) / 255F;
+   }
+
+   public static float squareFrost(IsoChunk c, int level, int i) {
+      LevelCover lc = built(c, level);
+      return lc == null ? 0F : (lc.frostSq[i] & 255) / 255F;
+   }
+
+   private static LevelCover built(IsoChunk c, int level) {
+      if (level < -32 || level > 31) {
+         return null;
+      }
+      ChunkCover cc = covers.get(c);
+      if (cc == null || cc.wx != c.wx || cc.wy != c.wy) {
+         return null;
+      }
+      LevelCover lc = cc.levels[level + 32];
+      return lc != null && lc.key != Integer.MIN_VALUE ? lc : null;
    }
 
    // ------------------------------------------------------------------------------------------------ placement
@@ -802,6 +833,7 @@ public final class GroundCover {
       int n, frostN;
       int key = Integer.MIN_VALUE, fkey = Integer.MIN_VALUE, skey = Integer.MIN_VALUE;
       boolean outdoor;
+      final byte[] sunSq = new byte[64], frostSq = new byte[64]; // per square, for Glints
       long squares; // squares that took cover (re-checked each bake: a floor built since drops its cover)
       final int[] runTex = new int[16], runFrom = new int[16], runTo = new int[16];
       int runs;
@@ -861,10 +893,13 @@ public final class GroundCover {
       lc.squares = 0L;
       lc.outdoor = false;
       Hood h = hood(c, level);
-      hoodChunk = c;
-      hoodZ = level;
-      hoodFrame = IsoWorld.instance.getFrameNo();
       Season s = season;
+      Corners K = corners(h, c);
+      for (int i = 0; i < 64; i++) {
+         int k0 = (i & 7) + (i >> 3) * 9;
+         lc.sunSq[i] = (byte)Math.round(64F * (K.sun[k0] + K.sun[k0 + 1] + K.sun[k0 + 9] + K.sun[k0 + 10]) - 0.5F);
+         lc.frostSq[i] = (byte)Math.round(64F * (K.frost[k0] + K.frost[k0 + 1] + K.frost[k0 + 9] + K.frost[k0 + 10]) - 0.5F);
+      }
       float dens = Config.GROUND_SCATTER_DENSITY_PCT / 100F;
       boolean blue = "bluenoise".equals(placement());
       boolean useSprites = !"procedural".equals(assets());
@@ -888,7 +923,7 @@ public final class GroundCover {
             lc.outdoor = true;
             if (mat == M_BUILT) {
                // player-built and decked floors: no cover (frost only)
-               addFrostQuad(h, x, y, mat, frostQuads);
+               addFrostQuad(K, sx, sy, x, y, mat, frostQuads);
                continue;
             }
             float rn = roadNear(h, x, y);
@@ -910,8 +945,9 @@ public final class GroundCover {
                      thr = hf(x * 6 + gx, y * 6 + gy, 13);
                      id = mix(x * 6 + gx, y * 6 + gy, 14);
                   }
-                  float canopy = canopy(h, px, py, 0.45F, sp);
-                  int species = sp[0];
+                  float lx = px - c.wx * 8, ly = py - c.wy * 8;
+                  float canopy = K.bil(K.can, lx, ly);
+                  int species = K.nearestSpecies(lx, ly);
                   float gut = gutter(h, px, py);
                   float bnk = bank(h, px, py);
                   float onRoad = mat == M_ROAD ? 1F : 0F;
@@ -924,7 +960,7 @@ public final class GroundCover {
                   if (ever) {
                      leafD *= 0.25F;
                   }
-                  float meadow = smooth(0.45F, 0.62F, fbm(px * 0.35F + 9F, py * 0.35F + 2F, 21));
+                  float meadow = K.bil(K.meadow, lx, ly);
                   float flowerD = mat == M_GRASS ? s.flowers * meadow * (1F - Math.min(1F, canopy) * 0.6F) * (0.45F + farm + 0.4F * (1 - townBias)) * smooth(1.2F, 2.5F, rn) * 0.55F : 0F;
                   float litterD = s.accum * (town * 0.5F + 0.15F) * ((mat == M_WALK ? 0.05F : 0F) + (mat == M_GRASS && rn < 2F ? 0.025F : 0F) + onRoad * gut * 0.08F + bnk * 0.03F);
                   float twigD = (0.012F + 0.05F * forest) * Math.min(1F, canopy) * (mat == M_GRASS || mat == M_DIRT ? 1F : 0.3F);
@@ -1038,7 +1074,7 @@ public final class GroundCover {
                   lc.squares |= 1L << (sx + sy * 8);
                }
             }
-            addFrostQuad(h, x, y, mat, frostQuads);
+            addFrostQuad(K, sx, sy, x, y, mat, frostQuads);
          }
       }
       // sprites grouped by texture page after the shapes (stable within each group): runs
@@ -1068,18 +1104,14 @@ public final class GroundCover {
    }
 
    private static final ArrayList<float[]> FROST_SCRATCH = new ArrayList<>();
-   private static final ArrayList<float[]> FROST_POOL = new ArrayList<>();
-   private static int frostPoolUsed;
 
-   private static void addFrostQuad(Hood h, int x, int y, int mat, ArrayList<float[]> out) {
+   private static void addFrostQuad(Corners K, int sx, int sy, int x, int y, int mat, ArrayList<float[]> out) {
       if (season.frost <= 0F || !Config.GROUND_COVER_FROST) {
          return;
       }
-      // frost at the four corners (each with its own sun): the quad interpolates them
-      float f0 = frostAt(h, x, y, mat, sunVis(h, x + 0.05F, y + 0.05F));
-      float f1 = frostAt(h, x + 1, y, mat, sunVis(h, x + 0.95F, y + 0.05F));
-      float f2 = frostAt(h, x + 1, y + 1, mat, sunVis(h, x + 0.95F, y + 0.95F));
-      float f3 = frostAt(h, x, y + 1, mat, sunVis(h, x + 0.05F, y + 0.95F));
+      // frost at the four corners, shared with the neighbours: the quad interpolates them
+      int k = sx + sy * 9;
+      float f0 = K.frost[k], f1 = K.frost[k + 1], f2 = K.frost[k + 10], f3 = K.frost[k + 9];
       if (f0 + f1 + f2 + f3 < 0.04F) {
          return;
       }
@@ -1089,13 +1121,14 @@ public final class GroundCover {
       q[3] = T_FROST;
       q[4] = 1F;
       q[5] = 0F;
-      q[6] = -1F;
+      // the chunk's border edges: the quad reaches a little past them, over the neighbour textures' floor overlap
+      q[6] = (sx == 0 ? 1 : 0) | (sx == 7 ? 2 : 0) | (sy == 0 ? 4 : 0) | (sy == 7 ? 8 : 0);
       q[7] = 1F;
       q[8] = f0;
       q[9] = f1;
       q[10] = f2;
       q[11] = f3;
-      q[12] = Math.floorMod(x, 8) + Math.floorMod(y, 8) * 8;
+      q[12] = sx + sy * 8;
       q[13] = 0F;
       q[14] = 0F;
       q[15] = mat;
@@ -1387,8 +1420,12 @@ public final class GroundCover {
          "      vL = vec2(mix(uv.x, uv.z, c01.x), mix(uv.y, uv.w, c01.y));",
          "      wpos = base;",
          "   } else if (type == 5) {",
-         "      // frost: the whole square (a.xy is its north corner)",
-         "      vec2 o = q * 0.5 + 0.5;",
+         "      // frost: the whole square (a.xy is its north corner), a little past the chunk's border edges (b.z's bits)",
+         "      int ef = int(b.z + 0.5);",
+         "      float mg = 0.025;",
+         "      vec2 lo = vec2((ef & 1) != 0 ? -mg : 0.0, (ef & 4) != 0 ? -mg : 0.0);",
+         "      vec2 hi = vec2((ef & 2) != 0 ? 1.0 + mg : 1.0, (ef & 8) != 0 ? 1.0 + mg : 1.0);",
+         "      vec2 o = mix(lo, hi, q * 0.5 + 0.5);",
          "      wpos = base + o;",
          "      scr = vec2((wpos.x - wpos.y) * 32.0 * ts, (wpos.x + wpos.y) * 16.0 * ts - a.z * 96.0 * ts);",
          "      vL = o;",
@@ -1434,14 +1471,19 @@ public final class GroundCover {
          "      fragColor = vec4(t.rgb * col * vLight.rgb, t.a * vCol.a);",
          "      return;",
          "   } else if (type == 5) {",
-         "      // frost: the corners' amounts, fine crystal speckle and feathery streaks, white-blue",
-         "      vec2 o = vL;",
+         "      // frost: rime, not snow: a pale silver film whose strength follows the corners' amounts, in patches (where the",
+         "      // grass stands proud and dry), with a fine streaky grain of frozen blades; the glints are drawn by pzopt.Glints",
+         "      vec2 o = clamp(vL, 0.0, 1.0);",
          "      float f = mix(mix(vFrost.x, vFrost.y, o.x), mix(vFrost.w, vFrost.z, o.x), o.y);",
-         "      float n1 = vn(vW * 23.0), n2 = vn(vW * 61.0 + 7.3), n3 = vn(vW * 6.0 + 2.1);",
-         "      float cover = smoothstep(0.15, 0.75, f * (0.55 + 0.6 * n3) + 0.25 * (n1 - 0.5));",
-         "      float speck = smoothstep(0.62, 0.9, n2) * f;",
-         "      a = clamp(cover * 0.62 + speck * 0.35, 0.0, 0.85);",
-         "      col = mix(vec3(0.80, 0.86, 0.93), vec3(0.97, 0.99, 1.0), n2);",
+         "      float patch = vn(vW * 1.7 + 2.1) * 0.65 + vn(vW * 4.3 - 5.2) * 0.35;",
+         "      float cover = smoothstep(0.08, 0.85, f * (0.45 + 0.85 * patch));",
+         "      float ang = vn(vW * 0.8 + 11.0) * 6.2831853;",
+         "      vec2 dir = vec2(cos(ang), sin(ang));",
+         "      float streak = vn(vec2(dot(vW, dir) * 38.0, dot(vW, vec2(-dir.y, dir.x)) * 7.0));",
+         "      float grain = vn(vW * 52.0 + 7.3);",
+         "      float tex = 0.5 + 0.5 * smoothstep(0.3, 0.85, streak * 0.6 + grain * 0.4);",
+         "      a = clamp(cover * tex * 0.46, 0.0, 0.6);",
+         "      col = mix(vec3(0.80, 0.85, 0.91), vec3(0.94, 0.96, 0.99), grain);",
          "      if (a < 0.01) discard;",
          "      fragColor = vec4(col * vLight.rgb * a, a);",
          "      return;",

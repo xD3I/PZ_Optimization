@@ -2348,7 +2348,7 @@ public final class Config {
       GLINT_MODEL = string("glintModel", "db23iso").trim().toLowerCase(java.util.Locale.ROOT);
       GLINT_PASS = string("glintPass", "diamonds").trim().toLowerCase(java.util.Locale.ROOT);
       GLINT_PCT = Math.max(0, Math.min(400, integer("glintPct", 100)));
-      GLINT_FLAKES = Math.max(4, Math.min(1024, integer("glintFlakes", 80)));
+      GLINT_FLAKES = Math.max(4, Math.min(16384, integer("glintFlakes", 1536)));
       GLINT_ROUGH_PCT = Math.max(25, Math.min(400, integer("glintRoughPct", 100)));
       GLINT_TWINKLE_PCT = Math.max(25, Math.min(400, integer("glintTwinklePct", 100)));
       GLINT_SUN = bool("glintSun", true);

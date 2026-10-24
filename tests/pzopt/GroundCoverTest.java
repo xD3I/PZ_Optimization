@@ -51,6 +51,15 @@ public class GroundCoverTest {
       float apr = s.flowers;
       Check.check(aug < 0.1F && oct > 0.8F, "leaf fall: August " + aug + " October " + oct);
       Check.check(augFl < 0.05F && apr > 0.6F, "flowers: August " + augFl + " April " + apr);
+      // the sources, for the offline rig (harness/ground/cover/glint_rig.py flakes)
+      Path dump = Path.of(System.getProperty("user.dir"), "build", "shader-dump");
+      Files.createDirectories(dump);
+      for (java.util.Map.Entry<String, String[]> e : Glints.sources().entrySet()) {
+         if (e.getValue()[0] != null) {
+            Files.writeString(dump.resolve("glints-" + e.getKey() + ".vert"), e.getValue()[0]);
+         }
+         Files.writeString(dump.resolve("glints-" + e.getKey() + (e.getValue()[0] == null ? ".comp" : ".frag")), e.getValue()[1]);
+      }
       // the programs
       Path check = Path.of("/tmp/glslcheck");
       if (!Files.isExecutable(check)) {
@@ -64,8 +73,10 @@ public class GroundCoverTest {
             continue;
          }
          programs += link(check, useMesa, mesa, "ground cover", GroundCover.VERT, GroundCover.FRAG);
-         for (int m = 0; m < Glints.MODELS.length; m++) {
-            programs += link(check, useMesa, mesa, "glints " + Glints.MODELS[m], Glints.VERT, Glints.frag(m));
+         for (java.util.Map.Entry<String, String[]> e : Glints.sources().entrySet()) {
+            if (e.getValue()[0] != null) {
+               programs += link(check, useMesa, mesa, "glints " + e.getKey(), e.getValue()[0], e.getValue()[1]);
+            }
          }
       }
       System.out.println("GroundCoverTest ok (" + programs + " programs linked)");
