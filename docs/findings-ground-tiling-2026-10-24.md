@@ -22,7 +22,7 @@ Measured on the desktop: RTX 4090, 5120x2160, power-saver profile.
 | Repeat score, grass (lower is better; texture floor 0.11) | stock 0.222 → hpb 0.176 |
 | Zoom 0.5 and 3 with `spriteFilter=sharp` | no seams, lines or chunk-edge breaks (`gt-zoom0.5-18`, `gt-zoom3-18`) |
 | pixelLight, AO, relief, sway, puddles, forced snow | no artefacts (`gt-inter20`, `gt-snow21`); pixelLight and relief read the baked colour, so they follow the patch |
-| Mac GL 4.1 core | the shaders link and bake with 0 failures (`mac-gt-mac19-20261024-201759`); the screenshot never arrived, so the look there is unseen |
+| Mac GL 4.1 core | 46 programs linked, 0 failed, the `tilinghpb` floor / edge / seam programs built; the field rig at zoom 1 shows soft grass / dirt transitions and tone patches, no grid, no seams, no missing ground (`mac-gt-mac23-20261024-225415`, `pzopt-shot.png`; the earlier run's `--quit-after 25` ended before the shot) |
 
 ## Techniques, one by one
 
@@ -59,17 +59,17 @@ Two bugs fixed on the way:
 | Exemplar wrap by mask (power-of-two period; NVIDIA has no integer divider; `lap` +43 → +21) | −2.8 µs | kept |
 | A sprite-table row's fetches at once, class map / field / other art before the lookup | −1.0 µs | kept |
 | gtField on scalars (no local arrays), one class-map fetch a square | in the noise | kept |
+| hpb basis in 3 texels; the class map by two `textureGather` (needs `GL_ARB_gpu_shader5`) | 0.0-0.3 µs (`gt-bc15-20261024-224655`) | reverted |
 | Macro lattice from uniforms / from a filtered texture; eight-channel field noise; rolled score loop; single call sites; pow-free hpb weights; early outs for alpha-less texels | none or worse | reverted |
 
 ## Open
 
 1. Tiling's own bake overhead, +15.6 µs a bake at hpb+b+m: lookup ~2.5, exemplar fetch ~2.3, hpb's 10 fetches ~4, field
    ~3-4, macro ~2-4. A diagnostic with the whole program present but never run cost the same as the no-op (+3.8): program
-   size is free, executed fetches are the cost. Next: fewer fetches (hpb basis, `textureGather` on the class map, interior
-   squares skip the field).
-2. The Mac look needs one picture.
-3. The `ground_field` rig leaves trees standing on squares flagged solid.
-4. Default values for the menu: hpb at cell 150 % suggested.
+   size is free, executed fetches are the cost. The fetch candidates are spent (each < 0.3 µs); interior squares
+   already skip the field (it returns at once when the four squares round the pixel share a class).
+2. The `ground_field` rig leaves trees standing on squares flagged solid.
+3. Default values for the menu: hpb at cell 150 % suggested.
 
 Tests: `GroundTileArtTest`, `GroundTilingShaderTest` (12 links on the NVIDIA driver and Mesa). Agent notes:
 `~/pzopt-wt/ground-tiling/build/notes.txt`.
