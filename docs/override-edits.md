@@ -8625,3 +8625,12 @@ blades over the ground just composited. Each blade takes its colour and depth fr
 chunk textures' lighting, AO, sun and cloud shadows carry over. The draw comes before pixelLight's pass and the characters,
 so both still apply on top. The call returns at once when `grassBlades` is off, the zoom is wider than
 `grassBladeMaxZoomPct`, or there is no cell; no GL work happens then. Off by default.
+
+### FBORenderCell: ground tracks (2026-10-24, branch ground-tracks)
+
+One line in `renderInternal`, right before `AmbientOcclusion.queue`: `pzopt.GroundTracks.afterComposite(playerIndex)`. It
+returns at once unless `groundTracksLook=composite`, a dev mode that is off by default. In that mode the tracks are drawn over
+the frame's floors after the chunk composite, as depth-tested floor diamonds at the analytic floor depth, so objects in front
+stay clean. The default look (`groundTracksLook=bake`) and the trodden grass go through ground-common's bake hooks
+(`FloorPatch`, the grass-object piece), so the branch's earlier hooks in this class were removed. The `Ripples` hooks (the rut
+water level in the puddle shader, `GroundTracks.puddleUniforms`) are in the pzopt package and need no marker.
