@@ -270,6 +270,7 @@ PzoptOptionClasses = {
     devGlintForce = { "pzopt.Glints" },
     devGlintNoUpload = { "pzopt.Glints" },
     devGlintRing = { "pzopt.Glints" },
+    devGlintTrace = { "pzopt.Glints" },
     devGlStateCheck = { "pzopt.GlState", "pzopt.TreeBake", "pzopt.Upscaler" },
     devGodRaysAlternate = { "pzopt.GodRays" },
     devGodRaysAlternateAll = { "pzopt.GodRays" },

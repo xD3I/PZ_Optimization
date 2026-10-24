@@ -1656,6 +1656,7 @@ public final class Config {
    public static volatile int GLINT_HDR_PCT; // glints: with HDR output on, the glints once more into the HDR glint target (past the 8-bit white), x this %; 0 = 8-bit only
    public static final boolean DEV_GLINT_NO_UPLOAD = bool("devGlintNoUpload", false); // dev: glint data uploaded only for the ring's first round (the upload's cost A/B; stale glints)
    public static final int DEV_GLINT_RING = integer("devGlintRing", 3); // dev: glint data textures in the ring (1 = one texture rewritten each frame, the implicit-sync A/B)
+   public static final String DEV_GLINT_TRACE = string("devGlintTrace", "").trim(); // dev: first,count (glint frames): one log line a frame with its squares, key light and point lights (the flicker hunt, 2026-10-25)
    public static final String DEV_GLINT_FORCE = string("devGlintForce", "").trim(); // dev: frost | snow | wet: every outdoor floor square in view gets that mask (cost and look rigs)
    public static volatile String GROUND_COVER_PLACEMENT; // ground cover: jitter (6 x 6 jittered grid a square, hashed thresholds) | bluenoise (a progressive blue-noise 4 x 4 square tile, rank-dithered)
    public static volatile String GROUND_COVER_ASSETS; // ground cover: mixed (procedural shapes + the game's leaf-clump and litter decals) | procedural | sprites
