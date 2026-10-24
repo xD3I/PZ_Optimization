@@ -2144,6 +2144,11 @@ local ENHANCEMENT_SECTIONS = {
               tip = "How strongly the water mirrors the scene. Real water seen from the game's camera angle reflects little (a few percent, more on the side of a wave); higher is more of a mirror." },
             { key = "reflectionPuddles", label = "Reflections: in puddles",
               tip = "Puddles mirror the scene too once the rain has made them big enough (the rain's rings blur them)." },
+            { key = "reflectionsFlow", label = "Reflections: follow the water",
+              tip = "The reflection moves with the water instead of sitting on it like a still picture: the waves that carry the river's current and the wind carry the mirrored image too, on the water's own clock. Calm water is nearly a mirror; a fast river, wind and rain break it into streaks stretched along the current. Puddles ripple with the wind and the rain (they have no current). It reuses the waves the water already computes: no measurable cost. Applies at once." },
+            { key = "reflectionsFlowPct", label = "Reflections: waves (%)",
+              choices = { "0", "50", "100", "200" }, note = { ["100"] = "default", ["0"] = "a mirror" },
+              tip = "How much the current, the wind and the rain bend and break the reflection (0: a still mirror whatever the weather; 200: twice the default)." },
         },
     },
     {
@@ -3283,6 +3288,8 @@ local EFFECTS = {
     entityShadowAoPct = { render = 1, cores = 1 },
     cloudShadows = { gpu = 1 },
     reflections = { render = 1, gpu = 1, vram = 1 },
+    reflectionsFlow = {},
+    reflectionsFlowPct = {},
     carGlass = { render = 1, gpu = 1 },
     mirrors = { render = 1, gpu = 1, vram = 1 },
     mirrorsWindows = { gpu = 1 },
@@ -4329,6 +4336,23 @@ function API.offValue(key, e)
     return nil
 end
 
+-- The leaf a switched choice's value moves to (the layout's `leaves`): { label, tip, off, values = the choices but the
+-- off one }, or nil when the setting has no leaf (no off value, one other value, or `leaves[key] = false`). The setting's
+-- row keeps the switch; the leaf row under it picks among `values`.
+function API.leaf(key, e)
+    local off = API.offValue(key, e)
+    if not (e and e.choices and off) then return nil end
+    local spec = ((PzoptSettingsLayout or {}).leaves or {})[key]
+    if spec == false then return nil end
+    local values = {}
+    for _, c in ipairs(e.choices) do
+        if tostring(c) ~= off then table.insert(values, tostring(c)) end
+    end
+    if #values < 2 then return nil end
+    spec = spec or {}
+    return { label = spec.label or "Mode", tip = spec.tip, off = off, values = values }
+end
+
 -- A subcategory's keys as a tree: each setting with its modifiers under it (the main menu's settings pages draw them
 -- indented under the setting's switch). Nothing in the entries says which key tunes which, so it is read from the labels
 -- and the order, and the layout's `parents` corrects the rest:
@@ -4508,15 +4532,90 @@ local RECOMMENDED_TIP = "Turns the Optimizations master switch and every categor
 local STOCK_TIP = "Turns the Optimizations master switch off: the game runs its original code everywhere, as if the overrides were not "
     .. "installed. The settings are kept for when you turn it on again; the Profiler and the performance overlay are not affected. "
     .. RESTART_NOTE
+
+-- What Recommended does: the Optimizations master, its category switches and every Optimizations setting at the default
+local function recommendedOptimizations()
+    return (API.set("enabled", "") and 1 or 0) + API.resetKeys(API.catMasters(1)) + API.resetKeys(API.pageKeys(1))
+end
+
+-- "All enhancements" / "All optimizations" (2026-10-24): every switch of a group on, read from the entries, so a new
+-- setting joins by itself. A switch is a tick box (default true / false) or a choice with an off value (API.offValue);
+-- its "on" is what the menu's switch turns it on to: the default when that is not off, the layout's onValues, else the
+-- first choice that is not off. Numbers, colours, curves and choices without an off value stay at the default, and so do
+-- pinned keys (API.set), keys a Java mod patches (mod compatibility keeps them off) and ALL_SKIP.
+local ALL_SKIP = {
+    -- Enhancements: "on" renders the world smaller (upscaler, dynamic resolution), forces HDR on a screen the check
+    -- found none on, hides the people in a car behind the seats (off = the cutaway, on purpose), or sharpens DLSS (taste)
+    upscaler = true, dynRes = true, hdr = true, carOccupantOcclusion = true, dlssSharpen = true,
+    -- remembered places stays as it is (maintainer, 2026-10-24)
+    memoryTint = true,
+    -- Optimizations: on = the game's own 42.21 tree rule; a third of the frame rate on a Mac; baked glass hides zombies;
+    -- hot-save parts written at different moments; measured slower; tearing; Metal present adds input delay; off on
+    -- Windows by design; mod-drawn UI follows the mod compatibility choice
+    driveTreeCutaway = true, macGlTimerQueries = true, windowsInChunkTexture = true, hotsaveStaged = true,
+    losLightPrefetch = true, vsyncAdaptive = true, macPresent = true, limiterSleep = true, uiRetainedMods = true,
+}
+
+local function isExperimental(e)
+    return string.find(string.lower((e.label or "") .. " " .. (e.tip or "")), "experimental", 1, true) ~= nil
+end
+
+-- the value a setting's switch turns it on to, nil = leave it at the default
+local function allOnValue(e)
+    local p, key = perf(), e.key
+    if e.bezier or e.colour or not p:isPzoptOptionKnown(key) then return nil end
+    local def = p:getPzoptOptionDefault(key)
+    if not e.choices then return (def == "true" or def == "false") and "true" or nil end
+    local off = API.offValue(key, e)
+    if not off then return nil end
+    if def ~= off then return def end
+    local on = ((PzoptSettingsLayout or {}).onValues or {})[key]
+    if on then return on end
+    for _, c in ipairs(e.choices) do
+        if tostring(c) ~= off then return tostring(c) end
+    end
+    return nil
+end
+
+-- every switch of a page's sections on (but the experimental ones when `noExperimental`); returns how many changed
+local function allOn(page, noExperimental)
+    local n = (API.set(API.MASTERS[page].key, "true") and 1 or 0)
+    for _, k in ipairs(API.catMasters(page)) do
+        if API.set(k, "true") then n = n + 1 end
+    end
+    for _, sec in ipairs(sectionsOf(page)) do
+        for _, e in ipairs(sec.entries or {}) do
+            if e.key then
+                local on = nil
+                if not ALL_SKIP[e.key] and not (noExperimental and isExperimental(e)) and compatReason(e.key) == "" then
+                    on = allOnValue(e)
+                end
+                if API.set(e.key, on) then n = n + 1 end
+            end
+        end
+    end
+    return n
+end
+
 function API.presets()
     local list = {
         { title = "Recommended (every optimization on)", tip = RECOMMENDED_TIP, apply = function()
-            local n = (API.set("enabled", "") and 1 or 0) + API.resetKeys(API.catMasters(1)) + API.resetKeys(API.pageKeys(1))
+            local n = recommendedOptimizations()
             return n .. (n == 1 and " setting" or " settings") .. " changed: every optimization at the build's default."
         end },
         { title = "Stock game (every optimization off)", tip = STOCK_TIP, apply = function()
             local changed = API.set("enabled", "false")
             return changed and "Optimizations switched off: the next launch is the stock game's code." or "Optimizations were already off."
+        end },
+        { title = "All enhancements", tip = "Every enhancement on, but the experimental ones and remembered places.", apply = function()
+            local n = recommendedOptimizations() + allOn(2, true)
+            return n .. (n == 1 and " setting" or " settings") .. " changed."
+        end },
+        { title = "All optimizations", tip = "Every optimization on, the experimental ones too; enhancements at their defaults.", apply = function()
+            -- the Enhancements master, its category switches and its settings back to the default (maintainer, 2026-10-24)
+            local n = allOn(1, false) + API.resetKeys({ API.MASTERS[2].key }) + API.resetKeys(API.catMasters(2))
+                + API.resetKeys(API.pageKeys(2))
+            return n .. (n == 1 and " setting" or " settings") .. " changed."
         end },
     }
     for _, profile in ipairs(PROFILES) do

@@ -372,7 +372,7 @@ public final class BenchPlan {
       Properties plan = plan();
       String id = scenario().id;
       for (Map.Entry<String, String> e : BenchSuite.flagsFor(scenario(), timedemoStep, plan.getProperty("weather." + id),
-            plan.getProperty("fog." + id), plan.getProperty("time." + id)).entrySet()) {
+            plan.getProperty("fog." + id), plan.getProperty("time." + id), plan.getProperty("season." + id)).entrySet()) {
          f.setProperty(e.getKey(), e.getValue());
       }
       return f;

@@ -51,7 +51,7 @@ final class BenchSetup {
       {"mode", "Stock comparison (ab) or PZ Optimization only (standard)"}, {"passes", "Passes per scenario"}, {"scenarios", "Scenarios"},
       {"uncapped", "Uncapped frame rate during the run"}, {"timedemo", "Timedemo"}, {"warmup", "Warm-up pass"}, {"seed", "Same random seed every pass"},
       {"cooldown", "Cool-down between passes (s)"}, {"modlua", "Measure each mod's Lua"},
-      {"weather", "Weather per scenario"}, {"fog", "Fog per scenario"}, {"time_of_day", "Hour per scenario"},
+      {"weather", "Weather per scenario"}, {"fog", "Fog per scenario"}, {"time_of_day", "Hour per scenario"}, {"season", "Season per scenario"},
       {"profiler", "Full performance overlay during the passes"},
    };
 
@@ -81,6 +81,7 @@ final class BenchSetup {
       runOpts.put("weather", perScenario(plan, "weather.", ids, "clear"));
       runOpts.put("fog", perScenario(plan, "fog.", ids, "off"));
       runOpts.put("time_of_day", perScenario(plan, "time.", ids, "12"));
+      runOpts.put("season", perScenario(plan, "season.", ids, "start"));
       for (String k : new String[] {"uncapped", "timedemo", "warmup", "seed", "cooldown", "modlua", "profiler"}) { // (modlua: the Mods row's profiler, 2026-10-21)
          runOpts.put(k, plan.getProperty(k, ""));
       }
@@ -264,7 +265,8 @@ final class BenchSetup {
       // the machine
       String[][] sys = {{"cpu", "CPU"}, {"gpu", "GPU"}, {"gl", "Graphics driver"}, {"ram_gb", "RAM (GB)"}, {"os", "System"}, {"java", "Java"},
          {"screen", "Screen"}, {"refresh_hz", "Refresh rate (Hz)"}, {"game_version", "Game version"}, {"pzopt_build", "PZ Optimization build"},
-         {"frame_cap", "Frame cap"}, {"vsync", "Vsync"}};
+         {"frame_cap", "Frame cap"}, {"vsync", "Vsync"}, {"power_profile", "Power profile"},
+         {"cpu_power", "CPU power (governor, EPP, boost, max clock / scheme, mode / source, thermal)"}};
       for (String[] s : sys) {
          add(rows, "sys", s[0], s[1], sysA.getOrDefault(s[0], ""), sysB.getOrDefault(s[0], ""));
       }

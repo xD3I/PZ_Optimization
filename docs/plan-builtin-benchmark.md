@@ -35,7 +35,7 @@ implemented and measured, none dropped.
 ## Techniques (status in the table at the end)
 
 1. Scripted, repeatable scenarios in a purpose-made world (above).
-2. Pinned scene: hour, weather, zoom, population, sandbox, game RNG seeded per pass.
+2. Pinned scene: hour, weather, season (the planner's per-scene chooser since 2026-10-24: start date / spring / summer / autumn / winter, Scene's `season=`), zoom, population, sandbox, game RNG seeded per pass.
 3. Warm-up excluded (settle before the route); a separate untimed warm-up pass optional (shader / disk caches).
 4. Several passes per scenario; mean, standard deviation, coefficient of variation, 95 % confidence interval
    (Student t); a pass more than 3 MAD from the median is flagged an outlier.
@@ -144,7 +144,7 @@ All 30 are implemented (classes: `src/CLAUDE.md` "Bench*"); measurements in `doc
 | 11 | chunk streaming | Stats.loadedChunks | |
 | 12 | load times | boot_seconds, load_seconds | |
 | 13 | validity checks + idle gate | BenchResults.validate, BenchIdle; cap_held | background / focus / cap-held caught (`fab`) |
-| 14 | system fingerprint | BenchSystem | |
+| 14 | system fingerprint | BenchSystem; power state (2026-10-24) `BenchPower`: `power_profile` + `cpu_power` (Linux ppd / platform profile / tuned + cpu0 cpufreq governor, EPP, boost, max kHz; Windows powrprof active scheme + power mode overlay + battery saver + processor min / max state and boost mode via FFM; macOS NSProcessInfo low power + thermal state, IOKit power source, pmset powermode), shown in Setup / Run facts / PC line / share code and marked in Compare, not in `key()` | BenchPowerTest |
 | 15 | score (geomean) | BenchResults.configScore | BenchResultsTest |
 | 16 | history, Welch vs previous | BenchResults history / PREV / CMP | |
 | 17 | stock A/B with interval | AB lines, bootstrap ratio CI | Louisville 3.04x [2.89-3.18]; stock limiter bug fixed, `gab` |

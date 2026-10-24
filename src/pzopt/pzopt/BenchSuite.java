@@ -120,6 +120,15 @@ public final class BenchSuite {
       }
    }
 
+   /** The seasons a scenario can run in (Scene's season=, pzopt.Season); "start" keeps the world's own date (9 July). */
+   static final java.util.List<String> SEASONS = java.util.List.of("start", "spring", "summer", "autumn", "winter");
+
+   /** A planned season: one of {@link #SEASONS}, "start" for anything else. */
+   static String seasonOf(String v) {
+      String s = v == null ? "" : v.trim().toLowerCase(java.util.Locale.ROOT);
+      return SEASONS.contains(s) ? s : "start";
+   }
+
    /** A planned hour (0-23), noon when it is missing or not a number. */
    static int hourOf(String v) {
       try {
@@ -148,10 +157,11 @@ public final class BenchSuite {
    }
 
    /**
-    * The pass's harness flags: the scenario's own, the common pins, the plan's weather, fog and hour for it (the menu's
-    * planner, 2026-10-21; null: clear, no fog, noon) and the timedemo step (route steps a second, 0 = wall clock).
+    * The pass's harness flags: the scenario's own, the common pins, the plan's weather, fog, hour and season for it (the
+    * menu's planner, 2026-10-21 / 10-24; null: clear, no fog, noon, the start date) and the timedemo step (route steps a
+    * second, 0 = wall clock).
     */
-   static Map<String, String> flagsFor(Scenario s, int fixedStep, String weather, String fog, String hour) {
+   static Map<String, String> flagsFor(Scenario s, int fixedStep, String weather, String fog, String hour, String season) {
       Map<String, String> m = new LinkedHashMap<>();
       for (int i = 0; i + 1 < COMMON.length; i += 2) {
          m.put(COMMON[i], COMMON[i + 1]);
@@ -165,6 +175,9 @@ public final class BenchSuite {
       }
       if (fog != null && !"off".equals(fogOf(fog))) { // (fog=off would pin it at 0: the weather's own pins already hold none)
          m.put("fog", fogOf(fog));
+      }
+      if (!"start".equals(seasonOf(season))) {
+         m.put("season", seasonOf(season));
       }
       if ("sweep".equals(s.id)) {
          BenchSweep.flags(m);

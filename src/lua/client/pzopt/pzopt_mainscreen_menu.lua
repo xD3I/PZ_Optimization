@@ -596,6 +596,22 @@ local function settingOn(key, e)
     return off ~= nil and v ~= off
 end
 
+-- the value a switched choice's switch turns on to: without `fresh`, the one it had this session (LAST_ON) first; then its
+-- default, the layout's onValues, the first value that is not off (`fresh`: the leaf row's default)
+local function onValueOf(key, e, fresh)
+    local off = offValueOf(key, e)
+    local on = not fresh and LAST_ON[key] or nil
+    local def = opt("getPzoptOptionDefault", key)
+    if not on and def ~= off then on = def end
+    if not on then on = ((PzoptSettingsLayout or {}).onValues or {})[key] end
+    if not on then
+        for _, c in ipairs(e.choices) do
+            if tostring(c) ~= off then on = tostring(c) break end
+        end
+    end
+    return on
+end
+
 local function settingFlip(key, e)
     local v, pinned = settingNext(key)
     if pinned ~= "" then return false end
@@ -610,16 +626,7 @@ local function settingFlip(key, e)
         settingStore(key, off)
         return true
     end
-    local on = LAST_ON[key]
-    local def = opt("getPzoptOptionDefault", key)
-    if not on and def ~= off then on = def end
-    if not on then on = ((PzoptSettingsLayout or {}).onValues or {})[key] end
-    if not on then
-        for _, c in ipairs(e.choices) do
-            if tostring(c) ~= off then on = tostring(c) break end
-        end
-    end
-    settingStore(key, on)
+    settingStore(key, onValueOf(key, e))
     return true
 end
 
@@ -1434,6 +1441,73 @@ end
 -- One setting as a list row: its value, its detail (text, impact chart, clips), its control(s), DEFAULT and the clips
 -- toggle. `where` (search, Fix a problem) names the page it lives on.
 local function settingItem(self, k, where)
+    -- (2026-10-24) A switched choice's value as a leaf row under its switch (PzoptSettings.leaf, the layout's `leaves`): its
+    -- own name, description (what it picks, the values with their notes, the setting's reasons and impact chart, Next
+    -- launch / In use / Default, who pins it), dropdown, DEFAULT and changed mark. The same key as its setting: while the
+    -- switch is on it changes the setting at once; while it is off the row is dim (as every modifier under a switch that is
+    -- off) and shows the value the switch turns on to, and a pick there becomes that value (LAST_ON, this session).
+    local function leafRow(e, leaf, parent)
+        local function pinned() return opt("getPzoptOptionPinnedBy", k) ~= "" end
+        local function current()
+            local v = (settingNext(k))
+            if v ~= leaf.off then return v end
+            return onValueOf(k, e)
+        end
+        local function pick(v)
+            if pinned() then return end
+            if (settingNext(k)) == leaf.off then LAST_ON[k] = v else settingStore(k, v) end
+        end
+        local function step(dir)
+            local cur, at = current(), 1
+            for i, v in ipairs(leaf.values) do if v == cur then at = i end end
+            pick(leaf.values[((at - 1 + (dir or 1) + #leaf.values) % #leaf.values) + 1])
+        end
+        local parentLabel = tostring(val(parent.label))
+        local it = { id = "leaf:" .. k, kind = "setting", setting = k, sec = parent.sec, leafOf = k, label = leaf.label,
+            detailTitle = parentLabel .. ": " .. leaf.label, meta = parent.meta }
+        it.desc = function()
+            local v, pin = settingNext(k)
+            local cur = current()
+            local d = esc(leaf.tip or ("What " .. parentLabel .. " runs while its switch is on.")) .. WHY.MARK .. " <LINE> <LINE> "
+            for _, c in ipairs(leaf.values) do
+                local note = e.note and e.note[c]
+                d = d .. (c == cur and "<RGB:0.27,0.87,0.49> " or "<RGB:0.94,0.94,0.96> ") .. esc(c) .. (note and (": " .. esc(note)) or "")
+                    .. (c == cur and "  (picked)" or "") .. " <LINE> "
+            end
+            if v == leaf.off and pin == "" then
+                d = d .. " <LINE> <RGB:0.66,0.66,0.70> " .. esc(parentLabel) .. " is off: the value picked here is the one its switch "
+                    .. "turns on to. <LINE> "
+            end
+            d = d .. " <LINE> <RGB:0.66,0.66,0.70> Next launch: " .. esc(showValue(v, e)) .. "  /  In use now: "
+                .. esc(showValue(opt("getPzoptOption", k), e)) .. "  /  Default: " .. esc(showValue(onValueOf(k, e, true), e))
+            if pin ~= "" then d = d .. " <LINE> <RGB:1,0.85,0.45> Pinned by " .. esc(pin) .. ", which wins: change it there." end
+            return d .. (where and (" <LINE> <RGB:0.66,0.66,0.70> On the page " .. esc(where)) or "")
+        end
+        it.chooser = { type = "chooser", label = leaf.label, get = function() return showValue(current(), nil) end,
+            set = step, shown = function() return true end, pinned = pinned,
+            options = function()
+                local cur, t, has = current(), {}, false
+                for _, c in ipairs(leaf.values) do
+                    table.insert(t, { label = showValue(c, nil), note = e.note and e.note[c] or nil, current = c == cur,
+                        pick = function() pick(c) end })
+                    if c == cur then has = true end
+                end
+                if not has then table.insert(t, 1, { label = showValue(cur, nil), current = true }) end -- (a value set by hand)
+                return t
+            end }
+        it.controls = { { type = "chooser", label = leaf.label, get = it.chooser.get, set = step } }
+        it.activate = function() step(1) end
+        it.value = function() return it.chooser.get() end
+        it.actions = { { label = "DEFAULT", key = "x", act = function()
+            if pinned() then return end
+            LAST_ON[k] = nil
+            if (settingNext(k)) ~= leaf.off then settingStore(k, onValueOf(k, e, true)) end
+        end }, clipsAction() }
+        it.isChanged = function() return not pinned() and current() ~= onValueOf(k, e, true) end
+        local default = it.actions[1]
+        it.reset = function() default.act() end
+        return it
+    end
     local t = settingsTree()
     local b0 = t.entry[k]
     local e, page = b0 and b0.e, b0 and b0.page
@@ -1466,17 +1540,31 @@ local function settingItem(self, k, where)
     item.isChanged = function()
         return opt("getPzoptOptionPinnedBy", k) == "" and (settingNext(k)) ~= opt("getPzoptOptionDefault", k)
     end
-    item.reset = function() item.actions[1].act() end
+    local default = item.actions[1] -- (DEFAULT itself: a search result puts OPEN ITS PAGE first)
+    item.reset = function() default.act() end
     if TAB_LAYOUT then
-        -- (tab layout) the row's switch sits before its name, a value it has after the name; a switched choice shows its
-        -- value only while on
+        -- (tab layout) the row's switch sits before its name, a value it has after the name; a switched choice's value is
+        -- a leaf row of its own under it (2026-10-24, maintainer: never a switch and a dropdown on one line)
         local off = (kind == "choice") and offValueOf(k, e) or nil
+        local leaf = off and PzoptSettings and PzoptSettings.leaf(k, e) or nil
         if kind == "bool" or off then
             item.toggle = { get = function() return settingOn(k, e) end, set = function() settingFlip(k, e) end,
                 pinned = function() return opt("getPzoptOptionPinnedBy", k) ~= "" end }
             item.activate = item.toggle.set
         end
-        if kind == "choice" or kind == "bezier" then
+        if off then
+            -- the setting's row: its switch alone. Changed = on / off differs from the default's; DEFAULT puts back the
+            -- whole setting (its value too). The leaf (item.leaf, placed under it by the page) picks the value.
+            item.value = nil
+            item.isChanged = function()
+                return opt("getPzoptOptionPinnedBy", k) == "" and settingOn(k, e) ~= (opt("getPzoptOptionDefault", k) ~= off)
+            end
+            local reset = item.actions[1].act
+            item.actions[1].act = function() LAST_ON[k] = nil reset() end
+            -- (left / right on the row: nothing to step, the value is the leaf's; a tick as for a plain switch)
+            item.controls = { { type = "tick", label = "Enabled", get = item.toggle.get, set = item.toggle.set } }
+            if leaf then item.leaf = leafRow(e, leaf, item) end
+        elseif kind == "choice" or kind == "bezier" then
             -- a dropdown: the closed box shows the value (the curve: its preset's name), the list every choice but the
             -- off one (the switch is the way off) with its note under it
             local function shown(v)
@@ -1533,7 +1621,14 @@ local function subPage(self, a, b, c, id)
     local p = { items = {}, settingsPage = true }
     if a == "tools" and b == "overlay" and c == 1 then table.insert(p.items, overlayRow()) end
     local keys, hidden = shownKeys(s and s.keys or {})
-    for _, k in ipairs(keys) do table.insert(p.items, settingItem(self, k)) end
+    for _, k in ipairs(keys) do
+        local it = settingItem(self, k)
+        table.insert(p.items, it)
+        if it.leaf then -- (a switched choice's value row under it)
+            it.leafShown, it.leaf.depth, it.leaf.treeParent, it.leaf.lastFlags = true, (it.depth or 0) + 1, it, { true }
+            table.insert(p.items, it.leaf)
+        end
+    end
     if s and s.dlss and PzoptSettings then
         table.insert(p.items, { id = "dlss", kind = "row", label = "NVIDIA DLSS files",
             value = function() return PzoptSettings.deps().state or "" end,
@@ -1642,9 +1737,10 @@ local function addSubs(self, p, a, cat, head)
                 local it = settingItem(self, n.key)
                 it.anchor, it.depth, it.treeParent = sid, n.depth, parentItem
                 it.lastFlags = lastFlags
-                if #n.kids > 0 then
+                local leaf = it.leaf -- (a switched choice's value: its first kid, before its modifiers)
+                if #n.kids > 0 or leaf then
                     local ck = "key:" .. n.key
-                    it.kids = #n.kids
+                    it.kids = #n.kids + (leaf and 1 or 0)
                     it.folded = COLLAPSED[ck] == true
                     it.fold = function() COLLAPSED[ck] = (not COLLAPSED[ck]) or nil end
                     table.insert(it.actions, { label = function() return COLLAPSED[ck] and "OPEN" or "FOLD" end, key = "y", quiet = true,
@@ -1652,6 +1748,13 @@ local function addSubs(self, p, a, cat, head)
                 end
                 table.insert(p.items, it)
                 if not it.folded then
+                    if leaf then
+                        local flags = {}
+                        for _, f in ipairs(lastFlags) do table.insert(flags, f) end
+                        table.insert(flags, #n.kids == 0)
+                        leaf.anchor, leaf.depth, leaf.treeParent, leaf.lastFlags = sid, n.depth + 1, it, flags
+                        table.insert(p.items, leaf)
+                    end
                     for j, c in ipairs(n.kids) do
                         local flags = {}
                         for _, f in ipairs(lastFlags) do table.insert(flags, f) end
@@ -1773,7 +1876,15 @@ local function problemPage(self, i)
     if not pr then return p end
     p.head = function() return " <RGB:0.85,0.55,0.95> " .. esc(pr.cause) .. " <LINE> " end
     for _, k in ipairs(pr.keys or {}) do
-        if settingsTree().entry[k] then table.insert(p.items, settingItem(self, k, (homeOf(k)))) end
+        if settingsTree().entry[k] then
+            local it = settingItem(self, k, (homeOf(k)))
+            it.depth = 0 -- (rows of one level: a leaf's guide line meets its switch)
+            table.insert(p.items, it)
+            if it.leaf then -- (a switched choice's value row under it)
+                it.leafShown, it.leaf.depth, it.leaf.treeParent, it.leaf.lastFlags = true, (it.depth or 0) + 1, it, { true }
+                table.insert(p.items, it.leaf)
+            end
+        end
     end
     return p
 end
@@ -1858,6 +1969,13 @@ PAGES.search = function(self)
                 item.verb = "Open its page"
             end
             table.insert(p.items, item)
+            local leaf = item.leaf -- (a switched choice's value: its row under it, its dropdown on the row, Y its page)
+            if leaf then
+                item.leafShown, leaf.depth, leaf.treeParent, leaf.lastFlags = true, (item.depth or 0) + 1, item, { true }
+                leaf.searchNode = row.node
+                table.insert(leaf.actions, 1, { label = "OPEN ITS PAGE", key = "y", act = function() self:openSetting(row.node, row.key) end })
+                table.insert(p.items, leaf)
+            end
         end
     end
     if total == 0 then
@@ -1978,8 +2096,9 @@ local function setupPageTabs(self)
                 return {
                     { "Where", info.where or "-", C_GREY },
                     { "Length", string.format("About %d s a pass, plus about 16 s to restart and load", sc.seconds), C_GREY },
-                    { "Runs", string.format("%s, %s, %s, %s", n == 1 and "1 pass" or (n .. " passes"),
-                        PzoptBench.weathers[per.weather].label, PzoptBench.fogs[per.fog].label, PzoptBench.times[per.time].label), C_GREY },
+                    { "Runs", string.format("%s, %s, %s, %s, %s", n == 1 and "1 pass" or (n .. " passes"),
+                        PzoptBench.weathers[per.weather].label, PzoptBench.fogs[per.fog].label, PzoptBench.times[per.time].label,
+                        PzoptBench.seasons[per.season or 1].label), C_GREY },
                     { "Score", id == "sweep" and "Not in the score: it measures each Visuals feature" or "Counts in the score", C_GREY },
                     { "Tests", sc.stresses ~= "" and sc.stresses or "-", C_GREY },
                 }
@@ -2015,6 +2134,13 @@ local function setupPageTabs(self)
                 function() return per.time end, function(i) per.time = i end,
                 "The hour " .. esc(sc.title) .. " runs at, held for the whole pass. Noon is the benches' own light; the evening's "
                     .. "low sun casts long shadows, the night is lit by the street lights and the cars.", 1, card))
+            table.insert(p.items, dropRow("season:" .. id, "Season", PzoptBench.seasons,
+                function(s) return s.label end,
+                function() return per.season or 1 end, function(i) per.season = i end,
+                "The season " .. esc(sc.title) .. " runs in: the world's date moves into it, so the trees and plants show it "
+                    .. "(spring blossom, summer green, autumn colours, bare in winter) and the days, light and temperature "
+                    .. "follow. Winter lays snow on the ground, and its rain and storms fall as snow. The start date is the "
+                    .. "benches' own (9 July).", 1, card))
         end
     end
     table.insert(p.items, { kind = "section", label = "Run" })
@@ -2768,7 +2894,7 @@ function PzoptMenuList:layoutTree()
     -- (2026-10-23) the resource a setting moves most (PzoptSettings.top): its icon after the name, room kept for it
     local iconW = hS + 2
     for _, it in ipairs(self.items) do
-        local key = (it.kind == "setting" or it.kind == "master") and (it.setting or it.master)
+        local key = (it.kind == "setting" or it.kind == "master") and not it.leafOf and (it.setting or it.master) -- (a leaf: its setting has it)
         local ok, top = pcall(function() return key and PzoptSettings and PzoptSettings.top(key) or nil end)
         it.top = ok and top or nil -- (an icon is never worth the page: a failure leaves it out)
     end
@@ -2957,7 +3083,7 @@ function PzoptMenuList:renderTree()
                 drawToggle(self, tx, tby, G, ok and on == true, (pinned or dim) and 0.45 or 1, hot and mx >= tx - 4 and mx < tx + G.tw + 4)
                 self.toggleX[i] = { tx - 4, tx + G.tw + 4 }
             end
-            if it.kids and not it.folded then -- the line down to the first modifier
+            if (it.kids and not it.folded) or it.leafShown then -- the line down to the first modifier (or its value's leaf)
                 local gy = ty + hS
                 guide(tx + math.floor(G.tw / 2), gy, y + L.h - gy)
             end
@@ -2974,6 +3100,9 @@ function PzoptMenuList:renderTree()
             if L.top then -- the resource it moves most: green saves, amber costs, blue puts idle cores to work
                 WHY.icon(self, L.top.axis.id, lx + textW(UIFont.Small, L.label[#L.label] or "") + 6, ty + (#L.label - 1) * hS + 1,
                     hS - 2, PzoptSettings.fxColour(L.top.axis, L.top.level))
+                -- (a row without a value, a switch: its "reset" and its prompts go after the icon, not over it; a value
+                -- drawn below sets its own end)
+                if #L.label == 1 then self.afterX[i] = lx + textW(UIFont.Small, L.label[1]) + 6 + hS - 2 end
             end
             local vc = dim and C_DIM or C_GREY
             local v = L.value
@@ -5139,7 +5268,7 @@ function PzoptMainMenu:cardTitleLines(w)
     if page.cardTitle[w] then return page.cardTitle[w] end
     local n = 1
     for _, row in ipairs(page.items or {}) do
-        if row.meta then n = math.max(n, #wrap(tostring(val(row.label)), UIFont.Medium, w)) end
+        if row.meta then n = math.max(n, #wrap(tostring(val(row.detailTitle or row.label)), UIFont.Medium, w)) end
     end
     page.cardTitle[w] = n
     return n
@@ -5506,7 +5635,7 @@ function PzoptMainMenu:showDetail()
     -- the text, and the chart with the text under it (a report row)
     local textH = y - textTop
     local head = page.head and page.head() or nil
-    local title = it and tostring(val(it.label)) or ""
+    local title = it and tostring(val(it.detailTitle or it.label)) or "" -- (a leaf: "Upscaler: Type", its setting's name first)
     local body = breakLong(it and it.desc and it.desc() or (self.emptyText or "")) -- (a path, a long key list)
     if not (TAB_LAYOUT and fixed and it and it.meta) then -- (a setting card puts the reasons in at its own width)
         body = WHY.put(body, it and (it.setting or it.master), D[3] - 26)

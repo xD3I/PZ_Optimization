@@ -724,8 +724,9 @@ launch() { # <job> <cwd> <command...> as the job's process group, output to outp
 }
 
 newest_run_dir() { # the run dir this job produced: newest <cwd>/harness/runs/<label>-* created after the job started
+  # (or bench-<label>-*: run.sh --benchmark / benchmark-run.sh names its dir bench-<label>-<ts>)
   local cwd="$1" label="$2" since="$3" r
-  r=$(ls -td "$cwd/harness/runs/$label"-* 2>/dev/null | head -1)
+  r=$(ls -td "$cwd/harness/runs/$label"-* "$cwd/harness/runs/bench-${label#bench-}"-* 2>/dev/null | head -1)
   [[ -n "$r" && "$(stat -c %Y "$r")" -ge "$since" ]] && echo "$r"
 }
 
@@ -826,7 +827,7 @@ remote_job() { # sync -> wrapper -> run in the ssh foreground -> collect; sets R
     probe "$m" || { set_mstate "$m" disconnected; event "$m" "disconnected during job $(job_id "$d") $label"; return 70; }
   fi
   # through bash: the laptops' login shell is fish with ls aliased to eza; the Mac's is zsh
-  remote_dir=$(mssh "$m" "bash -c 'command ls -td $repo/harness/runs/$label-* 2>/dev/null | head -1'" 2>/dev/null | tr -d '\r')
+  remote_dir=$(mssh "$m" "bash -c 'command ls -td $repo/harness/runs/$label-* $repo/harness/runs/bench-${label#bench-}-* 2>/dev/null | head -1'" 2>/dev/null | tr -d '\r')
   if [[ -z "$remote_dir" ]]; then echo "[$(ts)] no harness/runs/$label-* on $m" >> "$d/output.log"; return $(( rc ? rc : 1 )); fi
   base=$(basename "$remote_dir")
   if [[ "$base" == "$m-"* ]]; then local_dir="$cwd/harness/runs/$base"; else local_dir="$cwd/harness/runs/$m-$base"; fi

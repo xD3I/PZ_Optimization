@@ -1048,6 +1048,12 @@ local FOGS = {
     { id = "off", label = "No fog" }, { id = "0.3", label = "Light fog" }, { id = "0.6", label = "Thick fog" },
     { id = "heavy", label = "Heavy fog" },
 }
+-- (2026-10-24) the season (Scene's season=, pzopt.Season): the world's date moved into it while it loads; "start" keeps the
+-- fresh world's own start date (9 July, the runs before seasons)
+local SEASONS = {
+    { id = "start", label = "Start date (9 July)" }, { id = "spring", label = "Spring" }, { id = "summer", label = "Summer" },
+    { id = "autumn", label = "Autumn" }, { id = "winter", label = "Winter (snow)" },
+}
 local TIMES = {
     { h = 8, label = "Morning (08:00)" }, { h = 12, label = "Noon (12:00)" }, { h = 20, label = "Evening (20:00)" },
     { h = 1, label = "Night (01:00)" },
@@ -1059,8 +1065,9 @@ PzoptBench.cooldown = COOLDOWN
 PzoptBench.weathers = WEATHERS
 PzoptBench.fogs = FOGS
 PzoptBench.times = TIMES
+PzoptBench.seasons = SEASONS
 
--- a setup: { scen = { [id] = bool }, per = { [id] = { passes, weather, fog, time } (indexes) }, opt = { [id] = bool },
+-- a setup: { scen = { [id] = bool }, per = { [id] = { passes, weather, fog, time, season } (indexes) }, opt = { [id] = bool },
 -- cool = index, label = text }
 -- (2026-10-21, maintainer) every scene off to start with; each scene its own passes (one), weather (clear) and hour (noon),
 -- the benches' own conditions
@@ -1068,17 +1075,17 @@ function PzoptBench.newSetup(scenarios)
     local s = { scen = {}, per = {}, opt = {}, cool = 1, label = "" }
     for _, sc in ipairs(scenarios) do
         s.scen[sc.id] = false
-        s.per[sc.id] = { passes = 1, weather = 1, fog = 1, time = 2 }
+        s.per[sc.id] = { passes = 1, weather = 1, fog = 1, time = 2, season = 1 }
     end
     for _, o in ipairs(SETUP_OPTIONS) do s.opt[o.id] = o.default end
     return s
 end
 
--- a scene's passes (the number), weather id, hour and fog id
+-- a scene's passes (the number), weather id, hour, fog id and season id
 function PzoptBench.sceneSetup(setup, id)
-    local per = setup.per[id] or { passes = 1, weather = 1, fog = 1, time = 2 }
+    local per = setup.per[id] or { passes = 1, weather = 1, fog = 1, time = 2, season = 1 }
     return PASSES[per.passes] or 1, (WEATHERS[per.weather] or WEATHERS[1]).id, (TIMES[per.time] or TIMES[2]).h,
-        (FOGS[per.fog] or FOGS[1]).id
+        (FOGS[per.fog] or FOGS[1]).id, (SEASONS[per.season or 1] or SEASONS[1]).id
 end
 
 -- the name a run without one gets: its start's date and minute, as the reports list shows it (BenchResults.dateOf)
@@ -1124,16 +1131,18 @@ function PzoptBench.start(setup, scenarios)
     local ids, _, ab = PzoptBench.estimate(setup, scenarios)
     if #ids == 0 then return "no scene chosen" end
     local o = setup.opt
-    local passes, weather, hours, fogs = {}, {}, {}, {} -- (each scene its own: "spin:2,horde:1", Benchmark.start)
+    local passes, weather, hours, fogs, seasons = {}, {}, {}, {}, {} -- (each scene its own: "spin:2,horde:1", Benchmark.start)
     for _, id in ipairs(ids) do
-        local n, w, h, f = PzoptBench.sceneSetup(setup, id)
+        local n, w, h, f, se = PzoptBench.sceneSetup(setup, id)
         table.insert(passes, id .. ":" .. n)
         table.insert(weather, id .. ":" .. w)
         table.insert(hours, id .. ":" .. h)
         table.insert(fogs, id .. ":" .. f)
+        table.insert(seasons, id .. ":" .. se)
     end
     local arg = "scenarios=" .. table.concat(ids, ",") .. ";passes=" .. table.concat(passes, ",") .. ";mode=" .. (ab and "ab" or "standard")
         .. ";weather=" .. table.concat(weather, ",") .. ";time=" .. table.concat(hours, ",") .. ";fog=" .. table.concat(fogs, ",")
+        .. ";season=" .. table.concat(seasons, ",")
         .. ";profiler=" .. (o.profiler and "1" or "0")
         .. ";uncapped=" .. (o.uncapped and "1" or "0") .. ";warmup=" .. (o.warmup and "1" or "0")
         .. ";timedemo=" .. (o.timedemo and "1" or "0") .. ";screenshot=" .. (o.screenshot and "1" or "0")
@@ -1361,15 +1370,21 @@ function PzoptBench.pcLines(d, theirs, w)
     local function lines(parts, r, g, b)
         for _, l in ipairs(wrapParts(parts, "  |  ", UIFont.Small, w)) do table.insert(out, { l, r, g, b }) end
     end
-    lines({ d.sys.cpu or "", d.sys.gpu or "", (d.sys.ram_gb or "?") .. " GB", (d.sys.screen or "") .. " @ " .. (d.sys.refresh_hz or "?") .. " Hz",
-        "cap " .. (d.sys.frame_cap or "?") }, 0.8, 0.8, 0.8)
+    local pc = { d.sys.cpu or "", d.sys.gpu or "", (d.sys.ram_gb or "?") .. " GB", (d.sys.screen or "") .. " @ " .. (d.sys.refresh_hz or "?") .. " Hz",
+        "cap " .. (d.sys.frame_cap or "?") }
+    -- the power profile (BenchPower, reports from 2026-10-24 on): power-saver vs balanced moves CPU-bound scores by up to ~20 %
+    if d.sys.power_profile and d.sys.power_profile ~= "-" then table.insert(pc, "power " .. d.sys.power_profile) end
+    lines(pc, 0.8, 0.8, 0.8)
     lines({ d.sys.os or "", d.sys.java or "", "PZ Optimization " .. (d.sys.pzopt_build or "") }, 0.6, 0.6, 0.6)
     if theirs then
         if theirs.bad then
             lines({ "That is not a benchmark share code." }, 1, 0.85, 0.5)
         else
-            lines({ "Their PC: " .. (theirs.sys.cpu or "?"), theirs.sys.gpu or "?", theirs.sys.screen or "?",
-                "cap " .. (theirs.sys.frame_cap or "?"), "score " .. (theirs.sys["score.A"] or "-") }, 1, 0.85, 0.5)
+            local tp = { "Their PC: " .. (theirs.sys.cpu or "?"), theirs.sys.gpu or "?", theirs.sys.screen or "?",
+                "cap " .. (theirs.sys.frame_cap or "?") }
+            if theirs.sys.power_profile and theirs.sys.power_profile ~= "-" then table.insert(tp, "power " .. theirs.sys.power_profile) end
+            table.insert(tp, "score " .. (theirs.sys["score.A"] or "-"))
+            lines(tp, 1, 0.85, 0.5)
         end
     end
     return out

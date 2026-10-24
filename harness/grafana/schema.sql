@@ -36,6 +36,11 @@ ALTER TABLE runs ADD COLUMN IF NOT EXISTS cpu_w double precision, ADD COLUMN IF 
 -- latest save", load = that to the first "world ready" after it (pzopt-loadtrace.out), run_s = opts run_seconds (launch to exit)
 ALTER TABLE runs ADD COLUMN IF NOT EXISTS boot_s double precision, ADD COLUMN IF NOT EXISTS load_s double precision,
   ADD COLUMN IF NOT EXISTS run_s double precision;
+-- the CPU power state at launch (2026-10-24, run.opts power_profile= / cpu_power=, ingest.power_state): the desktop sat in
+-- power-saver (boost off, 4.7 GHz) for every run before; NULL for runs without the lines
+ALTER TABLE runs ADD COLUMN IF NOT EXISTS power_profile text, ADD COLUMN IF NOT EXISTS cpu_power text,
+  ADD COLUMN IF NOT EXISTS cpu_governor text, ADD COLUMN IF NOT EXISTS cpu_epp text, ADD COLUMN IF NOT EXISTS cpu_boost text,
+  ADD COLUMN IF NOT EXISTS cpu_max_khz bigint;
 -- the hero's scenes per machine, refreshed by ingest.py after imports (derived.py: HERO_SCENES, hero_refresh_sql)
 CREATE TABLE IF NOT EXISTS hero_scenes (machine text, scene text, st_runs bigint, o_runs bigint, newest timestamptz,
   st_fps double precision, o_fps double precision, st_low double precision, o_low double precision,

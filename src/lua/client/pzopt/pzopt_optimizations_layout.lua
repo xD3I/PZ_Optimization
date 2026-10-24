@@ -207,6 +207,34 @@ PzoptSettingsLayout = {
     offValues = { spriteFilter = "stock", darknessFloorPct = "0" },
     onValues = { upscaler = "fsr1" },
 
+    -- (2026-10-24, maintainer: no switch and dropdown on one line) A choice setting with an off value and two or more other
+    -- values (PzoptSettings.leaf) draws its switch on its own row and its value on a leaf row under it: the leaf's own
+    -- name, description (what it picks; the values with their notes; the setting's impact chart) and controls. `leaves[key]`
+    -- names the leaf and says what it picks ({ label, tip }; without one: "Mode" and the values' notes); false keeps the
+    -- value on the setting's row (no leaf). A choice with one value besides off is a plain switch.
+    leaves = {
+        presentPacing = { label = "Timed by", tip = "What each frame's hold is timed against: the GPU's completion, the CPU's end of the frame, or both." },
+        vrr = { label = "Mode", tip = "Follow what the display reports, or always act as if it runs variable refresh." },
+        borderlessFullscreen = { label = "Where", tip = "On Linux only (the platform whose desktops need it for variable refresh), or on every platform." },
+        vehicleSmooth = { label = "Method", tip = "How a vehicle is placed between physics steps: drawn between the last two (10 ms behind) or the last one carried forward." },
+        bloodBake = { label = "Drawn by", tip = "Who draws the floor splats into the chunk pictures: the GPU in the bake, or the CPU before it." },
+        hordeBatch = { label = "Order", tip = "Batches that keep the stock drawing order to the pixel, or the fastest order with the zombies after the other moving objects." },
+        modCompat = { label = "Mode", tip = "What happens to a setting a Java mod also patches: switched off (max compatibility) or kept on and reported (max performance)." },
+        corePlacement = { label = "Placement", tip = "Which cores take which threads while the switch is on." },
+        gpuPstate = { label = "Clock level", tip = "The fixed clock to hold, or the lowest one whose frame time still fits the cap." },
+        gcSlackQueue = { label = "When", tip = "When the spare-time collection runs under the frame queue." },
+        upscaler = { label = "Type", tip = "Which upscaler renders the world smaller and scales it back up. Its render size is the next setting." },
+        spriteFilter = { label = "Filter", tip = "How the world's art is sampled when it is drawn at a size other than its own." },
+        carOccupant = { label = "Drawn as", tip = "How the people inside a car are drawn behind its glass." },
+        darknessFloorPct = { label = "Floor", tip = "How much light a seen square keeps at least, in % of full light." },
+        overlayStats = { label = "Detail", tip = "How much the statistics block shows." },
+        overlayTree = { label = "Sub-phases", tip = "How many sub-phases each phase of the game-thread tree lists." },
+        overlayVerdict = { label = "Detail", tip = "The short verdict, or with the two biggest game-thread sub-phases." },
+        overlayGraph = { label = "Frames shown", tip = "How many frames the graph spans (and so its width)." },
+        overlayFlame = { label = "Placement", tip = "Where the flame graph sits and how wide it is." },
+        consoleLog = { label = "Lines", tip = "Which PZ Optimization lines reach the console." },
+    },
+
     -- a key no subcategory lists: its section's title prefix -> category id
     home = {
         { "Chunk textures", "world" }, { "Cutaways", "weather" }, { "Entity updates", "zombies" }, { "More game-thread", "zombies" },
@@ -224,7 +252,7 @@ PzoptSettingsLayout = {
         "gpuPstate", "gcHeap", "luaGcNoop", "audioLimiter", "modProfile", "updateCheck",
         "upscaler", "upscalerQuality", "dynRes", "dynResFps", "spriteFilter", "hdrAuto", "hdr", "pixelLight", "voxelLight", "torchSource",
         "sunShadows", "sunShadowStrengthPct", "entityShadows", "moonShadows", "cloudShadows", "ambientOcclusion", "godRays", "godRaysStrengthPct",
-        "reflections", "reflectionPuddles", "ripples", "ripplesStrengthPct", "ripplesRain", "ripplesWake", "mirrors", "mirrorsWindows", "mirrorsWallMirrors", "mirrorsProps", "carGlass", "carOccupant", "bloodWet", "darknessFloorPct",
+        "reflections", "reflectionPuddles", "reflectionsFlow", "ripples", "ripplesStrengthPct", "ripplesRain", "ripplesWake", "mirrors", "mirrorsWindows", "mirrorsWallMirrors", "mirrorsProps", "carGlass", "carOccupant", "bloodWet", "darknessFloorPct",
         "memoryTint", "colorGrading", "foliageSway", "foliageSwayPct", "relief", "occludedZombieOutlines",
         "groundHexTiling", "groundMacroPct", "groundScatter", "glints", "groundTracks", "grassBlades",
         "overlaySampling", "overlay", "overlayStats", "overlayGraph", "overlayCorner", "overlayFont", "overlayFpsColor", "consoleLog" },
