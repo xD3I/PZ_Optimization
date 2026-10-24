@@ -610,6 +610,7 @@ PzoptOptionClasses = {
     grassBladeFeedback = { "pzopt.GrassBlades" },
     grassBladeFeetPct = { "pzopt.GrassBlades" },
     grassBladeGenEvery = { "pzopt.GrassBlades" },
+    grassBladeGenMs = { "pzopt.GrassBlades" },
     grassBladeHeightPct = { "pzopt.GrassBlades" },
     grassBladeLayerDiv = { "pzopt.GrassBlades" },
     grassBladeLayerEvery = { "pzopt.GrassBlades" },
