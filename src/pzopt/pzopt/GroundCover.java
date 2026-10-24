@@ -95,9 +95,9 @@ public final class GroundCover {
       register(); // loaded by Ground.FEATURES the first frame a ground key is on
       // tracks crush the cover: a chunk whose ground state changed re-bakes (the shader reads the state: prints in the frost,
       // leaves pressed into the ruts)
-      GroundState.addListener((wx, wy) -> {
+      Ground.onFrame(p -> {
          if (on() && Ground.on(Ground.K_TRACKS)) {
-            GroundBake.rebakeChunk(wx, wy, "cover tracks", true);
+            GroundState.wantFullRebakes(); // changed chunks re-bake whole (the cover reads the state), once, instead of the decal re-bake
             GroundCover.tracksRebakes++;
          }
       });
@@ -139,7 +139,7 @@ public final class GroundCover {
    public static String stats() {
       return "ground cover: bakes=" + bakes + " skipped=" + bakesSkipped + " builds=" + builds + " build_us=" + (builds > 0 ? buildNs / 1000 / builds : 0) + " (hood " + (builds > 0 ? hoodNs / 1000 / builds : 0) + " corners " + (builds > 0 ? cornersNs / 1000 / builds : 0) + ") build_min_us=" + (builds > 0 ? buildMinNs / 1000 : 0) + " build_late_us=" + (buildLate > 0 ? buildLateNs / 1000 / buildLate : 0)
             + " async=" + asyncBuilds + " sync=" + syncBuilds + " submit_us=" + (submits > 0 ? submitNs / 1000 / submits : 0) + " gathers=" + gathers + " land_rebakes=" + landRebakes + " stale_draws=" + staleDraws + " dropped=" + droppedBuilds
-            + " instances=" + instancesDrawn + " rebakes=" + rebakesIssued + " tracksRebakes=" + tracksRebakes + " step=" + step + " frostStep=" + frostStep + " month=" + season.month
+            + " instances=" + instancesDrawn + " rebakes=" + rebakesIssued + " tracksWantFrames=" + tracksRebakes + " step=" + step + " frostStep=" + frostStep + " month=" + season.month
             + String.format(java.util.Locale.ROOT, " fall=%.2f flowers=%.2f frost=%.2f tmin=%.1f", season.leafFall, season.flowers, season.frost, season.tMin)
             + (failed ? " (failed)" : "");
    }
@@ -391,11 +391,10 @@ public final class GroundCover {
          // every chunk level that holds (or can now hold) cover is re-baked, a few a frame, nearest first
          pending.clear();
          pendingLevels.clear();
-         for (java.util.Map.Entry<IsoChunk, ChunkCover> e : covers.entrySet()) {
-            ChunkCover cc = e.getValue();
-            IsoChunk c = e.getKey();
-            if (cc.wx != c.wx || cc.wy != c.wy) {
-               continue;
+         forEachLoaded(c -> {
+            ChunkCover cc = slot(c);
+            if (cc == null) {
+               return;
             }
             for (int li = 0; li < 64; li++) {
                LevelCover lc = cc.levels[li];
@@ -412,7 +411,7 @@ public final class GroundCover {
                   pendingLevels.add(new int[] {li - 32});
                }
             }
-         }
+         });
       }
       if (pending.isEmpty()) {
          return;
@@ -930,8 +929,8 @@ public final class GroundCover {
       if (level < -32 || level > 31) {
          return null;
       }
-      ChunkCover cc = covers.get(c);
-      if (cc == null || cc.wx != c.wx || cc.wy != c.wy) {
+      ChunkCover cc = slot(c);
+      if (cc == null) {
          return null;
       }
       LevelCover lc = cc.levels[level + 32];
@@ -1024,12 +1023,12 @@ public final class GroundCover {
    }
 
    static ChunkCover coverOf(IsoChunk c) {
-      ChunkCover cc = covers.get(c);
-      if (cc == null || cc.wx != c.wx || cc.wy != c.wy) {
+      ChunkCover cc = slot(c);
+      if (cc == null) {
          cc = new ChunkCover();
          cc.wx = c.wx;
          cc.wy = c.wy;
-         covers.put(c, cc);
+         GroundChunk.put(c, SLOT, cc);
       }
       return cc;
    }
@@ -1042,7 +1041,7 @@ public final class GroundCover {
       ChunkCover cc;
       ChunkInfo[] nine;
       Season season;
-      int key, fkey, skey;
+      int key, fkey, skey, gen;
       final LevelCover out = new LevelCover();
       long ns;
    }
@@ -1078,6 +1077,7 @@ public final class GroundCover {
       Job j = new Job();
       j.chunk = c;
       j.cc = cc;
+      j.gen = GroundChunk.gen(c);
       j.nine = nine(c);
       j.season = snapshot();
       j.key = seasonKey();
@@ -1112,7 +1112,7 @@ public final class GroundCover {
          ChunkCover cc = j.cc;
          cc.inFlight = false;
          IsoChunk c = j.chunk;
-         if (covers.get(c) != cc || cc.wx != c.wx || cc.wy != c.wy) {
+         if (GroundChunk.gen(c) != j.gen || GroundChunk.get(c, SLOT) != cc || cc.wx != c.wx || cc.wy != c.wy) {
             droppedBuilds++; // the chunk left (or its slot was reused) meanwhile
             continue;
          }
@@ -1166,8 +1166,8 @@ public final class GroundCover {
                if (c == null || !c.loaded) {
                   continue;
                }
-               ChunkCover cc = covers.get(c);
-               if (cc != null && cc.wx == c.wx && cc.wy == c.wy) {
+               ChunkCover cc = slot(c);
+               if (cc != null) {
                   if (cc.inFlight) {
                      continue;
                   }
@@ -1237,7 +1237,34 @@ public final class GroundCover {
       return lc;
    }
 
-   private static final java.util.IdentityHashMap<IsoChunk, ChunkCover> covers = new java.util.IdentityHashMap<>();
+   /** The cover rides on its chunk (GroundChunk slot: dropped when the game reuses the chunk). */
+   static final int SLOT = GroundChunk.id("ground cover");
+
+   static ChunkCover slot(IsoChunk c) {
+      ChunkCover cc = (ChunkCover)GroundChunk.get(c, SLOT);
+      return cc != null && cc.wx == c.wx && cc.wy == c.wy ? cc : null;
+   }
+
+   /** Game thread: every loaded chunk of every player's chunk map, once. */
+   static void forEachLoaded(java.util.function.Consumer<IsoChunk> f) {
+      zombie.iso.IsoCell cell = IsoWorld.instance.currentCell;
+      int w = zombie.iso.IsoChunkMap.chunkGridWidth;
+      java.util.Set<IsoChunk> done = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
+      for (int pl = 0; pl < 4; pl++) {
+         zombie.iso.IsoChunkMap cm = cell.getChunkMap(pl);
+         if (cm == null || cm.ignore) {
+            continue;
+         }
+         for (int gy = 0; gy < w; gy++) {
+            for (int gx = 0; gx < w; gx++) {
+               IsoChunk c = cm.getChunk(gx, gy);
+               if (c != null && c.loaded && done.add(c)) {
+                  f.accept(c);
+               }
+            }
+         }
+      }
+   }
 
 
 
@@ -2053,20 +2080,7 @@ public final class GroundCover {
       }
    }
 
-   /**
-    * Covers leave the cache when their chunk slot was reused or unloaded, or nothing baked or prefetched them for two
-    * minutes (milliseconds, not frames: at 800 fps a frame budget swept the prefetched covers every two seconds and the
-    * worker rebuilt them forever, gcv-cost-pass2).
-    */
+   /** The covers ride on their chunks (GroundChunk): nothing to sweep. */
    public static void sweep() {
-      if ((IsoWorld.instance.getFrameNo() & 255) != 0) {
-         return;
-      }
-      long now = System.currentTimeMillis();
-      covers.entrySet().removeIf(e -> {
-         IsoChunk c = e.getKey();
-         ChunkCover cc = e.getValue();
-         return cc.wx != c.wx || cc.wy != c.wy || !c.loaded && now - cc.seen > 5_000L || now - cc.seen > 120_000L;
-      });
    }
 }

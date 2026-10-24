@@ -151,16 +151,17 @@ public final class Glints {
       long seenMs;
    }
 
-   private static final java.util.IdentityHashMap<IsoChunk, ChunkMasks> masks = new java.util.IdentityHashMap<>();
+   /** The masks ride on their chunk (GroundChunk slot: dropped when the game reuses the chunk). */
+   static final int SLOT = GroundChunk.id("glint masks");
    static final int REFRESH_MS = 400; // + a chunk stagger of up to 250 ms (milliseconds: at 800 fps 30 frames was 40 ms)
 
    static LevelMask mask(IsoChunk c, int level, int frameNo, float wetGround, boolean snowAny) {
-      ChunkMasks cm = masks.get(c);
+      ChunkMasks cm = (ChunkMasks)GroundChunk.get(c, SLOT);
       if (cm == null || cm.wx != c.wx || cm.wy != c.wy) {
          cm = new ChunkMasks();
          cm.wx = c.wx;
          cm.wy = c.wy;
-         masks.put(c, cm);
+         GroundChunk.put(c, SLOT, cm);
       }
       long now = System.currentTimeMillis();
       cm.seenMs = now;
@@ -240,14 +241,6 @@ public final class Glints {
       }
    }
 
-   /** Chunks not seen for a while leave the cache (pooled IsoChunks are re-keyed by wx / wy anyway). */
-   private static void sweep(int frameNo) {
-      if ((frameNo & 255) != 0) {
-         return;
-      }
-      long now = System.currentTimeMillis();
-      masks.values().removeIf(cm -> now - cm.seenMs > 10_000L);
-   }
 
    // ------------------------------------------------------------------------------------------------ lights
 
@@ -443,7 +436,6 @@ public final class Glints {
    private static void build(int playerIndex, java.util.List<IsoChunk> chunks) {
       frames++;
       int frameNo = IsoWorld.instance.getFrameNo();
-      sweep(frameNo);
       int model = model();
       int passMode = passMode();
       if (model < 0) {
