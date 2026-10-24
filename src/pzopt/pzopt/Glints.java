@@ -74,7 +74,7 @@ public final class Glints {
 
    public static String stats() {
       return "glints: frames=" + frames + " queued=" + framesQueued + " instances=" + instances + " max=" + maxInstances + " maskRebuilds=" + maskRebuilds
-            + " draws=" + draws + " queue_us=" + (frames > 0 ? String.format(java.util.Locale.ROOT, "%.1f (masks %.1f, lights %.1f)", queueNs / 1000.0 / frames, maskNs / 1000.0 / frames, lightsNs / 1000.0 / frames) : "0") + " mask_us=" + (maskRebuilds > 0 ? String.format(java.util.Locale.ROOT, "%.2f", maskNs / 1000.0 / maskRebuilds) : "0") + " ring=" + Gpu.ringWrites + " hdr=" + hdrQueued + "/" + Gpu.hdrDraws + " lightFrames=" + lightFrames + " sunFrames=" + sunFrames + " pointSquares=" + pointSquares + " sunSquares=" + sunSquares + " model=" + model() + " pass=" + PASS_NAMES[passMode()] + " lamps=" + lampsCell + "/" + lampN + "/" + lampsActive + (failed ? " (failed)" : "");
+            + " draws=" + draws + " queue_us=" + (frames > 0 ? String.format(java.util.Locale.ROOT, "%.1f (masks %.1f, lights %.1f)", queueNs / 1000.0 / frames, maskNs / 1000.0 / frames, lightsNs / 1000.0 / frames) : "0") + " mask_us=" + (maskRebuilds > 0 ? String.format(java.util.Locale.ROOT, "%.2f", maskNs / 1000.0 / maskRebuilds) : "0") + " ring=" + Gpu.ringWrites + " hdr=" + hdrQueued + "/" + Gpu.hdrDraws + " lightFrames=" + lightFrames + " noMaskFrames=" + noMaskFrames + " sunFrames=" + sunFrames + " pointSquares=" + pointSquares + " sunSquares=" + sunSquares + " model=" + model() + " pass=" + PASS_NAMES[passMode()] + " lamps=" + lampsCell + "/" + lampN + "/" + lampsActive + (failed ? " (failed)" : "");
    }
 
    /** The model in force (devGlintCycle steps through them, then "off"). */
@@ -426,7 +426,7 @@ public final class Glints {
     * Game thread, FBORenderCell after the players / items and before the puddles: this frame's masked squares in a light's
     * reach, queued as one draw. Nothing queued when there are none.
     */
-   public static long queueNs, maskNs, lightsNs, hdrQueued;
+   public static long queueNs, maskNs, lightsNs, hdrQueued, noMaskFrames;
    private static Frame queuedFrame;
    private static int queuedFrameNo = -1;
 
@@ -512,6 +512,12 @@ public final class Glints {
       }
       float wet = zombie.iso.IsoPuddles.getInstance().getWetGroundFinalValue();
       boolean snowAny = IsoWorld.instance.currentCell.getSnowTarget() > 0;
+      // nothing can carry a mask (no frost potential, no snow, a dry road, nothing forced): no walk over the chunks at all
+      if (Config.DEV_GLINT_FORCE.isEmpty() && !snowAny && wet <= 0.05F && Config.DEV_GLINT_VIEW != 1
+            && !(GroundCover.on() && Config.GROUND_COVER_FROST && GroundCover.season.frost > 0F)) {
+         noMaskFrames++;
+         return;
+      }
       int camCX = zombie.core.math.PZMath.fastfloor(cx / 8F), camCY = zombie.core.math.PZMath.fastfloor(cy / 8F);
       float K = BloodDecals.K;
       f.n = 0;
