@@ -18,6 +18,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("run")
     ap.add_argument("--skip", type=float, default=0.0, help="fraction of each period to skip at its start")
+    ap.add_argument("--drop", type=int, default=1, help="periods left out at the start of each name (its program's compile)")
     a = ap.parse_args()
     run = Path(a.run)
     con = (run / "console.txt").read_text(errors="replace")
@@ -29,6 +30,7 @@ def main():
     P, T = int(alt.group(1)), int(alt.group(2))
     cyc = alt.group(3).split(",") if alt.group(3) else None
     halves = {}
+    periods = {}
     for l in (run / "pzopt-gpusections.out").read_text(errors="replace").splitlines():
         if l.startswith("#"):
             continue
@@ -43,9 +45,25 @@ def main():
             continue
         name = ("on" if k % 2 == 0 else "off") + ("-" + cyc[(k // 2) % len(cyc)] if cyc and k % 2 == 0 else "")
         halves.setdefault(name, []).append(int(f[2]) / 1000.0)
+        periods.setdefault(name, {}).setdefault(k, []).append(int(f[2]) / 1000.0)
+    # each name's first period may hold its program's compile (a new variant bakes stock until it is in): left out
+    first = {n: sorted(ks)[:a.drop] for n, ks in periods.items()}
+    offmed = {k: statistics.median(x) for k, x in periods.get("off", {}).items() if len(x) >= 20}
     for name in sorted(halves):
-        v = halves[name]
-        print(f"{name:16s} bakes {len(v):6d}  GPU us/bake mean {statistics.mean(v):7.1f}  median {statistics.median(v):7.1f}  p90 {sorted(v)[int(0.9 * (len(v) - 1))]:7.1f}")
+        ks = sorted(k for k in periods[name] if k not in first[name])
+        v = [x for k in ks for x in periods[name][k]]
+        if not v:
+            continue
+        pm = [statistics.median(periods[name][k]) for k in ks if len(periods[name][k]) >= 20]
+        ps = f"  per-period n={len(pm)} {statistics.mean(pm):6.1f} +- {statistics.stdev(pm) / len(pm) ** 0.5 if len(pm) > 1 else 0:4.1f}" if pm else ""
+        d = []
+        if name != "off":
+            for k in ks:
+                nb = [offmed[j] for j in (k - 1, k + 1) if j in offmed]
+                if len(periods[name][k]) >= 20 and nb:
+                    d.append(statistics.median(periods[name][k]) - statistics.mean(nb))
+        ds = f"  vs off {statistics.mean(d):+6.1f} +- {statistics.stdev(d) / len(d) ** 0.5 if len(d) > 1 else 0:4.1f}" if d else ""
+        print(f"{name:16s} bakes {len(v):6d}  GPU us/bake mean {statistics.mean(v):7.1f}  median {statistics.median(v):7.1f}  p90 {sorted(v)[int(0.9 * (len(v) - 1))]:7.1f}{ps}{ds}")
     return 0
 
 

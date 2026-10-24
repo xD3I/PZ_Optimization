@@ -23,6 +23,8 @@ import zombie.iso.weather.ClimateManager;
  * does in double ({@link GroundTiling#origin}).
  */
 public final class GroundTilingPatch implements GroundBake.FloorPatch {
+   /** The compiled mode's name (the variant's GT_MODE); set by active() before GroundBake asks for id(). */
+   static volatile String spec = "hpb";
    static final GroundTilingPatch INSTANCE = new GroundTilingPatch();
    /** Texture units: the sprite table, then the art, Gaussian and LUT arrays. */
    static final int UNIT = 60;
@@ -43,7 +45,17 @@ public final class GroundTilingPatch implements GroundBake.FloorPatch {
 
    @Override
    public String id() {
-      return "tiling";
+      return "tiling" + spec;
+   }
+
+   /**
+    * The program is specialised to the tiling mode (GT_MODE): with every mode's sampler in one program NVIDIA allocates
+    * the registers of the biggest (lap, voronoi) for all of them, which cost the bake ~5 us (gt-bc3). The mode is part
+    * of {@link #id()}, so a mode change compiles its own variant.
+    */
+   @Override
+   public String defines() {
+      return "#define GT_MODE " + Math.max(0, modeIndex(spec));
    }
 
    // ---------------------------------------------------------------------------------------------- game thread
@@ -90,6 +102,7 @@ public final class GroundTilingPatch implements GroundBake.FloorPatch {
             height |= t[i].equals("b");
             macro = t[i].equals("m") ? 100 : macro;
          }
+         spec = MODES[mode];
          if (mode == 0 && !height && macro == 0) {
             return false;
          }
@@ -98,6 +111,9 @@ public final class GroundTilingPatch implements GroundBake.FloorPatch {
          if (mode <= 0) {
             mode = 2;
          }
+         spec = MODES[mode];
+      } else {
+         spec = MODES[0];
       }
       float dry = seasonDryness();
       float[] p = {
@@ -207,28 +223,29 @@ public final class GroundTilingPatch implements GroundBake.FloorPatch {
 
       // the drawn sprite's table row, or -1: the page's lookup grid lists the rows whose rect touches the fragment's cell;
       // the rect test and three probe texels of the bound page confirm one (the same uv on another page fails the probes)
-      int gtSprCode(int i) { return int(texelFetch(pzGtSprTex, ivec2(6, i), 0).x); } // layer | kind << 4, -1 unused
-      bool gtSprAt(int i) {
+      // a table row's code if the fragment is in its rect and the bound page has its three probe texels, else -1; every
+      // fetch of the row goes out at once (the rect test no longer gates the probes: two dependent fetch levels fewer)
+      int gtSprMatch(int i) {
          vec4 r = texelFetch(pzGtSprTex, ivec2(5, i), 0); // the page rect (uv x0, y0, x1, y1)
-         if (texCoord.x < r.x || texCoord.x >= r.z || texCoord.y < r.y || texCoord.y >= r.w || gtSprCode(i) < 0) return false;
          vec4 q = texelFetch(pzGtSprTex, ivec2(3, i), 0), q2 = texelFetch(pzGtSprTex, ivec2(4, i), 0);
-         vec4 d0 = abs(texelFetch(DIFFUSE, ivec2(q.xy), 0) - texelFetch(pzGtSprTex, ivec2(0, i), 0));
-         vec4 d1 = abs(texelFetch(DIFFUSE, ivec2(q.zw), 0) - texelFetch(pzGtSprTex, ivec2(1, i), 0));
-         vec4 d2 = abs(texelFetch(DIFFUSE, ivec2(q2.xy), 0) - texelFetch(pzGtSprTex, ivec2(2, i), 0));
-         vec4 m = max(d0, max(d1, d2));
-         return max(max(m.x, m.y), max(m.z, m.w)) < 0.035;
+         vec4 p0 = texelFetch(pzGtSprTex, ivec2(0, i), 0), p1 = texelFetch(pzGtSprTex, ivec2(1, i), 0), p2 = texelFetch(pzGtSprTex, ivec2(2, i), 0);
+         int code = int(texelFetch(pzGtSprTex, ivec2(6, i), 0).x);
+         vec4 m = max(abs(texelFetch(DIFFUSE, ivec2(q.xy), 0) - p0), max(abs(texelFetch(DIFFUSE, ivec2(q.zw), 0) - p1), abs(texelFetch(DIFFUSE, ivec2(q2.xy), 0) - p2)));
+         bool in_ = texCoord.x >= r.x && texCoord.x < r.z && texCoord.y >= r.y && texCoord.y < r.w;
+         return in_ && max(max(m.x, m.y), max(m.z, m.w)) < 0.035 ? code : -1;
       }
-      int gtSpriteRow() {
+      int gtSpriteCode() {
          ivec2 cell = clamp(ivec2(texCoord * float(GT_SPR_GRID)), ivec2(0), ivec2(GT_SPR_GRID - 1));
          vec4 cand = texelFetch(pzGtSprTex, ivec2(cell.x, GT_SPR_N + cell.y), 0);
          if (cand.x < -1.5) {
-            for (int i = 0; i < GT_SPR_N; i++) if (gtSprAt(i)) return i;
+            for (int i = 0; i < GT_SPR_N; i++) { int c = gtSprMatch(i); if (c >= 0) return c; }
             return -1;
          }
          for (int k = 0; k < 4; k++) {
             int i = int(cand[k]);
             if (i < 0) return -1;
-            if (gtSprAt(i)) return i;
+            int c = gtSprMatch(i);
+            if (c >= 0) return c;
          }
          return -1;
       }
@@ -245,40 +262,42 @@ public final class GroundTilingPatch implements GroundBake.FloorPatch {
          int m = cls & 15;
          return m == 1 ? 5 : (m == 2 || m == 9) ? 3 : m == 8 ? 2 : m == 4 ? 1 : m == 3 ? 0 : -1;
       }
-      // classes are material | tone << 4 (the class map's R and G); out: the winner c1 and its weight w1, the runner-up c2
-      // (weight 1 - w1), whether class want is one of the four squares; false if the pixel has one class
-      bool gtField(vec2 wLocal, ivec2 px, int want, out int c1, out float w1, out int c2, out bool hasWant) {
+      // classes are material | tone << 4 (the class map's R and G, one fetch a square); -1 for a square that does not blend
+      int gtCls(ivec2 sq) {
+         vec2 rg = texelFetch(pzgClassTex, ivec2(sq.x & 511, sq.y & 511), 0).rg;
+         int r = int(rg.r * 255.0 + 0.5);
+         return gtRank(r) < 0 ? -1 : (r & 15) | (min(int(rg.g * 255.0 + 0.5) & 15, 3) << 4);
+      }
+      float gtScore(int c, float wc, ivec2 px, vec2 q, ivec2 bi, vec2 bf) {
+         int la = GT_CODE_LAYER[c];
+         float h = la < 0 ? 0.5 : gtFetch(px, ivec2(0), float(la)).a;
+         float nz = gtFbm2(q, bi, bf, 31u + uint(c)) - 0.5;
+         return wc + 0.06 * float(gtRank(c)) + 2.0 * pzGtBlend.y * nz + pzGtBlend.w * (h - 0.5);
+      }
+      void gtTop(int c, float sc, inout int c1, inout float s1, inout int c2, inout float s2) {
+         if (sc > s1) { s2 = s1; c2 = c1; s1 = sc; c1 = c; } else if (sc > s2) { s2 = sc; c2 = c; }
+      }
+      // out: the winner c1 and its weight w1, the runner-up c2 (weight 1 - w1), whether class want is one of the four
+      // squares; false if the pixel has one class. Scalars only (a dynamically indexed local array goes to local memory).
+      bool gtFieldK(vec2 wLocal, ivec2 px, int init, out int c1, out float w1, out int c2, out int k0, out int k1, out int k2, out int k3) {
          vec2 g = wLocal - 0.5;
          vec2 gf = floor(g);
          vec2 t = g - gf;
          ivec2 i0 = ivec2(gf) + pzGtWorld;
-         int cl[4]; float wts[4]; int n = 0; float wsum = 0.0;
-         hasWant = false;
-         for (int k = 0; k < 4; k++) {
-            ivec2 d = ivec2(k & 1, k >> 1);
-            int cls = pzgClassAt(i0 + d);
-            if (gtRank(cls) < 0) continue;
-            float w = (d.x == 1 ? t.x : 1.0 - t.x) * (d.y == 1 ? t.y : 1.0 - t.y);
-            int c = (cls & 15) | (min(pzgToneAt(i0 + d), 3) << 4);
-            hasWant = hasWant || c == want;
-            int j = 0;
-            for (; j < n; j++) if (cl[j] == c) break;
-            if (j == n) { cl[n] = c; wts[n] = 0.0; n++; }
-            wts[j] += w;
-            wsum += w;
-         }
-         c1 = want; c2 = want; w1 = 1.0;
-         if (n < 2 || wsum <= 1e-4) return false;
+         k0 = gtCls(i0); k1 = gtCls(i0 + ivec2(1, 0)); k2 = gtCls(i0 + ivec2(0, 1)); k3 = gtCls(i0 + ivec2(1, 1));
+         c1 = init; c2 = init; w1 = 1.0;
+         int r = k0 >= 0 ? k0 : k1 >= 0 ? k1 : k2 >= 0 ? k2 : k3;
+         if ((k1 < 0 || k1 == r) && (k2 < 0 || k2 == r) && (k3 < 0 || k3 == r) && (k0 < 0 || k0 == r)) return false;
+         float a0 = k0 < 0 ? 0.0 : (1.0 - t.x) * (1.0 - t.y), a1 = k1 < 0 ? 0.0 : t.x * (1.0 - t.y);
+         float a2 = k2 < 0 ? 0.0 : (1.0 - t.x) * t.y, a3 = k3 < 0 ? 0.0 : t.x * t.y;
+         float inv = 1.0 / (a0 + a1 + a2 + a3);
          ivec2 bi; vec2 bf; gtSplit(pzGtBlend.z, bi, bf);
+         vec2 q = wLocal / pzGtBlend.z;
          float s1 = -1e9, s2 = -1e9;
-         for (int j = 0; j < n; j++) {
-            int c = cl[j];
-            int la = GT_CODE_LAYER[c];
-            float h = la < 0 ? 0.5 : gtFetch(px, ivec2(0), float(la)).a;
-            float nz = gtFbm2(wLocal / pzGtBlend.z, bi, bf, 31u + uint(c)) - 0.5;
-            float sc = wts[j] / wsum + 0.06 * float(gtRank(c)) + 2.0 * pzGtBlend.y * nz + pzGtBlend.w * (h - 0.5);
-            if (sc > s1) { s2 = s1; c2 = c1; s1 = sc; c1 = c; } else if (sc > s2) { s2 = sc; c2 = c; }
-         }
+         if (k0 >= 0) gtTop(k0, gtScore(k0, (a0 + (k1 == k0 ? a1 : 0.0) + (k2 == k0 ? a2 : 0.0) + (k3 == k0 ? a3 : 0.0)) * inv, px, q, bi, bf), c1, s1, c2, s2);
+         if (k1 >= 0 && k1 != k0) gtTop(k1, gtScore(k1, (a1 + (k2 == k1 ? a2 : 0.0) + (k3 == k1 ? a3 : 0.0)) * inv, px, q, bi, bf), c1, s1, c2, s2);
+         if (k2 >= 0 && k2 != k0 && k2 != k1) gtTop(k2, gtScore(k2, (a2 + (k3 == k2 ? a3 : 0.0)) * inv, px, q, bi, bf), c1, s1, c2, s2);
+         if (k3 >= 0 && k3 != k0 && k3 != k1 && k3 != k2) gtTop(k3, gtScore(k3, a3 * inv, px, q, bi, bf), c1, s1, c2, s2);
          w1 = clamp(0.5 + (s1 - s2) / pzGtBlend.x, 0.5, 1.0);
          return true;
       }
@@ -287,57 +306,45 @@ public final class GroundTilingPatch implements GroundBake.FloorPatch {
       #if defined(PZG_PIECE) && PZG_PIECE == 2
          return t; // a grass / erosion overlay or dug soil on the natural floor: stock (with the attached flag only)
       #endif
+      #if GT_MODE >= 0
+         if (pzGtPeriod.z != GT_MODE) return t; // (a program of another spec: the stock texel until its own is in)
+         const int mode = GT_MODE;
+      #else
          int mode = pzGtPeriod.z;
+      #endif
          if (mode == 10) return t; // dev cost split: the variant's own overhead (no lookup)
-         int row = gtSpriteRow();
-         if (row < 0 || mode == 9) return t; // (9: dev cost split, the lookup alone)
-         int code = gtSprCode(row);
-         int layer = code & 15, kind = code >> 4;
-         ivec2 px = gtWrap(ivec2(gl_FragCoord.xy) / pzGtBakeI.z + pzGtBakeI.xy);
+         // the world side first, it needs no sprite: the class map, the field and the other class's art go out beside the
+         // sprite lookup's fetches instead of after them (the bake's small draws leave too few warps to hide a long chain)
+         ivec2 px = gtWrap((ivec2(gl_FragCoord.xy) >> (pzGtBakeI.z - 1)) + pzGtBakeI.xy); // (s = 1 or 2)
          vec2 uv = vec2(gl_FragCoord.x * pzGtBakeF.x + pzGtBakeF.y, gl_FragCoord.y * pzGtBakeF.z + pzGtBakeF.w);
          vec2 wLocal = vec2(uv.y + uv.x, uv.y - uv.x) * 0.5;
-         if (mode == 8) {
-            // dev alignment check: the exemplar's slot diamonds (red, from the exact pixel) and the world squares (blue, from
-            // the art-aligned position) over the stock texel; both must trace the sprite's own diamond edges
-            vec2 q = vec2(px) + 0.5 - vec2(float(pzGtPeriod.x / 4) - 1.0, 0.0); // slot (0, 0)'s top vertex at x = 32ts - 1
-            float k = float(pzGtPeriod.x / 4), kh = float(pzGtPeriod.y / 4);
-            vec2 e = vec2(q.y / kh + q.x / k, q.y / kh - q.x / k) * 0.5;
-            vec2 fe = abs(fract(e) - 0.5), fw = abs(fract(wLocal) - 0.5);
-            float red = max(fe.x, fe.y) > 0.49 ? 1.0 : 0.0, blue = max(fw.x, fw.y) > 0.49 ? 1.0 : 0.0;
-            return vec4(mix(t.rgb, vec3(red, 0.0, blue), max(red, blue) * 0.8), t.a);
-         }
-         // the game's pages hold premultiplied colour and the bake blends (ONE, ONE_MINUS_SRC_ALPHA): the stock texel is
-         // un-premultiplied here, the exemplar holds straight colour, and the result goes back premultiplied by its alpha
-         vec4 c = mode > 0 ? gtSample(px, wLocal, float(layer), mode) : (kind == 0 || pzGtBlend.x <= 0.0 ? vec4(t.rgb / max(t.a, 1e-4), t.a) : gtFetch(px, ivec2(0), float(layer)));
-         float grassy = ((pzGtBakeI.w >> layer) & 1) != 0 ? 1.0 : 0.0;
          int own = pzgClass & 15;
          int ownCls = own | (min(pzgToneAt(pzgSq), 3) << 4);
          bool blend = pzGtBlend.x > 0.0 && gtRank(pzgClass) >= 0;
-         if (kind == 0) {
-            int c1, c2; float w1; bool has;
-            if (blend && GT_LAYER_MAT[layer] == own && gtField(wLocal, px, ownCls, c1, w1, c2, has) && !(c1 == ownCls && w1 >= 1.0)) {
-               // the other class's art in its own tone (an edge piece of it, where the map has one, paints the same share)
-               int co_ = c1 == ownCls ? c2 : c1;
-               int lo = GT_CODE_LAYER[co_];
-               if (lo >= 0 && co_ != ownCls) {
-                  vec4 co = mode > 0 ? gtSample(px, wLocal, float(lo), mode) : gtFetch(px, ivec2(0), float(lo));
-                  float wo = c1 == ownCls ? 1.0 - w1 : w1;
-                  c.rgb = mix(c.rgb, co.rgb, wo);
-                  grassy = mix(grassy, ((pzGtBakeI.w >> lo) & 1) != 0 ? 1.0 : 0.0, wo);
-               }
+         int c1 = ownCls, c2 = ownCls, k0 = -1, k1 = -1, k2 = -1, k3 = -1; float w1 = 1.0;
+         bool f = blend && gtFieldK(wLocal, px, ownCls, c1, w1, c2, k0, k1, k2, k3);
+         // the other class's art in its own tone, as a floor of the square's material mixes it (an edge piece of it, where
+         // the map has one, paints the same share)
+         vec4 co = vec4(0.0); float wo = 0.0, go = 0.0;
+         if (f && !(c1 == ownCls && w1 >= 1.0)) {
+            int co_ = c1 == ownCls ? c2 : c1;
+            int lo = GT_CODE_LAYER[co_];
+            if (lo >= 0 && co_ != ownCls) {
+               co = mode > 0 && mode < 8 ? gtSample(px, wLocal, float(lo), mode) : gtFetch(px, ivec2(0), float(lo));
+               wo = c1 == ownCls ? 1.0 - w1 : w1;
+               go = ((pzGtBakeI.w >> lo) & 1) != 0 ? 1.0 : 0.0;
             }
-            vec3 rgb = gtMacro(c.rgb, wLocal, grassy);
-            return vec4(rgb * t.a, t.a);
          }
-         vec3 rgb = gtMacro(c.rgb, wLocal, grassy);
+         int code = gtSpriteCode();
+         if (code < 0) return t;
+         if (mode == 9) return vec4(t.rgb * 0.999, t.a); // (9: dev cost split, the lookup alone; kept from folding away)
+         int layer = code & 15, kind = code >> 4;
          // an edge piece of class B over the square: B's share of the same field where B is one of the four squares round
          // the pixel; an edge with no such neighbour (hand-placed on the map) keeps the sprite's alpha
          float a = t.a;
          int bCls = GT_LAYER_CLS[layer];
-         if (blend) {
-            int c1, c2; float w1; bool has;
-            bool f = gtField(wLocal, px, bCls, c1, w1, c2, has);
-            if (has) {
+         if (kind != 0 && blend) {
+            if (k0 == bCls || k1 == bCls || k2 == bCls || k3 == bCls) {
                a = !f ? 1.0 : c1 == bCls ? w1 : c2 == bCls ? 1.0 - w1 : 0.0;
             } else {
                // (no neighbour of B here: the strip / half reaches past the 2x2 squares; B's share is nil where the field
@@ -345,6 +352,25 @@ public final class GroundTilingPatch implements GroundBake.FloorPatch {
                a = f ? 0.0 : t.a;
             }
          }
+         if (mode == 8) {
+            vec2 q = vec2(px) + 0.5 - vec2(float(pzGtPeriod.x / 4) - 1.0, 0.0);
+            float k = float(pzGtPeriod.x / 4), kh = float(pzGtPeriod.y / 4);
+            vec2 e = vec2(q.y / kh + q.x / k, q.y / kh - q.x / k) * 0.5;
+            vec2 fe = abs(fract(e) - 0.5), fw = abs(fract(wLocal) - 0.5);
+            float red = max(fe.x, fe.y) > 0.49 ? 1.0 : 0.0, blue = max(fw.x, fw.y) > 0.49 ? 1.0 : 0.0;
+            return vec4(mix(t.rgb, vec3(red, 0.0, blue), max(red, blue) * 0.8), t.a);
+         }
+         vec4 c = mode > 0 ? gtSample(px, wLocal, float(layer), mode) : (kind == 0 || pzGtBlend.x <= 0.0 ? vec4(t.rgb / max(t.a, 1e-4), t.a) : gtFetch(px, ivec2(0), float(layer)));
+         float grassy = ((pzGtBakeI.w >> layer) & 1) != 0 ? 1.0 : 0.0;
+         if (kind == 0) {
+            if (GT_LAYER_MAT[layer] == own) {
+               c.rgb = mix(c.rgb, co.rgb, wo);
+               grassy = mix(grassy, go, wo);
+            }
+            vec3 rgb = gtMacro(c.rgb, wLocal, grassy);
+            return vec4(rgb * t.a, t.a);
+         }
+         vec3 rgb = gtMacro(c.rgb, wLocal, grassy);
          return vec4(rgb * a, a);
       }
       """.formatted(GroundTileArt.SPR_MAX, GroundTileArt.SPR_GRID);
