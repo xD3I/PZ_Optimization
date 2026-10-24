@@ -465,7 +465,7 @@ public final class GroundTracks {
       if (failed || GroundState.texture() == 0 || !init()) {
          return;
       }
-      GpuSections.begin("ground.bake");
+      GpuSections.markNow("ground.bake", false); // render thread, inside the drawer
       try {
          GL20.glUseProgram(bakeProg);
          MVP.set(Core.getInstance().projectionMatrixStack.peek()).mul(Core.getInstance().modelViewMatrixStack.peek());
@@ -506,7 +506,7 @@ public final class GroundTracks {
          SpriteRenderer.ringBuffer.restoreVbos = true;
          SpriteRenderer.ringBuffer.restoreBoundTextures = true;
          GL11.glDepthMask(true);
-         GpuSections.end("ground.bake");
+         GpuSections.markNow("ground.bake", true);
       }
    }
 }
