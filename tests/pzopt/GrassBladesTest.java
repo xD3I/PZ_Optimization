@@ -51,6 +51,12 @@ public class GrassBladesTest {
          Check.check(x >= r[0] && x <= r[0] + r[2] && y >= r[1] && y <= r[1] + r[3], "root " + i + " inside the rectangle " + java.util.Arrays.toString(r));
       }
 
+      // no texture2D token in the Mac's programs: CoreGlsl would add pz_texture2D wrappers with bias overloads, which Apple
+      // refuses in a vertex shader (gb-mac-20261024-191837)
+      for (String src : new String[] {GrassBlades.INLINE_VERT, GrassBlades.ROOT_VERT, GrassBlades.ROOT_FRAG, GrassBlades.FRAG}) {
+         Check.check(!src.contains("texture2D"), "no texture2D in a GL 4.1 program");
+      }
+
       // GLSL
       Path check = Path.of("/tmp/glslcheck");
       if (!Files.isExecutable(check)) {

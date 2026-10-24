@@ -1934,8 +1934,9 @@ public final class GrassBlades {
       "uniform vec4 uLod;", // small blade px, small segments, dev bisection
       "uniform sampler2D uTrail;", // 256 x 256 RGBA32F, two texels a square, toroidal: trample time, cut time, key, direction
       "uniform vec4 uTrailK;", // now (s), 1 / trail recovery (s), 1 / regrow (s), on
-      "#define texture2D texture",
-      GroundState.GLSL,
+      // GroundState's helper written with texture(): a texture2D token makes CoreGlsl (the Mac's GL 4.1 core) add its
+      // pz_texture2D wrappers, whose bias overloads Apple refuses in a vertex shader
+      GroundState.GLSL.replace("texture2D(", "texture("),
       COMMON,
       "vec2 gbH2(uint s) { return vec2(gbH01(s), gbH01(s ^ 0x9e3779b9U)); }",
       // the root's colour / depth: the world's textures at the root pixel, or (GB_ROOTS, the vertex-only path) the root pass's
