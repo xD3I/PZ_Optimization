@@ -90,12 +90,17 @@ public final class GroundTracks {
 
       @Override
       public double decayEveryHours() {
-         return Config.GROUND_TRACKS_DECAY_MINUTES / 60.0;
+         return Config.GROUND_TRACKS_DECAY_MINUTES / 60.0 / Config.DEV_GROUND_TRACKS_TIME_SCALE;
+      }
+
+      @Override
+      public float decayDt(double gameHours) {
+         return (float)(gameHours * Config.DEV_GROUND_TRACKS_TIME_SCALE * 2.0 / Math.max(1, Config.GROUND_TRACKS_DAYS));
       }
 
       @Override
       public boolean rebakes() {
-         return "bake".equals(Config.GROUND_TRACKS_LOOK);
+         return "bake".equals(Config.GROUND_TRACKS_LOOK) && !"stamp".equals(Ground.variant()); // (devGroundCycle stamp: the stamping alone)
       }
 
       @Override
@@ -113,7 +118,7 @@ public final class GroundTracks {
 
       @Override
       public boolean active() {
-         return on() && "bake".equals(Config.GROUND_TRACKS_LOOK);
+         return on() && "bake".equals(Config.GROUND_TRACKS_LOOK) && !"stamp".equals(Ground.variant());
       }
 
       @Override
@@ -137,6 +142,7 @@ public final class GroundTracks {
    private static long lastFrameCount = -1L;
    private static long lastNanos;
    private static boolean rulesSet;
+   private static String lastVariant;
    private static float wet;
 
    /** Ground.frameStart's feature hook (before the movers and GroundState): the rules, the sources, the wetness. */
@@ -162,6 +168,12 @@ public final class GroundTracks {
          GroundState.setRules(RULES);
       }
       GroundState.use();
+      String v = Ground.variant();
+      if (v != null && !v.equals(lastVariant)) {
+         lastVariant = v;
+         Log.info("ground tracks: variant " + v + " epoch_ms " + System.currentTimeMillis());
+         GroundBake.rebakeAll("tracks variant", false);
+      }
       GroundState.Sources src = GroundState.SOURCES;
       src.vehicles = Config.GROUND_TRACKS_VEHICLES;
       src.feet = Config.GROUND_TRACKS_FEET;
@@ -188,6 +200,9 @@ public final class GroundTracks {
       float tauDry = temp < 5F ? 18F : temp < 15F ? 10F : 5F;
       wet += rain * (1F - wet) * Math.min(1F, gh / 0.75F) - wet * Math.min(1F, gh / tauDry);
       wet = clamp01(wet);
+      if (Config.DEV_GROUND_TRACKS_WET_PCT >= 0) {
+         wet = Math.min(100, Config.DEV_GROUND_TRACKS_WET_PCT) / 100F;
+      }
    }
 
    static float clamp01(float v) {
@@ -353,26 +368,50 @@ public final class GroundTracks {
 
    // ------------------------------------------------------------------------------------------------ render thread
 
-   private static boolean tried, ok;
+   private static boolean ok;
    private static int bakeProg, vao;
    private static int bMVP, bGo, bState, bUv, bMat, bLight, bWeather, bSky;
    private static final java.nio.IntBuffer INTS = BufferUtils.createIntBuffer(8);
    private static final FloatBuffer MAT = BufferUtils.createFloatBuffer(16);
    private static final Matrix4f MVP = new Matrix4f();
 
+   /**
+    * The look's defines from the keys; devGroundCycle variants override them in-run: nopom (relief offset sampling off),
+    * noshadow, noao, flat (lighting only: neither the offset sampling nor the shadow march), colour (the colour response alone,
+    * no relight at all).
+    */
    static String header() {
-      return "#version 430\n#define GT_TPS " + TPS + ".0\n#define GT_TN " + TN + "\n#define GT_POM " + (Config.GROUND_TRACKS_POM ? 1 : 0) + "\n#define GT_SHADOW "
-         + Config.GROUND_TRACKS_SHADOW_STEPS + "\n#define GT_AO " + (Config.GROUND_TRACKS_AO ? 1 : 0) + "\n";
+      String v = Ground.variant();
+      boolean pom = Config.GROUND_TRACKS_POM && !"nopom".equals(v) && !"flat".equals(v) && !"colour".equals(v);
+      int shadow = "noshadow".equals(v) || "flat".equals(v) || "colour".equals(v) ? 0 : Config.GROUND_TRACKS_SHADOW_STEPS;
+      boolean ao = Config.GROUND_TRACKS_AO && !"noao".equals(v) && !"colour".equals(v);
+      return "#version 430\n#define GT_TPS " + TPS + ".0\n#define GT_TN " + TN + "\n#define GT_POM " + (pom ? 1 : 0) + "\n#define GT_SHADOW " + shadow
+         + "\n#define GT_AO " + (ao ? 1 : 0) + "\n#define GT_RELIGHT " + ("colour".equals(v) ? 0 : 1) + "\n";
    }
 
+   private static final java.util.HashMap<String, int[]> PROGRAMS = new java.util.HashMap<>();
+   private static String bakeHeader;
+
+   /** The bake program for the current defines (a key or a dev variant change compiles another, once). */
    private static boolean init() {
-      if (tried) {
+      String h = header();
+      if (h.equals(bakeHeader)) {
          return ok;
       }
-      tried = true;
-      String frag = header() + GroundTracksGlsl.BAKE_FRAG.replace("// (gt_look.glsl follows)", GroundTracksGlsl.LOOK);
-      bakeProg = link(header() + GroundTracksGlsl.BAKE_VERT, frag, "ground tracks bake");
-      if (bakeProg == 0) {
+      bakeHeader = h;
+      int[] cached = PROGRAMS.get(h);
+      if (cached == null) {
+         String frag = h + GroundTracksGlsl.BAKE_FRAG.replace("// (gt_look.glsl follows)", GroundTracksGlsl.LOOK);
+         int p = link(h + GroundTracksGlsl.BAKE_VERT, frag, "ground tracks bake");
+         cached = new int[] {p};
+         PROGRAMS.put(h, cached);
+         if (p != 0) {
+            Log.info("ground tracks: bake program for " + h.replace("\n", " ").replace("#define ", ""));
+         }
+      }
+      bakeProg = cached[0];
+      ok = bakeProg != 0;
+      if (!ok) {
          failed = true;
          Log.warn("ground tracks: the bake program failed, off");
          return false;
@@ -385,9 +424,9 @@ public final class GroundTracks {
       bLight = GL20.glGetUniformLocation(bakeProg, "uLight");
       bWeather = GL20.glGetUniformLocation(bakeProg, "uWeather");
       bSky = GL20.glGetUniformLocation(bakeProg, "uSky");
-      vao = GL30.glGenVertexArrays();
-      ok = true;
-      Log.info("ground tracks: bake pass ready (map: GroundState, " + TPS + " texels a square)");
+      if (vao == 0) {
+         vao = GL30.glGenVertexArrays();
+      }
       return true;
    }
 

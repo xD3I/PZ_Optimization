@@ -1916,6 +1916,8 @@ public final class Config {
    public static volatile int GROUND_TRACKS_DECAY_MINUTES; // groundTracksDecayMinutes: game minutes between decay passes
    public static volatile boolean GROUND_TRACKS_VEHICLES, GROUND_TRACKS_FEET, GROUND_TRACKS_BODIES; // the stamp sources
    public static volatile int DEV_GROUND_TRACKS_VIEW; // devGroundTracksView: 1 the height field drawn as colour (blue ruts, red berms)
+   public static volatile int DEV_GROUND_TRACKS_TIME_SCALE; // devGroundTracksTimeScale: the decay runs this many times faster than the game clock (the recovery in seconds)
+   public static volatile int DEV_GROUND_TRACKS_WET_PCT; // devGroundTracksWetPct: the ground's wetness pinned (0..100; -1 = from the rain)
    public static volatile int DEV_GROUND_TRACKS_RIG; // devGroundTracksRig: 1 a scripted scene round the player (a car pass with a skid, three walkers, a body, a drag), the look rig
    public static volatile boolean DEV_GROUND_TRACKS_LOG; // devGroundTracksLog: a stats line every 600 frames
    public static final int DEV_RAIN_SCALE_PCT = integer("devRainScalePct", 40); // dev: a raindrop's ring against a footstep's (% in space; time sqrt of it); read at launch
@@ -2442,6 +2444,8 @@ public final class Config {
       DEV_GROUND_TRACKS_VIEW = integer("devGroundTracksView", 0);
       DEV_GROUND_TRACKS_LOG = bool("devGroundTracksLog", false);
       DEV_GROUND_TRACKS_RIG = integer("devGroundTracksRig", 0);
+      DEV_GROUND_TRACKS_TIME_SCALE = Math.max(1, integer("devGroundTracksTimeScale", 1));
+      DEV_GROUND_TRACKS_WET_PCT = integer("devGroundTracksWetPct", -1);
       loadingLive = false;
    }
 

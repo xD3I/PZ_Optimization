@@ -3,6 +3,9 @@
 // GT_POM (0/1): relief offset sampling of the rut (the camera's fixed view ray through the height field);
 // GT_SHADOW steps of the self-shadow march toward the key light; GT_AO the cavity term.
 vec4 gtS(vec2 p);
+#ifndef GT_RELIGHT
+#define GT_RELIGHT 1
+#endif
 
 // The view ray: a point h squares above the rest surface shows where the rest surface would be 2.449 h further toward +x+y
 // (one square of height moves the screen like 2.449 units of x + y; SunShadow's WZ / WX). So the pixel whose rest-surface
@@ -108,7 +111,7 @@ vec3 gtFactor(vec2 p0, int mat, vec3 L, float sun, float wet, float snowDepth, v
       f *= 1.0 - 0.24 * fresh * flat1 * (1.0 - bare); // crushed fresh blades
    } else if (mat == 2) {
       // dirt / mud: cut soil is darker and wetter; a fresh berm's crumbs are paler
-      float cut = clamp(depth * 9.0, 0.0, 1.0);
+      float cut = clamp(depth * 14.0, 0.0, 1.0);
       float dark = 0.16 + 0.22 * wet;
       f *= 1.0 - dark * cut - 0.12 * fresh * (0.4 + wet);
       f *= gtTint(B, vec3(0.40, 0.29, 0.20), 0.3 * wear, 1.0);
@@ -129,6 +132,9 @@ vec3 gtFactor(vec2 p0, int mat, vec3 L, float sun, float wet, float snowDepth, v
       float through = smoothstep(snowDepth * 0.8, snowDepth * 1.05, depth);
       f *= gtTint(B, vec3(0.45, 0.41, 0.38), 0.8 * through, 0.5);
    }
+#if GT_RELIGHT == 0
+   relight = 1.0; // (the colour response alone: the dev variant 'colour')
+#endif
    f *= relight * ao;
    // water standing in the ruts (mud, sand, slush): a flat surface at the pooled level; brown, opaque, the sky at grazing
    if ((mat == 2 || mat == 3 || mat == 5) && wet > 0.0) {

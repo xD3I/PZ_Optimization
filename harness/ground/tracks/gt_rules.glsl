@@ -87,7 +87,7 @@ void gtPrim(GtPrim q, vec2 p, int mat, out float cut, out float berm, out float 
       if (e < 1.0) {
          float prof = 1.0 - e * e;
          float ht = mix(1.0, 0.72 + 0.28 * abs(a / len) + 0.2 * smoothstep(0.2, 0.9, -a / len), q.c.z); // heel and toe press deeper
-         cut = -q.b.z * prof * ht;
+         cut = -q.b.z * prof * ht * 1.5; // (a print reads at the iso scale only a bit deeper than life)
          w = prof;
       } else {
          float rr = sqrt(e);
