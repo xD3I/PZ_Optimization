@@ -138,7 +138,7 @@ public final class GroundCover {
 
    public static String stats() {
       return "ground cover: bakes=" + bakes + " skipped=" + bakesSkipped + " builds=" + builds + " build_us=" + (builds > 0 ? buildNs / 1000 / builds : 0) + " (hood " + (builds > 0 ? hoodNs / 1000 / builds : 0) + " corners " + (builds > 0 ? cornersNs / 1000 / builds : 0) + ") build_min_us=" + (builds > 0 ? buildMinNs / 1000 : 0) + " build_late_us=" + (buildLate > 0 ? buildLateNs / 1000 / buildLate : 0)
-            + " async=" + asyncBuilds + " sync=" + syncBuilds + " submit_us=" + (submits > 0 ? submitNs / 1000 / submits : 0) + " gathers=" + gathers + " gather_us=" + (gathers > 0 ? gatherNs / 1000 / gathers : 0) + " land_rebakes=" + landRebakes + " stale_draws=" + staleDraws + " dropped=" + droppedBuilds
+            + " async=" + asyncBuilds + " sync=" + syncBuilds + " submit_us=" + (submits > 0 ? submitNs / 1000 / submits : 0) + " gathers=" + gathers + " gather_us=" + (gathers > 0 ? gatherNs / 1000 / gathers : 0) + " land_rebakes=" + landRebakes + " popins=" + popins + " popin_ms=" + (popins > 0 ? popinMs / popins : 0) + "/" + popinMaxMs + " popins_late=" + popinsLate + " stale_draws=" + staleDraws + " dropped=" + droppedBuilds
             + " instances=" + instancesDrawn + " rebakes=" + rebakesIssued + " tracksWantFrames=" + tracksRebakes + " step=" + step + " frostStep=" + frostStep + " month=" + season.month
             + String.format(java.util.Locale.ROOT, " fall=%.2f flowers=%.2f frost=%.2f tmin=%.1f", season.leafFall, season.flowers, season.frost, season.tMin)
             + (failed ? " (failed)" : "");
@@ -1054,6 +1054,7 @@ public final class GroundCover {
       ChunkInfo info; // level 0's squares as last gathered
       boolean inFlight; // a worker build of level 0 is queued or running
       boolean rebakeOnLand; // a bake drew the stale (or no) cover meanwhile: re-bake when the build lands
+      long staleSinceMs; // when that bake was (the pop-in's length: popin_ms)
       boolean baked; // level 0 was baked since its cover was built
    }
 
@@ -1084,7 +1085,7 @@ public final class GroundCover {
    private static final java.util.concurrent.ConcurrentLinkedQueue<Job> landed = new java.util.concurrent.ConcurrentLinkedQueue<>();
    private static java.util.concurrent.ExecutorService worker;
    private static int inFlight;
-   public static long asyncBuilds, syncBuilds, landRebakes, staleDraws, droppedBuilds, asyncNs;
+   public static long asyncBuilds, syncBuilds, landRebakes, staleDraws, droppedBuilds, asyncNs, popins, popinMs, popinMaxMs, popinsLate;
 
    static boolean async() {
       return Config.GROUND_COVER_ASYNC;
@@ -1168,6 +1169,15 @@ public final class GroundCover {
          if (j.key != k || j.fkey != fk || j.skey != sk) {
             continue; // stale already: the prefetch builds it again (and its landing re-bakes)
          }
+         if (cc.rebakeOnLand) { // a bake showed the chunk without its cover: how long until it lands
+            long d = System.currentTimeMillis() - cc.staleSinceMs;
+            popins++;
+            popinMs += d;
+            popinMaxMs = Math.max(popinMaxMs, d);
+            if (d > 100L) {
+               popinsLate++;
+            }
+         }
          if (cc.rebakeOnLand || cc.baked && changed) {
             cc.rebakeOnLand = false;
             queueRebake(c);
@@ -1244,6 +1254,9 @@ public final class GroundCover {
          // the worker builds it (prefetched, or now): the bake draws what there is and re-bakes when the build lands
          if (!cc.inFlight) {
             submit(c, cc);
+         }
+         if (!cc.rebakeOnLand) {
+            cc.staleSinceMs = System.currentTimeMillis();
          }
          cc.rebakeOnLand = true;
          if (lc != null) {
