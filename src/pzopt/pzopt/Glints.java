@@ -21,6 +21,7 @@ import zombie.core.SpriteRenderer;
 import zombie.core.opengl.GLStateRenderThread;
 import zombie.core.textures.Texture;
 import zombie.core.textures.TextureDraw;
+import zombie.core.textures.TextureFBO;
 import zombie.iso.IsoCamera;
 import zombie.iso.IsoCell;
 import zombie.iso.IsoChunk;
@@ -68,7 +69,7 @@ public final class Glints {
 
    public static String stats() {
       return "glints: frames=" + frames + " queued=" + framesQueued + " instances=" + instances + " max=" + maxInstances + " maskRebuilds=" + maskRebuilds
-            + " draws=" + draws + " queue_us=" + (frames > 0 ? String.format(java.util.Locale.ROOT, "%.1f", queueNs / 1000.0 / frames) : "0") + " ring=" + Gpu.ringWrites + " lightFrames=" + lightFrames + " sunFrames=" + sunFrames + " pointSquares=" + pointSquares + " sunSquares=" + sunSquares + " model=" + model() + " pass=" + PASS_NAMES[passMode()] + (failed ? " (failed)" : "");
+            + " draws=" + draws + " queue_us=" + (frames > 0 ? String.format(java.util.Locale.ROOT, "%.1f", queueNs / 1000.0 / frames) : "0") + " ring=" + Gpu.ringWrites + " hdr=" + hdrQueued + "/" + Gpu.hdrDraws + " lightFrames=" + lightFrames + " sunFrames=" + sunFrames + " pointSquares=" + pointSquares + " sunSquares=" + sunSquares + " model=" + model() + " pass=" + PASS_NAMES[passMode()] + (failed ? " (failed)" : "");
    }
 
    /** The model in force (devGlintCycle steps through them, then "off"). */
@@ -138,18 +139,20 @@ public final class Glints {
       final byte[] kind = new byte[64];
       final byte[] strength = new byte[64]; // 0..255
       final byte[] sun = new byte[64]; // 0..255: the square's sun visibility (frost's shade term)
-      int builtFrame = Integer.MIN_VALUE;
-      int level;
+      long builtMs = Long.MIN_VALUE;
+      int level, ts;
+      /** per masked square, its data block's frame-independent part (the frame adds its chunk depth, origin, light bits) */
+      final float[] block = new float[64 * TEXELS * 4];
    }
 
    static final class ChunkMasks {
       final LevelMask[] levels = new LevelMask[64]; // by level + 32
       int wx = Integer.MIN_VALUE, wy;
-      int seenFrame;
+      long seenMs;
    }
 
    private static final java.util.IdentityHashMap<IsoChunk, ChunkMasks> masks = new java.util.IdentityHashMap<>();
-   static final int REFRESH = 30;
+   static final int REFRESH_MS = 400; // + a chunk stagger of up to 250 ms (milliseconds: at 800 fps 30 frames was 40 ms)
 
    static LevelMask mask(IsoChunk c, int level, int frameNo, float wetGround, boolean snowAny) {
       ChunkMasks cm = masks.get(c);
@@ -159,7 +162,8 @@ public final class Glints {
          cm.wy = c.wy;
          masks.put(c, cm);
       }
-      cm.seenFrame = frameNo;
+      long now = System.currentTimeMillis();
+      cm.seenMs = now;
       int li = level + 32;
       if (li < 0 || li >= 64) {
          return null;
@@ -169,11 +173,12 @@ public final class Glints {
          m = cm.levels[li] = new LevelMask();
          m.level = level;
       }
-      int stagger = (c.wx * 7 + c.wy * 13) & 31;
-      if (m.builtFrame != Integer.MIN_VALUE && frameNo - m.builtFrame < REFRESH + stagger) {
+      int stagger = ((c.wx * 7 + c.wy * 13) & 31) * 8;
+      if (m.builtMs != Long.MIN_VALUE && now - m.builtMs < REFRESH_MS + stagger && m.ts == Core.tileScale) {
          return m;
       }
-      m.builtFrame = frameNo;
+      m.builtMs = now;
+      m.ts = Core.tileScale;
       maskRebuilds++;
       build(c, level, m, wetGround, snowAny);
       return m;
@@ -215,6 +220,23 @@ public final class Glints {
          m.kind[i] = (byte)kind;
          m.strength[i] = (byte)Math.round(Math.min(1F, s) * 255F);
          m.sun[i] = (byte)Math.round(Math.max(0F, Math.min(1F, sunVis)) * 255F);
+         int x = sq.x, y = sq.y, ts = m.ts, o = i * TEXELS * 4;
+         float[] d = m.block;
+         // the floor diamond's north corner in absolute screen pixels (IsoUtils.XToScreen / YToScreen at tile scale ts)
+         d[o] = (x - y) * (32F * ts);
+         d[o + 1] = (x + y) * (16F * ts) - level * (96F * ts);
+         d[o + 2] = IsoDepthHelper.calculateDepth(x, y, level); // + the frame's chunk depth
+         d[o + 3] = level;
+         // grid space s = (x - y) 32, t = (x + y) 16, wrapped every 4096 units (128 / 256 squares: cells of every level
+         // line up across the wrap, the random pattern just restarts)
+         d[o + 6] = (float)Math.floorMod((x - y) * 32, 4096);
+         d[o + 7] = (float)Math.floorMod((x + y) * 16, 4096);
+         d[o + 8] = kind;
+         d[o + 9] = (m.strength[i] & 255) / 255F;
+         d[o + 10] = (m.sun[i] & 255) / 255F;
+         d[o + 13] = level & 255;
+         d[o + 14] = 0F;
+         d[o + 15] = 0F;
       }
    }
 
@@ -223,7 +245,8 @@ public final class Glints {
       if ((frameNo & 255) != 0) {
          return;
       }
-      masks.values().removeIf(cm -> frameNo - cm.seenFrame > 600);
+      long now = System.currentTimeMillis();
+      masks.values().removeIf(cm -> now - cm.seenMs > 10_000L);
    }
 
    // ------------------------------------------------------------------------------------------------ lights
@@ -358,6 +381,7 @@ public final class Glints {
 
    static final class Pass extends TextureDraw.GenericDrawer {
       Frame frame;
+      boolean hdr;
 
       @Override
       public void render() {
@@ -373,7 +397,34 @@ public final class Glints {
     * Game thread, FBORenderCell after the players / items and before the puddles: this frame's masked squares in a light's
     * reach, queued as one draw. Nothing queued when there are none.
     */
-   public static long queueNs;
+   public static long queueNs, hdrQueued;
+   private static Frame queuedFrame;
+   private static int queuedFrameNo = -1;
+
+   /**
+    * Game thread, FBORenderCell inside the HDR glint-only pass (after the wet blood's): this frame's glints once more, into
+    * HdrGlint's target, so they reach past the 8-bit world's white in the HDR output. Nothing without HDR or glints this frame.
+    */
+   public static void queueHdr() {
+      if (!on() || Config.GLINT_HDR_PCT <= 0 || !Hdr.active || Hdr.alphaGain || Hdr.tune.glint <= 0F) {
+         return;
+      }
+      Frame f = queuedFrame;
+      if (f == null || f.n == 0 || queuedFrameNo != IsoWorld.instance.getFrameNo() || Config.DEV_GLINT_VIEW != 0) {
+         return;
+      }
+      Pass p = PASSES[passIndex++ & 7];
+      if (p == null) {
+         p = PASSES[(passIndex - 1) & 7] = new Pass();
+      }
+      p.frame = f;
+      p.hdr = true;
+      hdrQueued++;
+      String sec = Ground.section("ground.glints.hdr");
+      GpuSections.begin(sec);
+      SpriteRenderer.instance.drawGeneric(p);
+      GpuSections.end(sec);
+   }
 
    public static void queue(int playerIndex, java.util.List<IsoChunk> chunks) {
       if (!on() || chunks == null) {
@@ -443,6 +494,22 @@ public final class Glints {
             }
             byte[] flags = cut.squareFlags[playerIndex];
             float chunkDepth = IsoDepthHelper.getChunkDepthData(camCX, camCY, c.wx, c.wy, level).depthStart;
+            // the lights that reach the chunk level at all (its 8 x 8 box + reach): the squares test only those
+            int cb = 0;
+            float bx0 = c.wx * 8 - ox, by0 = c.wy * 8 - oy, pz = level * METRIC_Z;
+            for (int li = 0; li < L.n; li++) {
+               int k = li * 4;
+               float qx = Math.max(bx0, Math.min(bx0 + 8F, L.p[k])) - L.p[k], qy = Math.max(by0, Math.min(by0 + 8F, L.p[k + 1])) - L.p[k + 1];
+               float r = L.p[k + 3] + 0.75F;
+               if (qx * qx + qy * qy <= r * r && Math.abs(pz - L.p[k + 2]) <= METRIC_Z * 1.5F) {
+                  cb |= 1 << li;
+               }
+            }
+            boolean sunOn = L.sun[3] > 0F;
+            if (cb == 0 && !sunOn && Config.DEV_GLINT_VIEW != 1) {
+               continue;
+            }
+            float[] blk = m.block;
             long bits = m.bits;
             while (bits != 0L && f.n < MAX) {
                int s = Long.numberOfTrailingZeros(bits);
@@ -453,12 +520,13 @@ public final class Glints {
                int x = c.wx * 8 + (s & 7), y = c.wy * 8 + (s >> 3);
                // which lights reach the square (its centre within reach + half a diagonal)
                int lb = 0;
-               float px = x + 0.5F - ox, py = y + 0.5F - oy, pz = level * METRIC_Z;
-               for (int li = 0; li < L.n; li++) {
+               float px = x + 0.5F - ox, py = y + 0.5F - oy;
+               for (int rest = cb; rest != 0; rest &= rest - 1) {
+                  int li = Integer.numberOfTrailingZeros(rest);
                   int k = li * 4;
                   float dx = px - L.p[k], dy = py - L.p[k + 1];
                   float r = L.p[k + 3] + 0.75F;
-                  if (dx * dx + dy * dy > r * r || Math.abs(pz - L.p[k + 2]) > METRIC_Z * 1.5F) {
+                  if (dx * dx + dy * dy > r * r) {
                      continue;
                   }
                   if (L.d[k + 2] > -1.5F) { // a cone: the square's centre inside it (a square's half-width of slack)
@@ -469,8 +537,7 @@ public final class Glints {
                   }
                   lb |= 1 << li;
                }
-               int sunv = m.sun[s] & 255;
-               boolean sun = L.sun[3] > 0F && sunv > 8;
+               boolean sun = sunOn && (m.sun[s] & 255) > 8;
                if (lb != 0) {
                   pointSquares++;
                }
@@ -480,32 +547,22 @@ public final class Glints {
                if (lb == 0 && !sun && Config.DEV_GLINT_VIEW != 1) {
                   continue;
                }
-               IsoGridSquare sq = c.getGridSquare(s & 7, s >> 3, level);
+               // the square's light gates the point lights only (an unseen square shows none): read it only for them
                float lum = 1F;
-               if (sq != null) {
-                  int l0 = sq.getVertLight(0, playerIndex), l2 = sq.getVertLight(2, playerIndex);
-                  lum = Math.min(1F, 0.5F * (luma(l0) + luma(l2)) * 2.5F);
+               if (lb != 0) {
+                  IsoGridSquare sq = c.getGridSquare(s & 7, s >> 3, level);
+                  if (sq != null) {
+                     int l0 = sq.getVertLight(0, playerIndex), l2 = sq.getVertLight(2, playerIndex);
+                     lum = Math.min(1F, 0.5F * (luma(l0) + luma(l2)) * 2.5F);
+                  }
                }
                int o = f.n * TEXELS * 4;
-               // the floor diamond's north corner in absolute screen pixels (IsoUtils.XToScreen / YToScreen at tile scale ts)
-               d[o] = (x - y) * (32F * ts);
-               d[o + 1] = (x + y) * (16F * ts) - level * (96F * ts);
-               d[o + 2] = chunkDepth + IsoDepthHelper.calculateDepth(x, y, level);
-               d[o + 3] = level;
+               System.arraycopy(blk, s * TEXELS * 4, d, o, TEXELS * 4);
+               d[o + 2] += chunkDepth;
                d[o + 4] = x - ox;
                d[o + 5] = y - oy;
-               // grid space s = (x - y) 32, t = (x + y) 16, wrapped every 4096 units (128 / 256 squares: cells of every
-               // level line up across the wrap, the random pattern just restarts)
-               d[o + 6] = (float)Math.floorMod((x - y) * 32, 4096);
-               d[o + 7] = (float)Math.floorMod((x + y) * 16, 4096);
-               d[o + 8] = m.kind[s];
-               d[o + 9] = (m.strength[s] & 255) / 255F;
-               d[o + 10] = sunv / 255F;
                d[o + 11] = lum;
                d[o + 12] = lb;
-               d[o + 13] = level & 255;
-               d[o + 14] = 0F;
-               d[o + 15] = 0F;
                f.n++;
             }
          }
@@ -528,6 +585,9 @@ public final class Glints {
          p = PASSES[(passIndex - 1) & 7] = new Pass();
       }
       p.frame = f;
+      p.hdr = false;
+      queuedFrame = f;
+      queuedFrameNo = frameNo;
       String sec = section(model, passMode);
       GpuSections.begin(sec);
       SpriteRenderer.instance.drawGeneric(p);
@@ -691,15 +751,36 @@ public final class Glints {
    static final String PFRAG = String.join("\n",
          "#version 330",
          "flat in vec3 vE;",
+         "#ifdef PZG_HDR",
+         "layout(location = 0) out vec4 fragColor;",
+         "layout(location = 1) out vec4 pzgHdrOut; // HdrGlint's target: g / (1 + g), the finished pixel's luminance",
+         "uniform sampler2D pzHdrNow;",
+         "uniform vec4 pzHdrNowP;",
+         "uniform float uHdrK;",
+         "void pzgWrite(vec3 c) {",
+         "   vec3 g = c * uHdrK;",
+         "   if (dot(g, vec3(1.0)) <= 1e-5) discard; // never overwrite the water's / puddles' / wet blood's glint with nothing",
+         "   fragColor = vec4(0.0);",
+         "   pzgHdrOut = vec4(g / (1.0 + g), 0.003 + 0.997 * dot(texture(pzHdrNow, gl_FragCoord.xy * pzHdrNowP.zw).rgb, vec3(0.2126, 0.7152, 0.0722)));",
+         "}",
+         "#else",
          "out vec4 fragColor;",
+         "void pzgWrite(vec3 c) { fragColor = vec4(c, 0.0); }",
+         "#endif",
          "void main() {",
          "   // a 2 x 2 bilinear splat: the point's four pixels share the energy by their distance to its centre",
          "   vec2 d = abs(gl_PointCoord - 0.5) * 2.0;",
          "   vec2 t = max(1.0 - d, 0.0);",
-         "   fragColor = vec4(vE * (t.x * t.y), 0.0);",
+         "   pzgWrite(vE * (t.x * t.y));",
          "}");
 
    static final int COMPACT_MAX = 262144;
+
+   /** A fragment source's HDR variant: the glint into HdrGlint's target (attachment 1) instead of the world colour. */
+   static String hdr(String frag) {
+      int nl = frag.indexOf('\n');
+      return frag.substring(0, nl + 1) + "#define PZG_HDR 1\n" + frag.substring(nl + 1);
+   }
 
    /** Every glint program's sources by name (GroundCoverTest links them and dumps them for harness/ground/cover/glint_rig.py). */
    static java.util.LinkedHashMap<String, String[]> sources() {
@@ -710,6 +791,9 @@ public final class Glints {
       m.put("particles", new String[] {PVERT, PFRAG});
       m.put("compact-draw", new String[] {CVERT, PFRAG});
       m.put("compact", new String[] {null, CCOMP});
+      m.put("hdr-diamonds-db23iso", new String[] {VERT, hdr(frag(1))});
+      m.put("hdr-particles", new String[] {PVERT, hdr(PFRAG)});
+      m.put("hdr-compact-draw", new String[] {CVERT, hdr(PFRAG)});
       return m;
    }
 
@@ -782,7 +866,22 @@ public final class Glints {
          "in vec3 vP;",
          "flat in vec4 vM;",
          "flat in ivec2 vB;",
+         "#ifdef PZG_HDR",
+         "layout(location = 0) out vec4 fragColor;",
+         "layout(location = 1) out vec4 pzgHdrOut; // HdrGlint's target: g / (1 + g), the finished pixel's luminance",
+         "uniform sampler2D pzHdrNow;",
+         "uniform vec4 pzHdrNowP;",
+         "uniform float uHdrK;",
+         "void pzgWrite(vec3 c) {",
+         "   vec3 g = c * uHdrK;",
+         "   if (dot(g, vec3(1.0)) <= 1e-5) discard; // never overwrite the water's / puddles' / wet blood's glint with nothing",
+         "   fragColor = vec4(0.0);",
+         "   pzgHdrOut = vec4(g / (1.0 + g), 0.003 + 0.997 * dot(texture(pzHdrNow, gl_FragCoord.xy * pzHdrNowP.zw).rgb, vec3(0.2126, 0.7152, 0.0722)));",
+         "}",
+         "#else",
          "out vec4 fragColor;",
+         "void pzgWrite(vec3 c) { fragColor = vec4(c, 0.0); }",
+         "#endif",
          "const vec3 V = vec3(0.61237244, 0.61237244, 0.5);",
          "float ndf(vec2 g, vec2 m, vec4 k, int salt) {",
          "#if MODEL == 0",
@@ -812,7 +911,7 @@ public final class Glints {
          "   vec4 k = uKind[kind];",
          "   if (uView.z == 1.0) {",
          "      vec3 col = kind == 0 ? vec3(0.1, 0.25, 0.6) : kind == 1 ? vec3(0.5) : vec3(0.0, 0.4, 0.4);",
-         "      fragColor = vec4(col * vM.y * 0.5, 0.0);",
+         "      pzgWrite(col * vM.y * 0.5);",
          "      return;",
          "   }",
          "   vec3 sum = vec3(0.0);",
@@ -836,13 +935,14 @@ public final class Glints {
          "   sum *= vM.y * uView.y;",
          "   if (uView.z == 2.0) { int nb = 0; for (int i = 0; i < " + MAX_LIGHTS + "; i++) nb += (bits >> i) & 1; sum += vec3(0.0, 0.08, 0.0) * float(nb); }",
          "   if (uView.z == 3.0) sum *= 20.0;",
-         "   fragColor = vec4(sum, 0.0);",
+         "   pzgWrite(sum);",
          "}");
    }
 
    static final class Gpu {
-      private static final int[] programs = new int[MODELS.length + 3];
-      private static final int[][] locs = new int[MODELS.length + 3][];
+      static final int N_PROG = MODELS.length + 3; // + N_PROG: the HDR variant
+      private static final int[] programs = new int[2 * N_PROG];
+      private static final int[][] locs = new int[2 * N_PROG][];
       /** A ring of three data textures (and compact buffers): a frame never writes what the GPU may still read (an implicit sync). */
       static final int RING = 3;
       private static final int[] texs = new int[RING], ssbos = new int[RING], indirects = new int[RING];
@@ -852,7 +952,7 @@ public final class Glints {
       private static final FloatBuffer v8 = BufferUtils.createFloatBuffer(MAX_LIGHTS * 4);
       private static final FloatBuffer v3 = BufferUtils.createFloatBuffer(12);
       private static final Matrix4f mvp = new Matrix4f();
-      static final String[] NAMES = {"uData", "uMVP", "uJ", "uTs", "uLp", "uLd", "uLc", "uSun", "uSunC", "uKind", "uView", "uTotal"};
+      static final String[] NAMES = {"uData", "uMVP", "uJ", "uTs", "uLp", "uLd", "uLc", "uSun", "uSunC", "uKind", "uView", "uTotal", "uHdrK", "pzHdrNow", "pzHdrNowP"};
 
       /** Render thread, at world entry (shaderWarmup) or on the first draw: every model's program. */
       static void warm() {
@@ -872,6 +972,7 @@ public final class Glints {
       static final int PROG_PARTICLES = MODELS.length, PROG_COMPACT = MODELS.length + 1, PROG_COMPACT_DRAW = MODELS.length + 2;
       private static int ssbo, indirect;
       public static long ringWrites;
+      static long uploads;
       private static final java.nio.IntBuffer CMD = BufferUtils.createIntBuffer(4);
 
       /** Compute shaders and indirect draws (GL 4.3; not on the Mac's 4.1). */
@@ -887,10 +988,13 @@ public final class Glints {
          if (programs[model] != 0) {
             return programs[model];
          }
-         String name = model < MODELS.length ? MODELS[model] : model == PROG_PARTICLES ? "particles" : model == PROG_COMPACT ? "compact" : "compact draw";
-         int p = model < MODELS.length ? Shaders.program("glints " + name, VERT, frag(model))
-            : model == PROG_PARTICLES ? Shaders.program("glints " + name, PVERT, PFRAG)
-            : model == PROG_COMPACT ? computeProgram(CCOMP) : Shaders.program("glints " + name, CVERT, PFRAG);
+         boolean hdr = model >= N_PROG;
+         int b = model % N_PROG;
+         String name = (hdr ? "hdr " : "") + (b < MODELS.length ? MODELS[b] : b == PROG_PARTICLES ? "particles" : b == PROG_COMPACT ? "compact" : "compact draw");
+         String pf = hdr ? hdr(PFRAG) : PFRAG;
+         int p = b < MODELS.length ? Shaders.program("glints " + name, VERT, hdr ? hdr(frag(b)) : frag(b))
+            : b == PROG_PARTICLES ? Shaders.program("glints " + name, PVERT, pf)
+            : b == PROG_COMPACT ? (hdr ? 0 : computeProgram(CCOMP)) : Shaders.program("glints " + name, CVERT, pf);
          if (p == 0) {
             programs[model] = -1;
             Log.warn("glints: the " + name + " program did not build");
@@ -911,10 +1015,17 @@ public final class Glints {
          if (f == null || f.n == 0) {
             return;
          }
+         boolean hdr = pass.hdr;
+         if (hdr && (!HdrGlint.glintOnlyNow() || f.stamp != lastStamp)) {
+            return; // the glint-only pass is not on, or this frame's main glint draw did not run (its data and list are the HDR draw's)
+         }
          try {
-            int which = f.pass == P_PARTICLES ? PROG_PARTICLES : f.pass == P_COMPACT ? PROG_COMPACT : f.model;
+            int which = f.pass == P_PARTICLES ? PROG_PARTICLES : f.pass == P_COMPACT ? (hdr ? PROG_COMPACT_DRAW : PROG_COMPACT) : f.model;
+            if (hdr) {
+               which += N_PROG;
+            }
             int prog = program(which);
-            if (prog <= 0 || f.pass == P_COMPACT && program(PROG_COMPACT_DRAW) <= 0) {
+            if (prog <= 0 || !hdr && f.pass == P_COMPACT && program(PROG_COMPACT_DRAW) <= 0) {
                return;
             }
             int[] l = locs[which];
@@ -937,7 +1048,8 @@ public final class Glints {
             tex = texs[slot];
             GL13.glActiveTexture(GL13.GL_TEXTURE1);
             GL11.glBindTexture(GL11.GL_TEXTURE_2D, tex);
-            if (fresh) {
+            if (fresh && !(Config.DEV_GLINT_NO_UPLOAD && uploads >= RING)) { // dev: the upload's share of the cost (stale data after the first round)
+               uploads++;
                int floats = f.n * TEXELS * 4;
                if (upload == null) {
                   upload = BufferUtils.createFloatBuffer(MAX * TEXELS * 4);
@@ -979,7 +1091,19 @@ public final class Glints {
             v3.flip();
             GL20.glUniform4fv(l[9], v3);
             GL20.glUniform4f(l[10], f.zoom / f.ts, Config.GLINT_PCT / 100F, Config.DEV_GLINT_VIEW, 1024F * f.ts * f.ts / (f.zoom * f.zoom));
-            if (f.pass == P_COMPACT) {
+            if (hdr) {
+               TextureFBO world = Core.getInstance().getOffscreenBuffer();
+               Texture wt = world != null ? (Texture)world.getTexture() : null;
+               GL20.glUniform1f(l[12], Config.GLINT_HDR_PCT / 100F);
+               GL20.glUniform1i(l[13], HdrGlint.NOW_UNIT);
+               GL20.glUniform4f(l[14], 1F, 0F, wt != null ? 1F / wt.getWidthHW() : 0F, wt != null ? 1F / wt.getHeightHW() : 0F);
+               if (f.pass == P_COMPACT) {
+                  ssbo = ssbos[slot];
+                  indirect = indirects[slot];
+                  GL30.glBindBufferBase(GL43.GL_SHADER_STORAGE_BUFFER, 0, ssbo);
+                  GL15.glBindBuffer(GL40.GL_DRAW_INDIRECT_BUFFER, indirect);
+               }
+            } else if (f.pass == P_COMPACT) {
                // the lit flakes into a list (compute), then one indirect draw of exactly those
                if (ssbos[0] == 0) {
                   for (int r = 0; r < RING; r++) {
@@ -1007,8 +1131,13 @@ public final class Glints {
                prog = programs[PROG_COMPACT_DRAW];
                zombie.core.ShaderHelper.glUseProgramObjectARB(prog);
             }
-            GL11.glEnable(GL11.GL_BLEND);
-            GL14.glBlendFuncSeparate(GL11.GL_ONE, GL11.GL_ONE, GL11.GL_ZERO, GL11.GL_ONE);
+            if (!hdr) {
+               GL11.glEnable(GL11.GL_BLEND);
+               GL14.glBlendFuncSeparate(GL11.GL_ONE, GL11.GL_ONE, GL11.GL_ZERO, GL11.GL_ONE);
+            } else {
+               GL30.glDisablei(GL11.GL_BLEND, 1); // HdrGlint's target is replaced, never blended (its encoding is not additive)
+               GL30.glColorMaski(0, false, false, false, false);
+            }
             GL11.glEnable(GL11.GL_DEPTH_TEST);
             GL11.glDepthFunc(GL11.GL_LEQUAL);
             GL11.glDepthMask(false);
@@ -1035,11 +1164,14 @@ public final class Glints {
             GL30.glBindVertexArray(0);
             GL11.glDisable(GL32.GL_DEPTH_CLAMP);
             draws++;
+            if (hdr) {
+               hdrDraws++;
+            }
          } catch (Throwable t) {
             failed = true;
             Log.warn("glints: draw failed, glints off: " + t);
          } finally {
-            if (f.pass == P_COMPACT && ssbo != 0) {
+            if (f.pass == P_COMPACT && ssbos[0] != 0) {
                GL30.glBindBufferBase(GL43.GL_SHADER_STORAGE_BUFFER, 0, 0);
                GL30.glBindBufferBase(GL43.GL_SHADER_STORAGE_BUFFER, 1, 0);
             }
@@ -1055,8 +1187,15 @@ public final class Glints {
             zombie.core.ShaderHelper.forgetCurrentlyBound();
             SpriteRenderer.ringBuffer.restoreVbos = true;
             SpriteRenderer.ringBuffer.restoreBoundTextures = true;
+            if (hdr) {
+               // the glint-only pass goes on (HdrGlint's OFF ends it): its colour mask and its unblended target stay
+               GL30.glColorMaski(0, false, false, false, false);
+               GL30.glDisablei(GL11.GL_BLEND, 1);
+            }
          }
       }
+
+      public static long hdrDraws;
    }
 
    /**

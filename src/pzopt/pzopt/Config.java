@@ -1644,6 +1644,8 @@ public final class Config {
    public static volatile int DEV_GLINT_VIEW; // dev: 1 masks (frost blue, snow white, wet cyan), 2 the lights reaching each square, 3 glints x 20
    public static final int DEV_GLINT_CYCLE = integer("devGlintCycle", 0); // dev: ms; the glint model cycles db23 -> db23iso -> jamsi -> sparkle -> explicit -> off (GPU section ground.glints.<model>)
    public static final int DEV_GLINT_ALTERNATE = integer("devGlintAlternate", 0); // dev: ms; glints switch on and off every period (GPU section ground.glints / ground.glints.off)
+   public static volatile int GLINT_HDR_PCT; // glints: with HDR output on, the glints once more into the HDR glint target (past the 8-bit white), x this %; 0 = 8-bit only
+   public static final boolean DEV_GLINT_NO_UPLOAD = bool("devGlintNoUpload", false); // dev: glint data uploaded only for the ring's first round (the upload's cost A/B; stale glints)
    public static final int DEV_GLINT_RING = integer("devGlintRing", 3); // dev: glint data textures in the ring (1 = one texture rewritten each frame, the implicit-sync A/B)
    public static final String DEV_GLINT_FORCE = string("devGlintForce", "").trim(); // dev: frost | snow | wet: every outdoor floor square in view gets that mask (cost and look rigs)
    public static volatile String GROUND_COVER_PLACEMENT; // ground cover: jitter (6 x 6 jittered grid a square, hashed thresholds) | bluenoise (a progressive blue-noise 4 x 4 square tile, rank-dithered)
@@ -2356,6 +2358,7 @@ public final class Config {
       GLINT_TWINKLE_PCT = Math.max(25, Math.min(400, integer("glintTwinklePct", 100)));
       GLINT_SUN = bool("glintSun", true);
       GLINT_POINT = bool("glintPoint", true);
+      GLINT_HDR_PCT = Math.max(0, Math.min(400, integer("glintHdrPct", 100)));
       DEV_GLINT_VIEW = integer("devGlintView", 0);
       GROUND_COVER_PLACEMENT = string("groundCoverPlacement", "bluenoise").trim().toLowerCase(java.util.Locale.ROOT);
       GROUND_COVER_ASSETS = string("groundCoverAssets", "mixed").trim().toLowerCase(java.util.Locale.ROOT);

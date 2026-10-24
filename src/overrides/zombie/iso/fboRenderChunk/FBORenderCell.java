@@ -1977,6 +1977,7 @@ public final class FBORenderCell {
             this.pzoptWaterOnly = false; // pzopt: HDR output
             this.renderPuddles(playerIndex); // pzopt: HDR output
             pzopt.BloodWet.queueGlint(); // pzopt: wet blood, its sun / sky / lamp glints
+            pzopt.Glints.queueHdr(); // pzopt: glints on frost, snow and wet asphalt, past the 8-bit white
             pzopt.HdrGlint.queueOff(); // pzopt: HDR output
          }
       } catch (Throwable var26) {

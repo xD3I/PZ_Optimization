@@ -583,7 +583,7 @@ public final class GroundCover {
       final byte[] mat = new byte[64], edge = new byte[64], height = new byte[64];
       Tree[] trees = new Tree[0];
       int forest, town, farm;
-      int frame;
+      long ms; // when gathered
    }
 
    public static long gathers;
@@ -593,7 +593,7 @@ public final class GroundCover {
       ChunkInfo info = new ChunkInfo();
       info.wx = c.wx;
       info.wy = c.wy;
-      info.frame = IsoWorld.instance.getFrameNo();
+      info.ms = System.currentTimeMillis();
       ArrayList<Tree> trees = new ArrayList<>();
       for (int i = 0; i < 64; i++) {
          int x = c.wx * 8 + (i & 7), y = c.wy * 8 + (i >> 3);
@@ -666,7 +666,7 @@ public final class GroundCover {
                continue;
             }
             ChunkCover cc = coverOf(n);
-            if (cc.info == null || cc.info.wx != n.wx || cc.info.wy != n.wy || n == c || IsoWorld.instance.getFrameNo() - cc.info.frame > 600) {
+            if (cc.info == null || cc.info.wx != n.wx || cc.info.wy != n.wy || n == c || System.currentTimeMillis() - cc.info.ms > 10_000L) {
                cc.info = gather(n);
             }
             out[(dx + 1) + (dy + 1) * 3] = cc.info;
@@ -1016,7 +1016,7 @@ public final class GroundCover {
    static final class ChunkCover {
       final LevelCover[] levels = new LevelCover[64];
       int wx = Integer.MIN_VALUE, wy;
-      int seen;
+      long seen; // ms: last baked, or last found fresh by the prefetch (the chunk is still loaded)
       ChunkInfo info; // level 0's squares as last gathered
       boolean inFlight; // a worker build of level 0 is queued or running
       boolean rebakeOnLand; // a bake drew the stale (or no) cover meanwhile: re-bake when the build lands
@@ -1156,6 +1156,7 @@ public final class GroundCover {
       int k = seasonKey(), fk = frostKey(), sk = settingsKey();
       float cx = IsoCamera.frameState.camCharacterX, cy = IsoCamera.frameState.camCharacterY;
       int w = zombie.iso.IsoChunkMap.chunkGridWidth;
+      long now = System.currentTimeMillis();
       for (int round = inFlight; round < 2; round++) {
          IsoChunk best = null;
          float bd = Float.MAX_VALUE;
@@ -1172,6 +1173,7 @@ public final class GroundCover {
                   }
                   LevelCover lc = cc.levels[32];
                   if (lc != null && lc.key == k && lc.fkey == fk && lc.skey == sk) {
+                     cc.seen = now;
                      continue;
                   }
                }
@@ -1187,14 +1189,14 @@ public final class GroundCover {
             return;
          }
          ChunkCover cc = coverOf(best);
-         cc.seen = IsoWorld.instance.getFrameNo();
+         cc.seen = System.currentTimeMillis();
          submit(best, cc);
       }
    }
 
    static LevelCover cover(IsoChunk c, int level) {
       ChunkCover cc = coverOf(c);
-      cc.seen = IsoWorld.instance.getFrameNo();
+      cc.seen = System.currentTimeMillis();
       int li = level + 32;
       LevelCover lc = cc.levels[li];
       int k = seasonKey(), fk = frostKey(), sk = settingsKey();
@@ -2051,12 +2053,20 @@ public final class GroundCover {
       }
    }
 
-   /** Chunks not seen for a while leave the cache. */
+   /**
+    * Covers leave the cache when their chunk slot was reused or unloaded, or nothing baked or prefetched them for two
+    * minutes (milliseconds, not frames: at 800 fps a frame budget swept the prefetched covers every two seconds and the
+    * worker rebuilt them forever, gcv-cost-pass2).
+    */
    public static void sweep() {
-      int f = IsoWorld.instance.getFrameNo();
-      if ((f & 255) != 0) {
+      if ((IsoWorld.instance.getFrameNo() & 255) != 0) {
          return;
       }
-      covers.values().removeIf(cc -> f - cc.seen > 1800);
+      long now = System.currentTimeMillis();
+      covers.entrySet().removeIf(e -> {
+         IsoChunk c = e.getKey();
+         ChunkCover cc = e.getValue();
+         return cc.wx != c.wx || cc.wy != c.wy || !c.loaded && now - cc.seen > 5_000L || now - cc.seen > 120_000L;
+      });
    }
 }

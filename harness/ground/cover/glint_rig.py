@@ -11,6 +11,7 @@ dimetric camera, on the desktop GPU through headless EGL (moderngl):
          on a 48 x 48-square frosty patch: energy of the drawn flakes against the smooth NDF's, flakes lit per square
   pcost  GPU time of the particle / compact passes alone (shader-dump programs) over SQUARES (5225) sun-lit squares,
          the data texture's upload timed apart (timer queries, median of 30)              -> printed
+  ppan   the particle pass's temporal stability, as pan (motion-compensated |I_t - I_t-1| / mean I), 512 x 512
   pan    temporal stability: the camera pans 0.37 px a frame, the light still;       -> printed
          flicker = mean |I_t - I_t-1| / mean I over 48 frames, per model and zoom
 
@@ -195,6 +196,29 @@ def mode_stats():
             print("stats %-10s %-9s E[model]/smooth: %s" % (name, model, "  ".join(vals)))
 
 
+def blur(img, passes=2):
+    """[1 4 6 4 1] / 16 separable, twice (sigma ~1.4 px): the pan metric's resampling floor goes, popping stays."""
+    k = np.array([1, 4, 6, 4, 1], "f4") / 16.0
+    for _ in range(passes):
+        img = np.apply_along_axis(lambda r: np.convolve(r, k, mode="same"), 1, img)
+        img = np.apply_along_axis(lambda r: np.convolve(r, k, mode="same"), 0, img)
+    return img
+
+
+def flicker(frames, sh=0.37):
+    """(raw, blurred) motion-compensated mean |I_t - I_t-1 shifted| / mean I."""
+    out = []
+    for fr in (frames, [blur(f) for f in frames]):
+        diffs, means = [], []
+        for t in range(1, len(fr)):
+            a, b = fr[t - 1], fr[t]
+            a_s = (1 - sh) * a[:, 1:-1] + sh * a[:, 2:]
+            diffs.append(np.abs(b[:, 1:-1] - a_s).mean())
+            means.append(b.mean())
+        out.append(np.mean(diffs) / max(np.mean(means), 1e-12))
+    return out
+
+
 def mode_pan():
     rig = Rig(512, 512)
     for kind, light, name in [(1, (1.5, 2.0, 1.35), "point"), (0, (-0.6, -0.6, 0.53), "sun-mirror")]:
@@ -212,16 +236,10 @@ def mode_pan():
                     rig.draw()
                     frames.append(rig.read())
                 # compare each frame with the previous one moved by the pan (bilinear shift of 0.37 px): a stable model
-                # changes only by the resampling
-                diffs, means = [], []
-                for t in range(1, 48):
-                    a = frames[t - 1]
-                    b = frames[t]
-                    sh = 0.37
-                    a_s = (1 - sh) * a[:, 1:-1] + sh * a[:, 2:]
-                    diffs.append(np.abs(b[:, 1:-1] - a_s).mean())
-                    means.append(b.mean())
-                out.append("z%.1f %.3f" % (zoom, np.mean(diffs) / max(np.mean(means), 1e-9)))
+                # changes only by the resampling (raw), and by nothing once both are blurred (blurred: popping, twinkle)
+                fr = [f.sum(-1) if f.ndim == 3 else f for f in frames[:24]]
+                raw, bl = flicker(fr)
+                out.append("z%.1f %.3f/%.3f" % (zoom, raw, bl))
             print("pan %-10s %-9s flicker: %s" % (name, model, "  ".join(out)))
 
 
@@ -369,9 +387,75 @@ def mode_pcost():
     print("  compact draw (%6d lit):  %7.1f us" % (cnt, timed(lambda: dva.render(moderngl.POINTS, vertices=cnt))))
 
 
+def mode_ppan():
+    import moderngl
+    ctx = moderngl.create_standalone_context(backend="egl", require=430)
+    dump = os.path.join(ROOT, "build", "shader-dump")
+    rd = lambda f: open(os.path.join(dump, f)).read()
+    W = 40
+    n = W * W
+    data = np.zeros((n * 4, 4), dtype="f4")
+    for i in range(n):
+        x, y = i % W, i // W
+        data[i * 4 + 0] = ((x - y) * 32.0, (x + y) * 16.0, 0.5, 0.0)
+        data[i * 4 + 1] = (x, y, ((x - y) * 32) % 4096, ((x + y) * 16) % 4096)
+        data[i * 4 + 2] = (0.0, 1.0, 1.0, 1.0)
+        data[i * 4 + 3] = (0.0, 0.0, 0.0, 0.0)
+    rows = (n * 4 + 4095) // 4096
+    pad = np.zeros((rows * 4096, 4), dtype="f4")
+    pad[: n * 4] = data
+    tex = ctx.texture((4096, rows), 4, pad.tobytes(), dtype="f4")
+    tex.filter = (moderngl.NEAREST, moderngl.NEAREST)
+    tex.use(1)
+    S = 512
+    fbo = ctx.framebuffer(color_attachments=[ctx.texture((S, S), 4, dtype="f4")])
+    fbo.use()
+    ctx.enable(moderngl.BLEND)
+    ctx.blend_func = moderngl.ONE, moderngl.ONE
+    ctx.enable(moderngl.PROGRAM_POINT_SIZE)
+    pp = ctx.program(vertex_shader=rd("glints-particles.vert"), fragment_shader=rd("glints-particles.frag"))
+    va = ctx.vertex_array(pp, [])
+    rho = float(os.environ.get("FLAKES", "3072")) / 1024.0
+    kinds = np.array([[rho, 1.6, 0.04, 0.018], [rho * 1.6, 1.3, 0.035, 0.018], [rho * 0.6, 0.22, 0.025, 0.02]], "f4")
+
+    def put(k, v, raw=False):
+        if k in pp:
+            if raw:
+                pp[k].write(v)
+            else:
+                pp[k] = v
+    put("uData", 1); put("uJ", (0.0, 0.0, 0.0, 0.0)); put("uTs", 1.0)
+    lp = np.zeros((8, 4), "f4"); lp[0] = (W / 2, W / 2, 1.35, 12.0)
+    ld = np.zeros((8, 4), "f4"); ld[0] = (0, 0, -2, 1)
+    lc = np.zeros((8, 4), "f4"); lc[0] = (1, 1, 1, 0)
+    put("uLp", lp.tobytes(), True); put("uLd", ld.tobytes(), True); put("uLc", lc.tobytes(), True)
+    put("uKind", kinds.tobytes(), True)
+    put("uView", (1.0, 1.0, 0.0, 1024.0))
+    for name, sun, bits in [("point", (0.0, 0.0, 1.0, 0.0), 1.0), ("sun-mirror", (-0.6, -0.6, 0.53, 1.0), 0.0)]:
+        data[3::4, 0] = bits
+        pad[: n * 4] = data
+        tex.write(pad.tobytes())
+        put("uSun", sun); put("uSunC", (1.0, 1.0, 1.0, 1.0))
+        frames = []
+        cx, cy = 0.0, W * 16.0
+        for t in range(48):
+            ox = cx - S / 2 + t * 0.37
+            m = np.zeros((4, 4), "f4")
+            m[0, 0] = 2.0 / S; m[1, 1] = -2.0 / S; m[2, 2] = 1.0; m[3, 3] = 1.0
+            m[3, 0] = -1.0 - ox * 2.0 / S; m[3, 1] = 1.0 + (cy - S / 2) * 2.0 / S
+            put("uMVP", m.tobytes(), True)
+            fbo.clear(0.0, 0.0, 0.0, 0.0)
+            va.render(moderngl.POINTS, vertices=n * 64)
+            img = np.frombuffer(fbo.read(components=4, dtype="f4"), "f4").reshape(S, S, 4)[..., :3].sum(-1)
+            frames.append(img)
+        raw, bl = flicker(frames[:24])
+        lit = (frames[0] > 0).sum()
+        print("ppan %-10s particles flicker raw/blurred: %.3f/%.3f  (lit px %d, energy %.3g)" % (name, raw, bl, lit, frames[0].sum()))
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("mode", choices=["img", "cost", "stats", "pan", "src", "flakes", "pcost"])
+    ap.add_argument("mode", choices=["img", "cost", "stats", "pan", "src", "flakes", "pcost", "ppan"])
     ap.add_argument("--out", default=os.path.join(ROOT, "build", "glint-rig"))
     a = ap.parse_args()
     if a.mode == "src":
@@ -384,6 +468,8 @@ def main():
         mode_flakes()
     elif a.mode == "pcost":
         mode_pcost()
+    elif a.mode == "ppan":
+        mode_ppan()
     elif a.mode == "stats":
         mode_stats()
     else:
