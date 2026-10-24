@@ -20,7 +20,7 @@ harness/run.sh --label <name> [--mode verify|bench|drive|parity|play] [--flag k=
 What it does: installs the pzopt-harness Lua mod, creates/points at the bench save
 `Saves/Sandbox/pzopt-bench`, writes the flag file the mod reads, launches the game, starts
 `sysmon.sh` and the MangoHud log, waits for exit, collects console.txt and every `pzopt-*.out`
-into the run dir, restores `latestSave.ini`. `run.opts` records launcher, renderer, flags.
+into the run dir, restores `latestSave.ini`. `run.opts` records launcher, renderer, flags, and the CPU power state at launch (`power_profile=`, `cpu_power=` governor / EPP / boost / max clock; the desktop sat in power-saver, 4.7 GHz, before 2026-10-24).
 
 `--mod ID` enables a mod for the run (default.txt + the bench save's mods.txt, restored after). An id not in
 `Zomboid/mods` is looked up in the Steam Workshop downloads beside the game (`workshop/content/108600/*/mods/*`, by the

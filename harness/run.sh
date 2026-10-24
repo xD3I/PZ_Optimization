@@ -245,6 +245,30 @@ recover_props() {
   return 0
 }
 recover_props
+# The launcher JSON the same way (2026-10-24, the flip: "PZ OPTIMIZATION settings reset after a restart"). A run that
+# dies before its EXIT trap (job 14338, ssh to the flip lost mid-run, 2026-10-23 01:07) leaves its edited JSON in place
+# with the player's copy beside it as ProjectZomboid64.json.pzopt-orig; the next run's `cp "$LAUNCHER" "$LAUNCHER.pzopt-orig"`
+# then overwrote that copy with the edited JSON and "restored" it, so the run's --vmarg -Dpzopt.userOptionsFile=/dev/null
+# (and -Dzomboid.steam=0, its -Xlog:gc) stayed in every later launch of the player: every menu change was saved to
+# /dev/null and the next boot read nothing. A .pzopt-orig at start is the player's file: put it back first.
+recover_launcher() {
+  local json="$PZ_DIR/ProjectZomboid64.json"
+  [[ -f "$json.pzopt-orig" ]] || return 0
+  local added
+  added=$(python3 - "$json.pzopt-orig" "$json" <<'PY' 2>/dev/null
+import json, sys
+try:
+    orig = json.load(open(sys.argv[1]))["vmArgs"]; cur = json.load(open(sys.argv[2]))["vmArgs"]
+    print(" ".join(a for a in cur if a not in orig))
+except Exception:
+    pass
+PY
+)
+  mv -f "$json.pzopt-orig" "$json"
+  echo "previous run died before cleanup: restored the player's ProjectZomboid64.json (dropped: ${added:-nothing})"
+  return 0
+}
+recover_launcher
 steam_logged_in() {
   pgrep -x steam >/dev/null || return 1
   local log="$HOME/.local/share/Steam/logs/connection_log.txt"
@@ -527,7 +551,8 @@ if [[ -n "$mangohud_secs" ]]; then
 fi
 
 # launcher JSON (vmArgs) edits for --jfr / --gc: the original comes back on exit
-# (if a run dies mid-way, ProjectZomboid64.json.pzopt-orig is the copy to restore by hand).
+# (if a run dies mid-way, ProjectZomboid64.json.pzopt-orig is the player's copy: recover_launcher puts it back at the
+# next run's start, before the backup below would overwrite it).
 # Paths inside the JVM are Wine paths: the install dir is S:/common/ProjectZomboid (see the gc.log line).
 LAUNCHER="$PZ_DIR/ProjectZomboid64.json"
 JFR_OUT="$PZ_DIR/pzopt.jfr"
@@ -652,6 +677,13 @@ while :; do
   rm -f "$ZOMBOID"/pzopt-*.out "$ZOMBOID/console.txt" "$ZOMBOID/pzopt-shot.now" "$ZOMBOID/pzopt-shot2.now" "$ZOMBOID/Screenshots/pzopt-shot.png" "$ZOMBOID/Screenshots/pzopt-shot2.png"
   restore_harness_flag; write_flags; write_launch_env
   launch_epoch=$(date +%s)
+  # the CPU power state the run starts under (2026-10-24 governor study: the desktop sat in power-saver, boost off,
+  # 4.7 GHz, for every run before; uncapped CPU-bound scenes are 3-19 % faster in balanced)
+  power_profile=$(powerprofilesctl get 2>/dev/null || cat /sys/firmware/acpi/platform_profile 2>/dev/null || echo unknown)
+  cpu_power="governor=$(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor 2>/dev/null || echo -)"
+  cpu_power+=" epp=$(cat /sys/devices/system/cpu/cpu0/cpufreq/energy_performance_preference 2>/dev/null || echo -)"
+  cpu_power+=" boost=$(cat /sys/devices/system/cpu/cpu0/cpufreq/boost 2>/dev/null || cat /sys/devices/system/cpu/cpufreq/boost 2>/dev/null || echo -)"
+  cpu_power+=" max_khz=$(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_max_freq 2>/dev/null || echo -)"
   route_start_epoch=""; mangohud_end_epoch=""
   if [[ -n "$lead" ]]; then
     route_start_epoch=$((launch_epoch + lead))
@@ -910,7 +942,7 @@ cp "$ZOMBOID"/pzopt-*.out "$out/" 2>/dev/null || true
 [[ -f "$ZOMBOID/Screenshots/pzopt-shot2.png" ]] && cp "$ZOMBOID/Screenshots/pzopt-shot2.png" "$out/shot2-game.png"
 cp "$PZ_DIR/pzopt.properties" "$out/pzopt.properties"
 cp "$LAUNCHER" "$out/ProjectZomboid64.json"
-{ echo "layout=$LAYOUT"; echo "mode=$mode"; echo "crashed=$crashed"; echo "attempts=$attempt"; echo "jfr=$jfr"; echo "jfr_period=$jfr_period"; echo "jfr_settings=${jfr_settings[*]:-}"; echo "game_profiler=$game_profiler"; echo "gc=${gc:-default}"; echo "no_dashboard=$no_dashboard"; echo "mangohud_secs=$mangohud_secs"; echo "no_mangohud=${no_mangohud:-0}"; echo "lead=${lead:-dynamic}"; echo "route_seconds=$route_seconds"; echo "renderer=$renderer"; echo "game_env=${game_env[*]:-}"; echo "record=$record"; echo "record_audio=${record_audio:-desktop}"; echo "launcher=$launcher"; echo "game_options=${game_options[*]:-}"; echo "mods=${extra_mods[*]:-}"; echo "vmargs=${vmargs[*]:-}"; echo "mangohud_config=${mangohud_config:-default}"; echo "launch_epoch=$launch_epoch"; echo "run_seconds=$((end-start))"; echo "preset=${preset:-none}"; echo "flags=${extra_flags[*]:-}"; } > "$out/run.opts"
+{ echo "layout=$LAYOUT"; echo "mode=$mode"; echo "crashed=$crashed"; echo "attempts=$attempt"; echo "jfr=$jfr"; echo "jfr_period=$jfr_period"; echo "jfr_settings=${jfr_settings[*]:-}"; echo "game_profiler=$game_profiler"; echo "gc=${gc:-default}"; echo "no_dashboard=$no_dashboard"; echo "mangohud_secs=$mangohud_secs"; echo "no_mangohud=${no_mangohud:-0}"; echo "lead=${lead:-dynamic}"; echo "route_seconds=$route_seconds"; echo "renderer=$renderer"; echo "game_env=${game_env[*]:-}"; echo "record=$record"; echo "record_audio=${record_audio:-desktop}"; echo "launcher=$launcher"; echo "game_options=${game_options[*]:-}"; echo "mods=${extra_mods[*]:-}"; echo "vmargs=${vmargs[*]:-}"; echo "mangohud_config=${mangohud_config:-default}"; echo "launch_epoch=$launch_epoch"; echo "power_profile=${power_profile:-unknown}"; echo "cpu_power=${cpu_power:-}"; echo "run_seconds=$((end-start))"; echo "preset=${preset:-none}"; echo "flags=${extra_flags[*]:-}"; } > "$out/run.opts"
 # gc.log rolls over (filecount=3); keep the segments that were written during this run
 for g in "$PZ_DIR"/gc.log "$PZ_DIR"/gc.log.[0-9]*; do
   [[ -f "$g" ]] || continue
