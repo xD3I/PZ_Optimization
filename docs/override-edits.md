@@ -8608,3 +8608,12 @@ one is a static boolean read while no ground key is on (all are off by default),
   static read while no feature registered a slot.
 - `pzopt.Scene` (harness, no override): `snow=0..100` pins the snow on the ground; `ground_map=N` prints natural ground by
   material.
+
+### FBORenderCell: grass blades (2026-10-24, branch grass-blades)
+
+One line in the chunk composite pass of `FBORenderCell`, right after the cloud-shadow composite hook:
+`pzopt.GrassBlades.afterComposite(playerIndex)`. Near the player at close zoom it queues one generic draw that grows grass
+blades over the ground just composited. Each blade takes its colour and depth from the world framebuffer at its root, so the
+chunk textures' lighting, AO, sun and cloud shadows carry over. The draw comes before pixelLight's pass and the characters,
+so both still apply on top. The call returns at once when `grassBlades` is off, the zoom is wider than
+`grassBladeMaxZoomPct`, or there is no cell; no GL work happens then. Off by default.
