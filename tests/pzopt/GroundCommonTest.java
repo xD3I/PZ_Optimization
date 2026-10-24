@@ -177,7 +177,7 @@ public class GroundCommonTest {
          String vert = Files.readString(game.resolve(base + ".vert"));
          String frag = Files.readString(game.resolve(base + ".frag"));
          for (int view = 0; view <= 3; view++) {
-            for (int piece = 0; piece < (base.equals("seamFix2") ? 1 : 3); piece++) {
+            for (int piece = 0; piece < (base.equals("seamFix2") ? 1 : 4); piece++) {
                boolean attached = piece != 0;
                List<GroundBake.FloorPatch> ps = new ArrayList<>();
                ps.add(TEST);
