@@ -102,7 +102,7 @@ public final class GroundTilingPatch implements GroundBake.FloorPatch {
       float dry = seasonDryness();
       float[] p = {
          mode, Config.DEV_GROUND_TILING_CELL_PCT / 100F, 0.6F, 7F, 0.5F, // tiling
-         height ? 0.3F : 0F, 0.2F, 0.8F, 1F, // blend
+         height ? 0.12F : 0F, 0.18F, 1.1F, 0.35F, // blend: softness (score units), noise amplitude, noise cell (squares), height weight
          0.12F * macro / 100F, 0.3F * dry * macro / 100F, 8F, 24F, // macro
          GroundTileArt.DRY_TINT[0], GroundTileArt.DRY_TINT[1], GroundTileArt.DRY_TINT[2],
          seed()};
@@ -175,6 +175,10 @@ public final class GroundTilingPatch implements GroundBake.FloorPatch {
       for (int i = 0; i < 16; i++) {
          ml.append(i == 0 ? "" : ", ").append(GroundTileArt.MATERIAL_LAYER[i]);
       }
+      ml.append(");\nconst int GT_LAYER_MAT[").append(GroundTileArt.LAYERS.length).append("] = int[").append(GroundTileArt.LAYERS.length).append("](");
+      for (int i = 0; i < GroundTileArt.LAYERS.length; i++) {
+         ml.append(i == 0 ? "" : ", ").append(GroundTileArt.LAYERS[i].material);
+      }
       ml.append(");\n");
       return "#define GT_EDGE_SOFT 0.12\n" + GroundTiling.GLSL + ml + GLSL;
    }
@@ -204,6 +208,53 @@ public final class GroundTilingPatch implements GroundBake.FloorPatch {
          return -1;
       }
 
+      // Transitions between natural materials from the class map instead of the map's edge pieces (groundHeightBlend): the
+      // material indicator of the four squares round the pixel interpolated bilinearly between their centres (a staircase
+      // of squares becomes a smooth line through its corners), a rank bias (grass grows over dirt, dirt over sand), world
+      // noise per material and the art's height (the grass blades win over the dirt at the line); the top two scores blend
+      // over pzGtBlend.x. The floor and the map's edge pieces evaluate the same field, so the transition is one line
+      // whichever piece draws it; an edge piece paints only its own material's share (with its tone), between two tones of
+      // one material the stock fade stays.
+      int gtRank(int cls) {
+         if ((cls & 128) != 0) return -1; // excluded (farmland, player-built)
+         int m = cls & 15;
+         return m == 1 ? 5 : (m == 2 || m == 9) ? 3 : m == 8 ? 2 : m == 4 ? 1 : m == 3 ? 0 : -1;
+      }
+      // out: the winner material m1 and its weight w1, the runner-up m2 (weight 1 - w1); false if the pixel has one material
+      bool gtField(vec2 wLocal, ivec2 px, int ownMat, int ownLayer, out int m1, out float w1, out int m2) {
+         vec2 g = wLocal - 0.5;
+         vec2 gf = floor(g);
+         vec2 t = g - gf;
+         ivec2 i0 = ivec2(gf) + pzGtWorld;
+         int mats[4]; float wts[4]; int n = 0; float wsum = 0.0;
+         for (int k = 0; k < 4; k++) {
+            ivec2 d = ivec2(k & 1, k >> 1);
+            int cls = pzgClassAt(i0 + d);
+            if (gtRank(cls) < 0) continue;
+            float w = (d.x == 1 ? t.x : 1.0 - t.x) * (d.y == 1 ? t.y : 1.0 - t.y);
+            int m = cls & 15;
+            int j = 0;
+            for (; j < n; j++) if (mats[j] == m) break;
+            if (j == n) { mats[n] = m; wts[n] = 0.0; n++; }
+            wts[j] += w;
+            wsum += w;
+         }
+         if (n < 2 || wsum <= 1e-4) return false;
+         ivec2 bi; vec2 bf; gtSplit(pzGtBlend.z, bi, bf);
+         float s1 = -1e9, s2 = -1e9; m1 = ownMat; m2 = ownMat;
+         for (int j = 0; j < n; j++) {
+            int m = mats[j];
+            int la = GT_MAT_LAYER[m]; // (the default tone's height: the floor and the edges must score alike)
+            float h = la < 0 ? 0.5 : gtFetch(px, ivec2(0), float(la)).a;
+            float nz = gtFbm2(wLocal / pzGtBlend.z, bi, bf, 31u + uint(m)) - 0.5;
+            float r = float(gtRank(m));
+            float sc = wts[j] / wsum + 0.06 * r + 2.0 * pzGtBlend.y * nz + pzGtBlend.w * (h - 0.5);
+            if (sc > s1) { s2 = s1; m2 = m1; s1 = sc; m1 = m; } else if (sc > s2) { s2 = sc; m2 = m; }
+         }
+         w1 = clamp(0.5 + (s1 - s2) / pzGtBlend.x, 0.5, 1.0);
+         return true;
+      }
+
       vec4 pzGtTexel(vec4 t) {
       #if defined(PZG_PIECE) && PZG_PIECE == 2
          return t; // a grass / erosion overlay or dug soil on the natural floor: stock
@@ -230,14 +281,32 @@ public final class GroundTilingPatch implements GroundBake.FloorPatch {
          // un-premultiplied here, the exemplar holds straight colour, and the result goes back premultiplied by its alpha
          vec4 c = mode > 0 ? gtSample(px, wLocal, float(layer), mode) : (kind == 0 || pzGtBlend.x <= 0.0 ? vec4(t.rgb / max(t.a, 1e-4), t.a) : gtFetch(px, ivec2(0), float(layer)));
          float grassy = ((pzGtBakeI.w >> layer) & 1) != 0 ? 1.0 : 0.0;
+         int own = pzgClass & 15;
+         if (kind == 0) {
+            int m1, m2; float w1;
+            if (pzGtBlend.x > 0.0 && GT_LAYER_MAT[layer] == own && gtRank(pzgClass) >= 0 && gtField(wLocal, px, own, layer, m1, w1, m2) && !(m1 == own && w1 >= 1.0)) {
+               // the other material's art (its default tone; an edge piece of it, if the map has one here, repaints its tone)
+               int mo = m1 == own ? m2 : m1;
+               int lo = GT_MAT_LAYER[mo];
+               if (lo >= 0) {
+                  vec4 co = mode > 0 ? gtSample(px, wLocal, float(lo), mode) : gtFetch(px, ivec2(0), float(lo));
+                  c.rgb = mix(co.rgb, c.rgb, m1 == own ? w1 : 1.0 - w1);
+                  grassy = max(grassy, ((pzGtBakeI.w >> lo) & 1) != 0 ? (m1 == own ? 1.0 - w1 : w1) : 0.0);
+               }
+            }
+            vec3 rgb = gtMacro(c.rgb, wLocal, grassy);
+            return vec4(rgb * t.a, t.a);
+         }
          vec3 rgb = gtMacro(c.rgb, wLocal, grassy);
-         if (kind == 0) return vec4(rgb * t.a, t.a);
-         // an edge piece of material B over the square's base A: B's art, B's coverage from the square's geometry and the heights
+         // an edge piece of material B over the square's base A
          float a = t.a;
-         if (pzGtBlend.x > 0.0) {
-            int la = GT_MAT_LAYER[pzgClass & 15];
-            float hA = la < 0 ? 0.5 : (mode > 0 ? gtSample(px, wLocal, float(la), mode).a : gtFetch(px, ivec2(0), float(la)).a);
-            a = gtOverlayAlpha(kind, t.a, c.a, hA, wLocal);
+         int mb = GT_LAYER_MAT[layer];
+         if (pzGtBlend.x > 0.0 && mb != own && gtRank(pzgClass) >= 0) {
+            int m1, m2; float w1;
+            a = 0.0;
+            if (gtField(wLocal, px, own, GT_MAT_LAYER[own], m1, w1, m2)) {
+               a = m1 == mb ? w1 : m2 == mb ? 1.0 - w1 : 0.0;
+            }
          }
          return vec4(rgb * a, a);
       }
