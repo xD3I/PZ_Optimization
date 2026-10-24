@@ -74,7 +74,7 @@ public final class Glints {
 
    public static String stats() {
       return "glints: frames=" + frames + " queued=" + framesQueued + " instances=" + instances + " max=" + maxInstances + " maskRebuilds=" + maskRebuilds
-            + " draws=" + draws + " queue_us=" + (frames > 0 ? String.format(java.util.Locale.ROOT, "%.1f", queueNs / 1000.0 / frames) : "0") + " ring=" + Gpu.ringWrites + " hdr=" + hdrQueued + "/" + Gpu.hdrDraws + " lightFrames=" + lightFrames + " sunFrames=" + sunFrames + " pointSquares=" + pointSquares + " sunSquares=" + sunSquares + " model=" + model() + " pass=" + PASS_NAMES[passMode()] + (failed ? " (failed)" : "");
+            + " draws=" + draws + " queue_us=" + (frames > 0 ? String.format(java.util.Locale.ROOT, "%.1f (masks %.1f, lights %.1f)", queueNs / 1000.0 / frames, maskNs / 1000.0 / frames, lightsNs / 1000.0 / frames) : "0") + " mask_us=" + (maskRebuilds > 0 ? String.format(java.util.Locale.ROOT, "%.2f", maskNs / 1000.0 / maskRebuilds) : "0") + " ring=" + Gpu.ringWrites + " hdr=" + hdrQueued + "/" + Gpu.hdrDraws + " lightFrames=" + lightFrames + " sunFrames=" + sunFrames + " pointSquares=" + pointSquares + " sunSquares=" + sunSquares + " model=" + model() + " pass=" + PASS_NAMES[passMode()] + (failed ? " (failed)" : "");
    }
 
    /** The model in force (devGlintCycle steps through them, then "off"). */
@@ -186,7 +186,9 @@ public final class Glints {
       m.builtMs = now;
       m.ts = Core.tileScale;
       maskRebuilds++;
+      long t0 = System.nanoTime();
       build(c, level, m, wetGround, snowAny);
+      maskNs += System.nanoTime() - t0;
       return m;
    }
 
@@ -388,7 +390,7 @@ public final class Glints {
     * Game thread, FBORenderCell after the players / items and before the puddles: this frame's masked squares in a light's
     * reach, queued as one draw. Nothing queued when there are none.
     */
-   public static long queueNs, hdrQueued;
+   public static long queueNs, maskNs, lightsNs, hdrQueued;
    private static Frame queuedFrame;
    private static int queuedFrameNo = -1;
 
@@ -452,7 +454,9 @@ public final class Glints {
       int ox = (int)Math.floor(cx / 64F) * 64, oy = (int)Math.floor(cy / 64F) * 64;
       Frame f = FRAMES[frameIndex++ & 3];
       Lights L = f.lights;
+      long tl = System.nanoTime();
       gatherLights(L, ox, oy, cx, cy, view);
+      lightsNs += System.nanoTime() - tl;
       if (L.n > 0) {
          lightFrames++;
       }

@@ -246,12 +246,12 @@ def mode_pan():
             print("pan %-10s %-9s flicker: %s" % (name, model, "  ".join(out)))
 
 
-def squares(W, n, ts, bits=0, lum=1.0):
+def squares(W, n, ts, bits=0, lum=1.0, kind=0):
     """Glints' two-texel square layout (pzopt.Glints.TEXELS = 2): kind frost, full strength and sun, level 0."""
     data = np.zeros((n * 2, 4), dtype="f4")
     for i in range(n):
         x, y = i % W, i // W
-        data[i * 2 + 0] = ((x - y) * 32.0 * ts, (x + y) * 16.0 * ts, 0.5, float(0 | (0 << 2) | (bits << 10)))
+        data[i * 2 + 0] = ((x - y) * 32.0 * ts, (x + y) * 16.0 * ts, 0.5, float(kind | (0 << 2) | (bits << 10)))
         data[i * 2 + 1] = (x, y, 1.0, float(255 + (int(round(lum * 255)) << 8)))
     rows = (n * 2 + 4095) // 4096
     pad = np.zeros((rows * 4096, 4), dtype="f4")
@@ -441,6 +441,77 @@ def mode_ppan():
         print("ppan %-10s particles flicker raw/blurred: %.3f/%.3f  (lit px %d, energy %.3g)" % (name, raw, bl, lit, frames[0].sum()))
 
 
+def mode_kinds():
+    """Each kind (frost, snow, wet) under a lamp (bulb 0.9 level up) and the sun-mirror direction, particles pass:
+    lit pixels, energy, and where the energy sits relative to the light (squares, + = towards the camera)."""
+    import moderngl
+    from PIL import Image
+    ctx = moderngl.create_standalone_context(backend="egl", require=430)
+    dump = os.path.join(ROOT, "build", "shader-dump")
+    rd = lambda f: open(os.path.join(dump, f)).read()
+    W = 40
+    n = W * W
+    SW, SH = 2600, 1400
+    fbo = ctx.framebuffer(color_attachments=[ctx.texture((SW, SH), 4, dtype="f4")])
+    fbo.use()
+    ctx.enable(moderngl.BLEND)
+    ctx.blend_func = moderngl.ONE, moderngl.ONE
+    ctx.enable(moderngl.PROGRAM_POINT_SIZE)
+    pp = ctx.program(vertex_shader=rd("glints-particles.vert"), fragment_shader=rd("glints-particles.frag"))
+    va = ctx.vertex_array(pp, [])
+    rho = float(os.environ.get("FLAKES", "3072")) / 1024.0
+    kinds = np.array([[rho, 1.6, 0.04, 0.018], [rho * 1.6, 1.3, 0.035, 0.018], [rho * 0.6, 0.22, 0.025, 0.02]], "f4")
+    tex = None
+
+    def put(k, v, raw=False):
+        if k in pp:
+            if raw:
+                pp[k].write(v)
+            else:
+                pp[k] = v
+    put("uData", 1); put("uJ", (0.0, 0.0, 0.0, 0.0)); put("uTs", 1.0)
+    put("uKind", kinds.tobytes(), True)
+    put("uView", (1.0, 1.0, 0.0, 1024.0))
+    put("uSunC", (1.0, 1.0, 1.0, 1.0))
+    lamp = float(os.environ.get("LAMP_H", "2.2"))
+    # screen x' = (x - y) 32 in [-1280, 1280], y' = (x + y) 16 in [0, 1280]
+    m = np.zeros((4, 4), "f4")
+    m[0, 0] = 2.0 / SW; m[1, 1] = -2.0 / SH; m[2, 2] = 1.0; m[3, 3] = 1.0
+    m[3, 0] = 0.0; m[3, 1] = 1.0
+    put("uMVP", m.tobytes(), True)
+    out = os.environ.get("OUT", "/tmp/claude-1000/gcv/rig")
+    os.makedirs(out, exist_ok=True)
+    for ki, kname in enumerate(["frost", "snow", "wet"]):
+        for name, sun, bits in [("lamp", (0.0, 0.0, 1.0, 0.0), 1), ("sun-mirror", (-0.6, -0.6, 0.53, 1.0), 0)]:
+            data, pad, rows = squares(W, n, 1.0, bits=bits, kind=ki)
+            if tex is None:
+                tex = ctx.texture((4096, rows), 4, pad.tobytes(), dtype="f4")
+                tex.filter = (moderngl.NEAREST, moderngl.NEAREST)
+            tex.write(pad.tobytes())
+            tex.use(1)
+            lp = np.zeros((8, 4), "f4"); lp[0] = (W / 2, W / 2, lamp, 20.0)
+            ld = np.zeros((8, 4), "f4"); ld[0] = (0, 0, -2, 1)
+            lc = np.zeros((8, 4), "f4"); lc[0] = (1, 1, 1, 0)
+            put("uLp", lp.tobytes(), True); put("uLd", ld.tobytes(), True); put("uLc", lc.tobytes(), True)
+            put("uSun", sun)
+            fbo.clear(0.0, 0.0, 0.0, 0.0)
+            va.render(moderngl.POINTS, vertices=n * 64)
+            img = np.frombuffer(fbo.read(components=4, dtype="f4"), "f4").reshape(SH, SW, 4)[..., :3].sum(-1)
+            img = img[::-1]  # GL rows bottom-up
+            ys, xs = np.nonzero(img > 0)
+            e = img.sum()
+            if e > 0:
+                cxp = (img.sum(0) * np.arange(SW)).sum() / e - SW / 2
+                cyp = (img.sum(1) * np.arange(SH)).sum() / e
+                # back to squares: x - y = x' / 32, x + y = y' / 16; relative to the lamp (W/2, W/2)
+                cxp, cyp = (cxp / 32 + cyp / 16) / 2 - W / 2, (cyp / 16 - cxp / 32) / 2 - W / 2
+            else:
+                cxp = cyp = float("nan")
+            print("kinds %-6s %-10s lit px %6d  energy %8.3g  max %.3g  centroid (squares from the lamp) x %+.1f y %+.1f" % (kname, name, len(xs), e, img.max(), cxp, cyp))
+            v = np.clip(img / max(img.max() * 0.25, 1e-9), 0, 1)
+            Image.fromarray((v * 255).astype("u1")).save(os.path.join(out, "kinds-%s-%s.png" % (kname, name)))
+
+
 COMP = """
 #version 430
 %LIB%
@@ -539,7 +610,7 @@ def mode_fused():
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("mode", choices=["img", "cost", "stats", "pan", "src", "flakes", "pcost", "ppan", "fused"])
+    ap.add_argument("mode", choices=["img", "cost", "stats", "pan", "src", "flakes", "pcost", "ppan", "fused", "kinds"])
     ap.add_argument("--out", default=os.path.join(ROOT, "build", "glint-rig"))
     a = ap.parse_args()
     if a.mode == "src":
@@ -556,6 +627,8 @@ def main():
         mode_ppan()
     elif a.mode == "fused":
         mode_fused()
+    elif a.mode == "kinds":
+        mode_kinds()
     elif a.mode == "stats":
         mode_stats()
     else:

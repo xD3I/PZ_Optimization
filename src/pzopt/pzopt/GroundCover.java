@@ -1154,6 +1154,7 @@ public final class GroundCover {
          asyncNs += j.ns;
          buildNs += j.ns;
          builds++;
+         buildMinNs = Math.min(buildMinNs, j.ns);
          if (builds > 40) {
             buildLateNs += j.ns;
             buildLate++;

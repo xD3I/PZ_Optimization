@@ -252,7 +252,7 @@ public final class WindLeaves {
       "   vec2 l = vec2(q.x, q.y * 0.5 * b.w) * a.w * 0.5;",
       "   vec2 p = vec2(b.x * l.x - b.y * l.y, b.y * l.x + b.x * l.y);",
       "   gl_Position = uMVP * vec4(a.xy + uJ + p, 0.0, 1.0);",
-      "   gl_Position.z = (a.z * 2.0 - 1.0) * gl_Position.w;",
+      "   gl_Position.z = clamp(a.z * 2.0 - 1.0, -1.0, 1.0) * gl_Position.w; // clamped here, no GL_DEPTH_CLAMP (Glints: gcv-cost-state)",
       "   vCol = vec4(c.rgb, b.z);",
       "   vFace = b.w;",
       "}");
@@ -343,12 +343,20 @@ public final class WindLeaves {
             GL11.glEnable(GL11.GL_DEPTH_TEST);
             GL11.glDepthFunc(GL11.GL_LEQUAL);
             GL11.glDepthMask(false);
-            GL11.glEnable(GL32.GL_DEPTH_CLAMP);
+            String dv = Ground.variant();
+            boolean clampHw = "wclamp".equals(dv); // dev: the hardware depth clamp of the first version
+            if (clampHw) {
+               GL11.glEnable(GL32.GL_DEPTH_CLAMP);
+            }
             GL11.glDisable(GL11.GL_ALPHA_TEST);
-            GL30.glBindVertexArray(vao);
-            GL31.glDrawArraysInstanced(GL11.GL_TRIANGLE_FAN, 0, 4, f.n);
-            GL30.glBindVertexArray(0);
-            GL11.glDisable(GL32.GL_DEPTH_CLAMP);
+            if (!"wnodraw".equals(dv)) { // dev: everything but the draw call
+               GL30.glBindVertexArray(vao);
+               GL31.glDrawArraysInstanced(GL11.GL_TRIANGLE_FAN, 0, 4, f.n);
+               GL30.glBindVertexArray(0);
+            }
+            if (clampHw) {
+               GL11.glDisable(GL32.GL_DEPTH_CLAMP);
+            }
          } catch (Throwable t) {
             failed = true;
             Log.warn("wind leaves: draw failed, off: " + t);
