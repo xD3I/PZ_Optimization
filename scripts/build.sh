@@ -92,6 +92,9 @@ if [[ -d "$SRC/lua" ]]; then
   if [[ -n "$lua_bin" ]]; then
     (cd "$REPO" && "$lua_bin" tests/lua/effect-why.lua) \
       || { echo "SETTINGS REASONS FAILED: give each resource above its reason (tests/lua/effect-why.lua)" >&2; exit 1; }
+    # A switch with a choice puts its value on a leaf row named in the layout's `leaves` (no switch + dropdown on one row).
+    (cd "$REPO" && "$lua_bin" tests/lua/setting-leaves.lua) \
+      || { echo "SETTING LEAVES FAILED: name each leaf above in PzoptSettingsLayout.leaves (tests/lua/setting-leaves.lua)" >&2; exit 1; }
   fi
 fi
 # Other loose media (src/media/ui/pzopt/compare/*.gif and *.avif: the PZ OPTIMIZATION screen's stock-vs-optimized clips,

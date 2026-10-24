@@ -4172,6 +4172,23 @@ function API.offValue(key, e)
     return nil
 end
 
+-- The leaf a switched choice's value moves to (the layout's `leaves`): { label, tip, off, values = the choices but the
+-- off one }, or nil when the setting has no leaf (no off value, one other value, or `leaves[key] = false`). The setting's
+-- row keeps the switch; the leaf row under it picks among `values`.
+function API.leaf(key, e)
+    local off = API.offValue(key, e)
+    if not (e and e.choices and off) then return nil end
+    local spec = ((PzoptSettingsLayout or {}).leaves or {})[key]
+    if spec == false then return nil end
+    local values = {}
+    for _, c in ipairs(e.choices) do
+        if tostring(c) ~= off then table.insert(values, tostring(c)) end
+    end
+    if #values < 2 then return nil end
+    spec = spec or {}
+    return { label = spec.label or "Mode", tip = spec.tip, off = off, values = values }
+end
+
 -- A subcategory's keys as a tree: each setting with its modifiers under it (the main menu's settings pages draw them
 -- indented under the setting's switch). Nothing in the entries says which key tunes which, so it is read from the labels
 -- and the order, and the layout's `parents` corrects the rest:
