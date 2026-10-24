@@ -56,7 +56,12 @@ public final class Glints {
 
    static final String[] MODELS = {"db23", "db23iso", "jamsi", "sparkle", "explicit"};
    static final int MAX_LIGHTS = 8;
-   static final int TEXELS = 4, MAX = 16384;
+   /**
+    * A square's data: two RGBA32F texels (2026-10-24, was four: the upload halved) - (screen x, screen y, depth, kind | level
+    * << 2 | light bits << 10), (x - origin, y - origin, strength, sun x 255 | light x 255 << 8); the shaders unpack them
+    * (pzgSquare) and rebuild the grid coordinates from the square and the frame origin (uOrigin).
+    */
+   static final int TEXELS = 2, MAX = 16384;
    static final float METRIC_Z = 2.4494897F; // squares of height per level (sqrt 6: the view vector's 30 degrees)
    static final int K_FROST = 0, K_SNOW = 1, K_WET = 2;
 
@@ -227,17 +232,9 @@ public final class Glints {
          d[o] = (x - y) * (32F * ts);
          d[o + 1] = (x + y) * (16F * ts) - level * (96F * ts);
          d[o + 2] = IsoDepthHelper.calculateDepth(x, y, level); // + the frame's chunk depth
-         d[o + 3] = level;
-         // grid space s = (x - y) 32, t = (x + y) 16, wrapped every 4096 units (128 / 256 squares: cells of every level
-         // line up across the wrap, the random pattern just restarts)
-         d[o + 6] = (float)Math.floorMod((x - y) * 32, 4096);
-         d[o + 7] = (float)Math.floorMod((x + y) * 16, 4096);
-         d[o + 8] = kind;
-         d[o + 9] = (m.strength[i] & 255) / 255F;
-         d[o + 10] = (m.sun[i] & 255) / 255F;
-         d[o + 13] = level & 255;
-         d[o + 14] = 0F;
-         d[o + 15] = 0F;
+         d[o + 3] = kind | (level & 255) << 2; // | the frame's light bits << 10
+         d[o + 6] = (m.strength[i] & 255) / 255F;
+         d[o + 7] = m.sun[i] & 255; // + the frame's square light x 255 << 8
       }
    }
 
@@ -370,6 +367,7 @@ public final class Glints {
       float zoom, jx, jy;
       int ts;
       int stamp;
+      int ox, oy; // the frame origin (squares)
    }
 
    static final class Pass extends TextureDraw.GenericDrawer {
@@ -552,10 +550,10 @@ public final class Glints {
                int o = f.n * TEXELS * 4;
                System.arraycopy(blk, s * TEXELS * 4, d, o, TEXELS * 4);
                d[o + 2] += chunkDepth;
+               d[o + 3] += lb << 10;
                d[o + 4] = x - ox;
                d[o + 5] = y - oy;
-               d[o + 11] = lum;
-               d[o + 12] = lb;
+               d[o + 7] += Math.round(lum * 255F) << 8;
                f.n++;
             }
          }
@@ -573,6 +571,8 @@ public final class Glints {
       f.jx = camera.fixJigglyModelsX * zoom;
       f.jy = camera.fixJigglyModelsY * zoom;
       f.stamp = ++stampCounter;
+      f.ox = ox;
+      f.oy = oy;
       Pass p = PASSES[passIndex++ & 7];
       if (p == null) {
          p = PASSES[(passIndex - 1) & 7] = new Pass();
@@ -598,6 +598,17 @@ public final class Glints {
          "#version 330",
          "uniform sampler2D uData;",
          "vec4 pzgTexel(int i) { return texelFetch(uData, ivec2(i & 4095, i >> 12), 0); }",
+         "uniform ivec2 uOrigin; // the frame origin (squares, a multiple of 64)",
+         "void pzgSquare(int sq, out vec4 a, out vec4 b, out vec4 c, out vec4 e) {",
+         "   vec4 t0 = pzgTexel(sq * 2), t1 = pzgTexel(sq * 2 + 1);",
+         "   int P = int(t0.w + 0.5), SL = int(t1.w + 0.5);",
+         "   int lv = (P >> 2) & 255;",
+         "   ivec2 X = ivec2(floor(t1.xy + 0.5)) + uOrigin;",
+         "   a = vec4(t0.xyz, float(lv > 127 ? lv - 256 : lv));",
+         "   b = vec4(t1.xy, float(((X.x - X.y) * 32) & 4095), float(((X.x + X.y) * 16) & 4095)); // grid space s, t wrapped at 4096",
+         "   c = vec4(float(P & 3), t1.z, float(SL & 255) / 255.0, float(SL >> 8) / 255.0);",
+         "   e = vec4(float(P >> 10), float(lv), 0.0, 0.0);",
+         "}",
          "uniform mat4 uMVP;",
          "uniform vec4 uJ;    // jiggle x, y, K per unit x + y, bias",
          "uniform float uTs;",
@@ -607,10 +618,8 @@ public final class Glints {
          "flat out ivec2 vB;  // light bits, level",
          "void main() {",
          "   int i = gl_InstanceID;",
-         "   vec4 a = pzgTexel(i * 4);",
-         "   vec4 b = pzgTexel(i * 4 + 1);",
-         "   vec4 c = pzgTexel(i * 4 + 2);",
-         "   vec4 e = pzgTexel(i * 4 + 3);",
+         "   vec4 a, b, c, e;",
+         "   pzgSquare(i, a, b, c, e);",
          "   int v = gl_VertexID;",
          "   vec2 o = v == 0 ? vec2(0.0) : v == 1 ? vec2(1.0, 0.0) : v == 2 ? vec2(1.0) : vec2(0.0, 1.0);",
          "   vec2 scr = a.xy + vec2((o.x - o.y) * 32.0 * uTs, (o.x + o.y) * 16.0 * uTs);",
@@ -636,6 +645,17 @@ public final class Glints {
    static final String FLAKE = String.join("\n",
          "uniform sampler2D uData;",
          "vec4 pzgTexel(int i) { return texelFetch(uData, ivec2(i & 4095, i >> 12), 0); }",
+         "uniform ivec2 uOrigin; // the frame origin (squares, a multiple of 64)",
+         "void pzgSquare(int sq, out vec4 a, out vec4 b, out vec4 c, out vec4 e) {",
+         "   vec4 t0 = pzgTexel(sq * 2), t1 = pzgTexel(sq * 2 + 1);",
+         "   int P = int(t0.w + 0.5), SL = int(t1.w + 0.5);",
+         "   int lv = (P >> 2) & 255;",
+         "   ivec2 X = ivec2(floor(t1.xy + 0.5)) + uOrigin;",
+         "   a = vec4(t0.xyz, float(lv > 127 ? lv - 256 : lv));",
+         "   b = vec4(t1.xy, float(((X.x - X.y) * 32) & 4095), float(((X.x + X.y) * 16) & 4095)); // grid space s, t wrapped at 4096",
+         "   c = vec4(float(P & 3), t1.z, float(SL & 255) / 255.0, float(SL >> 8) / 255.0);",
+         "   e = vec4(float(P >> 10), float(lv), 0.0, 0.0);",
+         "}",
          "uniform mat4 uMVP;",
          "uniform vec4 uJ;    // jiggle x, y, K per unit x + y, bias",
          "uniform float uTs;",
@@ -651,10 +671,8 @@ public final class Glints {
          "bool pzgFlake(int vid, out vec4 clip, out vec3 energy) {",
          "   int sq = vid / " + SLOTS + ", k = vid - sq * " + SLOTS + ";",
          "   int li = k >> 4, cell = (k >> 2) & 3, fi = k & 3;",
-         "   vec4 a = pzgTexel(sq * 4);",
-         "   vec4 b = pzgTexel(sq * 4 + 1);",
-         "   vec4 c = pzgTexel(sq * 4 + 2);",
-         "   vec4 e = pzgTexel(sq * 4 + 3);",
+         "   vec4 a, b, c, e;",
+         "   pzgSquare(sq, a, b, c, e);",
          "   int bits = int(e.x + 0.5), level = int(e.y + 0.5);",
          "   int kind = int(c.x + 0.5);",
          "   vec4 kp = uKind[kind];",
@@ -945,7 +963,7 @@ public final class Glints {
       private static final FloatBuffer v8 = BufferUtils.createFloatBuffer(MAX_LIGHTS * 4);
       private static final FloatBuffer v3 = BufferUtils.createFloatBuffer(12);
       private static final Matrix4f mvp = new Matrix4f();
-      static final String[] NAMES = {"uData", "uMVP", "uJ", "uTs", "uLp", "uLd", "uLc", "uSun", "uSunC", "uKind", "uView", "uTotal", "uHdrK", "pzHdrNow", "pzHdrNowP"};
+      static final String[] NAMES = {"uData", "uMVP", "uJ", "uTs", "uLp", "uLd", "uLc", "uSun", "uSunC", "uKind", "uView", "uTotal", "uHdrK", "pzHdrNow", "pzHdrNowP", "uOrigin"};
 
       /** Render thread, at world entry (shaderWarmup) or on the first draw: every model's program. */
       static void warm() {
@@ -1069,6 +1087,7 @@ public final class Glints {
             GL20.glUniformMatrix4fv(l[1], false, mat);
             GL20.glUniform4f(l[2], f.jx, f.jy, BloodDecals.K, BloodDecals.K * Config.BLOOD_APPEND_BIAS_PCT / 100F + 1.0E-4F);
             GL20.glUniform1f(l[3], f.ts);
+            GL20.glUniform2i(l[15], f.ox, f.oy);
             Lights L = f.lights;
             v8.clear();
             v8.put(L.p).flip();

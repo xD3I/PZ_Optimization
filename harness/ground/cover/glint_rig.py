@@ -246,22 +246,26 @@ def mode_pan():
             print("pan %-10s %-9s flicker: %s" % (name, model, "  ".join(out)))
 
 
+def squares(W, n, ts, bits=0, lum=1.0):
+    """Glints' two-texel square layout (pzopt.Glints.TEXELS = 2): kind frost, full strength and sun, level 0."""
+    data = np.zeros((n * 2, 4), dtype="f4")
+    for i in range(n):
+        x, y = i % W, i // W
+        data[i * 2 + 0] = ((x - y) * 32.0 * ts, (x + y) * 16.0 * ts, 0.5, float(0 | (0 << 2) | (bits << 10)))
+        data[i * 2 + 1] = (x, y, 1.0, float(255 + (int(round(lum * 255)) << 8)))
+    rows = (n * 2 + 4095) // 4096
+    pad = np.zeros((rows * 4096, 4), dtype="f4")
+    pad[: n * 2] = data
+    return data, pad, rows
+
+
 def mode_flakes():
     import moderngl
     ctx = moderngl.create_standalone_context(backend="egl", require=430)
     src = open(os.path.join(ROOT, "build", "shader-dump", "glints-compact.comp")).read()
     W = 48
     n = W * W
-    data = np.zeros((n * 4, 4), dtype="f4")
-    for i in range(n):
-        x, y = i % W, i // W
-        data[i * 4 + 0] = ((x - y) * 64.0, (x + y) * 32.0, 0.5, 0.0)
-        data[i * 4 + 1] = (x, y, ((x - y) * 32) % 4096, ((x + y) * 16) % 4096)
-        data[i * 4 + 2] = (0.0, 1.0, 1.0, 1.0)  # frost, full strength, full sun, lit
-        data[i * 4 + 3] = (1.0, 0.0, 0.0, 0.0)  # light 0 reaches it, level 0
-    rows = (n * 4 + 4095) // 4096
-    pad = np.zeros((rows * 4096, 4), dtype="f4")
-    pad[: n * 4] = data
+    data, pad, rows = squares(W, n, 2.0, bits=1)  # light 0 reaches every square
     tex = ctx.texture((4096, rows), 4, pad.tobytes(), dtype="f4")
     tex.filter = (moderngl.NEAREST, moderngl.NEAREST)
     rho, a, b = float(os.environ.get("FLAKES", "1536")) / 1024.0, 0.45, 0.035
@@ -314,16 +318,7 @@ def mode_pcost():
     rd = lambda f: open(os.path.join(dump, f)).read()
     n = int(os.environ.get("SQUARES", "5225"))
     W = int(np.ceil(np.sqrt(n)))
-    data = np.zeros((n * 4, 4), dtype="f4")
-    for i in range(n):
-        x, y = i % W, i // W
-        data[i * 4 + 0] = ((x - y) * 64.0, (x + y) * 32.0, 0.5, 0.0)
-        data[i * 4 + 1] = (x, y, ((x - y) * 32) % 4096, ((x + y) * 16) % 4096)
-        data[i * 4 + 2] = (0.0, 1.0, 1.0, 1.0)
-        data[i * 4 + 3] = (float(os.environ.get("BITS", "0")), 0.0, 0.0, 0.0)
-    rows = (n * 4 + 4095) // 4096
-    pad = np.zeros((rows * 4096, 4), dtype="f4")
-    pad[: n * 4] = data
+    data, pad, rows = squares(W, n, 2.0, bits=int(os.environ.get("BITS", "0")))
     tex = ctx.texture((4096, 16), 4, dtype="f4")
     tex.filter = (moderngl.NEAREST, moderngl.NEAREST)
     tex.write(pad.tobytes(), viewport=(0, 0, 4096, rows))
@@ -397,16 +392,7 @@ def mode_ppan():
     rd = lambda f: open(os.path.join(dump, f)).read()
     W = 40
     n = W * W
-    data = np.zeros((n * 4, 4), dtype="f4")
-    for i in range(n):
-        x, y = i % W, i // W
-        data[i * 4 + 0] = ((x - y) * 32.0, (x + y) * 16.0, 0.5, 0.0)
-        data[i * 4 + 1] = (x, y, ((x - y) * 32) % 4096, ((x + y) * 16) % 4096)
-        data[i * 4 + 2] = (0.0, 1.0, 1.0, 1.0)
-        data[i * 4 + 3] = (0.0, 0.0, 0.0, 0.0)
-    rows = (n * 4 + 4095) // 4096
-    pad = np.zeros((rows * 4096, 4), dtype="f4")
-    pad[: n * 4] = data
+    data, pad, rows = squares(W, n, 1.0)
     tex = ctx.texture((4096, rows), 4, pad.tobytes(), dtype="f4")
     tex.filter = (moderngl.NEAREST, moderngl.NEAREST)
     tex.use(1)
@@ -435,8 +421,7 @@ def mode_ppan():
     put("uKind", kinds.tobytes(), True)
     put("uView", (1.0, 1.0, 0.0, 1024.0))
     for name, sun, bits in [("point", (0.0, 0.0, 1.0, 0.0), 1.0), ("sun-mirror", (-0.6, -0.6, 0.53, 1.0), 0.0)]:
-        data[3::4, 0] = bits
-        pad[: n * 4] = data
+        data, pad, rows = squares(W, n, 1.0, bits=int(bits))
         tex.write(pad.tobytes())
         put("uSun", sun); put("uSunC", (1.0, 1.0, 1.0, 1.0))
         frames = []
