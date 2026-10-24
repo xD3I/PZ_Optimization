@@ -72,8 +72,13 @@ public final class GroundTracks {
    public static long gameNs;
    static volatile boolean failed;
 
+   static {
+      // the interim map stamps by itself: GroundState v1's built-in sources stay off meanwhile (one stamping path)
+      GroundState.setSources(false, false);
+   }
+
    public static boolean on() {
-      return Config.GROUND_TRACKS && Overrides.enabled() && !failed && !CoreGl.legacyMac();
+      return Ground.on(Ground.K_TRACKS) && Overrides.enabled() && !failed && !CoreGl.legacyMac();
    }
 
    public static String stats() {
@@ -176,81 +181,33 @@ public final class GroundTracks {
       return m;
    }
 
-   /** A square's natural ground (FloorMaterial / FootstepMaterial of its floor, else the blends_natural tile row), or none. */
+   /** A square's natural ground (GroundTiles: the floor's sheet and tile; farmland, dug soil, water and built floors are none). */
    static int material(IsoGridSquare sq) {
       if (sq == null) {
          return MAT_NONE;
       }
-      IsoObject floor = sq.getFloor();
-      if (floor == null || floor.getSprite() == null) {
+      int code = GroundTiles.square(sq);
+      if (!GroundTiles.natural(code)) {
          return MAT_NONE;
       }
-      PropertyContainer p = floor.getProperties();
-      String fm = p == null ? null : p.get(IsoPropertyType.FLOOR_MATERIAL);
-      if (fm == null && p != null) {
-         fm = p.get(IsoPropertyType.FOOTSTEP_MATERIAL);
-      }
-      if (fm != null) {
-         switch (fm) {
-            case "Grass":
-               return MAT_GRASS;
-            case "Dirt":
-            case "Clay":
-               return MAT_DIRT;
-            case "Sand":
-               return MAT_SAND;
-            case "Gravel":
-               return MAT_GRAVEL;
-            default:
-               break; // Road, Water, Burnt, Concrete, Wood ...: by name below, else none
-         }
-      }
-      String n = floor.getSprite().getName();
-      if (n == null) {
-         return MAT_NONE;
-      }
-      if (n.startsWith("blends_natural_01_")) {
-         int i = parseTail(n);
-         if (i < 0) {
-            return MAT_NONE;
-         }
-         if (i < 16) {
-            return MAT_SAND;
-         }
-         if (i < 64) {
+      switch (GroundTiles.material(code)) {
+         case GroundTiles.GRASS:
+         case GroundTiles.GRASS_OVERLAY:
+         case GroundTiles.VEGETATION:
             return MAT_GRASS;
-         }
-         if (i < 80) {
+         case GroundTiles.DIRT:
+         case GroundTiles.DARK_DIRT:
+         case GroundTiles.CLAY:
             return MAT_DIRT;
-         }
-         if (i < 96) {
-            return MAT_GRAVEL; // dry grass over dirt / gravel
-         }
-         if (i < 112) {
-            return MAT_DIRT;
-         }
-         return MAT_NONE;
+         case GroundTiles.SAND:
+            return MAT_SAND;
+         case GroundTiles.GRAVEL:
+            return MAT_GRAVEL;
+         case GroundTiles.SNOW:
+            return MAT_SNOW;
+         default:
+            return MAT_NONE;
       }
-      if (n.startsWith("floors_exterior_natural_01_") || n.startsWith("blends_natural_02_")) {
-         return MAT_GRASS;
-      }
-      return MAT_NONE;
-   }
-
-   private static int parseTail(String n) {
-      int u = n.lastIndexOf('_');
-      int v = 0;
-      if (u < 0 || u == n.length() - 1) {
-         return -1;
-      }
-      for (int i = u + 1; i < n.length(); i++) {
-         char ch = n.charAt(i);
-         if (ch < '0' || ch > '9') {
-            return -1;
-         }
-         v = v * 10 + (ch - '0');
-      }
-      return v;
    }
 
    // ------------------------------------------------------------------------------------------------ primitives (game thread)
@@ -519,6 +476,9 @@ public final class GroundTracks {
          vehicles(cell);
       }
       characters(cell, dt);
+      if (Config.DEV_GROUND_TRACKS_RIG > 0) {
+         rig(pl);
+      }
       weather(dt);
       Frame f = alloc();
       long nowMs = System.currentTimeMillis();
@@ -648,6 +608,80 @@ public final class GroundTracks {
       f.nIndex = nPairs;
    }
 
+   // ------------------------------------------------------------------------------------------------ the look rig
+
+   private static double rigX = Double.NaN, rigY;
+   private static long rigT0;
+   private static final double[] rigLast = new double[16];
+   private static boolean rigBody;
+   private static final float[] rigWalk = new float[6];
+   private static final int[] rigFoot = new int[3];
+
+   /** devGroundTracksRig: a scripted scene beside the player, the same every run (time from its first frame). */
+   private static void rig(IsoPlayer pl) {
+      long now = System.currentTimeMillis();
+      if (Double.isNaN(rigX) || Math.abs(pl.getX() - rigX) > 30.0 || Math.abs(pl.getY() - rigY) > 30.0) { // (a teleport starts it again)
+         rigBody = false;
+         java.util.Arrays.fill(rigWalk, 0F);
+         rigX = Math.floor(pl.getX()) + 0.5;
+         rigY = Math.floor(pl.getY()) + 0.5;
+         rigT0 = now;
+         java.util.Arrays.fill(rigLast, Double.NaN);
+         Log.info("ground tracks rig: anchor " + rigX + "," + rigY);
+      }
+      double t = (now - rigT0) / 1000.0;
+      // the car: an S from 9 squares west to 9 east, 3 squares north of the player, 4 squares a second, its rear sliding
+      // through the bend (slip 0.7 there); 4 wheels, track 1.5, wheelbase 2.6
+      double s = Math.min(t * 4.0, 20.0);
+      for (int w = 0; w < 4; w++) {
+         double sw = s - (w >= 2 ? 2.6 : 0.0);
+         if (sw < 0) {
+            continue;
+         }
+         double cx = rigX - 9.0 + sw, cy = rigY - 3.0 - 1.6 * Math.sin(Math.min(sw, 18.0) / 18.0 * Math.PI * 2.0);
+         double dx = 1.0, dy = -1.6 * Math.PI * 2.0 / 18.0 * Math.cos(Math.min(sw, 18.0) / 18.0 * Math.PI * 2.0);
+         double l = Math.hypot(dx, dy);
+         double side = (w & 1) == 0 ? 0.75 : -0.75;
+         double x = cx - dy / l * side, y = cy + dx / l * side;
+         float slip = (w >= 2 && sw > 7 && sw < 11) ? 0.7F : 0F;
+         if (!Double.isNaN(rigLast[w * 2]) && Math.hypot(x - rigLast[w * 2], y - rigLast[w * 2 + 1]) > 0.02) {
+            wheel(rigLast[w * 2], rigLast[w * 2 + 1], x, y, 0.10F, 0.10F * (1F + 0.6F * slip), 0.035F * (1F + slip), slip);
+         } else if (!Double.isNaN(rigLast[w * 2])) {
+            continue;
+         }
+         rigLast[w * 2] = x;
+         rigLast[w * 2 + 1] = y;
+      }
+      // three walkers 3, 4.5 and 6 squares south, west to east at walking pace, prints every 0.42
+      for (int k = 0; k < 3; k++) {
+         double wx = rigX - 8.0 + Math.min(t * 2.2, 16.0), wy = rigY + 3.0 + 1.5 * k + 0.4 * Math.sin(t * 0.7 + k);
+         float lx = rigWalk[k * 2], ly = rigWalk[k * 2 + 1];
+         if (lx == 0F) {
+            rigWalk[k * 2] = (float)wx;
+            rigWalk[k * 2 + 1] = (float)wy;
+            continue;
+         }
+         double d = Math.hypot(wx - lx, wy - ly);
+         if (d >= 0.42) {
+            float ux = (float)((wx - lx) / d), uy = (float)((wy - ly) / d);
+            rigFoot[k] ^= 1;
+            float sd = rigFoot[k] == 0 ? 0.09F : -0.09F;
+            ellipse(wx - uy * sd, wy + ux * sd, ux, uy, 0.14F, 0.055F, 0.045F, 0.012F, 1F, 1F);
+            rigWalk[k * 2] = (float)wx;
+            rigWalk[k * 2 + 1] = (float)wy;
+         }
+      }
+      // a body 4 squares west of the player, a drag 6 squares south-west
+      if (!rigBody && t > 1.0) {
+         rigBody = true;
+         ellipse(rigX - 4.0, rigY + 0.5, 0.8F, 0.6F, 0.85F, 0.28F, 0.035F, 0.01F, 1F, 0F);
+      }
+      if (t > 1.0 && t < 4.0) {
+         double a = (t - 1.0) / 3.0;
+         drag(rigX - 9.0 + 4.0 * a, rigY + 8.0, rigX - 9.0 + 4.0 * a + 0.1, rigY + 8.0, 0.22F);
+      }
+   }
+
    // ------------------------------------------------------------------------------------------------ weather and decay
 
    private static final float[] WEATHER = new float[4];
@@ -731,7 +765,7 @@ public final class GroundTracks {
             slotPending[s] = false;
             slotRebakeMs[s] = nowMs;
             if (c != null) {
-               c.invalidateRenderChunkLevel(0, 1L); // DIRTY_BLOOD: a floor decal changed
+               GroundBake.rebakeChunk(cx, cy, "tracks", false);
                rebakesAsked++;
                budget--;
             }

@@ -39,8 +39,16 @@ void main() {
    }
    vec3 f = gtFactor(vP, m, uLight.xyz, uLight.w, uWeather.x, uWeather.y, uSky);
    if (uWeather.z == 1.0) {
+      // dev: the height (blue ruts, red berms)
       float h = gtS(vP).x;
       f = h < 0.0 ? vec3(1.0 + h * 8.0, 1.0 + h * 8.0, 2.0) : vec3(1.0 + h * 30.0, 1.0, 1.0);
+   } else if (uWeather.z == 2.0) {
+      // dev: the material of each square (grass green, dirt brown, sand yellow, gravel grey, snow blue), the state ignored
+      const vec3 MC[6] = vec3[6](vec3(1.0), vec3(0.6, 1.5, 0.6), vec3(1.5, 0.9, 0.5), vec3(1.6, 1.5, 0.6), vec3(0.7), vec3(0.7, 0.8, 1.8));
+      f = MC[m];
+   } else if (uWeather.z == 3.0) {
+      // dev: the raw R byte as read (rest 192 = x1.5; an unbound texture reads black)
+      f = vec3(2.0 * texture(uState, uUv.xy + vP * uUv.z).x);
    }
    fragColor = vec4(clamp(f * 0.5, 0.0, 1.0), 0.5);
 }
