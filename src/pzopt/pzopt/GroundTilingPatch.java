@@ -48,7 +48,7 @@ public final class GroundTilingPatch implements GroundBake.FloorPatch {
 
    // ---------------------------------------------------------------------------------------------- game thread
 
-   static final String[] MODES = {"stock", "hex", "hpb", "bomb", "voronoi", "two", "lap"};
+   static final String[] MODES = {"stock", "hex", "hpb", "bomb", "voronoi", "two", "lap", "ident", "grid"}; // ident (dev): the exemplar at offset 0; grid (dev): the stock texel with the exemplar's square edges (red) and the geometry's (blue)
    private static volatile float[] params = new float[0]; // the frame's uniform values (game thread -> render thread)
    private static String lastSig = "";
    private static float seasonDry = -1F;
@@ -79,11 +79,23 @@ public final class GroundTilingPatch implements GroundBake.FloorPatch {
          return false;
       }
       int mode = 0;
-      if (hex) {
-         String v = Ground.variant();
-         int m = v == null ? -1 : modeIndex(v);
-         mode = m >= 0 ? m : Math.max(0, modeIndex(Config.DEV_GROUND_TILING_MODE));
-         if (mode == 0) {
+      String v = Ground.variant();
+      if (v != null && hex) {
+         // devGroundCycle names: <mode>[+b][+m] (the height blend / the macro at 100 % for that step, else off)
+         String[] t = v.split("\\+");
+         mode = Math.max(0, modeIndex(t[0]));
+         height = false;
+         macro = 0;
+         for (int i = 1; i < t.length; i++) {
+            height |= t[i].equals("b");
+            macro = t[i].equals("m") ? 100 : macro;
+         }
+         if (mode == 0 && !height && macro == 0) {
+            return false;
+         }
+      } else if (hex) {
+         mode = modeIndex(Config.DEV_GROUND_TILING_MODE);
+         if (mode <= 0) {
             mode = 2;
          }
       }
@@ -91,7 +103,7 @@ public final class GroundTilingPatch implements GroundBake.FloorPatch {
       float[] p = {
          mode, Config.DEV_GROUND_TILING_CELL_PCT / 100F, 0.6F, 7F, 0.5F, // tiling
          height ? 0.3F : 0F, 0.2F, 0.8F, 1F, // blend
-         0.12F * macro / 100F, 0.6F * dry * macro / 100F, 8F, 24F, // macro
+         0.12F * macro / 100F, 0.3F * dry * macro / 100F, 8F, 24F, // macro
          GroundTileArt.DRY_TINT[0], GroundTileArt.DRY_TINT[1], GroundTileArt.DRY_TINT[2],
          seed()};
       String sig = java.util.Arrays.toString(p);
@@ -204,6 +216,16 @@ public final class GroundTilingPatch implements GroundBake.FloorPatch {
          vec2 uv = vec2(gl_FragCoord.x * pzGtBakeF.x + pzGtBakeF.y, gl_FragCoord.y * pzGtBakeF.z + pzGtBakeF.w);
          vec2 wLocal = vec2(uv.y + uv.x, uv.y - uv.x) * 0.5;
          int mode = pzGtPeriod.z;
+         if (mode == 8) {
+            // dev alignment check: the exemplar's slot diamonds (red, from the exact pixel) and the world squares (blue, from
+            // the art-aligned position) over the stock texel; both must trace the sprite's own diamond edges
+            vec2 q = vec2(px) + 0.5 - vec2(float(pzGtPeriod.x / 4) - 1.0, 0.0); // slot (0, 0)'s top vertex at x = 32ts - 1
+            float k = float(pzGtPeriod.x / 4), kh = float(pzGtPeriod.y / 4);
+            vec2 e = vec2(q.y / kh + q.x / k, q.y / kh - q.x / k) * 0.5;
+            vec2 fe = abs(fract(e) - 0.5), fw = abs(fract(wLocal) - 0.5);
+            float red = max(fe.x, fe.y) > 0.49 ? 1.0 : 0.0, blue = max(fw.x, fw.y) > 0.49 ? 1.0 : 0.0;
+            return vec4(mix(t.rgb, vec3(red, 0.0, blue), max(red, blue) * 0.8), t.a);
+         }
          vec4 c = mode > 0 ? gtSample(px, wLocal, float(layer), mode) : (kind == 0 || pzGtBlend.x <= 0.0 ? t : gtFetch(px, ivec2(0), float(layer)));
          float grassy = ((pzGtBakeI.w >> layer) & 1) != 0 ? 1.0 : 0.0;
          vec3 rgb = gtMacro(c.rgb, wLocal, grassy);
