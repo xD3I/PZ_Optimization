@@ -51,22 +51,14 @@ public final class GroundTiling {
       #ifndef GT_MODE
       #define GT_MODE -1
       #endif
-      #ifdef GT_OLD_HASH
-      uint gtHash3(ivec2 c, uint salt) { return gtPcg(uint(c.x) ^ gtPcg(uint(c.y) ^ gtPcg(salt ^ uint(pzGtPeriod.w)))); }
-      #else
       // one PCG round over the lattice point and the salt spread by odd constants (a third of the nested hash's work)
       uint gtHash3(ivec2 c, uint salt) { return gtPcg((uint(c.x) * 0x8DA6B343u) ^ (uint(c.y) * 0xD8163841u) ^ ((salt + uint(pzGtPeriod.w)) * 0xCB1AB31Fu)); }
-      #endif
       vec2 gtRand2(ivec2 c, uint salt) { uint h = gtHash3(c, salt); return vec2(float(h & 0xFFFFu), float(h >> 16u)) * (1.0 / 65536.0); }
       float gtRand1(ivec2 c, uint salt) { return float(gtHash3(c, salt) >> 8u) * (1.0 / 16777216.0); }
 
-      #ifdef GT_OLD_WRAP
-      ivec2 gtWrap(ivec2 p) { ivec2 m = pzGtPeriod.xy; return ((p % m) + m) % m; }
-      #else
       // the period is a power of two (128N x 64N px at tile scale 1 or 2): a mask, not two integer modulos (NVIDIA has no
       // integer divider: each % is a few dozen instructions)
       ivec2 gtWrap(ivec2 p) { return p & (pzGtPeriod.xy - 1); }
-      #endif
       ivec2 gtLayer(ivec2 p, float layer) { return p + ivec2(0, int(layer) * pzGtPeriod.y); }
       vec4 gtFetch(ivec2 px, ivec2 off, float layer) { return texelFetch(pzGtArt, gtLayer(gtWrap(px + off), layer), 0); }
       vec4 gtFetchG(ivec2 px, ivec2 off, float layer) { return texelFetch(pzGtGauss, gtLayer(gtWrap(px + off), layer), 0); }

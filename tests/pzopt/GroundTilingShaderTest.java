@@ -29,7 +29,7 @@ public class GroundTilingShaderTest {
       for (String base : new String[] {"tileWithDepth", "opaqueWithDepth"}) {
          String vert = Files.readString(game.resolve(base + ".vert"));
          String frag = Files.readString(game.resolve(base + ".frag"));
-         for (String spec : new String[] {"hpb", "hpbDaow", "lap", "stock"})
+         for (String spec : new String[] {"hpb", "lap", "stock", "ident", "hex", "voronoi"})
          for (int piece = 0; piece < 3; piece++) {
             GroundTilingPatch.spec = spec;
             List<GroundBake.FloorPatch> ps = new ArrayList<>();
