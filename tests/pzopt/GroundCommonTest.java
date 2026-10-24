@@ -116,7 +116,7 @@ public class GroundCommonTest {
             "   vec4 st = pzgStateAt(pzgW.xy);",
             "   float age = st.z;",
             "   int nb = pzgClassAt(pzgSq + ivec2(1, 0));",
-            "   if (pzgMaterial() == 1 && pzgNatural(nb) && !pzgAttached) t.rgb *= 0.9 + 0.1 * n + 0.01 * cell.z;",
+            "   if (pzgMaterial() == 1 && pzgNatural(nb) && !pzgAttached) t.rgb *= 0.9 + 0.1 * n + 0.01 * cell.z + 0.001 * float(pzgToneAt(pzgSq));",
             "   return t * (1.0 - st.r * 0.3 * pzgTestAmount) + texture2D(pzgTestTex, pzgF) * 0.0 + vec4(age * 0.0);",
             "}",
             "vec4 pzgTestColor(vec4 c) { return c * (1.0 + 0.01 * pzgU01(pzgHash2(pzgSq, PZG_SEED_COMMON))); }");
