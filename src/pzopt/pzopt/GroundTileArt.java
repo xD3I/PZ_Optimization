@@ -56,7 +56,66 @@ public final class GroundTileArt {
       new LayerDef("darkDirt", 9, 0, BN + 80, BN + 85, BN + 86),
       new LayerDef("clay", 8, 0, BN + 96, BN + 101, BN + 102, BN + 103),
       new LayerDef("gravel", 4, 0, "floors_exterior_natural_01_13"),
+      new LayerDef("gravelStreet", 4, 1, "blends_street_01_48", "blends_street_01_53", "blends_street_01_54", "blends_street_01_55"),
    };
+   /** The grass layers (macro dryness applies to them): bit per layer. */
+   public static final int GRASSY = 0b1110;
+   /** The tone-0 layer of each material (the base under a blend piece: its height), -1 for none. */
+   public static final int[] MATERIAL_LAYER = {-1, 1, 4, 0, 7, -1, -1, -1, 6, 5, -1, -1, -1, -1, -1, -1};
+
+   /**
+    * The sprite table: every natural floor sprite the patch re-samples, with its layer and piece kind (0 a whole square,
+    * 1..4 the half toward the north / south / west / east corner, 5..8 the strip along the -y / -x / +x / +y edge;
+    * blends_natural_01 +1..+4 and +8..+11 / +12..+15, checked against the sprites). The shader finds the drawn sprite by
+    * its page rect and confirms it with three probe texels of the bound page. Left out (they stay stock): the dug soil
+    * (blends_natural_01_87, farmland), floors_exterior_natural_01_16..19 (ploughed rows), rows past 111.
+    */
+   static final class Spr {
+      final String name;
+      final int layer, kind;
+      float x0, y0, x1, y1;
+      final float[] probe = new float[12]; // 3 rgba
+      final int[] pxy = new int[6]; // their page texels
+      boolean ok;
+
+      Spr(String name, int layer, int kind) {
+         this.name = name;
+         this.layer = layer;
+         this.kind = kind;
+      }
+   }
+
+   static ArrayList<Spr> sprites() {
+      ArrayList<Spr> l = new ArrayList<>();
+      int[] rowLayer = {0, 1, 2, 3, 4, 5, 6};
+      for (int row = 0; row < 7; row++) {
+         for (int k = 0; k < 16; k++) {
+            int idx = row * 16 + k;
+            if (idx == 87) {
+               continue;
+            }
+            int kind = k == 0 || k >= 5 && k <= 7 ? 0 : k <= 4 ? k : 5 + (k - 8) % 4;
+            l.add(new Spr(BN + idx, rowLayer[row], kind));
+         }
+      }
+      l.add(new Spr("floors_exterior_natural_01_0", 1, 0));
+      l.add(new Spr("floors_exterior_natural_01_1", 2, 0));
+      l.add(new Spr("floors_exterior_natural_01_2", 3, 0));
+      l.add(new Spr("floors_exterior_natural_01_13", 7, 0));
+      l.add(new Spr("floors_exterior_natural_01_24", 0, 0));
+      for (int i : new int[] {48, 53, 54, 55}) {
+         l.add(new Spr("blends_street_01_" + i, 8, 0));
+      }
+      return l;
+   }
+
+   /** Max table rows (the GLSL array size). */
+   public static final int SPR_MAX = 128;
+   /** The table as uploaded: rects (x0, y0, x1, y1 in page uv), codes (layer | kind << 4, -1 unused). */
+   public static float[] sprRects = new float[SPR_MAX * 4];
+   public static int[] sprCodes = new int[SPR_MAX];
+   public static volatile int sprTex, sprCount;
+   private static float[] sprProbes; // SPR_MAX x 5 rgba: probe colours 0..2, texel 3 (x1, y1, x2, y2), texel 4 (x3, y3)
    /** Exemplar size in squares (N x N lattice period, 2 N^2 diamond slots). */
    static final int N = 2;
    static final int LUT_N = 256, LUT_W = LUT_N + 4;
@@ -86,7 +145,7 @@ public final class GroundTileArt {
 
    // ------------------------------------------------------------------------------------------------ state
 
-   public static volatile int artTex, gaussTex, lutTex; // GL_TEXTURE_2D_ARRAY ids (render thread), 0 until uploaded
+   public static volatile int artTex, gaussTex, lutTex; // GL_TEXTURE_2D ids, layers stacked vertically (render thread), 0 until uploaded
    public static volatile int periodW, periodH, layers;
    public static volatile boolean failed;
    private static volatile Built built; // the worker's result, waiting for the upload
@@ -129,8 +188,12 @@ public final class GroundTileArt {
             Thread th = new Thread(() -> {
                try {
                   long t1 = System.nanoTime();
-                  built = build(tiles, Core.tileScale);
+                  Built bb = build(tiles, Core.tileScale);
                   buildMs = (System.nanoTime() - t1) / 1000000L;
+                  if (Config.DEV_GROUND_TILING_DUMP) {
+                     dump(bb);
+                  }
+                  built = bb;
                   Log.info("ground tiling: art built: " + layers + " layers " + periodW + "x" + periodH + " in " + buildMs
                      + " ms (read-back " + readbackMs + " ms); seams " + Arrays.toString(seamRaw) + " -> " + Arrays.toString(seamFixed)
                      + " (one-sided " + Arrays.toString(seamMode) + ")");
@@ -185,10 +248,94 @@ public final class GroundTileArt {
             }
             out[l] = got.toArray(new float[0][]);
          }
+         ArrayList<Spr> tab = sprites();
+         Arrays.fill(sprCodes, -1);
+         float[] probes = new float[SPR_MAX * 5 * 4];
+         int n = 0;
+         for (Spr e : tab) {
+            Texture t = Texture.getSharedTexture(e.name);
+            if (t == null || t.getTextureId() == null || t.getID() <= 0 || n >= SPR_MAX) {
+               continue;
+            }
+            int id = t.getID();
+            ByteBuffer page = pages.get(id);
+            if (page == null) {
+               int pw = t.getWidthHW(), ph = t.getHeightHW();
+               page = BufferUtils.createByteBuffer(pw * ph * 4);
+               GL11.glBindTexture(GL11.GL_TEXTURE_2D, id);
+               GL11.glGetTexImage(GL11.GL_TEXTURE_2D, 0, GL11.GL_RGBA, GL11.GL_UNSIGNED_BYTE, page);
+               Texture.lastTextureID = -1;
+               pages.put(id, page);
+               pageSize.put(id, new int[] {pw, ph});
+            }
+            int[] ps = pageSize.get(id);
+            if (!probe(t, page, ps[0], ps[1], e)) {
+               continue;
+            }
+            sprRects[n * 4] = e.x0;
+            sprRects[n * 4 + 1] = e.y0;
+            sprRects[n * 4 + 2] = e.x1;
+            sprRects[n * 4 + 3] = e.y1;
+            sprCodes[n] = e.layer | e.kind << 4;
+            for (int k = 0; k < 12; k++) {
+               probes[n * 20 + k] = e.probe[k];
+            }
+            for (int k = 0; k < 6; k++) {
+               probes[n * 20 + 12 + k] = e.pxy[k];
+            }
+            n++;
+         }
+         sprCount = n;
+         sprProbes = probes;
       } finally {
          Texture.lastTextureID = -1;
       }
       return out;
+   }
+
+   /** The sprite's page rect (uv) and three opaque probe texels spread over it; false if it has none. */
+   static boolean probe(Texture t, ByteBuffer page, int pw, int ph, Spr e) {
+      int sx = t.getX(), sy = t.getY(), w = t.getWidth(), h = t.getHeight();
+      if (sx < 0 || sy < 0) {
+         sx = Math.round(t.getXStart() * pw);
+         sy = Math.round(t.getYStart() * ph);
+      }
+      if (w <= 2 || h <= 2) {
+         return false;
+      }
+      e.x0 = Math.min(t.getXStart(), t.getXEnd());
+      e.x1 = Math.max(t.getXStart(), t.getXEnd());
+      e.y0 = Math.min(t.getYStart(), t.getYEnd());
+      e.y1 = Math.max(t.getYStart(), t.getYEnd());
+      double[][] want = {{0.25, 0.5}, {0.5, 0.45}, {0.75, 0.55}};
+      for (int k = 0; k < 3; k++) {
+         int best = -1;
+         double bd = 1e9;
+         for (int y = 1; y < h - 1; y++) {
+            for (int x = 1; x < w - 1; x++) {
+               int p = ((sy + y) * pw + sx + x) * 4;
+               if ((page.get(p + 3) & 255) < 250) {
+                  continue;
+               }
+               double dx = (x - want[k][0] * w) / w, dy = (y - want[k][1] * h) / h;
+               double d = dx * dx + dy * dy;
+               if (d < bd) {
+                  bd = d;
+                  best = (sy + y) * pw + sx + x;
+               }
+            }
+         }
+         if (best < 0) {
+            return false;
+         }
+         for (int c = 0; c < 4; c++) {
+            e.probe[k * 4 + c] = (page.get(best * 4 + c) & 255) / 255F;
+         }
+         e.pxy[k * 2] = best % pw;
+         e.pxy[k * 2 + 1] = best / pw;
+      }
+      e.ok = true;
+      return true;
    }
 
    /** The diamond rows of a floor sprite (the last 32ts rows of its frame) out of its page; null if the frame is odd. */
@@ -399,6 +546,36 @@ public final class GroundTileArt {
       periodH = ph;
       layers = L;
       return b;
+   }
+
+   /** dev (devGroundTilingDump): every layer's art and Gaussian exemplar as PNGs, and the sprite table, under Zomboid/pzopt/ground-tiling/. */
+   static void dump(Built b) {
+      try {
+         java.io.File dir = new java.io.File(zombie.ZomboidFileSystem.instance.getCacheDir(), "pzopt" + java.io.File.separator + "ground-tiling");
+         dir.mkdirs();
+         for (int l = 0; l < b.n; l++) {
+            for (int g = 0; g < 2; g++) {
+               byte[] src = g == 0 ? b.art : b.gauss;
+               java.awt.image.BufferedImage img = new java.awt.image.BufferedImage(b.w, b.h, java.awt.image.BufferedImage.TYPE_INT_ARGB);
+               for (int y = 0; y < b.h; y++) {
+                  for (int x = 0; x < b.w; x++) {
+                     int p = ((l * b.h + y) * b.w + x) * 4;
+                     img.setRGB(x, y, 0xFF000000 | (src[p] & 255) << 16 | (src[p + 1] & 255) << 8 | (src[p + 2] & 255));
+                  }
+               }
+               javax.imageio.ImageIO.write(img, "png", new java.io.File(dir, (g == 0 ? "art-" : "gauss-") + LAYERS[l].name + ".png"));
+            }
+         }
+         StringBuilder sb = new StringBuilder();
+         for (int i = 0; i < sprCount; i++) {
+            sb.append(String.format("%d code %d layer %d kind %d rect %.5f %.5f %.5f %.5f%n", i, sprCodes[i], sprCodes[i] & 15, sprCodes[i] >> 4,
+               sprRects[i * 4], sprRects[i * 4 + 1], sprRects[i * 4 + 2], sprRects[i * 4 + 3]));
+         }
+         java.nio.file.Files.writeString(new java.io.File(dir, "sprites.txt").toPath(), sb.toString());
+         Log.info("ground tiling: art dumped to " + dir);
+      } catch (Throwable t) {
+         Log.warn("ground tiling: dump failed: " + t);
+      }
    }
 
    static float clamp01(float v) {
@@ -761,16 +938,23 @@ public final class GroundTileArt {
    static void upload(Built b) {
       long t0 = System.nanoTime();
       try {
-         int prev = GL11.glGetInteger(GL30.GL_TEXTURE_BINDING_2D_ARRAY);
-         artTex = array(b.w, b.h, b.n, GL11.GL_RGBA8, GL11.GL_UNSIGNED_BYTE, buf(b.art), null, true);
-         gaussTex = array(b.w, b.h, b.n, GL11.GL_RGBA8, GL11.GL_UNSIGNED_BYTE, buf(b.gauss), null, false);
+         // the layers stacked vertically (layer L at rows L * h): plain 2D textures (GroundTiling.GLSL says why)
+         artTex = tex2d(b.w, b.h * b.n, GL11.GL_RGBA8, GL11.GL_UNSIGNED_BYTE, buf(b.art), null, Math.min(4, Integer.numberOfTrailingZeros(b.h)));
+         gaussTex = tex2d(b.w, b.h * b.n, GL11.GL_RGBA8, GL11.GL_UNSIGNED_BYTE, buf(b.gauss), null, 0);
          FloatBuffer fb = BufferUtils.createFloatBuffer(b.lut.length);
          fb.put(b.lut).flip();
-         lutTex = array(LUT_W, 4, b.n, GL30.GL_RGBA32F, GL11.GL_FLOAT, null, fb, false);
-         GL11.glBindTexture(GL30.GL_TEXTURE_2D_ARRAY, prev);
+         lutTex = tex2d(LUT_W, 4 * b.n, GL30.GL_RGBA32F, GL11.GL_FLOAT, null, fb, 0);
+         if (sprProbes != null) {
+            FloatBuffer pb = BufferUtils.createFloatBuffer(sprProbes.length);
+            pb.put(sprProbes).flip();
+            sprTex = tex2d(5, SPR_MAX, GL30.GL_RGBA32F, GL11.GL_FLOAT, null, pb, 0);
+         }
       } catch (Throwable t) {
          failed = true;
          Log.warn("ground tiling: art upload failed: " + t);
+      } finally {
+         GL11.glBindTexture(GL11.GL_TEXTURE_2D, 0);
+         Texture.lastTextureID = -1;
       }
       uploadMs = (System.nanoTime() - t0) / 1000000L;
    }
@@ -781,41 +965,36 @@ public final class GroundTileArt {
       return bb;
    }
 
-   static int array(int w, int h, int n, int internal, int type, ByteBuffer bytes, FloatBuffer floats, boolean mips) {
+   /** A 2D texture, nearest, {@code maxLevel} mip levels kept (0: none). */
+   static int tex2d(int w, int h, int internal, int type, ByteBuffer bytes, FloatBuffer floats, int maxLevel) {
       int id = GL11.glGenTextures();
-      GL11.glBindTexture(GL30.GL_TEXTURE_2D_ARRAY, id);
+      GL11.glBindTexture(GL11.GL_TEXTURE_2D, id);
       if (bytes != null) {
-         GL12.glTexImage3D(GL30.GL_TEXTURE_2D_ARRAY, 0, internal, w, h, n, 0, GL11.GL_RGBA, type, bytes);
+         GL11.glTexImage2D(GL11.GL_TEXTURE_2D, 0, internal, w, h, 0, GL11.GL_RGBA, type, bytes);
       } else {
-         GL12.glTexImage3D(GL30.GL_TEXTURE_2D_ARRAY, 0, internal, w, h, n, 0, GL11.GL_RGBA, type, floats);
+         GL11.glTexImage2D(GL11.GL_TEXTURE_2D, 0, internal, w, h, 0, GL11.GL_RGBA, type, floats);
       }
-      GL11.glTexParameteri(GL30.GL_TEXTURE_2D_ARRAY, GL11.GL_TEXTURE_WRAP_S, GL11.GL_REPEAT);
-      GL11.glTexParameteri(GL30.GL_TEXTURE_2D_ARRAY, GL11.GL_TEXTURE_WRAP_T, GL11.GL_REPEAT);
-      if (mips) {
-         GL30.glGenerateMipmap(GL30.GL_TEXTURE_2D_ARRAY);
-         GL11.glTexParameteri(GL30.GL_TEXTURE_2D_ARRAY, GL11.GL_TEXTURE_MIN_FILTER, GL11.GL_LINEAR_MIPMAP_LINEAR);
-         GL11.glTexParameteri(GL30.GL_TEXTURE_2D_ARRAY, GL11.GL_TEXTURE_MAG_FILTER, GL11.GL_LINEAR);
-      } else {
-         GL11.glTexParameteri(GL30.GL_TEXTURE_2D_ARRAY, GL11.GL_TEXTURE_MIN_FILTER, GL11.GL_NEAREST);
-         GL11.glTexParameteri(GL30.GL_TEXTURE_2D_ARRAY, GL11.GL_TEXTURE_MAG_FILTER, GL11.GL_NEAREST);
-         GL11.glTexParameteri(GL30.GL_TEXTURE_2D_ARRAY, GL12.GL_TEXTURE_MAX_LEVEL, 0);
+      GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MIN_FILTER, maxLevel > 0 ? GL11.GL_NEAREST_MIPMAP_NEAREST : GL11.GL_NEAREST);
+      GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MAG_FILTER, GL11.GL_NEAREST);
+      GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL12.GL_TEXTURE_MAX_LEVEL, Math.max(0, maxLevel));
+      if (maxLevel > 0) {
+         GL30.glGenerateMipmap(GL11.GL_TEXTURE_2D);
       }
       return id;
    }
 
-   /** Render thread: bind the three arrays on units u, u + 1, u + 2 (the active unit is put back to 0). */
+   /** Render thread: bind the sprite table on {@code unit} and the art, Gaussian and LUT textures on unit + 1 .. + 3 (active unit back to 0). */
    public static void bind(int unit) {
-      GL13.glActiveTexture(GL13.GL_TEXTURE0 + unit);
-      GL11.glBindTexture(GL30.GL_TEXTURE_2D_ARRAY, artTex);
-      GL13.glActiveTexture(GL13.GL_TEXTURE0 + unit + 1);
-      GL11.glBindTexture(GL30.GL_TEXTURE_2D_ARRAY, gaussTex);
-      GL13.glActiveTexture(GL13.GL_TEXTURE0 + unit + 2);
-      GL11.glBindTexture(GL30.GL_TEXTURE_2D_ARRAY, lutTex);
+      int[] ids = {sprTex, artTex, gaussTex, lutTex};
+      for (int i = 0; i < 4; i++) {
+         GL13.glActiveTexture(GL13.GL_TEXTURE0 + unit + i);
+         GL11.glBindTexture(GL11.GL_TEXTURE_2D, ids[i]);
+      }
       GL13.glActiveTexture(GL13.GL_TEXTURE0);
    }
 
    public static String stats() {
       return "ground art: layers " + layers + " " + periodW + "x" + periodH + ", read-back " + readbackMs + " ms, build " + buildMs
-         + " ms, upload " + uploadMs + " ms" + (failed ? " (FAILED)" : artTex == 0 ? " (not ready)" : "");
+         + " ms, upload " + uploadMs + " ms, sprites " + sprCount + (failed ? " (FAILED)" : artTex == 0 ? " (not ready)" : "");
    }
 }

@@ -87,15 +87,15 @@ class Rig:
             ex, gauss, lut = [ex], [gauss], [lut]
         H, W, _ = ex[0].shape
         ctx = self.ctx; n = len(ex)
-        def arr(a):
-            st = np.stack(a)
-            t = ctx.texture_array((W, H, n), 4, (np.clip(st, 0, 1) * 255 + 0.5).astype(np.uint8).tobytes())
+        def arr(a):  # layers stacked vertically, as GroundTileArt uploads them
+            st = np.concatenate(a, 0)
+            t = ctx.texture((W, H * n), 4, (np.clip(st, 0, 1) * 255 + 0.5).astype(np.uint8).tobytes())
             t.filter = (self.mgl.NEAREST, self.mgl.NEAREST)
             return t
         self.tArt = arr(ex); self.tGauss = arr(gauss)
-        self.tArt.build_mipmaps(); self.tArt.filter = (self.mgl.LINEAR_MIPMAP_LINEAR, self.mgl.LINEAR)
-        L = np.stack(lut).astype(np.float32)
-        self.tLut = ctx.texture_array((L.shape[2], L.shape[1], n), 4, L.tobytes(), dtype="f4")
+        self.tArt.build_mipmaps(0, 4); self.tArt.filter = (self.mgl.NEAREST_MIPMAP_NEAREST, self.mgl.NEAREST)
+        L = np.concatenate(lut, 0).astype(np.float32)
+        self.tLut = ctx.texture((L.shape[1], L.shape[0]), 4, L.tobytes(), dtype="f4")
         self.tLut.filter = (self.mgl.NEAREST, self.mgl.NEAREST)
         self.period = (W, H)
 

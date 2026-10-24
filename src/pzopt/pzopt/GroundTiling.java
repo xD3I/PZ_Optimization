@@ -32,10 +32,12 @@ public final class GroundTiling {
     */
    public static final String GLSL = """
       // ---- pzopt ground tiling (pzopt.GroundTiling.GLSL) ----
-      uniform sampler2DArray pzGtArt;   // rgb colour, a height; iso-layout periodic exemplar per layer
-      uniform sampler2DArray pzGtGauss; // hpb: Gaussianised rgb (mean 0.5, sd 1/6), a height
-      uniform sampler2DArray pzGtLut;   // hpb (float): rows 0..2 inverse CDF of the decorrelated channels (x = Gaussian value
-                                        //   0..1); row 3: texels 0..2 the PCA basis columns, texel 3 the mean colour
+      // the layers are stacked vertically in plain 2D textures (layer L at rows L * period.y ..): the game validates every
+      // program with all samplers on unit 0, and Mesa refuses a sampler2DArray beside sampler2D there
+      uniform sampler2D pzGtArt;   // rgb colour, a height; iso-layout periodic exemplar per layer (mipmapped per aligned block)
+      uniform sampler2D pzGtGauss; // hpb: Gaussianised rgb (mean 0.5, sd 1/6), a height
+      uniform sampler2D pzGtLut;   // hpb (float), 4 rows a layer: rows 0..2 inverse CDF of the decorrelated channels (x =
+                                   //   Gaussian value 0..1); row 3: texels 0..2 the PCA basis columns, texel 3 the mean colour
       uniform ivec4 pzGtPeriod;         // x, y exemplar period px (128N, 64N); z mode; w seed
       uniform vec4 pzGtHex;             // x cell size (squares), y height contrast, z weight exponent, w gain r
       uniform vec4 pzGtBlend;           // height blend: x depth (0 = stock alpha), y boundary noise amplitude, z noise scale (squares), w height weight
@@ -51,8 +53,9 @@ public final class GroundTiling {
       float gtRand1(ivec2 c, uint salt) { return float(gtHash3(c, salt) >> 8u) * (1.0 / 16777216.0); }
 
       ivec2 gtWrap(ivec2 p) { ivec2 m = pzGtPeriod.xy; return ((p % m) + m) % m; }
-      vec4 gtFetch(ivec2 px, ivec2 off, float layer) { return texelFetch(pzGtArt, ivec3(gtWrap(px + off), int(layer)), 0); }
-      vec4 gtFetchG(ivec2 px, ivec2 off, float layer) { return texelFetch(pzGtGauss, ivec3(gtWrap(px + off), int(layer)), 0); }
+      ivec2 gtLayer(ivec2 p, float layer) { return p + ivec2(0, int(layer) * pzGtPeriod.y); }
+      vec4 gtFetch(ivec2 px, ivec2 off, float layer) { return texelFetch(pzGtArt, gtLayer(gtWrap(px + off), layer), 0); }
+      vec4 gtFetchG(ivec2 px, ivec2 off, float layer) { return texelFetch(pzGtGauss, gtLayer(gtWrap(px + off), layer), 0); }
       ivec2 gtOffset(ivec2 v, uint salt) { return ivec2(gtRand2(v, salt) * vec2(pzGtPeriod.xy)); }
 
       // world squares (local to the chunk origin) -> skewed triangle-grid coordinates (Mikkelsen's TriangleGrid input)
@@ -96,14 +99,14 @@ public final class GroundTiling {
          W /= (W.x + W.y + W.z);
          vec4 g = (g1 * W.x + g2 * W.y + g3 * W.z) - 0.5;
          g = clamp(g / sqrt(dot(W, W)) + 0.5, 0.0, 1.0);
-         int L = int(layer);
+         int L = int(layer) * 4;
          float n1 = float(textureSize(pzGtLut, 0).x - 4);
          vec3 d;
-         d.x = texelFetch(pzGtLut, ivec3(int(g.r * n1 + 0.5), 0, L), 0).r;
-         d.y = texelFetch(pzGtLut, ivec3(int(g.g * n1 + 0.5), 1, L), 0).r;
-         d.z = texelFetch(pzGtLut, ivec3(int(g.b * n1 + 0.5), 2, L), 0).r;
-         mat3 B = mat3(texelFetch(pzGtLut, ivec3(0, 3, L), 0).xyz, texelFetch(pzGtLut, ivec3(1, 3, L), 0).xyz, texelFetch(pzGtLut, ivec3(2, 3, L), 0).xyz);
-         vec3 c = B * d + texelFetch(pzGtLut, ivec3(3, 3, L), 0).xyz;
+         d.x = texelFetch(pzGtLut, ivec2(int(g.r * n1 + 0.5), L), 0).r;
+         d.y = texelFetch(pzGtLut, ivec2(int(g.g * n1 + 0.5), L + 1), 0).r;
+         d.z = texelFetch(pzGtLut, ivec2(int(g.b * n1 + 0.5), L + 2), 0).r;
+         mat3 B = mat3(texelFetch(pzGtLut, ivec2(0, L + 3), 0).xyz, texelFetch(pzGtLut, ivec2(1, L + 3), 0).xyz, texelFetch(pzGtLut, ivec2(2, L + 3), 0).xyz);
+         vec3 c = B * d + texelFetch(pzGtLut, ivec2(3, L + 3), 0).xyz;
          return vec4(clamp(c, 0.0, 1.0), g.a);
       }
 
@@ -113,9 +116,19 @@ public final class GroundTiling {
       #ifndef GT_LAP_DECAY
       #define GT_LAP_DECAY 0.5
       #endif
+      // mip level k of the layer, bilinear by hand with the layer's own wrap (the stacked layers never bleed into each other)
       vec4 gtLapFetch(ivec2 px, ivec2 off, float layer, float lod) {
-         vec2 uv = (vec2(gtWrap(px + off)) + 0.5) / vec2(pzGtPeriod.xy);
-         return lod == 0.0 ? texelFetch(pzGtArt, ivec3(gtWrap(px + off), int(layer)), 0) : textureLod(pzGtArt, vec3(uv, layer), lod);
+         if (lod == 0.0) return gtFetch(px, off, layer);
+         int k = int(lod);
+         ivec2 m = max(pzGtPeriod.xy >> k, ivec2(1));
+         vec2 q = (vec2(gtWrap(px + off)) + 0.5) / float(1 << k) - 0.5;
+         vec2 f = floor(q); vec2 t = q - f; ivec2 b = ivec2(f);
+         int ly = int(layer) * m.y;
+         vec4 c00 = texelFetch(pzGtArt, ivec2((b.x % m.x + m.x) % m.x, (b.y % m.y + m.y) % m.y + ly), k);
+         vec4 c10 = texelFetch(pzGtArt, ivec2(((b.x + 1) % m.x + m.x) % m.x, (b.y % m.y + m.y) % m.y + ly), k);
+         vec4 c01 = texelFetch(pzGtArt, ivec2((b.x % m.x + m.x) % m.x, ((b.y + 1) % m.y + m.y) % m.y + ly), k);
+         vec4 c11 = texelFetch(pzGtArt, ivec2(((b.x + 1) % m.x + m.x) % m.x, ((b.y + 1) % m.y + m.y) % m.y + ly), k);
+         return mix(mix(c00, c10, t.x), mix(c01, c11, t.x), t.y);
       }
       vec4 gtLap(ivec2 px, vec2 wLocal, float layer) {
          vec3 w; ivec2 v1, v2, v3; gtTri(gtSkew(wLocal), w, v1, v2, v3);

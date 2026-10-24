@@ -1608,6 +1608,11 @@ public final class Config {
    public static final boolean CLOUD_CULL = bool("cloudCull", true); // cloudShadows: chunk textures no cloud reaches this frame skip the cloud work in the composite (a coarse max map of the field, per texture on the game thread)
    public static final int DEV_CLOUD_SKIP = integer("devCloudSkip", 0); // dev (cost split): 1 = no kept-term tap (a constant share), 2 = no detail tap (no erosion), 4 = the kept term bound once a frame (wrong picture: the cost of per-draw binds); bits
    public static final int DEV_CLOUD_ALTERNATE = integer("devCloudAlternate", 0); // dev: ms; cloud shadows switch on and off every period (the frames' GPU time split by it)
+   // ground without the grid (pzopt.GroundTilingPatch / GroundTiling / GroundTileArt; groundHexTiling): the tiling technique
+   // and its cell (the in-run comparison steps through devGroundCycle=hex,hpb,... instead)
+   public static final String DEV_GROUND_TILING_MODE = string("devGroundTilingMode", "hpb"); // dev: hex | hpb | bomb | voronoi | two | lap
+   public static final int DEV_GROUND_TILING_CELL_PCT = Math.max(50, Math.min(800, integer("devGroundTilingCellPct", 150))); // dev: the tiling cell, % of a square
+   public static final boolean DEV_GROUND_TILING_DUMP = bool("devGroundTilingDump", false); // dev: the built art layers as PNGs in Zomboid/pzopt/ground-tiling/
    // ground and grass (2026-10-24, the ground proposal: pzopt.Ground / GroundBake / GroundState / GroundHash / GroundTiles; the
    // features live on their own branches): the Visuals category catGroundEnabled, every switch off by default, all live
    public static volatile boolean GROUND_HEX_TILING; // natural ground (grass, dirt, sand, gravel) baked without its visible tile repeat (hex-tiling, Mikkelsen 2022)
