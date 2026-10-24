@@ -305,6 +305,11 @@ public final class GroundState {
    private static final byte[][] slotMat = new byte[SLOTS * SLOTS][];
    private static final long[] slotMatMs = new long[SLOTS * SLOTS];
    private static final int[] slotLoadedFrame = new int[SLOTS * SLOTS];
+   /** The chunk's level 0 baked since it took the slot (GroundBake.bakeBegin): a change before its first bake needs no re-bake. */
+   private static final boolean[] slotBaked = new boolean[SLOTS * SLOTS];
+   /** Pending only from its saved state arriving: re-baked through the low-priority path (no second full bake while streaming). */
+   private static final boolean[] slotFromLoad = new boolean[SLOTS * SLOTS];
+   public static long rebakesSkippedUnbaked, rebakesLoadLow;
    private static int frame;
    private static boolean activeNow, wasActive, windowMoved;
    private static String saveId;
@@ -390,6 +395,8 @@ public final class GroundState {
          java.util.Arrays.fill(slotLive, false);
          java.util.Arrays.fill(slotModified, false);
          java.util.Arrays.fill(slotPending, false);
+         java.util.Arrays.fill(slotBaked, false);
+         java.util.Arrays.fill(slotFromLoad, false);
          java.util.Arrays.fill(slotMat, null);
          LOADS.clear();
          wcx = Integer.MIN_VALUE;
@@ -470,6 +477,17 @@ public final class GroundState {
       gameNs += tg - t0;
    }
 
+   /** GroundBake.bakeBegin (game thread): chunk c's level 0 bakes. */
+   static void baked(IsoChunk c) {
+      if (!activeNow) {
+         return;
+      }
+      int s = slot(c.wx, c.wy);
+      if (slotKey[s] == key(c.wx, c.wy)) {
+         slotBaked[s] = true;
+      }
+   }
+
    private static void submit(Frame f) {
       f.on = activeNow;
       SpriteRenderer.instance.drawGeneric(f);
@@ -503,6 +521,8 @@ public final class GroundState {
             slotLive[s] = false;
             slotModified[s] = false;
             slotPending[s] = false;
+            slotBaked[s] = false;
+            slotFromLoad[s] = false;
             slotMat[s] = null;
             if (Config.GROUND_TRACKS_PERSIST && saveId != null) {
                load(cx, cy);
@@ -795,7 +815,8 @@ public final class GroundState {
                   slotLive[s] = true;
                   slotModified[s] = true;
                   slotPending[s] = true;
-            anyPending = true;
+                  slotFromLoad[s] = false;
+                  anyPending = true;
                } else {
                   ci = cellOf[li];
                }
@@ -911,7 +932,9 @@ public final class GroundState {
             decayChunk(f, cx, cy, dt, nowMs);
             slotPending[s] = true;
             anyPending = true;
-            slotModified[s] = true;
+            slotFromLoad[s] = false;
+            // (not slotModified: the saved state and its hours give the same catch-up decay at its next load; saving a slot
+            // only decay touched rewrote the region files of every chunk driven past)
          }
       }
       decayPasses++;
@@ -931,6 +954,7 @@ public final class GroundState {
       IsoCell cell = IsoWorld.instance.getCell();
       int budget = 4;
       boolean left = false;
+      boolean known = GroundBake.CLASS_ON; // (bakeBegin reports level-0 bakes only while the class map is on)
       for (int cy = wcy; cy < wcy + SLOTS && budget > 0; cy++) {
          for (int cx = wcx; cx < wcx + SLOTS && budget > 0; cx++) {
             int s = slot(cx, cy);
@@ -951,9 +975,18 @@ public final class GroundState {
                   LISTENERS.remove(l);
                }
             }
-            if (rebake) {
+            boolean fromLoad = slotFromLoad[s];
+            slotFromLoad[s] = false;
+            if (rebake && known && !slotBaked[s]) {
+               rebakesSkippedUnbaked++; // (its first bake reads the state as it is now)
+            } else if (rebake) {
                IsoChunk c = cell == null ? null : cell.getChunk(cx, cy);
-               if (c != null) {
+               if (c != null && fromLoad && !full) {
+                  GroundBake.rebakeChunk(cx, cy, "tracks load", true);
+                  rebakesLoadLow++;
+                  rebakesAsked++;
+                  budget--;
+               } else if (c != null) {
                   if (full || viewRebake && !r.rebakes()) {
                      GroundBake.rebakeChunk(cx, cy, "tracks", true);
                   } else {
@@ -1651,7 +1684,8 @@ public final class GroundState {
          slotLive[s] = true;
          slotModified[s] = false;
          slotPending[s] = true;
-            anyPending = true;
+         anyPending = true;
+         slotFromLoad[s] = true;
          slotLoadedFrame[s] = frame;
          if (age > 0.0) {
             System.arraycopy(WEATHER, 0, f.weather, 0, 4);
@@ -1825,7 +1859,7 @@ public final class GroundState {
       return "ground state: " + (activeNow ? "on" : "off") + " rules " + rules.id() + ", frames " + frames + ", prims " + primsTotal + " (dropped " + primsDropped
          + "), cells " + cellsTotal + ", dispatches " + dispatches + ", decay passes " + decayPasses + " (" + decayCells + " cells), clears " + clears
          + ", read-backs " + readbacks + " (in flight " + inFlight.get() + "), chunks saved " + chunksSaved + " loaded " + chunksLoaded + " dropped "
-         + loadsDropped + ", re-bakes " + rebakesAsked + ", stamp batches " + batches + ", game " + us(gameNs) + " us/frame (sources " + us(sourcesNs)
+         + loadsDropped + ", re-bakes " + rebakesAsked + " (load, low priority " + rebakesLoadLow + "; before the first bake, skipped " + rebakesSkippedUnbaked + "), stamp batches " + batches + ", game " + us(gameNs) + " us/frame (sources " + us(sourcesNs)
          + ", dev rigs " + us(rigNs) + ", binning " + us(binNs) + ", window " + us(winNs) + ", loads " + us(loadNs) + ", decay " + us(decayNs) + ", changes " + us(changesNs)
          + ", tail " + us(tailNs) + ")" + (failed ? " (failed)" : "");
    }
