@@ -104,6 +104,39 @@ public class GroundTileArtTest {
          Check.check(l >= 0 && GroundTileArt.LAYERS[l].material == mt[0], "material " + mt[0] + " tone " + mt[1] + " has a layer: " + l);
       }
       Check.check(GroundTileArt.layerOf(0) < 0 && GroundTileArt.layerOf(5) < 0, "non-natural classes have no layer");
+      // the sprite lookup grid lists every rect that holds a uv in the uv's cell (two pages: rects may overlap)
+      {
+         int n = 100;
+         float[] rects = new float[GroundTileArt.SPR_MAX * 4];
+         int[] codes = new int[GroundTileArt.SPR_MAX];
+         java.util.Arrays.fill(codes, -1);
+         SplittableRandom rr = new SplittableRandom(3);
+         for (int i = 0; i < n; i++) {
+            float x0 = (float)rr.nextDouble(0, 0.95), y0 = (float)rr.nextDouble(0, 0.95);
+            rects[i * 4] = x0;
+            rects[i * 4 + 1] = y0;
+            rects[i * 4 + 2] = x0 + 128F / 4096F;
+            rects[i * 4 + 3] = y0 + 256F / 4096F;
+            codes[i] = 1;
+         }
+         float[] g = GroundTileArt.sprGrid(rects, codes, n);
+         int G = GroundTileArt.SPR_GRID, checked = 0;
+         for (int t = 0; t < 20000; t++) {
+            int i = rr.nextInt(n);
+            float u = (float)rr.nextDouble(rects[i * 4], rects[i * 4 + 2]), v = (float)rr.nextDouble(rects[i * 4 + 1], rects[i * 4 + 3]);
+            int c = Math.min(G - 1, (int)(v * G)) * G + Math.min(G - 1, (int)(u * G));
+            if (g[c * 4] < -1.5F) {
+               continue; // overflow: the shader walks the table
+            }
+            boolean found = false;
+            for (int k = 0; k < 4; k++) {
+               found |= (int)g[c * 4 + k] == i;
+            }
+            Check.check(found, "grid cell lists rect " + i);
+            checked++;
+         }
+         Check.check(checked > 15000, "grid overflow rare: " + checked);
+      }
       File dir = new File("build/ground-tiling/sprites");
       if (dir.isDirectory()) {
          float[][][] real = new float[GroundTileArt.LAYERS.length][][];

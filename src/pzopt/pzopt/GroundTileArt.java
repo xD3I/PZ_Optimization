@@ -111,6 +111,52 @@ public final class GroundTileArt {
 
    /** Max table rows (the GLSL array size). */
    public static final int SPR_MAX = 128;
+   /**
+    * The sprite lookup grid (2026-10-24, the bake cost: the shader walked all SPR_MAX rects per fragment): the page's uv
+    * square cut into SPR_GRID x SPR_GRID cells, each listing up to four table rows whose rect touches it (-1 none; -2 in
+    * the first slot: more than four, the shader walks the table).
+    */
+   public static final int SPR_GRID = 128;
+
+   /** pzGtSprTex: rows 0..SPR_MAX-1 the probes (texels 0..4), rows SPR_MAX.. the lookup grid (RGBA = four rows). */
+   static float[] sprTexData(float[] probes, float[] rects, int[] codes, int n) {
+      int w = SPR_GRID;
+      float[] d = new float[w * (SPR_MAX + SPR_GRID) * 4];
+      for (int i = 0; i < SPR_MAX; i++) {
+         for (int k = 0; k < 20; k++) {
+            d[(i * w) * 4 + k] = probes[i * 20 + k];
+         }
+      }
+      float[] g = sprGrid(rects, codes, n);
+      System.arraycopy(g, 0, d, w * SPR_MAX * 4, g.length);
+      return d;
+   }
+
+   static float[] sprGrid(float[] rects, int[] codes, int n) {
+      int G = SPR_GRID;
+      float[] g = new float[G * G * 4];
+      Arrays.fill(g, -1F);
+      int[] cnt = new int[G * G];
+      for (int i = 0; i < n; i++) {
+         if (codes[i] < 0) {
+            continue;
+         }
+         int cx0 = Math.max(0, (int)Math.floor(rects[i * 4] * G)), cy0 = Math.max(0, (int)Math.floor(rects[i * 4 + 1] * G));
+         int cx1 = Math.min(G - 1, (int)Math.floor(rects[i * 4 + 2] * G)), cy1 = Math.min(G - 1, (int)Math.floor(rects[i * 4 + 3] * G));
+         for (int cy = cy0; cy <= cy1; cy++) {
+            for (int cx = cx0; cx <= cx1; cx++) {
+               int c = cy * G + cx;
+               if (cnt[c] < 4) {
+                  g[c * 4 + cnt[c]] = i;
+               } else {
+                  g[c * 4] = -2F;
+               }
+               cnt[c]++;
+            }
+         }
+      }
+      return g;
+   }
    /** The table as uploaded: rects (x0, y0, x1, y1 in page uv), codes (layer | kind << 4, -1 unused). */
    public static float[] sprRects = new float[SPR_MAX * 4];
    public static int[] sprCodes = new int[SPR_MAX];
@@ -945,9 +991,10 @@ public final class GroundTileArt {
          fb.put(b.lut).flip();
          lutTex = tex2d(LUT_W, 4 * b.n, GL30.GL_RGBA32F, GL11.GL_FLOAT, null, fb, 0);
          if (sprProbes != null) {
-            FloatBuffer pb = BufferUtils.createFloatBuffer(sprProbes.length);
-            pb.put(sprProbes).flip();
-            sprTex = tex2d(5, SPR_MAX, GL30.GL_RGBA32F, GL11.GL_FLOAT, null, pb, 0);
+            float[] all = sprTexData(sprProbes, sprRects, sprCodes, sprCount);
+            FloatBuffer ab = BufferUtils.createFloatBuffer(all.length);
+            ab.put(all).flip();
+            sprTex = tex2d(SPR_GRID, SPR_MAX + SPR_GRID, GL30.GL_RGBA32F, GL11.GL_FLOAT, null, ab, 0);
          }
       } catch (Throwable t) {
          failed = true;

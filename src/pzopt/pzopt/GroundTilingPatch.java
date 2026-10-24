@@ -185,6 +185,7 @@ public final class GroundTilingPatch implements GroundBake.FloorPatch {
 
    static final String GLSL = """
       #define GT_SPR_N %d
+      #define GT_SPR_GRID %d
       uniform vec4 pzGtSpr[GT_SPR_N];       // the natural sprites' page rects (uv x0, y0, x1, y1)
       uniform ivec4 pzGtSprCode[GT_SPR_N / 4]; // layer | kind << 4, -1 unused (four a vector)
       uniform sampler2D pzGtSprTex;         // per row: probe colours (texels 0..2), probe page texels (3: x1 y1 x2 y2, 4: x3 y3)
@@ -192,18 +193,29 @@ public final class GroundTilingPatch implements GroundBake.FloorPatch {
                                             //   logical pixel (1, 2); w the grass layers (bits)
       uniform vec4 pzGtBakeF;               // the art-aligned local world position: u = x - y = fragX * x + y, v = x + y = fragY * z + w
 
+      // the drawn sprite's table row, or -1: the page's lookup grid lists the rows whose rect touches the fragment's cell;
+      // the rect test and three probe texels of the bound page confirm one (the same uv on another page fails the probes)
+      bool gtSprAt(int i) {
+         vec4 r = pzGtSpr[i];
+         if (texCoord.x < r.x || texCoord.x >= r.z || texCoord.y < r.y || texCoord.y >= r.w || pzGtSprCode[i >> 2][i & 3] < 0) return false;
+         vec4 q = texelFetch(pzGtSprTex, ivec2(3, i), 0), q2 = texelFetch(pzGtSprTex, ivec2(4, i), 0);
+         vec4 d0 = abs(texelFetch(DIFFUSE, ivec2(q.xy), 0) - texelFetch(pzGtSprTex, ivec2(0, i), 0));
+         vec4 d1 = abs(texelFetch(DIFFUSE, ivec2(q.zw), 0) - texelFetch(pzGtSprTex, ivec2(1, i), 0));
+         vec4 d2 = abs(texelFetch(DIFFUSE, ivec2(q2.xy), 0) - texelFetch(pzGtSprTex, ivec2(2, i), 0));
+         vec4 m = max(d0, max(d1, d2));
+         return max(max(m.x, m.y), max(m.z, m.w)) < 0.035;
+      }
       int gtSpriteRow() {
-         for (int i = 0; i < GT_SPR_N; i++) {
-            vec4 r = pzGtSpr[i];
-            if (texCoord.x >= r.x && texCoord.x < r.z && texCoord.y >= r.y && texCoord.y < r.w) {
-               if (pzGtSprCode[i >> 2][i & 3] < 0) return -1;
-               vec4 q = texelFetch(pzGtSprTex, ivec2(3, i), 0), q2 = texelFetch(pzGtSprTex, ivec2(4, i), 0);
-               vec4 d0 = abs(texelFetch(DIFFUSE, ivec2(q.xy), 0) - texelFetch(pzGtSprTex, ivec2(0, i), 0));
-               vec4 d1 = abs(texelFetch(DIFFUSE, ivec2(q.zw), 0) - texelFetch(pzGtSprTex, ivec2(1, i), 0));
-               vec4 d2 = abs(texelFetch(DIFFUSE, ivec2(q2.xy), 0) - texelFetch(pzGtSprTex, ivec2(2, i), 0));
-               vec4 m = max(d0, max(d1, d2));
-               return max(max(m.x, m.y), max(m.z, m.w)) < 0.035 ? i : -1;
-            }
+         ivec2 cell = clamp(ivec2(texCoord * float(GT_SPR_GRID)), ivec2(0), ivec2(GT_SPR_GRID - 1));
+         vec4 cand = texelFetch(pzGtSprTex, ivec2(cell.x, GT_SPR_N + cell.y), 0);
+         if (cand.x < -1.5) {
+            for (int i = 0; i < GT_SPR_N; i++) if (gtSprAt(i)) return i;
+            return -1;
+         }
+         for (int k = 0; k < 4; k++) {
+            int i = int(cand[k]);
+            if (i < 0) return -1;
+            if (gtSprAt(i)) return i;
          }
          return -1;
       }
@@ -310,7 +322,7 @@ public final class GroundTilingPatch implements GroundBake.FloorPatch {
          }
          return vec4(rgb * a, a);
       }
-      """.formatted(GroundTileArt.SPR_MAX);
+      """.formatted(GroundTileArt.SPR_MAX, GroundTileArt.SPR_GRID);
 
    /** The overlays on a natural floor get their own program, which keeps them stock without the table walk. */
    @Override
