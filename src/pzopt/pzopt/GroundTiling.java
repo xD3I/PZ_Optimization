@@ -79,11 +79,29 @@ public final class GroundTiling {
          return res / (res.x + res.y + res.z);
       }
 
+      #ifdef GT_HEX_ROT_HEIGHT
+      float gtRotH(ivec2 px, ivec2 v, float layer) {
+         float a = gtRand1(v, 9u) * 6.2831853, ca = cos(a), sa = sin(a);
+         // screen px -> world (u, v) squares: x = 64 (u - v), y = 32 (u + v); rotate a texel ring of radius ~12 px about px
+         vec2 d = vec2(float((px.x * 7 + px.y * 13) & 15) - 7.5, float((px.x * 11 + px.y * 5) & 15) - 7.5); // fixed probe offset
+         vec2 w = vec2(d.y / 32.0 + d.x / 64.0, d.y / 32.0 - d.x / 64.0) * 0.5;
+         vec2 r = vec2(ca * w.x - sa * w.y, sa * w.x + ca * w.y);
+         ivec2 q = ivec2(round(vec2(64.0 * (r.x - r.y), 32.0 * (r.x + r.y)) - d));
+         return gtFetch(px + q, gtOffset(v, 1u), layer).a;
+      }
+      #endif
+
       // Mikkelsen 2022 (JCGT 11(3)): three fetches, weights w^exp scaled by the texel's height, no rotation
       vec4 gtHex(ivec2 px, vec2 wLocal, float layer) {
          vec3 w; ivec2 v1, v2, v3; gtTri(gtSkew(wLocal), w, v1, v2, v3);
          vec4 c1 = gtFetch(px, gtOffset(v1, 1u), layer), c2 = gtFetch(px, gtOffset(v2, 1u), layer), c3 = gtFetch(px, gtOffset(v3, 1u), layer);
+      #ifdef GT_HEX_ROT_HEIGHT
+         // test variant: the colours stay unrotated, only the height that weighs them is read through a per-cell rotation
+         // (world space about the texel, nearest texel of the iso exemplar)
+         vec3 dw = mix(vec3(1.0), vec3(gtRotH(px, v1, layer), gtRotH(px, v2, layer), gtRotH(px, v3, layer)), pzGtHex.y);
+      #else
          vec3 dw = mix(vec3(1.0), vec3(c1.a, c2.a, c3.a), pzGtHex.y);
+      #endif
          vec3 W = dw * pow(w, vec3(pzGtHex.z));
          W /= (W.x + W.y + W.z);
          if (pzGtHex.w != 0.5) W = gtGain3(W, pzGtHex.w);
