@@ -48,7 +48,7 @@ public final class GroundTilingPatch implements GroundBake.FloorPatch {
 
    // ---------------------------------------------------------------------------------------------- game thread
 
-   static final String[] MODES = {"stock", "hex", "hpb", "bomb", "voronoi", "two", "lap", "ident", "grid"}; // ident (dev): the exemplar at offset 0; grid (dev): the stock texel with the exemplar's square edges (red) and the geometry's (blue)
+   static final String[] MODES = {"stock", "hex", "hpb", "bomb", "voronoi", "two", "lap", "ident", "grid", "lookup", "pass"}; // ident (dev): the exemplar at offset 0; grid (dev): the stock texel with the exemplar's square edges (red) and the geometry's (blue)
    private static volatile float[] params = new float[0]; // the frame's uniform values (game thread -> render thread)
    private static String lastSig = "";
    private static float seasonDry = -1F;
@@ -179,6 +179,20 @@ public final class GroundTilingPatch implements GroundBake.FloorPatch {
       for (int i = 0; i < GroundTileArt.LAYERS.length; i++) {
          ml.append(i == 0 ? "" : ", ").append(GroundTileArt.LAYERS[i].material);
       }
+      ml.append(");\nconst int GT_CODE_LAYER[64] = int[64](");
+      for (int i = 0; i < 64; i++) {
+         ml.append(i == 0 ? "" : ", ").append(GroundTileArt.layerOf((i & 15) | (i >> 4) << 4));
+      }
+      ml.append(");\nconst int GT_LAYER_CLS[").append(GroundTileArt.LAYERS.length).append("] = int[").append(GroundTileArt.LAYERS.length).append("](");
+      for (int l = 0; l < GroundTileArt.LAYERS.length; l++) {
+         int code = -1;
+         for (int i = 0; i < 64 && code < 0; i++) {
+            if (GroundTileArt.layerOf((i & 15) | (i >> 4) << 4) == l) {
+               code = i;
+            }
+         }
+         ml.append(l == 0 ? "" : ", ").append(code);
+      }
       ml.append(");\n");
       return "#define GT_EDGE_SOFT 0.12\n" + GroundTiling.GLSL + ml + GLSL;
    }
@@ -232,36 +246,39 @@ public final class GroundTilingPatch implements GroundBake.FloorPatch {
          int m = cls & 15;
          return m == 1 ? 5 : (m == 2 || m == 9) ? 3 : m == 8 ? 2 : m == 4 ? 1 : m == 3 ? 0 : -1;
       }
-      // out: the winner material m1 and its weight w1, the runner-up m2 (weight 1 - w1); false if the pixel has one material
-      bool gtField(vec2 wLocal, ivec2 px, int ownMat, int ownLayer, out int m1, out float w1, out int m2) {
+      // classes are material | tone << 4 (the class map's R and G); out: the winner c1 and its weight w1, the runner-up c2
+      // (weight 1 - w1), whether class want is one of the four squares; false if the pixel has one class
+      bool gtField(vec2 wLocal, ivec2 px, int want, out int c1, out float w1, out int c2, out bool hasWant) {
          vec2 g = wLocal - 0.5;
          vec2 gf = floor(g);
          vec2 t = g - gf;
          ivec2 i0 = ivec2(gf) + pzGtWorld;
-         int mats[4]; float wts[4]; int n = 0; float wsum = 0.0;
+         int cl[4]; float wts[4]; int n = 0; float wsum = 0.0;
+         hasWant = false;
          for (int k = 0; k < 4; k++) {
             ivec2 d = ivec2(k & 1, k >> 1);
             int cls = pzgClassAt(i0 + d);
             if (gtRank(cls) < 0) continue;
             float w = (d.x == 1 ? t.x : 1.0 - t.x) * (d.y == 1 ? t.y : 1.0 - t.y);
-            int m = cls & 15;
+            int c = (cls & 15) | (min(pzgToneAt(i0 + d), 3) << 4);
+            hasWant = hasWant || c == want;
             int j = 0;
-            for (; j < n; j++) if (mats[j] == m) break;
-            if (j == n) { mats[n] = m; wts[n] = 0.0; n++; }
+            for (; j < n; j++) if (cl[j] == c) break;
+            if (j == n) { cl[n] = c; wts[n] = 0.0; n++; }
             wts[j] += w;
             wsum += w;
          }
+         c1 = want; c2 = want; w1 = 1.0;
          if (n < 2 || wsum <= 1e-4) return false;
          ivec2 bi; vec2 bf; gtSplit(pzGtBlend.z, bi, bf);
-         float s1 = -1e9, s2 = -1e9; m1 = ownMat; m2 = ownMat;
+         float s1 = -1e9, s2 = -1e9;
          for (int j = 0; j < n; j++) {
-            int m = mats[j];
-            int la = GT_MAT_LAYER[m]; // (the default tone's height: the floor and the edges must score alike)
+            int c = cl[j];
+            int la = GT_CODE_LAYER[c];
             float h = la < 0 ? 0.5 : gtFetch(px, ivec2(0), float(la)).a;
-            float nz = gtFbm2(wLocal / pzGtBlend.z, bi, bf, 31u + uint(m)) - 0.5;
-            float r = float(gtRank(m));
-            float sc = wts[j] / wsum + 0.06 * r + 2.0 * pzGtBlend.y * nz + pzGtBlend.w * (h - 0.5);
-            if (sc > s1) { s2 = s1; m2 = m1; s1 = sc; m1 = m; } else if (sc > s2) { s2 = sc; m2 = m; }
+            float nz = gtFbm2(wLocal / pzGtBlend.z, bi, bf, 31u + uint(c)) - 0.5;
+            float sc = wts[j] / wsum + 0.06 * float(gtRank(c)) + 2.0 * pzGtBlend.y * nz + pzGtBlend.w * (h - 0.5);
+            if (sc > s1) { s2 = s1; c2 = c1; s1 = sc; c1 = c; } else if (sc > s2) { s2 = sc; c2 = c; }
          }
          w1 = clamp(0.5 + (s1 - s2) / pzGtBlend.x, 0.5, 1.0);
          return true;
@@ -271,14 +288,15 @@ public final class GroundTilingPatch implements GroundBake.FloorPatch {
       #if defined(PZG_PIECE) && PZG_PIECE == 2
          return t; // a grass / erosion overlay or dug soil on the natural floor: stock
       #endif
+         int mode = pzGtPeriod.z;
+         if (mode == 10) return t; // dev cost split: the variant's own overhead (no lookup)
          int row = gtSpriteRow();
-         if (row < 0) return t;
+         if (row < 0 || mode == 9) return t; // (9: dev cost split, the lookup alone)
          int code = pzGtSprCode[row >> 2][row & 3];
          int layer = code & 15, kind = code >> 4;
          ivec2 px = gtWrap(ivec2(gl_FragCoord.xy) / pzGtBakeI.z + pzGtBakeI.xy);
          vec2 uv = vec2(gl_FragCoord.x * pzGtBakeF.x + pzGtBakeF.y, gl_FragCoord.y * pzGtBakeF.z + pzGtBakeF.w);
          vec2 wLocal = vec2(uv.y + uv.x, uv.y - uv.x) * 0.5;
-         int mode = pzGtPeriod.z;
          if (mode == 8) {
             // dev alignment check: the exemplar's slot diamonds (red, from the exact pixel) and the world squares (blue, from
             // the art-aligned position) over the stock texel; both must trace the sprite's own diamond edges
@@ -294,30 +312,38 @@ public final class GroundTilingPatch implements GroundBake.FloorPatch {
          vec4 c = mode > 0 ? gtSample(px, wLocal, float(layer), mode) : (kind == 0 || pzGtBlend.x <= 0.0 ? vec4(t.rgb / max(t.a, 1e-4), t.a) : gtFetch(px, ivec2(0), float(layer)));
          float grassy = ((pzGtBakeI.w >> layer) & 1) != 0 ? 1.0 : 0.0;
          int own = pzgClass & 15;
+         int ownCls = own | (min(pzgToneAt(pzgSq), 3) << 4);
+         bool blend = pzGtBlend.x > 0.0 && gtRank(pzgClass) >= 0;
          if (kind == 0) {
-            int m1, m2; float w1;
-            if (pzGtBlend.x > 0.0 && GT_LAYER_MAT[layer] == own && gtRank(pzgClass) >= 0 && gtField(wLocal, px, own, layer, m1, w1, m2) && !(m1 == own && w1 >= 1.0)) {
-               // the other material's art (its default tone; an edge piece of it, if the map has one here, repaints its tone)
-               int mo = m1 == own ? m2 : m1;
-               int lo = GT_MAT_LAYER[mo];
-               if (lo >= 0) {
+            int c1, c2; float w1; bool has;
+            if (blend && GT_LAYER_MAT[layer] == own && gtField(wLocal, px, ownCls, c1, w1, c2, has) && !(c1 == ownCls && w1 >= 1.0)) {
+               // the other class's art in its own tone (an edge piece of it, where the map has one, paints the same share)
+               int co_ = c1 == ownCls ? c2 : c1;
+               int lo = GT_CODE_LAYER[co_];
+               if (lo >= 0 && co_ != ownCls) {
                   vec4 co = mode > 0 ? gtSample(px, wLocal, float(lo), mode) : gtFetch(px, ivec2(0), float(lo));
-                  c.rgb = mix(co.rgb, c.rgb, m1 == own ? w1 : 1.0 - w1);
-                  grassy = max(grassy, ((pzGtBakeI.w >> lo) & 1) != 0 ? (m1 == own ? 1.0 - w1 : w1) : 0.0);
+                  float wo = c1 == ownCls ? 1.0 - w1 : w1;
+                  c.rgb = mix(c.rgb, co.rgb, wo);
+                  grassy = mix(grassy, ((pzGtBakeI.w >> lo) & 1) != 0 ? 1.0 : 0.0, wo);
                }
             }
             vec3 rgb = gtMacro(c.rgb, wLocal, grassy);
             return vec4(rgb * t.a, t.a);
          }
          vec3 rgb = gtMacro(c.rgb, wLocal, grassy);
-         // an edge piece of material B over the square's base A
+         // an edge piece of class B over the square: B's share of the same field where B is one of the four squares round
+         // the pixel; an edge with no such neighbour (hand-placed on the map) keeps the sprite's alpha
          float a = t.a;
-         int mb = GT_LAYER_MAT[layer];
-         if (pzGtBlend.x > 0.0 && mb != own && gtRank(pzgClass) >= 0) {
-            int m1, m2; float w1;
-            a = 0.0;
-            if (gtField(wLocal, px, own, GT_MAT_LAYER[own], m1, w1, m2)) {
-               a = m1 == mb ? w1 : m2 == mb ? 1.0 - w1 : 0.0;
+         int bCls = GT_LAYER_CLS[layer];
+         if (blend) {
+            int c1, c2; float w1; bool has;
+            bool f = gtField(wLocal, px, bCls, c1, w1, c2, has);
+            if (has) {
+               a = !f ? 1.0 : c1 == bCls ? w1 : c2 == bCls ? 1.0 - w1 : 0.0;
+            } else {
+               // (no neighbour of B here: the strip / half reaches past the 2x2 squares; B's share is nil where the field
+               // has other classes, else the stock alpha)
+               a = f ? 0.0 : t.a;
             }
          }
          return vec4(rgb * a, a);
