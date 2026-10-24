@@ -4447,8 +4447,10 @@ function API.presets()
             local n = recommendedOptimizations() + allOn(2, true)
             return n .. (n == 1 and " setting" or " settings") .. " changed."
         end },
-        { title = "All optimizations", tip = "Every optimization on, the experimental ones too.", apply = function()
-            local n = allOn(1, false)
+        { title = "All optimizations", tip = "Every optimization on, the experimental ones too; enhancements at their defaults.", apply = function()
+            -- the Enhancements master, its category switches and its settings back to the default (maintainer, 2026-10-24)
+            local n = allOn(1, false) + API.resetKeys({ API.MASTERS[2].key }) + API.resetKeys(API.catMasters(2))
+                + API.resetKeys(API.pageKeys(2))
             return n .. (n == 1 and " setting" or " settings") .. " changed."
         end },
     }
