@@ -148,7 +148,7 @@ public final class Ground {
       if (!featuresLoaded && (m != 0L || DEV_ANY || Config.DEV_GROUND_VIEW != 0)) {
          loadFeatures();
       }
-      if (m == 0L && !DEV_ANY && frameMask == 0L && !GroundBake.FLOOR_ON && !GroundBake.PASS_ON && !GroundState.active()) {
+      if (m == 0L && !DEV_ANY && frameMask == 0L && !GroundBake.FLOOR_ON && !GroundBake.PASS_ON && !GroundBake.PASS_AFTER_SNOW_ON && !GroundState.busy() && !GroundMovers.wanted()) {
          // every key off: nothing below has work (the registered patches answer off from the same keys)
          if (GroundBake.anyRegistered()) {
             GroundBake.frameStart(playerIndex);
@@ -194,6 +194,9 @@ public final class Ground {
       }
       frameMask = m;
       GroundBake.frameStart(playerIndex);
+      if (playerIndex == 0) {
+         GroundMovers.frameStart();
+      }
       GroundState.frameStart(playerIndex);
       if (Config.INSTRUMENT && playerIndex == 0) {
          long now = System.currentTimeMillis();
@@ -202,6 +205,9 @@ public final class Ground {
             Log.info(GroundBake.stats());
             if (GroundState.active()) {
                Log.info(GroundState.stats());
+            }
+            if (GroundMovers.frames > 0) {
+               Log.info(GroundMovers.stats());
             }
          }
       }

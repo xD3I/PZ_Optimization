@@ -1622,7 +1622,7 @@ public final class Config {
    public static volatile boolean GRASS_BLADES; // grass near the player drawn as real blades (clumps, wind waves, trampling)
    public static volatile int GRASS_BLADE_RADIUS; // grass blades: squares round the player
    public static volatile int GRASS_BLADE_DENSITY_PCT; // grass blades: how many, %
-   public static volatile int DEV_GROUND_VIEW; // dev: ground views (GroundBake: 1 = the bake's world position as a checker, 2 = the class map)
+   public static volatile int DEV_GROUND_VIEW; // dev: ground views (GroundBake: 1 = the bake's world position as a checker, 2 = the class map, 3 = the ground state: ruts blue, berms red, wear green)
    public static final int DEV_GROUND_ALTERNATE = integer("devGroundAlternate", 0); // dev: ms; the ground keys in devGroundAlternateKeys switch off and on every period (within-run A/B: harness/ground/ab.py), or devGroundCycle steps
    public static final String DEV_GROUND_ALTERNATE_KEYS = string("devGroundAlternateKeys", "all"); // dev: comma list of ground keys the alternation switches ("all" = every ground switch)
    public static final String DEV_GROUND_CYCLE = string("devGroundCycle", ""); // dev: comma list of variant names stepped every devGroundAlternate ms (pzopt.Ground.cycle(); a feature reads its own names)
