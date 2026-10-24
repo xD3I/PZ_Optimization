@@ -1019,8 +1019,8 @@ public final class Glints {
    static void kindParams(FloatBuffer out) {
       float rho = Config.GLINT_FLAKES / 1024F;
       float rough = Config.GLINT_ROUGH_PCT / 100F, tw = Config.GLINT_TWINKLE_PCT / 100F;
-      out.put(rho).put(0.45F * rough).put(0.035F * tw).put(0.018F);
-      out.put(rho * 1.6F).put(0.55F * rough).put(0.03F * tw).put(0.018F);
+      out.put(rho).put(0.9F * rough).put(0.04F * tw).put(0.018F);
+      out.put(rho * 1.6F).put(0.75F * rough).put(0.035F * tw).put(0.018F);
       out.put(rho * 0.6F).put(0.22F * rough).put(0.025F * tw).put(0.02F);
    }
 }

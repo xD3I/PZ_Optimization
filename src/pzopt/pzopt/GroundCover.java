@@ -64,7 +64,7 @@ public final class GroundCover {
    }
 
    private static volatile boolean failed = CoreGl.legacyMac();
-   public static long bakes, bakesSkipped, builds, instancesDrawn, rebakesIssued, buildNs;
+   public static long bakes, bakesSkipped, builds, instancesDrawn, rebakesIssued, buildNs, hoodNs, cornersNs;
 
    public static boolean on() {
       return Ground.on(Ground.K_SCATTER) && Overrides.enabled() && !failed;
@@ -127,7 +127,7 @@ public final class GroundCover {
    }
 
    public static String stats() {
-      return "ground cover: bakes=" + bakes + " skipped=" + bakesSkipped + " builds=" + builds + " build_us=" + (builds > 0 ? buildNs / 1000 / builds : 0)
+      return "ground cover: bakes=" + bakes + " skipped=" + bakesSkipped + " builds=" + builds + " build_us=" + (builds > 0 ? buildNs / 1000 / builds : 0) + " (hood " + (builds > 0 ? hoodNs / 1000 / builds : 0) + " corners " + (builds > 0 ? cornersNs / 1000 / builds : 0) + ")"
             + " instances=" + instancesDrawn + " rebakes=" + rebakesIssued + " step=" + step + " frostStep=" + frostStep + " month=" + season.month
             + String.format(java.util.Locale.ROOT, " fall=%.2f flowers=%.2f frost=%.2f tmin=%.1f", season.leafFall, season.flowers, season.frost, season.tMin)
             + (failed ? " (failed)" : "");
@@ -896,9 +896,14 @@ public final class GroundCover {
       lc.frostN = 0;
       lc.squares = 0L;
       lc.outdoor = false;
+      long t0 = System.nanoTime();
       Hood h = hood(c, level);
+      long t1 = System.nanoTime();
       Season s = season;
       Corners K = corners(h, c);
+      long t2 = System.nanoTime();
+      hoodNs += t1 - t0;
+      cornersNs += t2 - t1;
       for (int i = 0; i < 64; i++) {
          int k0 = (i & 7) + (i >> 3) * 9;
          lc.sunSq[i] = (byte)Math.round(64F * (K.sun[k0] + K.sun[k0 + 1] + K.sun[k0 + 9] + K.sun[k0 + 10]) - 0.5F);
@@ -1486,7 +1491,7 @@ public final class GroundCover {
          "      float streak = vn(vec2(dot(vW, dir) * 38.0, dot(vW, vec2(-dir.y, dir.x)) * 7.0));",
          "      float grain = vn(vW * 52.0 + 7.3);",
          "      float tex = 0.5 + 0.5 * smoothstep(0.3, 0.85, streak * 0.6 + grain * 0.4);",
-         "      a = clamp(cover * tex * 0.46, 0.0, 0.6);",
+         "      a = clamp(cover * tex * 0.62, 0.0, 0.7);",
          "      col = mix(vec3(0.80, 0.85, 0.91), vec3(0.94, 0.96, 0.99), grain);",
          "      if (a < 0.01) discard;",
          "      fragColor = vec4(col * vLight.rgb * a, a);",
