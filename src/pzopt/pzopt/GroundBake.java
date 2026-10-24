@@ -132,6 +132,14 @@ public final class GroundBake {
          return false;
       }
 
+      /**
+       * Runs on the floors (pieces 0-2). A grass-object-only patch answers false: while every active patch does, the floors
+       * keep the stock programs (and the seam strips the stock seam) and only the grass objects take the variant.
+       */
+      default boolean floorsToo() {
+         return true;
+      }
+
       /** Render thread, each bake into a chunk texture while the variant exists: set this patch's uniforms on {@code program}. */
       default void bakeStart(int program, FBORenderChunk rc) {
       }
@@ -441,6 +449,8 @@ public final class GroundBake {
       int piece = 0;
       if (cur[1]) {
          piece = 3;
+      } else if (!v.floors) {
+         return stock; // (only grass-object patches active)
       } else if (attached && v.attachedFlag) {
          int code = GroundTiles.of(sprite);
          piece = GroundTiles.natural(code) && (code & (GroundTiles.F_OVERLAY | GroundTiles.F_FARM)) == 0 ? 1 : 2;
@@ -758,6 +768,7 @@ public final class GroundBake {
       final ArrayList<FloorPatch> patches;
       final boolean attachedFlag;
       final boolean overlay; // programs for level-0 grass objects (piece 3)
+      final boolean floors; // programs for the floors (pieces 0-2, the seam): some active patch runs on floors
       final int view;
       volatile int state = PENDING;
       final int[] prog = new int[8]; // [piece * 2 + (0 tile, 1 opaque)], 0 = none (the stock program)
@@ -772,11 +783,13 @@ public final class GroundBake {
          this.sig = sig;
          this.patches = patches;
          this.attachedFlag = attachedFlag;
-         boolean o = false;
+         boolean o = false, fl = patches.isEmpty() || view != 0;
          for (FloorPatch p : patches) {
             o |= p.overlayObjects();
+            fl |= p.floorsToo();
          }
          this.overlay = o;
+         this.floors = fl;
          this.view = view;
       }
 
@@ -1001,13 +1014,10 @@ public final class GroundBake {
 
    /** The variant's fragment source from the stock program's final source; null if the source is not as expected. */
    static String variantSource(String stock, Variant v, int piece) {
-      java.util.List<FloorPatch> ps = v.patches;
-      if (piece == 3) { // grass objects: only the patches that asked for them
-         ps = new ArrayList<>();
-         for (FloorPatch p : v.patches) {
-            if (p.overlayObjects()) {
-               ps.add(p);
-            }
+      java.util.List<FloorPatch> ps = new ArrayList<>();
+      for (FloorPatch p : v.patches) { // grass objects: the patches that asked for them; floors: the ones that run on floors
+         if (piece == 3 ? p.overlayObjects() : p.floorsToo()) {
+            ps.add(p);
          }
       }
       return variantSource(stock, ps, v.view, piece);
@@ -1103,7 +1113,7 @@ public final class GroundBake {
       try {
          boolean opaque = v.stockOpaque > 0 && opaqueFrag != null && opaqueVert != null;
          for (int piece = 0; piece < 4; piece++) {
-            if (piece > 0 && piece < 3 && !v.attachedFlag || piece == 3 && !v.overlay) {
+            if (piece > 0 && piece < 3 && !v.attachedFlag || piece == 3 && !v.overlay || piece < 3 && !v.floors) {
                continue;
             }
             v.prog[piece * 2] = compile(v, piece * 2, st);
@@ -1115,12 +1125,14 @@ public final class GroundBake {
                   v.prog[piece * 2 + k] = 0;
                }
             }
-            if (v.prog[piece * 2] == 0 && piece == 0) {
+            if (v.prog[piece * 2] == 0 && (piece == 0 || piece == 3 && !v.floors)) {
                v.state = Variant.FAILED;
                return;
             }
          }
-         compileSeam(v);
+         if (v.floors) {
+            compileSeam(v);
+         }
          v.state = Variant.READY;
          Log.info("ground: floor variant " + v.sig + " = programs " + java.util.Arrays.toString(v.prog) + " (tile / opaque per piece: floor, natural edge, overlay, grass object), seam " + v.seamProg + ", stock " + v.stockTile + " / " + v.stockOpaque + " / " + v.stockSeam);
       } catch (Throwable t) {
