@@ -233,6 +233,7 @@ PzoptSettingsLayout = {
         overlayGraph = { label = "Frames shown", tip = "How many frames the graph spans (and so its width)." },
         overlayFlame = { label = "Placement", tip = "Where the flame graph sits and how wide it is." },
         consoleLog = { label = "Lines", tip = "Which PZ Optimization lines reach the console." },
+        groundTracksWater = { label = "Drawn by", tip = "Who draws the water standing in the ruts: the game's puddles (with their ripples) when Puddle ripples is on, the tracks' own bake (still water), or always the puddles." },
     },
 
     -- a key no subcategory lists: its section's title prefix -> category id
