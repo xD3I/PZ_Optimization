@@ -894,6 +894,7 @@ public final class Glints {
          Log.info(sb.append(" sun=").append(L.sun[3]).toString());
       }
       if (L.n == 0 && L.sun[3] <= 0F && Config.DEV_GLINT_VIEW != 1) {
+         trace(f, L, ox, oy);
          return; // no light reaches the view: no glint anywhere
       }
       float[] d = f.data;
@@ -1053,6 +1054,41 @@ public final class Glints {
             }
          }
       }
+      trace(f, L, ox, oy);
+   }
+
+   private static int traceFirst = -2, traceCount;
+   static volatile boolean traceOn; // the trace window is open (the render thread traces its draws too)
+   private static long traceP, traceS;
+
+   /** devGlintTrace=first,count: the frame's squares and lights, one log line (the worker or the game thread). */
+   private static void trace(Frame f, Lights L, int ox, int oy) {
+      if (traceFirst == -2) {
+         traceFirst = -1;
+         String[] t = Config.DEV_GLINT_TRACE.split(",");
+         if (t.length == 2) {
+            traceFirst = Integer.parseInt(t[0].trim());
+            traceCount = Integer.parseInt(t[1].trim());
+         }
+      }
+      traceOn = traceFirst >= 0 && frames >= traceFirst && frames < traceFirst + traceCount;
+      if (!traceOn) {
+         traceP = pointSquares;
+         traceS = sunSquares;
+         return;
+      }
+      StringBuilder sb = new StringBuilder(256);
+      sb.append(String.format(java.util.Locale.ROOT, "glints trace: frame %d world %d t=%d n=%d pointSq=%d sunSq=%d sun=%.3f lights=%d", frames,
+            IsoWorld.instance.getFrameNo(), System.currentTimeMillis() % 100000L, f.n, pointSquares - traceP, sunSquares - traceS, L.sun[3], L.n));
+      for (int i = 0; i < L.n; i++) {
+         int k = i * 4;
+         sb.append(String.format(java.util.Locale.ROOT, " [%d %s %.2f,%.2f,%.2f r=%.1f s=%.2f c=%.2f,%.2f,%.2f cone=%.2f key=%08x]", i,
+               L.c[k + 3] == 0F ? "lamp" : L.c[k + 3] == 2F ? "car" : "torch", L.p[k] + ox, L.p[k + 1] + oy, L.p[k + 2], L.p[k + 3], L.d[k + 3],
+               L.c[k], L.c[k + 1], L.c[k + 2], L.d[k + 2], L.key[i]));
+      }
+      traceP = pointSquares;
+      traceS = sunSquares;
+      Log.info(sb.toString());
    }
 
    /**
@@ -1675,6 +1711,17 @@ public final class Glints {
                prog = programs[PROG_COMPACT_DRAW];
                zombie.core.ShaderHelper.glUseProgramObjectARB(prog);
             }
+            // the game's legacy alpha test is still on from the draws before, its function GL_GREATER 0 on some frames and
+            // GL_ALWAYS on others (2026-10-25, gfl-trace7: 1067 frames GREATER, every one with 0 fragments written; 1160 ALWAYS,
+            // all drawn): a glint fragment's alpha is 0, so the whole field's glints blinked on and off. Off for the draw; the
+            // finally's GLStateRenderThread.restore() puts the game's state back (WindLeaves / BloodWet do the same).
+            if (traceOn) {
+               traceAlpha = CoreGl.active ? "core" : GL11.glIsEnabled(GL11.GL_ALPHA_TEST) + "/0x" + Integer.toHexString(GL11.glGetInteger(GL11.GL_ALPHA_TEST_FUNC))
+                     + "/" + GL11.glGetFloat(GL11.GL_ALPHA_TEST_REF);
+            }
+            if (!"galpha".equals(dv)) { // dev cycle name "galpha": the game's alpha test left as it is (the flicker's A/B)
+               GL11.glDisable(GL11.GL_ALPHA_TEST);
+            }
             if (!hdr) {
                GL11.glEnable(GL11.GL_BLEND);
                GL14.glBlendFuncSeparate(GL11.GL_ONE, GL11.GL_ONE, GL11.GL_ZERO, GL11.GL_ONE);
@@ -1712,7 +1759,13 @@ public final class Glints {
                if (noDraw) {
                   // dev: everything but the draw
                } else if (f.pass == P_PARTICLES) {
+                  if (traceOn) {
+                     traceDraw(f, hdr, true);
+                  }
                   GL11.glDrawArrays(GL11.GL_POINTS, 0, "phalf".equals(dv) ? f.n * SLOTS / 2 : f.n * SLOTS);
+                  if (traceOn) {
+                     traceDraw(f, hdr, false);
+                  }
                } else {
                   GL40.glDrawArraysIndirect(GL11.GL_POINTS, 0L);
                   GL15.glBindBuffer(GL40.GL_DRAW_INDIRECT_BUFFER, 0);
@@ -1757,6 +1810,29 @@ public final class Glints {
       }
 
       public static long hdrDraws;
+      private static int traceQuery;
+      private static String traceAlpha = "-";
+
+      /**
+       * devGlintTrace (render thread, a dev rig: glGets and a blocking query read): the fragments the draw wrote (an occlusion
+       * query) beside the state that can drop them all. 2026-10-25: the game's legacy alpha test, left on by the draws before
+       * (GL_GREATER 0 on some frames, GL_ALWAYS on others), dropped every glint fragment (alpha 0) on the GREATER frames.
+       */
+      static void traceDraw(Frame f, boolean hdr, boolean before) {
+         if (before) {
+            if (traceQuery == 0) {
+               traceQuery = GL15.glGenQueries();
+            }
+            GL15.glBeginQuery(GL15.GL_SAMPLES_PASSED, traceQuery);
+            return;
+         }
+         GL15.glEndQuery(GL15.GL_SAMPLES_PASSED);
+         int samples = GL15.glGetQueryObjecti(traceQuery, GL15.GL_QUERY_RESULT);
+         Log.info(String.format(java.util.Locale.ROOT, "glints draw trace: stamp %d t=%d v=%s hdr=%b n=%d samples=%d fbo=%d depth=%b/0x%x stencil=%b scissor=%b alphaTest(game)=%s alphaOnAtDraw=%b lights=%d sun=%.3f",
+               f.stamp, System.currentTimeMillis() % 100000L, Ground.variant(), hdr, f.n, samples, GL11.glGetInteger(GL30.GL_DRAW_FRAMEBUFFER_BINDING),
+               GL11.glIsEnabled(GL11.GL_DEPTH_TEST), GL11.glGetInteger(GL11.GL_DEPTH_FUNC), GL11.glIsEnabled(GL11.GL_STENCIL_TEST), GL11.glIsEnabled(GL11.GL_SCISSOR_TEST),
+               traceAlpha, CoreGl.active || GL11.glIsEnabled(GL11.GL_ALPHA_TEST), f.lights.n, f.lights.sun[3]));
+      }
    }
 
    /**
