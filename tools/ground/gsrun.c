@@ -9,7 +9,8 @@
 //   src <path>                   the compute source
 //   tn N                         map size (texels)
 //   cells <path> N / prims <path> N / index <path> N / decay <path> N    little-endian uint32 / float32 arrays
-//   relax 0|1 / tick T / weather r s t w
+//   relax 0|1 / tick T / weather r s t w / pixels 0|1|2 (read back with glReadPixels / with the pack pass instead of glGetTextureSubImage)
+//   pack <path>                  the pack pass source (GroundState.GLSL_PACK; pixels 2, region a multiple of 128)
 //   readback X Y W H <out.rgba>
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
@@ -55,15 +56,18 @@ int main(int argc, char **argv) {
    FILE *job = fopen(argv[1], "r");
    if (!job) { perror(argv[1]); return 2; }
    char line[4096], a[1024], out[1024] = "";
-   char *src = NULL;
+   char *src = NULL, *packSrc = NULL;
+   int pixels = 0;
    int tn = 2048, relax = 0, tick = 1, nCells = 0, nPrims = 0, nIndex = 0, nDecay = 0, rx = 0, ry = 0, rw = 0, rh = 0;
    void *cells = NULL, *prims = NULL, *index = NULL, *decay = NULL;
    float weather[4] = {0, 0, 15, 0};
    while (fgets(line, sizeof line, job)) {
       int k;
       if (sscanf(line, "src %1023s", a) == 1) { src = slurp(a, NULL); continue; }
+      if (sscanf(line, "pack %1023s", a) == 1) { packSrc = slurp(a, NULL); continue; }
       if (sscanf(line, "tn %d", &tn) == 1) continue;
       if (sscanf(line, "relax %d", &relax) == 1) continue;
+      if (sscanf(line, "pixels %d", &pixels) == 1) continue;
       if (sscanf(line, "tick %d", &tick) == 1) continue;
       if (sscanf(line, "weather %f %f %f %f", weather, weather + 1, weather + 2, weather + 3) == 4) continue;
       if (sscanf(line, "cells %1023s %d", a, &k) == 2) { cells = slurp(a, NULL); nCells = k; continue; }
@@ -123,7 +127,42 @@ int main(int argc, char **argv) {
    glBufferStorage(GL_PIXEL_PACK_BUFFER, bytes, NULL, fl | GL_CLIENT_STORAGE_BIT);
    unsigned char *map = glMapBufferRange(GL_PIXEL_PACK_BUFFER, 0, bytes, fl);
    if (!map) { fprintf(stderr, "map failed\n"); return 1; }
-   glGetTextureSubImage(tex, 0, rx, ry, 0, rw, rh, 1, GL_RGBA, GL_UNSIGNED_BYTE, (GLsizei)bytes, (void *)0);
+   if (pixels == 2) { // GroundState's default: the pack pass, one dispatch for every 128 x 128 block, one buffer copy
+      if (!packSrc || rw % 128 || rh % 128) { fprintf(stderr, "pack needs a pack source and a region of 128 blocks\n"); return 2; }
+      GLuint ps = glCreateShader(GL_COMPUTE_SHADER);
+      glShaderSource(ps, 1, (const char **)&packSrc, NULL);
+      glCompileShader(ps);
+      glGetShaderiv(ps, GL_COMPILE_STATUS, &ok);
+      glGetShaderInfoLog(ps, sizeof log, NULL, log);
+      if (!ok) { fprintf(stderr, "pack compile FAILED\n%s\n", log); return 1; }
+      GLuint pp = glCreateProgram();
+      glAttachShader(pp, ps);
+      glLinkProgram(pp);
+      glGetProgramiv(pp, GL_LINK_STATUS, &ok);
+      if (!ok) { fprintf(stderr, "pack link FAILED\n"); return 1; }
+      int bx = rw / 128, by = rh / 128, nb = bx * by;
+      int *org = malloc(nb * 8);
+      for (int j = 0; j < by; j++) for (int i = 0; i < bx; i++) { org[(j * bx + i) * 2] = rx + i * 128; org[(j * bx + i) * 2 + 1] = ry + j * 128; }
+      GLuint ob = ssbo(org, nb * 8), outb = ssbo(NULL, bytes);
+      glUseProgram(pp);
+      glBindImageTexture(0, tex, 0, GL_FALSE, 0, GL_READ_ONLY, GL_RGBA8);
+      glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, ob);
+      glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 2, outb);
+      glDispatchCompute(8, 8, nb);
+      glMemoryBarrier(GL_BUFFER_UPDATE_BARRIER_BIT);
+      glBindBuffer(GL_COPY_READ_BUFFER, outb);
+      glBindBuffer(GL_COPY_WRITE_BUFFER, pbo);
+      glCopyBufferSubData(GL_COPY_READ_BUFFER, GL_COPY_WRITE_BUFFER, 0, 0, bytes);
+   } else if (pixels) { // glReadPixels: glReadPixels from a framebuffer over the map
+      GLuint fbo; glGenFramebuffers(1, &fbo);
+      glBindFramebuffer(GL_READ_FRAMEBUFFER, fbo);
+      glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, tex, 0);
+      glReadBuffer(GL_COLOR_ATTACHMENT0);
+      glReadPixels(rx, ry, rw, rh, GL_RGBA, GL_UNSIGNED_BYTE, (void *)0);
+      glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
+   } else {
+      glGetTextureSubImage(tex, 0, rx, ry, 0, rw, rh, 1, GL_RGBA, GL_UNSIGNED_BYTE, (GLsizei)bytes, (void *)0);
+   }
    glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
    GLsync fence = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
    glFlush();
@@ -136,7 +175,11 @@ int main(int argc, char **argv) {
    }
    glDeleteSync(fence);
    unsigned char *px = malloc(bytes);
-   memcpy(px, map, bytes);
+   if (pixels == 2) { // blocks -> the region's rows
+      int bx = rw / 128;
+      for (int y = 0; y < rh; y++) for (int i = 0; i < bx; i++)
+         memcpy(px + ((long)y * rw + i * 128) * 4, map + ((long)((y / 128) * bx + i) * 16384 + (y % 128) * 128) * 4, 512);
+   } else memcpy(px, map, bytes);
    GLenum e = glGetError();
    if (e != GL_NO_ERROR) { fprintf(stderr, "gl error 0x%x\n", e); return 1; }
    FILE *of = fopen(out, "wb");

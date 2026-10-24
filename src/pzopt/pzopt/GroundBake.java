@@ -110,6 +110,11 @@ public final class GroundBake {
          return new String[0][];
       }
 
+      /** {@code #define} lines put at the head of the variant (before the stock source and the ground helpers), or "". */
+      default String defines() {
+         return "";
+      }
+
       /** Wants {@code pzgPiece} / {@code pzgAttached} (costs two more programs: attached pieces draw with their own, by kind). */
       default boolean wantsAttachedFlag() {
          return false;
@@ -140,6 +145,37 @@ public final class GroundBake {
 
    private static final CopyOnWriteArrayList<FloorPatch> PATCHES = new CopyOnWriteArrayList<>();
    private static final CopyOnWriteArrayList<FloorPass> PASSES = new CopyOnWriteArrayList<>();
+
+   /**
+    * Dev (devGroundNoop, 2026-10-24, ground-tiling's "the no-op variant doubles a bake's GPU time"): floor patches that
+    * change nothing, keyed by groundHexTiling and the cycle token: full (the variant as a patch gets it), nofetch (without
+    * the class-map fetch in pzgSetup), noupload (the variant, no class-map uploads while it is on). With
+    * devGroundAlternate + devGroundAlternateKeys=groundHexTiling + devGroundCycle=full,nofetch,noupload; harness/ground/bakecost.py.
+    */
+   static void registerNoopProbes() {
+      String[][] probes = {{"noopFull", "full", ""}, {"noopNoFetch", "nofetch", "#define PZG_NO_CLASS_FETCH 1"}, {"noopNoUpload", "noupload", ""}};
+      for (String[] pr : probes) {
+         register(new FloorPatch() {
+            public String id() {
+               return pr[0];
+            }
+
+            public boolean active() {
+               String t = Ground.variant();
+               return Ground.on(Ground.K_HEX) && (t == null ? pr[1].equals("full") : t.equals(pr[1]));
+            }
+
+            public String declarations() {
+               return "";
+            }
+
+            public String defines() {
+               return pr[2];
+            }
+         });
+      }
+      Log.info("ground: clock nano=" + System.nanoTime() + " epoch_ms=" + System.currentTimeMillis() + " (no-op floor probes registered)");
+   }
 
    public static void register(FloorPatch p) {
       for (FloorPatch q : PATCHES) {
@@ -511,6 +547,9 @@ public final class GroundBake {
       if (!CLASS_ON || c == null || level != 0) {
          return;
       }
+      if (Config.DEV_GROUND_NOOP && "noupload".equals(Ground.variant()) && Ground.on(Ground.K_HEX)) {
+         return; // dev probe: the variant without its class-map uploads
+      }
       ClassPatch p;
       synchronized (FREE_PATCHES) {
          p = FREE_PATCHES.poll();
@@ -728,7 +767,11 @@ public final class GroundBake {
       "   vec2 fl = floor(pzgW.xy);",
       "   pzgSq = ivec2(fl);",
       "   pzgF = pzgW.xy - fl;",
+      "#ifdef PZG_NO_CLASS_FETCH",
+      "   pzgClass = 1;", // (dev probe: the variant without its class-map fetch)
+      "#else",
       "   pzgClass = pzgClassAt(pzgSq);",
+      "#endif",
       "   pzgPiece = PZG_PIECE;",
       "   pzgAttached = PZG_PIECE != 0;",
       "}",
@@ -770,6 +813,12 @@ public final class GroundBake {
       StringBuilder head = new StringBuilder();
       head.append("#define PZG_FLOOR 1\n#define PZG_VIEW ").append(view).append('\n');
       head.append("#define PZG_PIECE ").append(piece).append('\n');
+      for (FloorPatch p : patches) {
+         String d = p.defines();
+         if (d != null && !d.isEmpty()) {
+            head.append(d).append('\n');
+         }
+      }
       head.append(GroundHash.GLSL).append(GLSL_FLOOR_HEAD);
       String c = GroundHash.insertAfterHeader(stock, head.toString(), 130);
       if (c == null) {

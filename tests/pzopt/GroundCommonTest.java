@@ -300,23 +300,36 @@ public class GroundCommonTest {
                   }
                   job.append("decay ").append(ints(dir.resolve("decay"), d.decay, d.nDecay * 4)).append(' ').append(d.nDecay).append('\n');
                }
-               Path out = dir.resolve("out.rgba");
-               job.append("readback ").append(rx).append(' ').append(ry).append(" 256 256 ").append(out).append('\n');
-               Path jf = Files.writeString(dir.resolve("job.txt"), job.toString());
-               ProcessBuilder pb = new ProcessBuilder(bin.toString(), jf.toString());
-               if (useMesa) {
-                  pb.environment().put("__EGL_VENDOR_LIBRARY_FILENAMES", mesa.toString());
-                  pb.environment().put("LIBGL_ALWAYS_SOFTWARE", "1");
+               Path out = dir.resolve("out.rgba"), outPx = dir.resolve("out-pixels.rgba"), outPk = dir.resolve("out-pack.rgba");
+               Path packf = Files.writeString(dir.resolve("pack.comp"), GroundState.GLSL_PACK);
+               String o = "", oPx = "", oPk = "";
+               for (int mode = 0; mode < 3; mode++) { // the read-back paths (glGetTextureSubImage, glReadPixels, the pack pass): the same bytes
+                  String jm = job + "pack " + packf + "\npixels " + mode + "\nreadback " + rx + ' ' + ry + " 256 256 " + (mode == 0 ? out : mode == 1 ? outPx : outPk) + '\n';
+                  Path jf = Files.writeString(dir.resolve("job.txt"), jm);
+                  ProcessBuilder pb = new ProcessBuilder(bin.toString(), jf.toString());
+                  if (useMesa) {
+                     pb.environment().put("__EGL_VENDOR_LIBRARY_FILENAMES", mesa.toString());
+                     pb.environment().put("LIBGL_ALWAYS_SOFTWARE", "1");
+                  }
+                  Process p = pb.redirectErrorStream(true).start();
+                  String r = new String(p.getInputStream().readAllBytes());
+                  p.waitFor();
+                  if (mode == 0) {
+                     o = r;
+                  } else if (mode == 1) {
+                     oPx = r;
+                  } else {
+                     oPk = r;
+                  }
                }
-               Process p = pb.redirectErrorStream(true).start();
-               String o = new String(p.getInputStream().readAllBytes());
-               p.waitFor();
                if (!useMesa && o.contains("no context")) {
                   continue;
                }
                String tag = rules.id() + (decay ? " + decay" : "") + (useMesa ? " (Mesa)" : " (driver)");
-               Check.check(o.contains("ran ok"), tag + ":\n" + o);
+               Check.check(o.contains("ran ok") && oPx.contains("ran ok") && oPk.contains("ran ok"), tag + ":\n" + o + "\n" + oPx + "\n" + oPk);
                byte[] px8 = Files.readAllBytes(out);
+               Check.check(java.util.Arrays.equals(px8, Files.readAllBytes(outPx)), tag + ": glReadPixels reads the same bytes as glGetTextureSubImage");
+               Check.check(java.util.Arrays.equals(px8, Files.readAllBytes(outPk)), tag + ": the pack pass reads the same bytes as glGetTextureSubImage");
                // texel of world (x, y) in the read-back
                java.util.function.BiFunction<Double, Double, int[]> at = (wx, wy) -> {
                   int tx = (int)Math.floor(wx * GroundState.TPS) - 994 * GroundState.TPS, ty = (int)Math.floor(wy * GroundState.TPS) - 1996 * GroundState.TPS;
