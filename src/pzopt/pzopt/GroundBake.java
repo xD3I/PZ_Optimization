@@ -850,6 +850,107 @@ public final class GroundBake {
       "}",
       "");
 
+   /**
+    * A patch's {@code const int NAME[N] = int[N](...)} tables (values -1..254) become functions over packed uint constants,
+    * and every {@code NAME[i]} in the declarations a call {@code NAME_F(i)}. NVIDIA puts a dynamically indexed const array in
+    * local memory and fills it at the start of every fragment, taken branch or not: ground tiling's four tables (~100 ints)
+    * cost its bake ~50 us of GPU even with the patch returning the stock texel at once (gc-int-cost 116 vs gc-int-packed 65.5
+    * us a bake, stock 61.4). Left alone: other types, values out of range, a table never indexed.
+    */
+   static String packConstTables(String src) {
+      if (src == null || !src.contains("const int ")) {
+         return src;
+      }
+      java.util.regex.Matcher m = java.util.regex.Pattern.compile("const\\s+int\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*\\[\\s*(\\d+)\\s*\\]\\s*=\\s*int\\s*\\[\\s*\\d*\\s*\\]\\s*\\(([^)]*)\\)\\s*;").matcher(src);
+      StringBuilder sb = new StringBuilder();
+      java.util.List<String> names = new java.util.ArrayList<>();
+      while (m.find()) {
+         String name = m.group(1);
+         String[] vs = m.group(3).split(",");
+         int[] v = new int[vs.length];
+         boolean ok = vs.length == Integer.parseInt(m.group(2));
+         for (int i = 0; ok && i < vs.length; i++) {
+            try {
+               v[i] = Integer.parseInt(vs[i].trim());
+               ok = v[i] >= -1 && v[i] <= 254;
+            } catch (NumberFormatException e) {
+               ok = false;
+            }
+         }
+         if (!ok) {
+            m.appendReplacement(sb, java.util.regex.Matcher.quoteReplacement(m.group()));
+            continue;
+         }
+         m.appendReplacement(sb, java.util.regex.Matcher.quoteReplacement(packedTable(name, v)));
+         names.add(name);
+      }
+      m.appendTail(sb);
+      String r = sb.toString();
+      for (String n : names) {
+         String prev = null;
+         while (!r.equals(prev)) { // (outermost first: a nested index is replaced by the next pass)
+            prev = r;
+            r = indexToCall(r, n);
+         }
+      }
+      return r;
+   }
+
+   private static String indexToCall(String r, String n) {
+      {
+         StringBuilder o = new StringBuilder();
+         int i = 0;
+         for (;;) {
+            int at = r.indexOf(n + "[", i);
+            if (at < 0) {
+               o.append(r, i, r.length());
+               break;
+            }
+            boolean word = at == 0 || !(Character.isLetterOrDigit(r.charAt(at - 1)) || r.charAt(at - 1) == '_');
+            int open = at + n.length(), depth = 0, close = -1;
+            for (int k = open; k < r.length() && word; k++) {
+               char ch = r.charAt(k);
+               if (ch == '[') {
+                  depth++;
+               } else if (ch == ']' && --depth == 0) {
+                  close = k;
+                  break;
+               }
+            }
+            if (!word || close < 0) {
+               o.append(r, i, open);
+               i = open;
+               continue;
+            }
+            o.append(r, i, at).append(n).append("_F(").append(r, open + 1, close).append(')');
+            i = close + 1;
+         }
+         return o.toString();
+      }
+   }
+
+   /** GLSL: {@code int name_F(int i)}, entry i of {@code v} (-1..254) from four bytes a uint constant (255 = -1). */
+   static String packedTable(String name, int[] v) {
+      int words = (v.length + 3) / 4;
+      StringBuilder f = new StringBuilder("int ").append(name).append("_F(int i) { int w = i >> 2; uint x = ");
+      for (int w = 0; w < words; w++) {
+         long word = 0;
+         for (int b = 0; b < 4; b++) {
+            int idx = w * 4 + b;
+            int x = idx < v.length ? v[idx] : -1;
+            word |= (long)(x < 0 ? 255 : x) << (8 * b);
+         }
+         if (w < words - 1) {
+            f.append("w == ").append(w).append(" ? ");
+         }
+         f.append(word).append('u');
+         if (w < words - 1) {
+            f.append(" : ");
+         }
+      }
+      return f.append("; int r = int((x >> uint(8 * (i & 3))) & 255u); return r == 255 ? -1 : r; }").toString();
+   }
+
    /** The variant's fragment source from the stock program's final source; null if the source is not as expected. */
    static String variantSource(String stock, Variant v, int piece) {
       return variantSource(stock, v.patches, v.view, piece);
@@ -874,7 +975,7 @@ public final class GroundBake {
       StringBuilder texelChain = new StringBuilder("vec4 pzgTexel(vec4 t) {\n");
       StringBuilder colorChain = new StringBuilder("vec4 pzgColor(vec4 c) {\n");
       for (FloorPatch p : patches) {
-         pre.append("// ground patch ").append(p.id()).append('\n').append(p.declarations()).append('\n');
+         pre.append("// ground patch ").append(p.id()).append('\n').append(packConstTables(p.declarations())).append('\n');
          if (p.texel() != null) {
             texelChain.append("   t = ").append(p.texel()).append("(t);\n");
          }
