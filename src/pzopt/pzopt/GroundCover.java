@@ -936,6 +936,24 @@ public final class GroundCover {
                continue;
             }
             float rn = roadNear(h, x, y);
+            // an upper bound of the square's total density (the rules' maxima over its corners): candidates ranked above it
+            // are rejected before any rule runs (blue noise: the square's list is in rank order, so the loop stops there)
+            int k0 = sx + sy * 9;
+            float canMax = Math.max(Math.max(K.can[k0], K.can[k0 + 1]), Math.max(K.can[k0 + 9], K.can[k0 + 10])) * 1.1F + 0.02F;
+            boolean everAny = K.species[k0] == 4 || K.species[k0 + 1] == 4 || K.species[k0 + 9] == 4 || K.species[k0 + 10] == 4;
+            boolean gutAny = mat == M_ROAD && (h.m(x, y - 1) != M_ROAD || h.m(x, y + 1) != M_ROAD || h.m(x - 1, y) != M_ROAD || h.m(x + 1, y) != M_ROAD);
+            boolean bankAny = (h.e(x, y) & 3) != 0 || (h.e(x, y + 1) & 1) != 0 || (h.e(x + 1, y) & 2) != 0
+               || ((h.e(x, y - 1) | h.e(x - 1, y) | h.e(x, y + 1) | h.e(x + 1, y)) & 4) != 0;
+            float aroundMax = Math.min(1F, h.trees.size() / 6F) * (0.4F + 0.6F * s.accum);
+            float leafMax = s.leafFall * (0.55F * Math.min(1.5F, canMax) * (mat == M_ROAD ? 0.22F + 0.35F * s.accum : mat == M_WALK ? 0.55F : 1F)
+               + aroundMax * ((gutAny ? 1.05F : 0F) + (bankAny ? 0.85F : 0F))) * (0.6F + 0.8F * forest);
+            float meadowMax = Math.max(Math.max(K.meadow[k0], K.meadow[k0 + 1]), Math.max(K.meadow[k0 + 9], K.meadow[k0 + 10]));
+            float bound = leafMax + (everAny ? 0.35F : 0F)
+               + (mat == M_GRASS ? s.flowers * meadowMax * (0.45F + farm + 0.4F * (1 - townBias)) * 0.55F : 0F)
+               + s.accum * (town * 0.5F + 0.15F) * 0.2F
+               + (0.012F + 0.05F * forest) * Math.min(1F, canMax)
+               + (mat == M_GRAVEL || mat == M_DIRT ? 0.04F : 0F);
+            bound *= dens;
             if (scatterOn) {
                int ncand = blue ? BlueNoise.bySquare[Math.floorMod(x, BlueNoise.TILE) + Math.floorMod(y, BlueNoise.TILE) * BlueNoise.TILE].length : 36;
                for (int k = 0; k < ncand; k++) {
@@ -953,6 +971,12 @@ public final class GroundCover {
                      py = y + (gy + hf(x * 6 + gx, y * 6 + gy, 12)) / 6F;
                      thr = hf(x * 6 + gx, y * 6 + gy, 13);
                      id = mix(x * 6 + gx, y * 6 + gy, 14);
+                  }
+                  if (thr > bound) {
+                     if (blue) {
+                        break;
+                     }
+                     continue;
                   }
                   float lx = px - c.wx * 8, ly = py - c.wy * 8;
                   float canopy = K.bil(K.can, lx, ly);
@@ -1278,7 +1302,10 @@ public final class GroundCover {
          bakesSkipped++;
          return;
       }
+      String sec = Ground.section("ground.cover");
+      GpuSections.begin(sec);
       SpriteRenderer.instance.drawGeneric(d);
+      GpuSections.end(sec);
       instancesDrawn += d.n;
    }
 

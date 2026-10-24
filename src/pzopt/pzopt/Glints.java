@@ -60,7 +60,7 @@ public final class Glints {
    static final int K_FROST = 0, K_SNOW = 1, K_WET = 2;
 
    private static volatile boolean failed = CoreGl.legacyMac();
-   public static long frames, framesQueued, instances, maxInstances, maskRebuilds, draws;
+   public static long frames, framesQueued, instances, maxInstances, maskRebuilds, draws, lightFrames, sunFrames, pointSquares, sunSquares;
 
    public static boolean on() {
       return Ground.on(Ground.K_GLINTS) && Overrides.enabled() && !failed && Core.getInstance() != null;
@@ -68,7 +68,7 @@ public final class Glints {
 
    public static String stats() {
       return "glints: frames=" + frames + " queued=" + framesQueued + " instances=" + instances + " max=" + maxInstances + " maskRebuilds=" + maskRebuilds
-            + " draws=" + draws + " model=" + model() + (failed ? " (failed)" : "");
+            + " draws=" + draws + " lightFrames=" + lightFrames + " sunFrames=" + sunFrames + " pointSquares=" + pointSquares + " sunSquares=" + sunSquares + " model=" + model() + " pass=" + PASS_NAMES[passMode()] + (failed ? " (failed)" : "");
    }
 
    /** The model in force (devGlintCycle steps through them, then "off"). */
@@ -407,6 +407,12 @@ public final class Glints {
       Frame f = FRAMES[frameIndex++ & 3];
       Lights L = f.lights;
       gatherLights(L, ox, oy, cx, cy, view);
+      if (L.n > 0) {
+         lightFrames++;
+      }
+      if (L.sun[3] > 0F) {
+         sunFrames++;
+      }
       if (L.n == 0 && L.sun[3] <= 0F && Config.DEV_GLINT_VIEW != 1) {
          return; // no light: no glint anywhere
       }
@@ -461,6 +467,12 @@ public final class Glints {
                }
                int sunv = m.sun[s] & 255;
                boolean sun = L.sun[3] > 0F && sunv > 8;
+               if (lb != 0) {
+                  pointSquares++;
+               }
+               if (sun) {
+                  sunSquares++;
+               }
                if (lb == 0 && !sun && Config.DEV_GLINT_VIEW != 1) {
                   continue;
                }
@@ -976,6 +988,9 @@ public final class Glints {
                GL31.glDrawArraysInstanced(GL11.GL_TRIANGLE_FAN, 0, 4, f.n);
             } else {
                GL11.glEnable(GL32.GL_PROGRAM_POINT_SIZE);
+               if (!CoreGl.active) {
+                  GL11.glEnable(GL20.GL_POINT_SPRITE); // a compatibility context defines gl_PointCoord only for point sprites
+               }
                if (f.pass == P_PARTICLES) {
                   GL11.glDrawArrays(GL11.GL_POINTS, 0, f.n * SLOTS);
                } else {
@@ -983,6 +998,9 @@ public final class Glints {
                   GL15.glBindBuffer(GL40.GL_DRAW_INDIRECT_BUFFER, 0);
                }
                GL11.glDisable(GL32.GL_PROGRAM_POINT_SIZE);
+               if (!CoreGl.active) {
+                  GL11.glDisable(GL20.GL_POINT_SPRITE);
+               }
             }
             GL30.glBindVertexArray(0);
             GL11.glDisable(GL32.GL_DEPTH_CLAMP);
