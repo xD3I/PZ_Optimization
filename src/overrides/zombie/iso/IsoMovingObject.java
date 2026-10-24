@@ -132,6 +132,16 @@ implements Mover {
     public IsoGridSquare pzoptMoveSq; // pzopt: postupdateParallel
     public boolean pzoptMoveSqSet; // pzopt: postupdateParallel
     public pzopt.PostupdateBatch.Snap pzoptMoveSnap; // pzopt: postupdateParallel
+    // pzopt: ground and grass (pzopt.GroundMovers): the stride line's anchor (0, 0: none), the foot that stepped last, the body
+    // imprint pressed, the near-mover tracking (last position, its frame, the smoothed moving strength), a vehicle's wheel
+    // points, and two floats a consumer keeps per mover (the blades' last trail stamp).
+    public float pzoptGmX, pzoptGmY; // pzopt: ground movers
+    public int pzoptGmFoot; // pzopt: ground movers
+    public boolean pzoptGmDead; // pzopt: ground movers
+    public float pzoptGmLx, pzoptGmLy, pzoptGmStrength; // pzopt: ground movers
+    public int pzoptGmSeen; // pzopt: ground movers
+    public double[] pzoptGmWheels; // pzopt: ground movers
+    public float pzoptGmMarkX, pzoptGmMarkY; // pzopt: ground movers
 
     /** pzopt: postupdateParallel, the fields a postupdate writes, saved. */
     public void pzoptMoveSave(pzopt.PostupdateBatch.Snap s) {

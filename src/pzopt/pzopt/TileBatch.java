@@ -86,8 +86,8 @@ public final class TileBatch {
    }
 
    private static final ThreadLocal<Pending> PENDING = ThreadLocal.withInitial(Pending::new);
-   private static final int[] programs = new int[4]; // the programs found patched (pzoptVD uniform present)
-   private static final boolean[] usable = new boolean[4];
+   private static final int[] programs = new int[16]; // the programs found patched (pzoptVD uniform present; the stock tile programs, the sprite filter's and ground's variants)
+   private static final boolean[] usable = new boolean[16];
    private static int nPrograms;
    public static long starts, merged, stamped, stockStarts;
    private static int samples;
