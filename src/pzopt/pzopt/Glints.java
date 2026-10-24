@@ -59,7 +59,7 @@ public final class Glints {
    public static long frames, framesQueued, instances, maxInstances, maskRebuilds, draws;
 
    public static boolean on() {
-      return Config.GLINTS_KEY && Overrides.enabled() && !failed && Core.getInstance() != null;
+      return Ground.on(Ground.K_GLINTS) && Overrides.enabled() && !failed && Core.getInstance() != null;
    }
 
    public static String stats() {
@@ -78,6 +78,14 @@ public final class Glints {
          return -1;
       }
       String m = Config.GLINT_MODEL;
+      String v = Ground.variant();
+      if (v != null) {
+         for (int i = 0; i < MODELS.length; i++) {
+            if (MODELS[i].equals(v)) {
+               return i;
+            }
+         }
+      }
       for (int i = 0; i < MODELS.length; i++) {
          if (MODELS[i].equals(m)) {
             return i;
@@ -87,7 +95,7 @@ public final class Glints {
    }
 
    static String section(int model) {
-      return model < 0 ? "ground.glints.off" : "ground.glints." + MODELS[model];
+      return Ground.section(model < 0 ? "ground.glints.off" : "ground.glints." + MODELS[model]);
    }
 
    // ------------------------------------------------------------------------------------------------ the masks
@@ -602,7 +610,7 @@ public final class Glints {
 
       /** Render thread, at world entry (shaderWarmup) or on the first draw: every model's program. */
       static void warm() {
-         if (!Config.GLINTS_KEY || !Overrides.enabled()) {
+         if (!Config.GLINTS || !Overrides.enabled()) {
             return;
          }
          for (int i = 0; i < MODELS.length; i++) {

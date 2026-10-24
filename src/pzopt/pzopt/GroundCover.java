@@ -11,7 +11,6 @@ import org.lwjgl.opengl.GL20;
 import org.lwjgl.opengl.GL30;
 import org.lwjgl.opengl.GL31;
 import zombie.GameTime;
-import zombie.IndieGL;
 import zombie.core.Core;
 import zombie.core.SpriteRenderer;
 import zombie.core.opengl.GLStateRenderThread;
@@ -68,7 +67,59 @@ public final class GroundCover {
    public static long bakes, bakesSkipped, builds, instancesDrawn, rebakesIssued, buildNs;
 
    public static boolean on() {
-      return Config.GROUND_SCATTER_KEY && Overrides.enabled() && !failed;
+      return Ground.on(Ground.K_SCATTER) && Overrides.enabled() && !failed;
+   }
+
+   /** The bake hook (ground-common's floor pass: after the floor tiles, before the snow, the blood and the objects). */
+   static final GroundBake.FloorPass PASS = new GroundBake.FloorPass() {
+      @Override
+      public String id() {
+         return "groundCover";
+      }
+
+      @Override
+      public boolean active() {
+         frame();
+         return on();
+      }
+
+      @Override
+      public void draw(IsoChunk c, int level, int playerIndex) {
+         bake(c, level, playerIndex);
+      }
+   };
+
+   private static boolean registered;
+
+   /** World entry (NoLoadingScreen): the floor pass joins ground-common's bake. */
+   public static void register() {
+      if (!registered) {
+         registered = true;
+         GroundBake.register(PASS);
+      }
+   }
+
+   /** devGroundCycle's current name when it is one of {@code names}, else null. */
+   static String cycled(String... names) {
+      String v = Ground.variant();
+      if (v != null) {
+         for (String n : names) {
+            if (n.equals(v)) {
+               return v;
+            }
+         }
+      }
+      return null;
+   }
+
+   static String placement() {
+      String v = cycled("jitter", "bluenoise");
+      return v != null ? v : Config.GROUND_COVER_PLACEMENT;
+   }
+
+   static String assets() {
+      String v = cycled("mixed", "procedural", "sprites");
+      return v != null ? v : Config.GROUND_COVER_ASSETS;
    }
 
    public static String stats() {
@@ -81,17 +132,11 @@ public final class GroundCover {
    // ------------------------------------------------------------------------------------------------ hashing (world-anchored)
 
    static int mix(int x, int y, int s) {
-      int h = x * 0x27d4eb2d ^ y * 0x165667b1 ^ s * 0x9e3779b9;
-      h ^= h >>> 15;
-      h *= 0x85ebca6b;
-      h ^= h >>> 13;
-      h *= 0xc2b2ae35;
-      h ^= h >>> 16;
-      return h;
+      return GroundHash.hash2(x, y, GroundHash.SEED_SCATTER + s * 0x9e3779b9);
    }
 
    static float hf(int x, int y, int s) {
-      return (mix(x, y, s) >>> 8) * (1F / 16777216F);
+      return GroundHash.u01(mix(x, y, s));
    }
 
    /** Smooth value noise of the world (squares), period-free. */
@@ -246,7 +291,7 @@ public final class GroundCover {
       int sk = seasonKey(), fk = frostKey();
       boolean seasonChanged = step != Integer.MIN_VALUE && sk != step;
       boolean frostChanged = frostStep != Integer.MIN_VALUE && fk != frostStep;
-      boolean settings = settingsKey() != lastSettings;
+      boolean settings = lastSettings != Integer.MIN_VALUE && settingsKey() != lastSettings;
       step = sk;
       frostStep = fk;
       lastSettings = settingsKey();
@@ -298,8 +343,8 @@ public final class GroundCover {
          }
          IsoChunk c = pending.remove(best);
          int level = pendingLevels.remove(best)[0];
-         if (level >= c.minLevel && level <= c.maxLevel) {
-            c.invalidateRenderChunkLevel(level, zombie.iso.fboRenderChunk.FBORenderChunk.DIRTY_REDRAW);
+         if (level == 0) {
+            GroundBake.rebakeChunk(c.wx, c.wy, "ground cover step", true);
             rebakesIssued++;
          }
       }
@@ -308,8 +353,8 @@ public final class GroundCover {
    private static int lastSettings = Integer.MIN_VALUE;
 
    static int settingsKey() {
-      return Config.GROUND_SCATTER_DENSITY_PCT * 31 + Config.GROUND_COVER_PLACEMENT.hashCode() * 7 + Config.GROUND_COVER_ASSETS.hashCode() * 13
-         + (Config.GROUND_COVER_FROST ? 1 : 0) + (Config.GROUND_SCATTER_KEY ? 2 : 0) + Config.DEV_GROUND_COVER_VIEW * 101;
+      return Config.GROUND_SCATTER_DENSITY_PCT * 31 + placement().hashCode() * 7 + assets().hashCode() * 13
+         + (Config.GROUND_COVER_FROST ? 1 : 0) + (Config.GROUND_SCATTER ? 2 : 0) + Config.DEV_GROUND_COVER_VIEW * 101;
    }
 
    // ------------------------------------------------------------------------------------------------ the squares around a chunk
@@ -329,16 +374,21 @@ public final class GroundCover {
          return M_NONE;
       }
       String n = floor.sprite.name;
-      if (n.startsWith("blends_natural_01_")) {
-         int i = index(n);
-         // rows of 16: 0-15 sand / dirt, 16-47 light / dark grass, 48-63 grass, 64-95 dirt / gravel, 96+ grass variants
-         if (i >= 16 && i < 64 || i >= 96) {
-            return M_GRASS;
-         }
-         return i >= 80 ? M_GRAVEL : M_DIRT;
+      int code = GroundTiles.square(sq);
+      if ((code & GroundTiles.F_EXCLUDED) != 0) {
+         return M_NONE; // farmland, dug soil, water
       }
-      if (n.startsWith("blends_natural_02_") || n.startsWith("floors_exterior_natural")) {
-         return M_DIRT;
+      switch (GroundTiles.material(code)) {
+         case GroundTiles.GRASS:
+         case GroundTiles.GRASS_OVERLAY:
+         case GroundTiles.VEGETATION:
+            return M_GRASS;
+         case GroundTiles.GRAVEL:
+            return M_GRAVEL;
+         case GroundTiles.NONE:
+            break;
+         default:
+            return M_DIRT; // dirt, sand, clay, dark dirt (snow: the game's)
       }
       if (n.startsWith("blends_street_01_") || n.startsWith("floors_exterior_street")) {
          int i = index(n);
@@ -816,9 +866,9 @@ public final class GroundCover {
       hoodFrame = IsoWorld.instance.getFrameNo();
       Season s = season;
       float dens = Config.GROUND_SCATTER_DENSITY_PCT / 100F;
-      boolean blue = "bluenoise".equals(Config.GROUND_COVER_PLACEMENT);
-      boolean useSprites = !"procedural".equals(Config.GROUND_COVER_ASSETS);
-      boolean useShapes = !"sprites".equals(Config.GROUND_COVER_ASSETS);
+      boolean blue = "bluenoise".equals(placement());
+      boolean useSprites = !"procedural".equals(assets());
+      boolean useShapes = !"sprites".equals(assets());
       if (blue) {
          BlueNoise.init();
       }
@@ -1163,8 +1213,8 @@ public final class GroundCover {
       if (!on() || FBORenderChunkManager.instance.renderChunk == null) {
          return;
       }
-      if (level < -32 || level > 31) {
-         return;
+      if (level != 0) {
+         return; // natural ground and streets are level 0 (ground-common re-bakes level 0)
       }
       if (step == Integer.MIN_VALUE) {
          updateSeason();
@@ -1448,7 +1498,7 @@ public final class GroundCover {
       static final Matrix4f mvp = new Matrix4f();
 
       static void warm() {
-         if ((Config.GROUND_SCATTER_KEY || Config.GROUND_COVER_FROST) && Overrides.enabled()) {
+         if ((Config.GROUND_SCATTER || Config.GROUND_COVER_FROST) && Overrides.enabled()) {
             init();
          }
       }
@@ -1571,10 +1621,5 @@ public final class GroundCover {
          return;
       }
       covers.values().removeIf(cc -> f - cc.seen > 1800);
-   }
-
-   /** The texel's IndieGL state stock's blood leaves behind (the caller restores its own). */
-   static void unused() {
-      IndieGL.enableDepthTest();
    }
 }

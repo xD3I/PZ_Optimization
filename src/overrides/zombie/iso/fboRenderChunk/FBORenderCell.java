@@ -221,7 +221,7 @@ public final class FBORenderCell {
       int playerIndex = IsoCamera.frameState.playerIndex;
       pzopt.EntityShadow.frameStart(playerIndex); // pzopt: entity shadows, the frame's light and probe bricks (its compute first in the frame: the pipeline has drained at the swap)
       pzopt.Ripples.frameStart(playerIndex); // pzopt: rain rings / car wakes, last frame's compute passes first in this frame
-      pzopt.GroundCover.frame(); // pzopt: ground cover, the season / frost step and its staggered re-bakes before this frame's bakes
+      pzopt.Ground.frameStart(playerIndex); // pzopt: ground and grass, the frame's switches, the floor variant, the ground state's stamps and uploads
       if (pzopt.CharDraw.enabled()) {
          pzopt.CharDraw.walk(IsoWorld.instance.getCell().getObjectList(), this); // pzopt: charDrawPrep, the object walk on a worker from here
       }
@@ -2215,6 +2215,9 @@ public final class FBORenderCell {
          case pzopt.BakeRecord.DEFER_TREES_END: // pzopt
             this.pzoptBakeTreesEnd(); // pzopt
             break; // pzopt
+         case pzopt.BakeRecord.DEFER_GROUND: // pzopt: ground and grass, the floor passes at their place in the stream
+            pzopt.GroundBake.floorPasses((IsoChunk)a, (Integer)b, IsoCamera.frameState.playerIndex); // pzopt
+            break; // pzopt
          default: // pzopt
             break; // pzopt
       } // pzopt
@@ -2691,6 +2694,9 @@ public final class FBORenderCell {
                if (var59 != null) {
                   var59.close();
                }
+      if (pzopt.GroundBake.PASS_ON && !pzopt.BakeRecord.deferHere(pzopt.BakeRecord.DEFER_GROUND, c, level)) { // pzopt: ground and grass, the floor passes (scatter) after the floor tiles, on the game thread
+         pzopt.GroundBake.floorPasses(c, level, IsoCamera.frameState.playerIndex); // pzopt
+      } // pzopt
       if (!pzopt.BakeRecord.deferHere(pzopt.BakeRecord.DEFER_SNOW, c, level)) { // pzopt: snow and blood on the game thread (shared state)
          this.pzoptBakeSnow(c, level); // pzopt
       } // pzopt
@@ -2703,7 +2709,6 @@ public final class FBORenderCell {
    void pzoptBakeSnow(IsoChunk c, int level) { // pzopt
       GameProfiler profiler = GameProfiler.getInstance(); // pzopt
       ProfileArea var59; // pzopt
-               pzopt.GroundCover.bake(c, level, IsoCamera.frameState.playerIndex); // pzopt: ground cover, leaves / flowers / litter / frost over the floor tiles, under the snow and the blood
                var59 = profiler.profile("Snow");
 
                try {
@@ -3158,6 +3163,7 @@ public final class FBORenderCell {
             pzopt.BakeMips.onBake(FBORenderChunkManager.instance.renderChunk, FBORenderChunkManager.instance.renderChunk.getTexture()); // pzopt
          } // pzopt
          if (isDirty && canRender && FBORenderChunkManager.instance.renderChunk != null) pzopt.SpriteFilter.bakeBegin(FBORenderChunkManager.instance.renderChunk.getTexture()); // pzopt: sprite filter, the texture's sharp level 1 after the bake
+         if (isDirty && canRender && pzopt.GroundBake.CLASS_ON) pzopt.GroundBake.bakeBegin(c, level); // pzopt: ground and grass, the chunk's ground classes into the class map ahead of its draws
          if (DebugOptions.instance.delayObjectRender.getValue()) {
             canRender = frameNo == c.loadedFrame || frameNo >= c.renderFrame;
          }
@@ -4586,10 +4592,12 @@ public final class FBORenderCell {
    public void renderFloor(IsoObject object) { // pzopt
       if (pzopt.BakeRecord.deferFloor(object)) return; // pzopt: bakeRecordParallel, a floor a recording thread may not draw goes to the game thread
       boolean pzoptFloor = pzopt.Sway.floorBegin(); // pzopt: swayFloorExact, a floor bakes its depth exactly as stock
+      boolean pzoptGround = pzopt.GroundBake.FLOOR_ON && pzopt.GroundBake.floorBegin(object); // pzopt: ground and grass, a natural floor bakes with the ground variant (GroundBake)
       try { // pzopt
          this.pzoptRenderFloor(object); // pzopt
       } finally { // pzopt
          if (pzoptFloor) pzopt.Sway.floorEnd(); // pzopt
+         if (pzoptGround) pzopt.GroundBake.floorEnd(); // pzopt: ground and grass
       } // pzopt
    } // pzopt
 
