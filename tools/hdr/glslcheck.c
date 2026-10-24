@@ -1,6 +1,8 @@
 // Compiles and links GLSL fragment units with the real driver (headless EGL, desktop GL compatibility context),
 // printing the info logs: checks pzopt's shader injections against the game's shaders without launching the game.
 //   cc -O2 -o /tmp/glslcheck tools/hdr/glslcheck.c -lEGL -lGL && /tmp/glslcheck vert.glsl frag1.glsl [frag2.glsl...]
+//   /tmp/glslcheck unit.comp: a compute unit alone (a first argument ending in .comp; pzopt.GroundTracks, 2026-10-24)
+#include <string.h>
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
 #define GL_GLEXT_PROTOTYPES
@@ -45,8 +47,13 @@ int main(int argc, char **argv) {
    if (!eglMakeCurrent(d, s, s, c)) { fprintf(stderr, "no context\n"); return 1; }
    printf("GL %s\n", glGetString(GL_RENDERER));
    GLuint p = glCreateProgram();
-   glAttachShader(p, unit(GL_VERTEX_SHADER, argv[1]));
-   for (int i = 2; i < argc; i++) glAttachShader(p, unit(GL_FRAGMENT_SHADER, argv[i]));
+   size_t l1 = strlen(argv[1]);
+   if (l1 > 5 && strcmp(argv[1] + l1 - 5, ".comp") == 0) {
+      glAttachShader(p, unit(GL_COMPUTE_SHADER, argv[1]));
+   } else {
+      glAttachShader(p, unit(GL_VERTEX_SHADER, argv[1]));
+      for (int i = 2; i < argc; i++) glAttachShader(p, unit(GL_FRAGMENT_SHADER, argv[i]));
+   }
    glLinkProgram(p);
    GLint ok; char log[8192];
    glGetProgramiv(p, GL_LINK_STATUS, &ok);

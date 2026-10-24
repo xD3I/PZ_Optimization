@@ -1948,6 +1948,24 @@ public final class Config {
    public static volatile String RIPPLES_RAIN; // puddle ripples: the raindrops' rings on puddles and wet ground: stock (the game's) | none | cells | texture | flipbook | field | sim (live; docs/findings-rain-wakes-2026-10-11.md)
    public static volatile String RIPPLES_WAKE; // puddle ripples: what a car leaves in the puddles: rings (a wheel ring every few squares) | trail | kelvin | particles | sim (live; docs/findings-rain-wakes-2026-10-11.md)
    public static volatile int RIPPLES_RAIN_PCT; // puddle ripples: the raindrops' rings, how strongly they tilt the surface (live)
+   // ground tracks (2026-10-24, pzopt.GroundTracks, the "Ground and grass" Visuals): ruts, footprints, worn paths that persist and fade
+   public static volatile String GROUND_TRACKS_LOOK; // groundTracksLook: bake (drawn into the chunk textures, 0 a frame) | composite (drawn over the picture each frame where tracks are)
+   public static volatile String GROUND_TRACKS_WATER; // groundTracksWater: auto (puddles when ripples patched the puddle program, else bake) | bake (murky water drawn with the look) | puddles (the game's puddle pass fills the ruts, with ripples on) | off
+   public static volatile boolean GROUND_TRACKS_POM; // groundTracksPom: relief offset sampling along the fixed view ray (the near wall of a rut hides its floor)
+   public static volatile int GROUND_TRACKS_SHADOW_STEPS; // groundTracksShadowSteps: the self-shadow march toward the key light (0 off)
+   public static volatile boolean GROUND_TRACKS_AO; // groundTracksAo: the cavity term in ruts
+   public static volatile int GROUND_TRACKS_STRENGTH_PCT; // groundTracksStrengthPct: how deep everything presses (100)
+   public static volatile int GROUND_TRACKS_REBAKE_MS; // groundTracksRebakeMs: a chunk being stamped re-bakes at most this often (bake look)
+   public static volatile int GROUND_TRACKS_DECAY_MINUTES; // groundTracksDecayMinutes: game minutes between decay passes
+   public static volatile boolean GROUND_TRACKS_VEHICLES, GROUND_TRACKS_FEET, GROUND_TRACKS_BODIES; // the stamp sources
+   public static volatile boolean GROUND_TRACKS_GRASS; // groundTracksGrass: the game's grass objects (erosion grass, overlays) fade and go to straw where trodden
+   public static volatile int DEV_GROUND_TRACKS_VIEW; // devGroundTracksView: 1 the height field drawn as colour (blue ruts, red berms)
+   public static volatile int DEV_GROUND_TRACKS_TIME_SCALE; // devGroundTracksTimeScale: the decay runs this many times faster than the game clock (the recovery in seconds)
+   public static volatile int DEV_GROUND_TRACKS_WET_PCT; // devGroundTracksWetPct: the ground's wetness pinned (0..100; -1 = from the rain)
+   public static volatile int DEV_GROUND_TRACKS_COMP_BIAS_PCT; // devGroundTracksCompBiasPct: the composite look's diamond, hundredths of a square of x + y toward the camera (the depth test against the floor)
+   public static volatile int DEV_GROUND_TRACKS_RIG_SECONDS; // devGroundTracksRigSeconds: the look rig stamps for this many seconds, then stops (0: all the run)
+   public static volatile int DEV_GROUND_TRACKS_RIG; // devGroundTracksRig: 1 a scripted scene round the player (a car pass with a skid, three walkers, a body, a drag), the look rig
+   public static volatile boolean DEV_GROUND_TRACKS_LOG; // devGroundTracksLog: a stats line every 600 frames
    public static final int DEV_RAIN_SCALE_PCT = integer("devRainScalePct", 40); // dev: a raindrop's ring against a footstep's (% in space; time sqrt of it); read at launch
    public static final int DEV_RAIN_AMP_PCT = integer("devRainAmpPct", 150); // dev: a raindrop's slope against a footstep's (%); read at launch
    public static final int DEV_RAIN_LIT_PCT = integer("devRainLitPct", 120); // dev: how much a rain ring's / wake's slope brightens / darkens the puddle's final colour (%); read at launch
@@ -2459,6 +2477,25 @@ public final class Config {
       OVERLAY_FPS_COLOR_GREEN = string("overlayFpsColorGreen", "green");
       OVERLAY_FPS_COLOR_YELLOW = string("overlayFpsColorYellow", "yellow");
       OVERLAY_FPS_COLOR_RED = string("overlayFpsColorRed", "red");
+      GROUND_TRACKS_LOOK = string("groundTracksLook", "bake").trim().toLowerCase(java.util.Locale.ROOT);
+      GROUND_TRACKS_WATER = string("groundTracksWater", "auto").trim().toLowerCase(java.util.Locale.ROOT);
+      GROUND_TRACKS_POM = bool("groundTracksPom", true);
+      GROUND_TRACKS_SHADOW_STEPS = Math.max(0, Math.min(16, integer("groundTracksShadowSteps", 8)));
+      GROUND_TRACKS_AO = bool("groundTracksAo", true);
+      GROUND_TRACKS_STRENGTH_PCT = Math.max(0, Math.min(300, integer("groundTracksStrengthPct", 100)));
+      GROUND_TRACKS_REBAKE_MS = Math.max(0, integer("groundTracksRebakeMs", 300));
+      GROUND_TRACKS_DECAY_MINUTES = Math.max(1, integer("groundTracksDecayMinutes", 30));
+      GROUND_TRACKS_VEHICLES = bool("groundTracksVehicles", true);
+      GROUND_TRACKS_FEET = bool("groundTracksFeet", true);
+      GROUND_TRACKS_BODIES = bool("groundTracksBodies", true);
+      GROUND_TRACKS_GRASS = bool("groundTracksGrass", true);
+      DEV_GROUND_TRACKS_VIEW = integer("devGroundTracksView", 0);
+      DEV_GROUND_TRACKS_COMP_BIAS_PCT = integer("devGroundTracksCompBiasPct", 5);
+      DEV_GROUND_TRACKS_RIG_SECONDS = integer("devGroundTracksRigSeconds", 0);
+      DEV_GROUND_TRACKS_LOG = bool("devGroundTracksLog", false);
+      DEV_GROUND_TRACKS_RIG = integer("devGroundTracksRig", 0);
+      DEV_GROUND_TRACKS_TIME_SCALE = Math.max(1, integer("devGroundTracksTimeScale", 1));
+      DEV_GROUND_TRACKS_WET_PCT = integer("devGroundTracksWetPct", -1);
       loadingLive = false;
    }
 
