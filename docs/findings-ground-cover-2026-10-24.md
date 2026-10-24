@@ -27,7 +27,7 @@ Desktop: RTX 4090, 5120x2160, power-saver profile, uncapped, empty options file.
 | Glints, nothing that can glint | 0.0 µs GPU; the game-thread check returns before gathering lights (14653) |
 | Glints, frosty dawn | +4.2 µs frame, +4.9 µs GPU (14642; was 9.7 / 12.2) |
 | Glints, worst case: 5,225 forced frost squares in full sun | +12.3 µs GPU with the default particle pass (14643) |
-| Glints, worst real case: wet town road at night, zoom 2.5, two cars' lights, street lamps | ~57 µs game thread (was 579), +24 ± 11 µs frame, 20-35 µs GPU (gcv-cost-wetnight4). **Open, back with ground-cover** |
+| Glints, worst real case: wet town road at night, zoom 2.5, two cars' lights, street lamps | game thread 4.0 µs (56.6 on the game thread, same build; was 579), worker ~57 µs on its own thread, GPU-bound frame +10-20 µs (gcv-cost-wetnight9 14727, -10 14732 order swapped) |
 
 ## Techniques, one by one
 
@@ -63,12 +63,39 @@ Fixes, in order:
   14639; gcv-look-wet-lamp 14641 now shows the streak toward the camera).
 - Headlights: the darkness gate stops glints on squares the game shows dark (14665).
 
+## Glint worker pass (2026-10-24 evening)
+
+| Run (job) | Change | Game thread a frame | Worker a frame |
+|---|---|---|---|
+| gcv-cost-wetnight5 (14703) | `glintAsync`: the per-frame build on its own thread, joined before the frame goes to the render thread | 6.4 (56.6 inline) | 53.3 |
+| gcv-cost-wetnight6 (14705) | torches and lamps gathered on the worker (the sun stays) | 6.9 (3.0 waits) | 78.9 |
+| gcv-cost-wetnight7 (14709) | out-of-date masks rebuild at most 12 a frame (a 5 % wet step rebuilt ~400 in one frame: a 4-5 ms hitch, inline too) | 4.4 | 81.7 |
+| gcv-cost-wetnight8 (14712) | light keys snapped to 1/4 square instead of 1/64 | 4.3 | 61.9 |
+| gcv-cost-wetnight9 / 10 (14727 / 14732) | final; order of the variants swapped (a +30 µs frame gap moved with the order: the route) | 4.0 / 4.4 | 56.6 / 57.7 |
+
+Per frame: ~199 chunk levels walked, 2.7 relit, ~194 copied whole. A per-square relight under a moving light was not built:
+1.4 % of levels relight a frame.
+
+Mac (M1 Pro, GL 4.1 core): every program links, leaves on lawns, sidewalks and the lot with pale frost, wind leaves drawn,
+glints on 3,334 frames (gcv-mac-look3 14725); sun glints from 9:30 (11° up; at 8:30 the sun was below the horizon). Cost at
+the 60 fps vsync: frame −6.8 ± 6.4 µs, game thread 14.1 µs, worker 48.7 µs, render thread ~18 µs glints / ~1 µs wind (Apple's
+timer queries read 0) (gcv-mac-cost2 14741).
+
+Motion (`devCapture` 1:1 60 fps, `harness/ground/cover/motion.py`: consecutive frames aligned, then diffed):
+
+| Runs | Scene | On | Off |
+|---|---|---|---|
+| gcv-motion-on / off (14721 / 14723) | dawn bench walk | 210 px changing over 49 frames (134 the player's idle); of 314 bright px, 254 steady, 12 blinking | 122 px |
+| gcv-pan-on / off (14730 / 14731) | 10 km/h pan past frosty lawns | jumps 1,166 ppm, bright 9.89 | 1,198 / 9.07 |
+| gcv-panforce-on / off (14734 / 14735) | same, every outdoor square frosted | 1,222 / 9.60 | 1,255 / 9.05 |
+| gcv-panforce-x20 (14739) | glints 20× brighter to count them | 46 points a frame, 97.0 % still there next frame (worst 10 %: 94.6) | |
+
 ## Open
 
-1. Worst-case glint game thread (~57 µs, chunk levels under moving car lights): the build moves to a frame worker. Back with
-   ground-cover.
-2. Mac (GL 4.1 core) untested; the legacy 2.1 path switches glints off. Back with ground-cover.
-3. Wind leaves and glints not yet judged moving in game. Back with ground-cover.
+1. The glint worker costs ~57 µs a frame off the game thread (49 on the Mac): the walk over ~200 chunk levels and the copy of
+   ~2,800 squares' records. The legacy GL 2.1 Mac path switches glints off.
+2. Twinkle under moving headlights at night not captured.
+3. Sun glints are sparse: the camera is fixed and Kentucky's sun never reaches the mirror direction; only steep facets glint.
 4. Glints use at most 8 lights (torches and headlights first, then lamps, then taillights); a crowded scene can drop lamps.
 5. The wet-lamp look used forced wetting, which wets the grass too; in play only roads get the wet mask.
 6. Short pop-ins at world load (29 ms average).

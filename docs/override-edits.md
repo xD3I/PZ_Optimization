@@ -8645,3 +8645,8 @@ are off, or nothing on screen can glint, it returns without walking the chunks. 
 so they can go past 8-bit white (`glintHdrPct`); it draws nothing unless the normal glint draw ran that frame and HDR output
 is on. The ground cover itself (`groundScatter`) bakes through ground-common's hooks and needs no line here. Neither hook
 changes stock behaviour with the keys off.
+
+A third line at the end of the level loop, right after `pzopt.TileRecord.endFrame()`: `pzopt.Glints.endFrame()` waits for the
+glint worker's list for this frame before the frame goes to the render thread. With `glintAsync` (default on),
+`Glints.queue` only gathers the sun or moon, queues the draw at its place and starts the worker, which walks the chunk levels
+and fills the frame's records while the game thread draws the rest. It returns at once when glints are off or no job is out.
