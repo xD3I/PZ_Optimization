@@ -7589,6 +7589,20 @@ local function install()
         stockGainJoypadFocus(self, ...)
         if self.pzoptMenuOption then pcall(syncJoypadRow, self) end
     end
+    -- (2026-10-24, the flip) a controller's first A goes to this when it has no focus yet (JoypadControllerData
+    -- onPressButtonNoFocus); stock knows the column and its own screens, not ours, so with the screen up before any press
+    -- (the benchmark's report after its restart) the A was dropped and the pad never reached the screen
+    local stockFocusForController = MainScreen.getCurrentFocusForController
+    function MainScreen:getCurrentFocusForController(...)
+        local s = self.pzoptMenuScreen
+        if s and s:isReallyVisible() and not (self.animPopup and self.animPopup:isReallyVisible()) and not UIManager.isModalVisible() then
+            for _, cls in ipairs({ PzoptUpdateDialog, PzoptCompatDialog }) do
+                if cls and cls.instance and cls.instance:isReallyVisible() then return cls.instance end
+            end
+            return s
+        end
+        return stockFocusForController(self, ...)
+    end
     local stockJoypadDown = MainScreen.onJoypadDown
     function MainScreen:onJoypadDown(button, ...)
         local label = self.pzoptMenuOption
