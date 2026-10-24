@@ -57,7 +57,7 @@ Scene presets (night with / without the torch, thunderstorm, heavy fog, both; sp
 ```bash
 harness/run.sh --label <name> --preset night-torch --prop instrument=true --no-dashboard   # or night-dark, storm, fog, storm-fog, helicopter
 ```
-Presets only add flags (`time_of_day`, `torch`, `visible`, `weather`, `fog`, route, turn, zoom); later `--flag`s override
+Presets only add flags (`time_of_day`, `torch`, `visible`, `weather`, `fog`, route, turn, zoom; `--season spring|summer|autumn|winter` adds `season=` to any of them); later `--flag`s override
 (`--preset storm --flag fog=0.5` = storm with half fog).
 Check `weather=`/`torch=`/`night_strength=` in `pzopt-bench.out` and compare preset runs only with
 runs of the same preset.

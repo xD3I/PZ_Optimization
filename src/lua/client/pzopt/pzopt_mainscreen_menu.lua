@@ -2096,8 +2096,9 @@ local function setupPageTabs(self)
                 return {
                     { "Where", info.where or "-", C_GREY },
                     { "Length", string.format("About %d s a pass, plus about 16 s to restart and load", sc.seconds), C_GREY },
-                    { "Runs", string.format("%s, %s, %s, %s", n == 1 and "1 pass" or (n .. " passes"),
-                        PzoptBench.weathers[per.weather].label, PzoptBench.fogs[per.fog].label, PzoptBench.times[per.time].label), C_GREY },
+                    { "Runs", string.format("%s, %s, %s, %s, %s", n == 1 and "1 pass" or (n .. " passes"),
+                        PzoptBench.weathers[per.weather].label, PzoptBench.fogs[per.fog].label, PzoptBench.times[per.time].label,
+                        PzoptBench.seasons[per.season or 1].label), C_GREY },
                     { "Score", id == "sweep" and "Not in the score: it measures each Visuals feature" or "Counts in the score", C_GREY },
                     { "Tests", sc.stresses ~= "" and sc.stresses or "-", C_GREY },
                 }
@@ -2133,6 +2134,13 @@ local function setupPageTabs(self)
                 function() return per.time end, function(i) per.time = i end,
                 "The hour " .. esc(sc.title) .. " runs at, held for the whole pass. Noon is the benches' own light; the evening's "
                     .. "low sun casts long shadows, the night is lit by the street lights and the cars.", 1, card))
+            table.insert(p.items, dropRow("season:" .. id, "Season", PzoptBench.seasons,
+                function(s) return s.label end,
+                function() return per.season or 1 end, function(i) per.season = i end,
+                "The season " .. esc(sc.title) .. " runs in: the world's date moves into it, so the trees and plants show it "
+                    .. "(spring blossom, summer green, autumn colours, bare in winter) and the days, light and temperature "
+                    .. "follow. Winter lays snow on the ground, and its rain and storms fall as snow. The start date is the "
+                    .. "benches' own (9 July).", 1, card))
         end
     end
     table.insert(p.items, { kind = "section", label = "Run" })

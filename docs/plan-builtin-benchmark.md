@@ -35,7 +35,7 @@ implemented and measured, none dropped.
 ## Techniques (status in the table at the end)
 
 1. Scripted, repeatable scenarios in a purpose-made world (above).
-2. Pinned scene: hour, weather, zoom, population, sandbox, game RNG seeded per pass.
+2. Pinned scene: hour, weather, season (the planner's per-scene chooser since 2026-10-24: start date / spring / summer / autumn / winter, Scene's `season=`), zoom, population, sandbox, game RNG seeded per pass.
 3. Warm-up excluded (settle before the route); a separate untimed warm-up pass optional (shader / disk caches).
 4. Several passes per scenario; mean, standard deviation, coefficient of variation, 95 % confidence interval
    (Student t); a pass more than 3 MAD from the median is flagged an outlier.

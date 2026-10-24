@@ -18,6 +18,9 @@ import zombie.iso.weather.ClimateManager;
  *       every run at the same instants; {@code clear} stops weather and pins the fair-weather values; with
  *       {@code time_of_day} the light follows that hour (the storm's dimming on top: a rainy night stays night), without it the
  *       light is pinned to daylight as before;</li>
+ *   <li>{@code season=spring|summer|autumn|winter} — the world's date moved into that season while it loads
+ *       ({@link Season}: erosion's tree / plant sprites, the climate, the sun); winter adds snow on the ground and makes
+ *       the {@code weather=} precipitation fall as snow;</li>
  *   <li>{@code fog=heavy|off|0..1} — pins the fog intensity ({@code heavy} = 1.0, the value a stock
  *       BLIZZARD stage without its own roll uses; a storm stage rolls at most 0.5) every frame. On its own it
  *       stops the save's weather period too (every WeatherPeriod stage re-pins fog to 0) but leaves the other
@@ -160,6 +163,7 @@ public final class Scene {
          Log.info("harness: sound=" + soundRadius + " every " + soundEvery + " frame(s) from the player's square, hearing="
                + zombie.SandboxOptions.instance.lore.hearing.getValue() + " (1=pinpoint x3, 2=normal x1, 3=poor x0.45)" + (soundParts ? ", parts timed" : "") + (soundFixed ? ", fixed square" : ""));
       }
+      Season.tick(); // season=winter: snow from world-ready, before the settle (the climate's first update had cleared it)
       if (!requested()) {
          return;
       }
@@ -499,6 +503,7 @@ public final class Scene {
    private static boolean hideUi;
 
    static void tick(IsoPlayer p, long nowNs) {
+      Season.tick(); // season=winter: the snow on the ground stays pinned
       if (hideUi) {
          // what the hide-UI key does (ISUIHandler.setVisibleAllUI): every visible element hidden (the clock, the car's
          // dashboard: Lua UI the Java switch alone leaves on), then the switch; every tick (entering a car shows the dashboard)
@@ -912,7 +917,7 @@ public final class Scene {
          if (fog < 0f) {
             set(cm, ClimateManager.FLOAT_FOG_INTENSITY, 0.0f);
          }
-         cm.getClimateBool(ClimateManager.BOOL_IS_SNOW).setOverride(false);
+         cm.getClimateBool(ClimateManager.BOOL_IS_SNOW).setOverride(Season.winter()); // season=winter: the rain falls as snow
          return;
       }
       // rain (2026-10-05, the manhole report): full rain in daylight, the storm's dim light left out so the puddles show
@@ -929,7 +934,7 @@ public final class Scene {
       light(cm, ClimateManager.FLOAT_GLOBAL_LIGHT_INTENSITY, storm ? 0.4f : 1.0f);
       light(cm, ClimateManager.FLOAT_AMBIENT, storm ? 0.45f : 1.0f);
       light(cm, ClimateManager.FLOAT_DAYLIGHT_STRENGTH, storm ? 0.45f : 1.0f);
-      cm.getClimateBool(ClimateManager.BOOL_IS_SNOW).setOverride(false);
+      cm.getClimateBool(ClimateManager.BOOL_IS_SNOW).setOverride(Season.winter()); // season=winter: the rain falls as snow
    }
 
    // fog_tint=dark: a near-black fog (the storm tint 0.5/0.45/0.4 glowed beige over a pitch-black night, cine-jev1)
@@ -1135,7 +1140,7 @@ public final class Scene {
             + "\nnight_strength=" + night + "\nprecipitation=" + precip + "\nfog_intensity=" + fogNow + "\nfog_fx=" + fogFx
             + "\nfog_quality=" + zombie.core.PerformanceSettings.fogQuality + "\nlightning_strikes=" + thunderCount
             + "\npopulation=" + (population >= 0f ? Float.toString(population) : "save") + "\nzombies_loaded=" + zombiesLoaded() + "\nzombies_removed=" + zombiesRemoved
-            + "\nsee_all=" + seeAll
+            + "\nsee_all=" + seeAll + Season.summary()
             + (carSpawn > 0 ? "\ncar_spawn=" + carSpawn + "\nvehicles_loaded=" + zombie.iso.IsoWorld.instance.currentCell.getVehicles().size() : "")
             + (soundRadius > 0 ? "\nsound_radius=" + soundRadius + "\nsound_every=" + soundEvery + "\nsound_stats=" + soundStats() : "")
             + (helicopter ? "\nhelicopter=" + helicopterState() : "") + ThumpRig.summary() + CarSiege.summary() + BrawlRig.summary() + MeleeRig.summary() + SoundProbe.summary() + Showcase.summary();
