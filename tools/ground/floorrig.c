@@ -95,10 +95,10 @@ int main(int argc, char **argv) {
       int w, h, u;
       if (sscanf(line, "atlas %1023s %d %d", a, &w, &h) == 3) { atlas = tex2d(w, h, GL_RGBA8, GL_RGBA, slurp(a, NULL), 0, 0); continue; }
       if (sscanf(line, "class %1023s", a) == 1) { classTex = tex2d(512, 512, GL_R8, GL_RED, slurp(a, NULL), 0, 1); continue; }
-      if (sscanf(line, "state %1023s", a) == 1) { stateTex = tex2d(1024, 1024, GL_RGBA8, GL_RGBA, slurp(a, NULL), 1, 1); continue; }
+      if (sscanf(line, "stateinfo %f %f %f %f", &sinfo[0], &sinfo[1], &sinfo[2], &sinfo[3]) == 4) continue;
+      if (strncmp(line, "state ", 6) == 0 && sscanf(line, "state %1023s", a) == 1) { stateTex = tex2d(1024, 1024, GL_RGBA8, GL_RGBA, slurp(a, NULL), 1, 1); continue; }
       if (sscanf(line, "map %f %f %f %f", &map[0], &map[1], &map[2], &map[3]) == 4) continue;
       if (sscanf(line, "bake %f %f", &bake[0], &bake[1]) == 2) continue;
-      if (sscanf(line, "stateinfo %f %f %f %f", &sinfo[0], &sinfo[1], &sinfo[2], &sinfo[3]) == 4) continue;
       float v;
       if (sscanf(line, "uniform1f %127s %f", un[nun].name, &v) == 2) { un[nun].v = v; un[nun++].isInt = 0; continue; }
       if (sscanf(line, "uniform1i %127s %f", un[nun].name, &v) == 2) { un[nun].v = v; un[nun++].isInt = 1; continue; }
@@ -148,8 +148,8 @@ int main(int argc, char **argv) {
       U1I(sm[i].name, 4 + i);
       glActiveTexture(GL_TEXTURE4 + i); glBindTexture(GL_TEXTURE_2D, sm[i].t);
    }
-   glActiveTexture(GL_TEXTURE0);
    GLuint ct, db, fbo;
+   glActiveTexture(GL_TEXTURE7); // the target's own unit: unit 0 keeps the atlas
    glGenTextures(1, &ct); glBindTexture(GL_TEXTURE_2D, ct);
    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, W, H, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
    glGenRenderbuffers(1, &db); glBindRenderbuffer(GL_RENDERBUFFER, db);
@@ -158,6 +158,7 @@ int main(int argc, char **argv) {
    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, ct, 0);
    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, db);
    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) { fprintf(stderr, "fbo incomplete\n"); return 1; }
+   glActiveTexture(GL_TEXTURE0);
    glViewport(0, 0, W, H);
    glClearColor(0, 0, 0, 0); glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
    glDisable(GL_DEPTH_TEST);
