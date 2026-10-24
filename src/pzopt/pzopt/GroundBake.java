@@ -35,9 +35,10 @@ import zombie.iso.fboRenderChunk.FBORenderChunkManager;
  *   <li>{@code vec3 pzgW} (the texel's world position: x, y in squares, z the level), {@code ivec2 pzgSq} (its square),
  *       {@code vec2 pzgF} (its place in the square, 0..1), {@code int pzgClass} (the square's class map byte, see
  *       {@link GroundTiles#mapByte}; {@code pzgMaterial()} its material), {@code int pzgClassAt(ivec2 square)} (any square's,
- *       neighbours included), {@code bool pzgAttached} (this draw is an attached piece of the floor: a blend edge, an overlay,
- *       not the floor's own sprite; only with {@link FloorPatch#wantsAttachedFlag()}), all set before the stock code
- *       runs;</li>
+ *       neighbours included), {@code int pzgPiece} (with {@link FloorPatch#wantsAttachedFlag()}: 0 the floor's own sprite, 1 an
+ *       attached piece of natural ground (a blends_natural edge), 2 any other attached piece (a grass / erosion overlay,
+ *       dug soil); {@code bool pzgAttached} = pzgPiece != 0; without the flag every piece draws as 0), all set before the
+ *       stock code runs;</li>
  *   <li>{@code vec4 pzgStateAt(vec2 world)}: the ground state map ({@link GroundState}) at a world position;</li>
  *   <li>the stock program's own names ({@code DIFFUSE}, {@code texCoord}, {@code col}, ...): the patch functions are
  *       inserted right before {@code main}, after every declaration.</li>
@@ -105,7 +106,7 @@ public final class GroundBake {
          return new String[0][];
       }
 
-      /** Wants {@code pzgAttached} (costs a second program: attached pieces draw with their own). */
+      /** Wants {@code pzgPiece} / {@code pzgAttached} (costs two more programs: attached pieces draw with their own, by kind). */
       default boolean wantsAttachedFlag() {
          return false;
       }
@@ -288,26 +289,31 @@ public final class GroundBake {
    }
 
    /**
-    * IsoSprite.startTileDepthShader: the program a floor tile starts ({@code program}: the stock tile-depth program the game
-    * chose; {@code attached}: the sprite is not the floor object's own, a blend edge or an overlay). The variant for a
-    * natural floor between {@link #floorBegin} and {@link #floorEnd}, else {@code program}.
+    * IsoSprite.startTileDepthShader: the program a floor tile starts ({@code stock}: the stock tile-depth program the game
+    * chose; the caller builds its uniform setters from the shader returned, so a variant whose uniforms sit at other
+    * locations than the stock program's gets its own; {@code sprite} the sprite drawn, {@code attached}: it is not the floor object's own, a blend edge or an
+    * overlay). The variant for a natural floor between {@link #floorBegin} and {@link #floorEnd}, else {@code program}.
     */
-   public static int program(int program, boolean attached) {
-      if (!FLOOR_ON || !CUR.get()[0]) {
-         return program;
+   public static zombie.tileDepth.TileDepthShader shader(zombie.tileDepth.TileDepthShader stock, zombie.iso.sprite.IsoSprite sprite, boolean attached) {
+      if (!FLOOR_ON || stock == null || !CUR.get()[0]) {
+         return stock;
       }
       Variant v = current;
       if (v == null || v.state != Variant.READY) {
-         return program;
+         return stock;
       }
-      boolean a = attached && v.attachedFlag;
-      if (program == v.stockTile) {
-         return a ? v.tileAttached : v.tile;
+      int program = stock.getID();
+      int piece = 0;
+      if (attached && v.attachedFlag) {
+         int code = GroundTiles.of(sprite);
+         piece = GroundTiles.natural(code) && (code & (GroundTiles.F_OVERLAY | GroundTiles.F_FARM)) == 0 ? 1 : 2;
       }
-      if (program == v.stockOpaque && v.opaque != 0) {
-         return a ? v.opaqueAttached : v.opaque;
+      int k = program == v.stockTile ? 0 : program == v.stockOpaque ? 1 : -1;
+      if (k < 0) {
+         return stock;
       }
-      return program;
+      zombie.tileDepth.TileDepthShader sh = v.shaders[piece * 2 + k];
+      return sh != null ? sh : stock;
    }
 
    // ------------------------------------------------------------------------------------------------ (c) floor passes
@@ -528,7 +534,7 @@ public final class GroundBake {
    private static final java.util.HashMap<String, Variant> VARIANTS = new java.util.HashMap<>();
    private static String tileVert, tileFrag, opaqueVert, opaqueFrag;
    private static Variant compiling;
-   private static int compilingKind; // 0 tile, 1 opaque, 2 tile attached, 3 opaque attached
+   private static int compilingKind; // piece * 2 + (0 tile, 1 opaque)
 
    private static final class Variant extends TextureDraw.GenericDrawer {
       static final int PENDING = 0, READY = 1, FAILED = 2;
@@ -537,8 +543,10 @@ public final class GroundBake {
       final boolean attachedFlag;
       final int view;
       volatile int state = PENDING;
-      int tile, opaque, tileAttached, opaqueAttached, stockTile, stockOpaque;
-      final int[] mapLoc = new int[4];
+      final int[] prog = new int[6]; // [piece * 2 + (0 tile, 1 opaque)], 0 = none (the stock program)
+      final zombie.tileDepth.TileDepthShader[] shaders = new zombie.tileDepth.TileDepthShader[6];
+      int stockTile, stockOpaque;
+      final int[] mapLoc = new int[6];
 
       Variant(String sig, ArrayList<FloorPatch> patches, boolean attachedFlag, int view) {
          this.sig = sig;
@@ -581,7 +589,7 @@ public final class GroundBake {
          case "pzopt_grTile.frag": {
             Variant v = compiling;
             String src = (compilingKind & 1) == 0 ? tileFrag : opaqueFrag;
-            String p = v == null || src == null ? null : variantSource(src, v, (compilingKind & 2) != 0);
+            String p = v == null || src == null ? null : variantSource(src, v, compilingKind / 2);
             return p != null ? p : FAILED_SOURCE;
          }
          default:
@@ -603,6 +611,7 @@ public final class GroundBake {
       "vec2 pzgF;",
       "int pzgClass;",
       "bool pzgAttached;",
+      "int pzgPiece;",
       "");
 
    static final String GLSL_FLOOR_SETUP = String.join("\n",
@@ -616,11 +625,8 @@ public final class GroundBake {
       "   pzgSq = ivec2(fl);",
       "   pzgF = pzgW.xy - fl;",
       "   pzgClass = pzgClassAt(pzgSq);",
-      "#ifdef PZG_ATTACHED",
-      "   pzgAttached = true;",
-      "#else",
-      "   pzgAttached = false;",
-      "#endif",
+      "   pzgPiece = PZG_PIECE;",
+      "   pzgAttached = PZG_PIECE != 0;",
       "}",
       "");
 
@@ -646,16 +652,14 @@ public final class GroundBake {
       "");
 
    /** The variant's fragment source from the stock program's final source; null if the source is not as expected. */
-   static String variantSource(String stock, Variant v, boolean attached) {
-      return variantSource(stock, v.patches, v.view, attached);
+   static String variantSource(String stock, Variant v, int piece) {
+      return variantSource(stock, v.patches, v.view, piece);
    }
 
-   static String variantSource(String stock, java.util.List<FloorPatch> patches, int view, boolean attached) {
+   static String variantSource(String stock, java.util.List<FloorPatch> patches, int view, int piece) {
       StringBuilder head = new StringBuilder();
       head.append("#define PZG_FLOOR 1\n#define PZG_VIEW ").append(view).append('\n');
-      if (attached) {
-         head.append("#define PZG_ATTACHED 1\n");
-      }
+      head.append("#define PZG_PIECE ").append(piece).append('\n');
       head.append(GroundHash.GLSL).append(GLSL_FLOOR_HEAD);
       String c = GroundHash.insertAfterHeader(stock, head.toString(), 130);
       if (c == null) {
@@ -734,26 +738,24 @@ public final class GroundBake {
       v.stockTile = st.getID();
       v.stockOpaque = so != null && so.isCompiled() ? so.getID() : -1;
       try {
-         v.tile = compile(v, 0, st);
-         if (v.tile == 0) {
-            v.state = Variant.FAILED;
-            return;
-         }
-         if (v.stockOpaque > 0 && opaqueFrag != null && opaqueVert != null) {
-            v.opaque = compile(v, 1, so);
-         }
-         if (v.attachedFlag) {
-            v.tileAttached = compile(v, 2, st);
-            v.opaqueAttached = v.opaque != 0 ? compile(v, 3, so) : 0;
-            if (v.tileAttached == 0) {
-               v.tileAttached = v.tile;
+         boolean opaque = v.stockOpaque > 0 && opaqueFrag != null && opaqueVert != null;
+         for (int piece = 0; piece < (v.attachedFlag ? 3 : 1); piece++) {
+            v.prog[piece * 2] = compile(v, piece * 2, st);
+            v.prog[piece * 2 + 1] = opaque ? compile(v, piece * 2 + 1, so) : 0;
+            for (int k = 0; k < 2; k++) {
+               int id = v.prog[piece * 2 + k];
+               v.shaders[piece * 2 + k] = id == 0 ? null : (zombie.tileDepth.TileDepthShader)zombie.core.opengl.Shader.ShaderMap.get(id);
+               if (id != 0 && v.shaders[piece * 2 + k] == null) {
+                  v.prog[piece * 2 + k] = 0;
+               }
             }
-            if (v.opaqueAttached == 0) {
-               v.opaqueAttached = v.opaque;
+            if (v.prog[piece * 2] == 0 && piece == 0) {
+               v.state = Variant.FAILED;
+               return;
             }
          }
          v.state = Variant.READY;
-         Log.info("ground: floor variant " + v.sig + " = programs " + v.tile + " / " + v.opaque + (v.attachedFlag ? " (+ attached " + v.tileAttached + " / " + v.opaqueAttached + ")" : "") + ", stock " + v.stockTile + " / " + v.stockOpaque);
+         Log.info("ground: floor variant " + v.sig + " = programs " + java.util.Arrays.toString(v.prog) + " (tile / opaque per piece: floor, natural edge, overlay), stock " + v.stockTile + " / " + v.stockOpaque);
       } catch (Throwable t) {
          Log.warn("ground: floor variant " + v.sig + " failed: " + t);
          v.state = Variant.FAILED;
@@ -771,9 +773,10 @@ public final class GroundBake {
             return 0;
          }
          String bad = sameUniforms(stock.getID(), s.getID());
-         if (bad != null) {
-            Log.warn("ground: floor variant " + v.sig + ": the stock uniform " + bad + " moved: stock floors");
-            return 0;
+         if (bad != null && kind == 0) {
+            // harmless: IsoSprite builds the floor's uniform setters from the variant itself (GroundBake.shader), TileBatch,
+            // foliage sway and the uniform cache look locations up per program
+            Log.info("ground: floor variant " + v.sig + ": stock uniform locations differ (" + bad + "), set through the variant's own");
          }
          int id = s.getID();
          Sway.aliasPatchedTile("pzopt_grTile", kind % 2 == 0 ? "tileWithDepth" : "opaqueWithDepth");
@@ -852,11 +855,10 @@ public final class GroundBake {
       mapValid = true;
       GpuSections.markNow(Ground.section("ground.bakeStart"), false);
       int prev = Ssr.boundProgram();
-      int[] progs = {v.tile, v.opaque, v.tileAttached, v.opaqueAttached};
       boolean bound = false;
-      for (int k = 0; k < 4; k++) {
-         int id = progs[k];
-         if (id == 0 || (k > 0 && (id == progs[0] || (k == 3 && id == progs[1])))) {
+      for (int k = 0; k < 6; k++) {
+         int id = v.prog[k];
+         if (id == 0) {
             continue;
          }
          GL20.glUseProgram(id);

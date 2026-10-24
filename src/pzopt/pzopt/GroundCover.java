@@ -91,6 +91,10 @@ public final class GroundCover {
 
    private static boolean registered;
 
+   static {
+      register(); // loaded by Ground.FEATURES the first frame a ground key is on
+   }
+
    /** World entry (NoLoadingScreen): the floor pass joins ground-common's bake. */
    public static void register() {
       if (!registered) {

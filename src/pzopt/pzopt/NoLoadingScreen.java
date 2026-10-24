@@ -42,7 +42,6 @@ public final class NoLoadingScreen {
          ModelShaders.warmup();
       }
       if (current instanceof IngameState) {
-         GroundCover.register(); // the ground cover's floor pass (off unless groundScatter)
          if (Config.SHADER_WARMUP && Overrides.enabled()) {
             zombie.core.opengl.RenderThread.queueInvokeOnRenderContext(GodRays.Gl::warm);
             zombie.core.opengl.RenderThread.queueInvokeOnRenderContext(BloodWet.Gpu::warm);
