@@ -88,6 +88,7 @@ public class GrassRig {
       pzopt.GrassBlades.Params p = pzopt.GrassBlades.rigParams();
       p.colorTex = src[1]; // the generation reads the pristine world (the game reads the target before drawing into it)
       p.depthTex = src[2];
+      p.targetFbo = dst[0];
       p.vp[0] = vx;
       p.vp[1] = vy;
       p.vp[2] = w;
@@ -122,6 +123,7 @@ public class GrassRig {
          // the wind advanced by `time` seconds (grass oscillator 1.3 Hz, gusts drifting at the dump's wind)
          p.ph[0] = (float)((p.ph[0] + time * 2.0 * Math.PI * 1.3) % (2.0 * Math.PI));
          p.gustU = (float)(((p.gustU - p.dirX * time * 3.0 / 8.0) % 32.0 + 32.0) % 32.0);
+         p.now += time;
       }
       p.o.apply(knobs);
       if (trail) {
