@@ -56,6 +56,9 @@ public final class GroundTiles {
     */
    public static final int F_ROAD = 1 << 14, F_WALK = 1 << 15;
    private static final int KNOWN = 1 << 30; // the cache's "looked up" bit
+   // the sprite's surface by its FloorMaterial / FootstepMaterial property, memoised beside the code (bits 20-22, bit 23 known):
+   // a city's built floors all take that path, two property lookups a square (gtr-lou3: 375 chunk surface reads, 3.5 us/frame)
+   private static final int PROP_KNOWN = 1 << 23, PROP_SHIFT = 20, PROP_MASK = PROP_KNOWN | (7 << PROP_SHIFT);
 
    public static int material(int code) {
       return code & 15;
@@ -90,7 +93,7 @@ public final class GroundTiles {
          s.pzoptGround = c;
          lookups++;
       }
-      return c & ~KNOWN;
+      return c & ~(KNOWN | PROP_MASK);
    }
 
    /** The code a sprite name gets (the cache's work; public for tests and the offline tools). */
@@ -238,7 +241,12 @@ public final class GroundTiles {
     * name rules do not know), {@link #SURF_SNOW} over any of them when {@code snow}; farmland, water and built floors none.
     */
    public static int surface(IsoGridSquare sq, boolean snow) {
-      int code = square(sq);
+      int s = surfaceFrom(square(sq), sq);
+      return s != SURF_NONE && snow ? SURF_SNOW : s;
+   }
+
+   /** {@link #surface} without snow from a {@link #square} code already read (pzopt ground-tracks 2026-10-24: the bake's). */
+   public static int surfaceFrom(int code, IsoGridSquare sq) {
       if ((code & F_EXCLUDED) != 0) {
          return SURF_NONE;
       }
@@ -262,13 +270,25 @@ public final class GroundTiles {
             s = sq == null ? SURF_NONE : byProperty(sq.getFloor());
             break;
       }
-      return s != SURF_NONE && snow ? SURF_SNOW : s;
+      return s;
    }
 
    private static int byProperty(IsoObject floor) {
       if (floor == null || floor.sprite == null) {
          return SURF_NONE;
       }
+      IsoSprite spr = floor.sprite;
+      of(spr); // (classified first: the memo's bits must not stand in for the "looked up" one)
+      int c = spr.pzoptGround;
+      if ((c & PROP_KNOWN) != 0) {
+         return (c >> PROP_SHIFT) & 7;
+      }
+      int r = byPropertyLookup(floor);
+      spr.pzoptGround = c | PROP_KNOWN | (r << PROP_SHIFT);
+      return r;
+   }
+
+   private static int byPropertyLookup(IsoObject floor) {
       try {
          zombie.core.properties.PropertyContainer p = floor.getProperties();
          String fm = p == null ? null : p.get(zombie.core.properties.IsoPropertyType.FLOOR_MATERIAL);

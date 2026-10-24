@@ -1984,6 +1984,7 @@ public final class Config {
    public static volatile boolean GROUND_TRACKS_AO; // groundTracksAo: the cavity term in ruts
    public static volatile int GROUND_TRACKS_STRENGTH_PCT; // groundTracksStrengthPct: how deep everything presses (100)
    public static volatile int GROUND_TRACKS_REBAKE_MS; // groundTracksRebakeMs: a chunk being stamped re-bakes at most this often (bake look)
+   public static volatile int GROUND_TRACKS_REBAKES_PER_SEC; // groundTracksRebakesPerSec: the stamping's chunk re-bakes a second at most (a horde over many chunks stretches the per-chunk interval instead; 0 no cap)
    public static volatile int GROUND_TRACKS_DECAY_MINUTES; // groundTracksDecayMinutes: game minutes between decay passes
    public static volatile boolean GROUND_TRACKS_VEHICLES, GROUND_TRACKS_FEET, GROUND_TRACKS_BODIES; // the stamp sources
    public static volatile boolean GROUND_TRACKS_GRASS; // groundTracksGrass: the game's grass objects (erosion grass, overlays) fade and go to straw where trodden
@@ -1994,6 +1995,7 @@ public final class Config {
    public static volatile int DEV_GROUND_TRACKS_RIG_SECONDS; // devGroundTracksRigSeconds: the look rig stamps for this many seconds, then stops (0: all the run)
    public static volatile int DEV_GROUND_TRACKS_RIG; // devGroundTracksRig: 1 a scripted scene round the player (a car pass with a skid, three walkers, a body, a drag), the look rig
    public static volatile boolean DEV_GROUND_TRACKS_LOG; // devGroundTracksLog: a stats line every 600 frames
+   public static volatile boolean DEV_GROUND_MOVERS_SYNC; // devGroundMoversSync: the characters' footprint gather on the game thread again (A/B of GroundMovers' worker)
    public static final int DEV_RAIN_SCALE_PCT = integer("devRainScalePct", 40); // dev: a raindrop's ring against a footstep's (% in space; time sqrt of it); read at launch
    public static final int DEV_RAIN_AMP_PCT = integer("devRainAmpPct", 150); // dev: a raindrop's slope against a footstep's (%); read at launch
    public static final int DEV_RAIN_LIT_PCT = integer("devRainLitPct", 120); // dev: how much a rain ring's / wake's slope brightens / darkens the puddle's final colour (%); read at launch
@@ -2531,6 +2533,7 @@ public final class Config {
       GROUND_TRACKS_AO = bool("groundTracksAo", true);
       GROUND_TRACKS_STRENGTH_PCT = Math.max(0, Math.min(300, integer("groundTracksStrengthPct", 100)));
       GROUND_TRACKS_REBAKE_MS = Math.max(0, integer("groundTracksRebakeMs", 300));
+      GROUND_TRACKS_REBAKES_PER_SEC = Math.max(0, integer("groundTracksRebakesPerSec", 12));
       GROUND_TRACKS_DECAY_MINUTES = Math.max(1, integer("groundTracksDecayMinutes", 30));
       GROUND_TRACKS_VEHICLES = bool("groundTracksVehicles", true);
       GROUND_TRACKS_FEET = bool("groundTracksFeet", true);
@@ -2540,6 +2543,7 @@ public final class Config {
       DEV_GROUND_TRACKS_COMP_BIAS_PCT = integer("devGroundTracksCompBiasPct", 5);
       DEV_GROUND_TRACKS_RIG_SECONDS = integer("devGroundTracksRigSeconds", 0);
       DEV_GROUND_TRACKS_LOG = bool("devGroundTracksLog", false);
+      DEV_GROUND_MOVERS_SYNC = bool("devGroundMoversSync", false);
       DEV_GROUND_TRACKS_RIG = integer("devGroundTracksRig", 0);
       DEV_GROUND_TRACKS_TIME_SCALE = Math.max(1, integer("devGroundTracksTimeScale", 1));
       DEV_GROUND_TRACKS_WET_PCT = integer("devGroundTracksWetPct", -1);

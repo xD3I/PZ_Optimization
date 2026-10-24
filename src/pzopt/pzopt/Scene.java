@@ -353,6 +353,9 @@ public final class Scene {
          crowd = Integer.parseInt(HarnessFlags.get("crowd", "0").trim());
          crowdAtNs = nowNs + 3_000_000_000L;
       }
+      if (crowdWalkNs > 0L && !CROWD.isEmpty() && nowNs >= crowdWalkAtNs) {
+         crowdWalk(nowNs);
+      }
       if (crowd <= 0 || nowNs < crowdAtNs) {
          return;
       }
@@ -386,11 +389,52 @@ public final class Scene {
          if (list != null) {
             for (zombie.characters.IsoZombie z : list) {
                z.setUseless(true); // never targets anyone (IsoZombie spotted / RespondToSound): stands and idles, still animated
+               CROWD.add(z);
             }
             spawned += list.size();
          }
       }
       Log.info("harness: crowd: " + spawned + " zombies spawned around " + px + "," + py + " (" + ground.size() + " outdoor squares)");
+      double walkS = Double.parseDouble(HarnessFlags.get("crowd_walk", "0").trim());
+      if (walkS > 0.0) {
+         crowdWalkNs = (long)(walkS * 1e9);
+         crowdWalkAtNs = nowNs;
+         crowdX = px;
+         crowdY = py;
+         crowdRMin = rMin;
+         crowdRMax = rMax;
+      }
+   }
+
+   // crowd_walk=S (2026-10-24, the ground tracks' stamping cost with a horde that walks): every S seconds each crowd zombie
+   // paths to a new random outdoor point of the crowd's ring (they stay useless: they walk, never target the ghost player)
+   private static final java.util.ArrayList<zombie.characters.IsoZombie> CROWD = new java.util.ArrayList<>();
+   private static long crowdWalkNs, crowdWalkAtNs;
+   private static int crowdX, crowdY, crowdRMin, crowdRMax, crowdWalks;
+   private static final java.util.Random CROWD_RNG = new java.util.Random(7);
+
+   private static void crowdWalk(long nowNs) {
+      crowdWalkAtNs = nowNs + crowdWalkNs;
+      zombie.iso.IsoCell cell = zombie.iso.IsoWorld.instance.currentCell;
+      int moved = 0;
+      for (zombie.characters.IsoZombie z : CROWD) {
+         if (z == null || z.isDead() || z.getCurrentSquare() == null) {
+            continue;
+         }
+         for (int tries = 0; tries < 8; tries++) {
+            double a = CROWD_RNG.nextDouble() * Math.PI * 2.0, r = crowdRMin + CROWD_RNG.nextDouble() * (crowdRMax - crowdRMin);
+            int tx = crowdX + (int)Math.round(Math.cos(a) * r), ty = crowdY + (int)Math.round(Math.sin(a) * r);
+            zombie.iso.IsoGridSquare sq = cell.getGridSquare(tx, ty, 0);
+            if (sq != null && sq.isOutside() && sq.isFree(false) && !sq.isWaterSquare()) {
+               z.pathToLocation(tx, ty, 0);
+               moved++;
+               break;
+            }
+         }
+      }
+      if (crowdWalks++ < 3) {
+         Log.info("harness: crowd walk: " + moved + " of " + CROWD.size() + " zombies given a new point");
+      }
    }
 
    private static final String[][] PLANT = {{"e_riverbirchJUMBOXL_1_0", "e_riverbirchJUMBOXL_1_4"}, {"e_dogwoodJUMBO_1_0", "e_dogwoodJUMBO_1_8"}};

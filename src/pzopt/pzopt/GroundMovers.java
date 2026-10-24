@@ -21,7 +21,9 @@ import zombie.vehicles.BaseVehicle;
  *   <li><b>Events</b> ({@link #wantEvents()}): this frame's footprints (a stride every 0.42 squares walking, 0.7 running,
  *   feet alternating; animals at 0.7 size), crawl drags, a body's imprint once on death, and every moving vehicle's wheel
  *   lines since the last frame (slip = 1 - Bullet's skidInfo, the vehicle's mass). A crowd is visited round robin (above 160
- *   zombies each one at least every ~0.3 s); the stride line is kept per character, so no print is lost, only placed late.
+ *   zombies each one at least every ~1.2 s); the stride line is kept per character, so no print is lost, only placed late.
+ *   The characters are gathered on a worker thread (devGroundMoversSync: on the game thread), their events a frame late;
+ *   the vehicles on the game thread.
  *   Read {@link #nEvents} / {@link #EV} (layout below) and {@link #EV_SRC}.</li>
  *   <li><b>Near movers</b> ({@link #wantNear(float)}): the players, zombies (at most {@link #MAX_NEAR}) and vehicles within
  *   the asked reach of the camera's character on its level: position, heading, speed, radius, a smoothed moving strength
@@ -34,7 +36,8 @@ import zombie.vehicles.BaseVehicle;
  * <p>Event layout, {@link #EV_FLOATS} floats each: kind ({@link #FOOT}, {@link #DRAG}, {@link #BODY}, {@link #WHEEL}), who
  * ({@link #PLAYER}, {@link #ZOMBIE}, {@link #ANIMAL}, {@link #VEHICLE}), then
  * <ul>
- *   <li>FOOT: x, y (the print's centre), ux, uy (heading), side (+1 left / -1 right), size (1, animals 0.7), running 0/1;</li>
+ *   <li>FOOT: x, y (the print's centre), ux, uy (heading), side (+1 left / -1 right), size (1, animals 0.7), running 0/1,
+ *   ground (1 natural as GroundState.peek knows it, 0 not known); none on known pavement while {@link #dropPaved};</li>
  *   <li>DRAG: x0, y0, x1, y1 (the dragged line), size;</li>
  *   <li>BODY: x, y, fx, fy (the body's facing), size;</li>
  *   <li>WHEEL: x0, y0, x1, y1 (the wheel's line since its last point), slip 0..1, mass (kg), wheel index.</li>
@@ -54,7 +57,7 @@ public final class GroundMovers {
    public static final float[] EV = new float[MAX_EVENTS * EV_FLOATS];
    public static final IsoMovingObject[] EV_SRC = new IsoMovingObject[MAX_EVENTS];
    public static int nEvents;
-   public static long eventsTotal, eventsDropped, gatherNs, frames;
+   public static long eventsTotal, eventsDropped, gatherNs, frames, vehicleNs, characterNs, visitsTotal;
 
    /** A mover near the camera this frame. */
    public static final class Mover {
@@ -135,8 +138,34 @@ public final class GroundMovers {
       }
       frames++;
       if (events) {
+         long ta = System.nanoTime();
+         GAME.n = 0;
          vehicles(cell);
-         characters(cell);
+         scanAnimals(cell);
+         long tb = System.nanoTime();
+         if (Config.DEV_GROUND_MOVERS_SYNC || workerFailed) {
+            characters(cell, GAME, dtGame);
+         } else {
+            // pzopt ground-tracks 2026-10-24: the characters' gather runs on a worker (the Louisville horde's ~45 zombie
+            // visits a frame were 4.3 us of game thread, cold objects): its events of the last job are taken here at the
+            // stamp rate (devGroundStateHz, 30 a second: a print ~1-2 batches late), and the next job is posted; the game
+            // thread never waits for it
+            if (doneGen == postGen && (!posted || t0 - lastTakeNs >= TAKE_PERIOD_NS)) {
+               lastTakeNs = t0; // (taken at GroundState's stamp rate: the worker's job covers the time since its last)
+               if (posted) {
+                  take(WORK);
+               }
+               postScale = paused ? 0.0 : Math.min(4.0, Math.max(0.0, zombie.GameTime.getInstance().getTrueMultiplier()));
+               posted = true;
+               startWorker();
+               postGen = postGen + 1;
+            } else if (doneGen != postGen) {
+               workerBusy++;
+            }
+         }
+         nEvents = GAME.n;
+         vehicleNs += tb - ta;
+         characterNs += System.nanoTime() - tb;
       }
       if (near) {
          near(cell, nearReach);
@@ -146,41 +175,196 @@ public final class GroundMovers {
 
    public static String stats() {
       return "ground movers: frames " + frames + ", events " + eventsTotal + " (dropped " + eventsDropped + "), gather "
-         + (frames == 0 ? "0" : String.format(java.util.Locale.ROOT, "%.2f", gatherNs / 1e3 / frames)) + " us/frame";
+         + (frames == 0 ? "0" : String.format(java.util.Locale.ROOT, "%.2f", gatherNs / 1e3 / frames)) + " us/frame (vehicles "
+         + (frames == 0 ? "0" : String.format(java.util.Locale.ROOT, "%.2f", vehicleNs / 1e3 / frames)) + ", characters "
+         + (frames == 0 ? "0" : String.format(java.util.Locale.ROOT, "%.2f", characterNs / 1e3 / frames)) + ", zombie visits " + visitsTotal + "; worker " + (workerJobs == 0 ? "0" : String.format(java.util.Locale.ROOT, "%.2f", workerNs / 1e3 / workerJobs))
+         + " us/job, jobs " + workerJobs + ", paved prints dropped " + pavedDropped + ", busy " + workerBusy + ", failures " + workerErrors + (Config.DEV_GROUND_MOVERS_SYNC || workerFailed ? ", off" : "") + ")";
    }
 
    // ------------------------------------------------------------------------------------------------ events
 
-   private static int event(int kind, int who, IsoMovingObject src) {
-      if (nEvents >= MAX_EVENTS) {
-         eventsDropped++;
-         return -1;
+   /** Where a gather writes its events: the frame's {@link #EV} (game thread) or the worker's own arrays. */
+   static final class Sink {
+      final float[] ev;
+      final IsoMovingObject[] src;
+      int n;
+      long total, dropped;
+
+      Sink(float[] ev, IsoMovingObject[] src) {
+         this.ev = ev;
+         this.src = src;
       }
-      int o = nEvents * EV_FLOATS;
-      EV[o] = kind;
-      EV[o + 1] = who;
-      EV_SRC[nEvents] = src;
-      nEvents++;
-      eventsTotal++;
-      return o + 2;
+
+      int event(int kind, int who, IsoMovingObject o) {
+         if (n >= MAX_EVENTS) {
+            dropped++;
+            return -1;
+         }
+         int k = n * EV_FLOATS;
+         ev[k] = kind;
+         ev[k + 1] = who;
+         src[n] = o;
+         n++;
+         total++;
+         return k + 2;
+      }
+   }
+
+   private static final Sink GAME = new Sink(EV, EV_SRC);
+   private static final Sink WORK = new Sink(new float[MAX_EVENTS * EV_FLOATS], new IsoMovingObject[MAX_EVENTS]);
+
+   private static int event(int kind, int who, IsoMovingObject src) {
+      int o = GAME.event(kind, who, src);
+      if (o < 0) {
+         eventsDropped++;
+      } else {
+         eventsTotal++;
+      }
+      return o;
+   }
+
+   /** Game thread: the worker's finished job appended to this frame's events. */
+   private static void take(Sink w) {
+      int m = Math.min(w.n, MAX_EVENTS - GAME.n);
+      if (m > 0) {
+         System.arraycopy(w.ev, 0, EV, GAME.n * EV_FLOATS, m * EV_FLOATS);
+         System.arraycopy(w.src, 0, EV_SRC, GAME.n, m);
+         GAME.n += m;
+      }
+      java.util.Arrays.fill(w.src, 0, w.n, null); // (no stale references kept alive)
+      eventsTotal += m;
+      eventsDropped += w.n - m + w.dropped;
+      visitsTotal += workerVisits;
+      workerVisits = 0;
+      w.n = 0;
+      w.dropped = 0;
+   }
+
+   // ------------------------------------------------------------------------------------------------ the worker
+   // One daemon thread that polls every millisecond for a posted job (no unpark: waking a parked thread is a futex call on
+   // the game thread). It owns the characters' pzoptGm* stride state and the round robin's cursor while it is on; it reads
+   // the zombie list and the characters' positions as the game thread leaves them (a position a frame old at worst; a list
+   // that shrank under the walk ends the walk early, the cursor goes on next job).
+
+   private static volatile int postGen, doneGen;
+   private static long lastTakeNs;
+   private static final long TAKE_PERIOD_NS = Config.DEV_GROUND_STATE_HZ <= 0 ? 0L : 1_000_000_000L / Config.DEV_GROUND_STATE_HZ;
+   private static volatile double postScale;
+   private static boolean posted;
+   private static volatile boolean workerFailed;
+   private static Thread workerThread;
+   private static int workerVisits; // worker-owned until doneGen, read by take()
+   private static int workerVehicleScan = 60; // (worker: its first job scans)
+   public static long workerNs, workerJobs, workerBusy, workerErrors;
+   /** Set by GroundState (its only consumer): FOOT events on known pavement are not made (GroundState.peek). */
+   public static volatile boolean dropPaved;
+   public static long pavedDropped;
+
+   private static void startWorker() {
+      if (workerThread != null) {
+         return;
+      }
+      Thread t = new Thread(GroundMovers::workerLoop, "pzopt-ground-movers");
+      t.setDaemon(true);
+      workerThread = t;
+      t.start();
+   }
+
+   private static void workerLoop() {
+      int seen = 0;
+      long last = 0L;
+      while (true) {
+         int g = postGen;
+         if (g == seen) {
+            java.util.concurrent.locks.LockSupport.parkNanos(1_000_000L);
+            continue;
+         }
+         seen = g;
+         long t0 = System.nanoTime();
+         double dt = last == 0L ? 1.0 / 60.0 : Math.min(0.1, (t0 - last) / 1e9);
+         last = t0;
+         try {
+            IsoCell cell = IsoWorld.instance == null ? null : IsoWorld.instance.currentCell;
+            if (cell != null) {
+               characters(cell, WORK, dt * postScale);
+               boolean drivers = false;
+               for (IsoPlayer p : IsoPlayer.players) {
+                  drivers |= p != null && p.getVehicle() != null;
+               }
+               driversNow = drivers;
+               if (++workerVehicleScan >= 60) {
+                  workerVehicleScan = 0;
+                  scanVehicles(cell);
+               }
+            }
+         } catch (Throwable t) {
+            WORK.n = 0;
+            if (++workerErrors == 1L) {
+               Log.warn("ground movers: worker job failed (" + t + "), retrying next frame");
+            }
+            if (workerErrors >= 200L) {
+               workerFailed = true; // (the game thread gathers again)
+               Log.warn("ground movers: worker failed 200 times, the gather is back on the game thread");
+            }
+         }
+         workerNs += System.nanoTime() - t0;
+         workerJobs++;
+         doneGen = g;
+      }
    }
 
    private static final Vector3f WP = new Vector3f();
    private static final ArrayList<BaseVehicle> MOVING = new ArrayList<>();
    private static final ArrayList<IsoGameCharacter> ANIMALS = new ArrayList<>();
-   private static int vehicleScan, animalScan = 1000, zCursor;
+   private static int vehicleScan, animalScan = 10000, zCursor;
 
-   private static void vehicles(IsoCell cell) {
-      if (++vehicleScan >= 20) {
-         vehicleScan = 0;
-         MOVING.clear();
+   private static final BaseVehicle[] NO_VEHICLES = new BaseVehicle[0];
+   private static volatile BaseVehicle[] movingNow = NO_VEHICLES; // the last scan's moving vehicles (the worker's, or the game thread's)
+   private static BaseVehicle[] movingUsed = NO_VEHICLES;
+   public static long vehicleScanRaces;
+   private static volatile boolean driversNow = true; // (the worker's last job: a player sits in a vehicle)
+
+   /** The cell's moving vehicles (a scan every ~2 s: a parked car that drives off is picked up then). */
+   private static void scanVehicles(IsoCell cell) {
+      ArrayList<BaseVehicle> out = new ArrayList<>();
+      try {
          for (BaseVehicle v : cell.getVehicles()) {
             if (v != null && Math.abs(v.getCurrentSpeedKmHour()) > 0.5F) {
-               MOVING.add(v);
-            } else if (v != null) {
-               v.pzoptGmWheels = null; // parked: its next line starts where it moves off
+               out.add(v);
             }
          }
+      } catch (RuntimeException e) {
+         vehicleScanRaces++; // (the worker's walk met a chunk load's add / remove: the last scan stays, the next one is ~2 s on)
+         return;
+      }
+      movingNow = out.isEmpty() ? NO_VEHICLES : out.toArray(NO_VEHICLES);
+   }
+
+   private static void vehicles(IsoCell cell) {
+      boolean async = !(Config.DEV_GROUND_MOVERS_SYNC || workerFailed);
+      if (!async && ++vehicleScan >= 120) { // (20 frames: a city's hundreds of parked cars cost 1.2 us/frame, gtr-lou3; on the worker since 10-24)
+         vehicleScan = 0;
+         scanVehicles(cell);
+      }
+      BaseVehicle[] now = movingNow;
+      if (async && now.length == 0 && movingUsed.length == 0 && !driversNow) {
+         return; // pzopt ground-tracks 2026-10-24: nothing moves and nobody drives (the worker looks at the players each job)
+      }
+      if (now != movingUsed) {
+         for (BaseVehicle v : movingUsed) { // parked since: its next line starts where it moves off
+            boolean still = false;
+            for (BaseVehicle w : now) {
+               still |= w == v;
+            }
+            if (!still) {
+               v.pzoptGmWheels = null;
+            }
+         }
+         movingUsed = now;
+      }
+      MOVING.clear();
+      if (now.length > 0) {
+         java.util.Collections.addAll(MOVING, now);
       }
       for (IsoPlayer p : IsoPlayer.players) {
          BaseVehicle v = p == null ? null : p.getVehicle();
@@ -237,48 +421,80 @@ public final class GroundMovers {
       }
    }
 
-   private static void characters(IsoCell cell) {
+   private static void characters(IsoCell cell, Sink sink, double dtG) {
+      boolean onWorker = sink == WORK;
       ArrayList<IsoZombie> zs = cell.getZombieList();
       int n = zs.size();
-      // a crowd round robin: each zombie at least every ~0.3 s (the stride line is kept, nothing is lost)
-      float dt = (float)Math.max(1.0 / 240.0, Math.min(0.1, dtGame));
-      int visits = n <= 160 ? n : Math.min(n, Math.max(64, (int)Math.ceil(n * dt / 0.3F)));
+      // a crowd round robin: each zombie at least every ~1.2 s (the stride line is kept, nothing is lost: a walker covers
+      // ~0.6-1.2 squares in that time, up to 10 prints a visit, a sprinter's 4 squares under the 6-square jump cut). 0.3 s
+      // visited ~110 zombies a frame in the Louisville horde at 60 fps (gtr-lou1: gather 7.2 us/frame), 0.6 s ~84 (lou4)
+      float dt = (float)Math.max(1.0 / 240.0, Math.min(0.1, dtG));
+      int visits = n <= 160 ? n : Math.min(n, Math.max(16, (int)Math.ceil(n * dt / 1.2F)));
       if (zCursor >= n) {
          zCursor = 0;
       }
       for (int k = 0; k < visits; k++) {
-         IsoZombie z = zs.get(zCursor);
+         IsoZombie z;
+         if (onWorker) {
+            if (zCursor >= zs.size()) { // (the list shrank under the worker's walk)
+               zCursor = 0;
+               break;
+            }
+            try {
+               z = zs.get(zCursor);
+            } catch (IndexOutOfBoundsException e) {
+               zCursor = 0;
+               break;
+            }
+         } else {
+            z = zs.get(zCursor);
+         }
          if (++zCursor >= n) {
             zCursor = 0;
          }
          if (z != null) {
-            character(z, ZOMBIE, 1F);
+            character(z, ZOMBIE, 1F, sink);
+         }
+         if (onWorker) {
+            workerVisits++;
+         } else {
+            visitsTotal++;
          }
       }
       for (IsoPlayer p : IsoPlayer.players) {
          if (p != null) {
-            character(p, PLAYER, 1F);
+            character(p, PLAYER, 1F, sink);
          }
       }
-      if (++animalScan >= 120) {
-         animalScan = 0;
-         ANIMALS.clear();
-         for (IsoMovingObject o : cell.getObjectList()) {
-            if (o instanceof zombie.characters.animals.IsoAnimal a) {
-               ANIMALS.add(a);
-            }
-         }
-      }
-      for (int i = 0; i < ANIMALS.size(); i++) {
-         IsoGameCharacter a = ANIMALS.get(i);
+      IsoGameCharacter[] animals = animalsNow; // (the game thread's scan, published whole)
+      for (IsoGameCharacter a : animals) {
          if (a.getCurrentSquare() != null) {
-            character(a, ANIMAL, ANIMAL_SIZE);
+            character(a, ANIMAL, ANIMAL_SIZE, sink);
          }
       }
    }
 
+   /** Game thread: the cell's animals every 120 frames (the object set is the game thread's to walk). */
+   private static void scanAnimals(IsoCell cell) {
+      if (++animalScan < 600) { // (every ~10 s: the cell's set holds the whole horde, 2,400 entries in Louisville; at 120 frames it was ~1 us a frame)
+         return;
+      }
+      animalScan = 0;
+      ANIMALS.clear();
+      for (IsoMovingObject o : cell.getObjectList()) {
+         if (o instanceof zombie.characters.animals.IsoAnimal a) {
+            ANIMALS.add(a);
+         }
+      }
+      animalsNow = ANIMALS.isEmpty() ? NO_ANIMALS : ANIMALS.toArray(NO_ANIMALS);
+   }
+
+   private static final IsoGameCharacter[] NO_ANIMALS = new IsoGameCharacter[0];
+   private static volatile IsoGameCharacter[] animalsNow = NO_ANIMALS;
+
    /** A character's strides since its last print: a footprint per stride beside the walked line, feet alternating. */
-   private static void character(IsoGameCharacter c, int who, float size) {
+   private static void character(IsoGameCharacter c, int who, float size, Sink sink) {
+      float[] EV = sink.ev; // (the sink's arrays: the frame's or the worker's)
       if (c.getZ() >= 0.5F || c.getVehicle() != null) {
          c.pzoptGmX = 0F;
          c.pzoptGmY = 0F;
@@ -289,7 +505,7 @@ public final class GroundMovers {
          if (!c.pzoptGmDead) {
             c.pzoptGmDead = true;
             float a = c.getAnimAngleRadians();
-            int o = event(BODY, who, c);
+            int o = sink.event(BODY, who, c);
             if (o >= 0) {
                EV[o] = x;
                EV[o + 1] = y;
@@ -308,7 +524,7 @@ public final class GroundMovers {
       if (d2 < walk * walk && (lx != 0F || ly != 0F)) {
          return; // not a stride yet (the common case)
       }
-      if (lx == 0F && ly == 0F || d2 > 9F) {
+      if (lx == 0F && ly == 0F || d2 > 36F) { // (a jump: teleport, pooled reuse)
          c.pzoptGmX = x;
          c.pzoptGmY = y;
          return;
@@ -320,12 +536,12 @@ public final class GroundMovers {
       }
       float d = (float)Math.sqrt(d2);
       float ux = dx / d, uy = dy / d;
-      int steps = Math.min(6, (int)(d / stride));
+      int steps = Math.min(10, (int)(d / stride));
       boolean crawl = c.isCrawling();
       for (int k = 1; k <= steps; k++) {
          float px = lx + ux * stride * k, py = ly + uy * stride * k;
          if (crawl) {
-            int o = event(DRAG, who, c);
+            int o = sink.event(DRAG, who, c);
             if (o >= 0) {
                EV[o] = px - ux * stride;
                EV[o + 1] = py - uy * stride;
@@ -336,7 +552,12 @@ public final class GroundMovers {
             continue;
          }
          c.pzoptGmFoot ^= 1;
-         int o = event(FOOT, who, c);
+         int pk = dropPaved ? GroundState.peek(px, py) : 0;
+         if (pk == 2) {
+            pavedDropped++; // pzopt ground-tracks 2026-10-24: a print on known pavement never becomes an event
+            continue;
+         }
+         int o = sink.event(FOOT, who, c);
          if (o >= 0) {
             EV[o] = px;
             EV[o + 1] = py;
@@ -345,6 +566,7 @@ public final class GroundMovers {
             EV[o + 4] = c.pzoptGmFoot == 0 ? 1F : -1F;
             EV[o + 5] = size;
             EV[o + 6] = running ? 1F : 0F;
+            EV[o + 7] = pk; // 1: natural ground under it (GroundState.peek), 0 not known
          }
       }
       c.pzoptGmX = lx + ux * stride * steps;
