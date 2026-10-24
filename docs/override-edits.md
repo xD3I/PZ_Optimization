@@ -8537,3 +8537,29 @@ from 2 frames after the first chair, vs `uideps-after-fix`).
   `skipGetters`.
 - Tests: `UiDepsTest` (`noisyListReceivers` with a list whose iterators throw and with the real `PZArrayList`; an equal
   list as the learned receiver; a table key whose `hashCode` throws once the table changed: INVALID, then opaque).
+
+### Controller on-screen keyboard latency (2026-10-24, worktree osk-lag): Input (new), GameWindow, pzopt_osk_fast.lua
+
+Profile rig: `run.sh --pad harness/pad/osk-lag.txt --flag inputlag=1`, `harness/osklag.py <run>` (press-to-screen per pad
+press through the PZ OPTIMIZATION search's on-screen keyboard). Three latencies stacked on a key press, all stock:
+
+- `zombie.core.input.Input` (new override). `updateGameThread` derives the button edges every pad handler and binding reads
+  (`controllerPressed`, `JoypadManager.onPressed`) from the controller state in use, then swaps in the newly polled one at
+  its end, so every pad button acted a frame after the poll that saw it, while the hat and the sticks (read later in the
+  frame through the controllers, after the swap) acted in that frame: on the keyboard the A button's handler ran a frame
+  after the D-pad's for presses polled together. Key `padFresh` (default on): the swap moves to the top of the method (the
+  connect / disconnect check and the edges then read the fresh poll); off, the stock order. Same edit as keyboardFresh's
+  in GameKeyboard.
+- `GameWindow.logic`: key `textEntryEarly` (default on) calls `Core.updateKeyboard` right after `GameKeyboard.update`, so the
+  focused text box takes the characters swapped in this frame before the UI updates and draws; stock gave them to the box
+  only in `DoFrameReady`, after the frame's render (a typed character showed a frame later). `DoFrameReady` still runs it
+  (the queue is empty then); a box focused later in the frame still gets the stock "ignore the first key" handling from
+  `DoFrameReady`. Also `GameWindow.frameStep` calls `pzopt.InputLag.afterRender` (harness probe, `--flag inputlag=1`: what
+  the frame drew of the on-screen keyboard, `U` lines).
+- Lua, no override: `pzopt_osk_fast.lua` (key `oskFast`, default on) replaces three functions of the game's
+  ISOnScreenKeyboard.lua while they are the game's own: a pad focus change lights / unlights a key at once instead of the
+  stock UITransition fade (in 100 ms, out 200 ms: the cursor read as moved on the third frame); the default key is focused
+  the first frame the keys are visible (stock: no key lit and the panel at row 1 column 1 after opening, the first A typed
+  "`"); and while the keyboard is up, `queueCharEvent` / `queueKeyEvent` (Backspace, arrows) go straight to the keyboard's
+  entry the way `Core.updateKeyboardAux` hands them over instead of through the render thread and a later frame's keyboard
+  swap (2 frames); Enter, Shift, a full or first-key-ignoring entry and non-ASCII characters keep the stock queue.

@@ -33,6 +33,8 @@ import zombie.input.MouseStateCache;
  */
 public final class InputLatch {
    public static final boolean KEYBOARD_FRESH = Config.KEYBOARD_FRESH && Overrides.enabled();
+   public static final boolean TEXT_ENTRY_EARLY = Config.TEXT_ENTRY_EARLY && Overrides.enabled();
+   public static final boolean PAD_FRESH = Config.PAD_FRESH && Overrides.enabled();
    public static final boolean LATCH = Config.INPUT_LATCH && Overrides.enabled();
    public static final boolean GATE = Config.FRAME_START_GATE && Overrides.enabled();
    private static final long WAIT_NS = Config.INPUT_LATCH_WAIT_US * 1000L;

@@ -43,11 +43,15 @@ def now_ms():
     return int(time.time() * 1000)
 
 
+PRESS_US = [0]  # epoch us of the last press's down SYN (2026-10-24, osk-lag: "us=" on press / hold lines)
+
+
 def press(ui, name, hold=0.12):
     """Presses name for hold seconds; returns the epoch ms of the down and the up event (None for an unknown name)."""
     if name in BUTTONS:
         ui.write(e.EV_KEY, BUTTONS[name], 1)
         ui.syn()
+        PRESS_US[0] = time.time_ns() // 1000
         t0 = now_ms()
         time.sleep(hold)
         ui.write(e.EV_KEY, BUTTONS[name], 0)
@@ -57,6 +61,7 @@ def press(ui, name, hold=0.12):
         axis, value = HATS[name] if name in HATS else AXES[name]
         ui.write(e.EV_ABS, axis, value)
         ui.syn()
+        PRESS_US[0] = time.time_ns() // 1000
         t0 = now_ms()
         time.sleep(hold)
         ui.write(e.EV_ABS, axis, 0)
@@ -106,7 +111,7 @@ def serve(fifo):
                     if parts[0] == "hold":              # hold <button> <seconds>
                         t = press(ui, parts[1], float(parts[2]))
                         if t:
-                            print("hold", parts[1], "t=%d up=%d" % t, flush=True)
+                            print("hold", parts[1], "t=%d up=%d" % t, "us=%d" % PRESS_US[0], flush=True)
                         continue
                     if parts[0] == "chord":             # chord <button> <button> [seconds]
                         t = chord(ui, parts[1:3], float(parts[3]) if len(parts) > 3 else 0.12)
@@ -115,7 +120,7 @@ def serve(fifo):
                         continue
                     t = press(ui, parts[0])
                     if t:
-                        print("press", parts[0], "t=%d up=%d" % t, flush=True)
+                        print("press", parts[0], "t=%d up=%d" % t, "us=%d" % PRESS_US[0], flush=True)
     finally:
         ui.close()
 
