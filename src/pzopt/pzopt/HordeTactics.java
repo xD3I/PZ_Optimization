@@ -253,6 +253,88 @@ final class HordeTactics {
       Log.info("harness: horde: buffs:" + b);
    }
 
+   /** angle_light: what the character was given (the summary's horde_light), the light, its keep-on counters */
+   static String lightDone = "off";
+   static zombie.inventory.InventoryItem lightItem;
+   static int lightRelit, lightLost;
+   static String lightSlot = "";
+   private static long lightLogNs;
+
+   /**
+    * angle_light=true (default with tactics=kite, 2026-10-24: the player lights the way at night without a hand: the rifle
+    * takes both): B42's angle head flashlight, Base.FlashLight_AngleHead (drainable, ActivatedItem, LightStrength 1.5,
+    * LightDistance 15, TorchCone, TorchDot 0.5, AttachmentType Webbing), clipped on the chest at the game's own attached
+    * location "Webbing Left Walkie" (AttachedLocations.lua: model attachment webbing_left_walkie, which the item's model has;
+    * the hotbar puts a Webbing item there, ISHotbarAttachDefinition WebbingLeft / WebbingRight) and switched on. An attached
+    * item that emits light is a player light: IsoPlayer.getActiveLightItem reads the hands first, then getAttachedItems, so
+    * getTorchStrength / isTorchCone and LightingJNI's torch list take it while the rifle fills both hands. It goes on after
+    * buffs and before the magazines are packed, so its 0.5 counts in the weight budget; angle_light_slot=Webbing_Right_Walkie
+    * moves it. Not tracked by the hotbar (attachedSlot -1), so ISHotbar never takes it off for want of a slot-providing
+    * webbing (buffs' chest rig provides none; in play an ALICE belt does, and webbing=true wears one: its light is reused).
+    * Showcase's tick keeps it lit and attached (as for webbing=true); observe() counts what it had to fix and logs it.
+    */
+   static void angleLight(IsoPlayer p) {
+      String v = HarnessFlags.get("angle_light", "true").trim();
+      if (!("true".equalsIgnoreCase(v) || "on".equalsIgnoreCase(v))) return;
+      zombie.inventory.InventoryItem it = Showcase.angleLight; // webbing=true already clipped one on
+      String slot = Showcase.angleLightSlot;
+      if (it == null) {
+         String type = HarnessFlags.get("angle_light_item", "Base.FlashLight_AngleHead").trim();
+         slot = HarnessFlags.get("angle_light_slot", "Webbing Left Walkie").trim().replace('_', ' ');
+         it = p.getInventory().AddItem(type);
+         if (it == null) {
+            lightDone = "no_" + type;
+            Log.warn("harness: horde: angle light: could not create " + type);
+            return;
+         }
+         p.setAttachedItem(slot, it);
+         Showcase.angleLight = it;
+         Showcase.angleLightSlot = slot;
+      }
+      it.setActivated(true);
+      lightItem = it;
+      lightSlot = slot;
+      p.resetModelNextFrame();
+      zombie.inventory.InventoryItem active = p.getActiveLightItem();
+      lightDone = it.getFullType() + "@" + slot.replace(' ', '_') + (it.isEmittingLight() ? "_lit" : "_dark");
+      Log.info("harness: horde: angle light: " + it.getFullType() + " attached at \"" + slot + "\" (attached item there: "
+            + (p.getAttachedItem(slot) == it) + ", in hands: " + (p.getPrimaryHandItem() == it || p.getSecondaryHandItem() == it)
+            + "), activated " + it.isActivated() + ", emitting " + it.isEmittingLight() + ", strength " + it.getLightStrength()
+            + ", distance " + it.getLightDistance() + ", cone " + it.isTorchCone() + " dot " + it.getTorchDot()
+            + "; player active light " + (active == null ? "none" : active.getFullType()) + ", torch strength " + p.getTorchStrength());
+   }
+
+   private static boolean lightAttachedEnd() {
+      IsoPlayer p = IsoPlayer.getInstance();
+      return p != null && lightItem != null && p.isAttachedItem(lightItem);
+   }
+
+   /** observe(): the angle light stays attached and lit for the whole fight; a check line every 5 s */
+   static void angleLightTick(IsoPlayer p, long nowNs) {
+      zombie.inventory.InventoryItem it = lightItem;
+      if (it == null) return;
+      boolean attached = p.isAttachedItem(it);
+      if (!attached && p.getInventory().contains(it)) {
+         lightLost++;
+         p.setAttachedItem(lightSlot, it);
+         Log.warn("harness: horde: angle light was detached: attached again (" + lightLost + ")");
+      }
+      if (!it.isActivated()) {
+         lightRelit++;
+         it.setActivated(true);
+         Log.warn("harness: horde: angle light was off: switched on again (" + lightRelit + ")");
+      }
+      if (nowNs - lightLogNs >= 5_000_000_000L) {
+         lightLogNs = nowNs;
+         zombie.inventory.InventoryItem active = p.getActiveLightItem();
+         Log.info(String.format(Locale.ROOT, "harness: horde: angle light check: attached %b at %s, lit %b emitting %b, battery %.3f, primary %s, active light %s, torch strength %.2f cone %b, night %b",
+               p.isAttachedItem(it), lightSlot, it.isActivated(), it.isEmittingLight(),
+               it.getCurrentUsesFloat(),
+               p.getPrimaryHandItem() == null ? "none" : p.getPrimaryHandItem().getFullType(), active == null ? "none" : active.getFullType(),
+               p.getTorchStrength(), p.isTorchCone(), zombie.GameTime.getInstance().getNight() > 0.5F));
+      }
+   }
+
    /** the highest level each moodle that touches the aim, the reload or the run reached */
    private static final zombie.scripting.objects.MoodleType[] WATCHED = {zombie.scripting.objects.MoodleType.PANIC,
          zombie.scripting.objects.MoodleType.STRESS, zombie.scripting.objects.MoodleType.TIRED, zombie.scripting.objects.MoodleType.ENDURANCE,
@@ -411,6 +493,7 @@ final class HordeTactics {
    /** Facts, damage, encumbrance; call every frame of the scene. {@code spawned}: the horde is out. */
    static void observe(IsoPlayer p, long nowNs, boolean spawned, float t) {
       if (!on) return;
+      angleLightTick(p, nowNs);
       float dt = lastTickNs == 0L ? 0F : Math.min(0.1F, (nowNs - lastTickNs) / 1e9F);
       lastTickNs = nowNs;
       float step = (float)Math.hypot(p.getX() - lastX, p.getY() - lastY);
@@ -1300,6 +1383,8 @@ final class HordeTactics {
       m.put("horde_desensitized", Boolean.toString(desensitized));
       m.put("horde_panic_max", String.format(Locale.ROOT, "%.3f", panicMax));
       m.put("horde_buffs", buffsDone.replace(' ', '_'));
+      m.put("horde_light", lightDone);
+      m.put("horde_light_end", lightItem == null ? "none" : "attached=" + lightAttachedEnd() + ",lit=" + lightItem.isActivated() + ",relit=" + lightRelit + ",reattached=" + lightLost);
       StringBuilder mm = new StringBuilder();
       for (int i = 0; i < WATCHED.length; i++) {
          if (moodleMax[i] > 0) mm.append(mm.length() > 0 ? "," : "").append(WATCHED[i]).append(':').append(moodleMax[i]);
