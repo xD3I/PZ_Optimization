@@ -33,22 +33,23 @@ def acf(l):
     return a / a[0, 0]
 
 
-def lattice_shifts(k=4):
+def lattice_shifts(k=4, scale=1.0):
+    """square-lattice shifts in screen px; scale = screen px per 2x-sprite px (zoom and capture scale)."""
     s = set()
     for i in range(-k, k + 1):
         for j in range(-k, k + 1):
             if i == 0 and j == 0:
                 continue
-            s.add((64 * (i - j), 32 * (i + j)))
+            s.add((int(round(64 * scale * (i - j))), int(round(32 * scale * (i + j)))))
     return sorted(s)
 
 
-def repeat_score(img, maxdx=None, maxdy=None):
+def repeat_score(img, maxdx=None, maxdy=None, scale=1.0):
     l = luma(img); H, W = l.shape
     a = acf(l)
     vals = []
     mask = np.ones_like(a, bool)
-    for dx, dy in lattice_shifts():
+    for dx, dy in lattice_shifts(scale=scale):
         if abs(dx) > W // 2 or abs(dy) > H // 2:
             continue
         best = -1

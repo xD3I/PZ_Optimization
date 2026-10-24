@@ -29,6 +29,9 @@ public final class GroundTilingPatch implements GroundBake.FloorPatch {
 
    static {
       GroundBake.register(INSTANCE);
+      // the clock anchor harness/ground-tiling/bakecost.py needs to put pzopt-gpusections.out's nanoTime pairs into the
+      // alternation's epoch-ms halves
+      Log.info("ground tiling: clock nano=" + System.nanoTime() + " epoch_ms=" + System.currentTimeMillis());
    }
 
    /** Loads the class (registers the patch). */
@@ -190,6 +193,9 @@ public final class GroundTilingPatch implements GroundBake.FloorPatch {
       }
 
       vec4 pzGtTexel(vec4 t) {
+      #if defined(PZG_PIECE) && PZG_PIECE == 2
+         return t; // a grass / erosion overlay or dug soil on the natural floor: stock
+      #endif
          int row = gtSpriteRow();
          if (row < 0) return t;
          int code = pzGtSprCode[row >> 2][row & 3];
@@ -212,6 +218,12 @@ public final class GroundTilingPatch implements GroundBake.FloorPatch {
          return vec4(rgb, a);
       }
       """.formatted(GroundTileArt.SPR_MAX);
+
+   /** The overlays on a natural floor get their own program, which keeps them stock without the table walk. */
+   @Override
+   public boolean wantsAttachedFlag() {
+      return true;
+   }
 
    @Override
    public String texel() {
