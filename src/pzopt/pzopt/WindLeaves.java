@@ -59,8 +59,10 @@ public final class WindLeaves {
       return (rng >>> 8) * (1F / 16777216F);
    }
 
+   private static float lastKph, lastLeaves, lastRain;
+
    public static String stats() {
-      return "wind leaves: frames=" + frames + " spawned=" + spawned + " drawn=" + drawn + (failed ? " (failed)" : "");
+      return "wind leaves: frames=" + frames + " spawned=" + spawned + " drawn=" + drawn + String.format(java.util.Locale.ROOT, " last kph=%.0f leaves=%.2f rain=%.2f", lastKph, lastLeaves, lastRain) + (failed ? " (failed)" : "");
    }
 
    /** Game thread, once a frame at the floor's end: step the leaves, spawn new ones, queue the draw. */
@@ -84,6 +86,9 @@ public final class WindLeaves {
          kph = Config.DEV_WIND_LEAVES_KPH;
       }
       float leaves = Math.max(0F, s.leafFall - 0.1F) * (1F - s.rain); // wet leaves stay down
+      lastKph = kph;
+      lastLeaves = leaves;
+      lastRain = s.rain;
       boolean season = leaves > 0.05F && kph > 8F;
       if (!season && n == 0) {
          return;

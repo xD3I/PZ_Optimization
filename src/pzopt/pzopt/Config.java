@@ -1662,6 +1662,7 @@ public final class Config {
    public static volatile boolean GROUND_COVER_FROST; // ground cover: morning frost in the shade (cold clear nights; melts where the sun has shone)
    public static volatile boolean GROUND_COVER_WIND; // ground cover: in autumn wind a few leaves (<= 32) lift off the covered ground and tumble downwind (the one per-frame part of the cover)
    public static final int DEV_WIND_LEAVES_KPH = integer("devWindLeavesKph", -1); // dev: the wind (kph) the wind-blown leaves see
+   public static volatile boolean GLINT_ASYNC; // glints: the frame's glint list built on a worker while the game thread renders on (joined before the frame is handed to the render thread); false = built on the game thread
    public static volatile boolean GROUND_COVER_ASYNC; // ground cover: level-0 cover built on a worker (squares gathered on the game thread), prefetched for the loaded chunks; false = built in the bake
    public static volatile int GROUND_REBAKE_PER_FRAME; // ground cover: chunk levels re-baked a frame at a season / frost step
    public static volatile int DEV_GROUND_COVER_VIEW; // dev: 1 cover kinds in flat colours
@@ -2425,6 +2426,7 @@ public final class Config {
       GROUND_COVER_PLACEMENT = string("groundCoverPlacement", "bluenoise").trim().toLowerCase(java.util.Locale.ROOT);
       GROUND_COVER_ASSETS = string("groundCoverAssets", "mixed").trim().toLowerCase(java.util.Locale.ROOT);
       GROUND_COVER_FROST = bool("groundCoverFrost", true);
+      GLINT_ASYNC = bool("glintAsync", true);
       GROUND_COVER_ASYNC = bool("groundCoverAsync", true);
       GROUND_COVER_WIND = bool("groundCoverWind", false);
       GROUND_REBAKE_PER_FRAME = Math.max(1, Math.min(32, integer("groundRebakePerFrame", 2)));
