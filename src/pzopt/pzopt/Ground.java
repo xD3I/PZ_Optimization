@@ -130,6 +130,9 @@ public final class Ground {
 
    private static void loadFeatures() {
       featuresLoaded = true;
+      if (Config.DEV_GROUND_NOOP) {
+         GroundBake.registerNoopProbes();
+      }
       for (String n : FEATURES) {
          try {
             Class.forName(n, true, Ground.class.getClassLoader());

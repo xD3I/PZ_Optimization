@@ -48,6 +48,13 @@ public final class GroundTiles {
    public static final String[] MATERIAL_NAMES = {"none", "grass", "dirt", "sand", "gravel", "snow", "grassOverlay", "vegetation", "clay", "darkDirt"};
    /** Flags. */
    public static final int F_BASE = 1 << 8, F_BLEND = 1 << 9, F_OVERLAY = 1 << 10, F_EROSION = 1 << 11, F_EXCLUDED = 1 << 12, F_FARM = 1 << 13;
+   /**
+    * Paved floors (material {@link #NONE}: never natural ground): {@link #F_ROAD} asphalt road ({@code blends_street_01} past
+    * its gravel pieces), {@link #F_WALK} sidewalk / pavement ({@code blends_street_01_64..79}, {@code floors_exterior_street},
+    * {@code floors_exterior_tilesandstone}, sheets named {@code sidewalk}, {@code street_trafficlines}); wet-asphalt glints,
+    * cover that keeps off the road. Upstreamed from ground cover's own name rules (2026-10-24).
+    */
+   public static final int F_ROAD = 1 << 14, F_WALK = 1 << 15;
    private static final int KNOWN = 1 << 30; // the cache's "looked up" bit
 
    public static int material(int code) {
@@ -57,6 +64,11 @@ public final class GroundTiles {
    /** The tone / variant within the material (grass: 0 light, 1 medium, 2 dark; else 0). */
    public static int tone(int code) {
       return (code >> 4) & 15;
+   }
+
+   /** 1 road, 2 sidewalk / pavement, 0 neither (see {@link #F_ROAD}). */
+   public static int paved(int code) {
+      return (code & F_ROAD) != 0 ? 1 : (code & F_WALK) != 0 ? 2 : 0;
    }
 
    /** A floor of natural ground that a feature may draw over (not excluded, not an overlay plant alone). */
@@ -147,7 +159,7 @@ public final class GroundTiles {
             }
             return 0;
          case "blends_street_01":
-            return idx == 48 || idx == 53 || idx == 54 || idx == 55 ? GRAVEL | F_BASE : 0;
+            return idx == 48 || idx == 53 || idx == 54 || idx == 55 ? GRAVEL | F_BASE : idx >= 64 && idx < 80 ? F_WALK : F_ROAD;
          case "blends_grassoverlays_01":
             return GRASS_OVERLAY | F_OVERLAY;
          case "e_newgrass_1":
@@ -162,6 +174,10 @@ public final class GroundTiles {
          default:
             if (sheet.startsWith("vegetation_farm") || sheet.startsWith("farming_")) {
                return F_EXCLUDED | F_FARM;
+            }
+            if (sheet.startsWith("floors_exterior_street") || sheet.startsWith("floors_exterior_tilesandstone") || sheet.contains("sidewalk")
+               || sheet.startsWith("street_trafficlines")) {
+               return F_WALK;
             }
             return 0;
       }
@@ -182,7 +198,7 @@ public final class GroundTiles {
       }
       int code = of(floor.sprite);
       if ((code & 15) == NONE) {
-         return code & F_EXCLUDED;
+         return code & (F_EXCLUDED | F_ROAD | F_WALK);
       }
       java.util.ArrayList<IsoSpriteInstance> att = floor.getAttachedAnimSprite();
       if (att != null) {
@@ -281,9 +297,10 @@ public final class GroundTiles {
    }
 
    /** The class map's byte of a code: material (4 bits), base (bit 4), blend (bit 5), overlay (bit 6), excluded (bit 7). */
-   /** The class map's second byte: the tone (low 4 bits), 16 erosion, 32 farm (GLSL pzgToneAt / pzgToneByteAt). */
+   /** The class map's second byte: the tone (low 4 bits), 16 erosion, 32 farm, 64 road, 128 sidewalk (GLSL pzgToneAt / pzgToneByteAt). */
    public static int toneByte(int code) {
-      return ((code >> 4) & 15) | ((code & F_EROSION) != 0 ? 16 : 0) | ((code & F_FARM) != 0 ? 32 : 0);
+      return ((code >> 4) & 15) | ((code & F_EROSION) != 0 ? 16 : 0) | ((code & F_FARM) != 0 ? 32 : 0) | ((code & F_ROAD) != 0 ? 64 : 0)
+         | ((code & F_WALK) != 0 ? 128 : 0);
    }
 
    public static int mapByte(int code) {
