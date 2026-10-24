@@ -28,10 +28,10 @@ public class GroundTilingShaderTest {
       for (String base : new String[] {"tileWithDepth", "opaqueWithDepth"}) {
          String vert = Files.readString(game.resolve(base + ".vert"));
          String frag = Files.readString(game.resolve(base + ".frag"));
-         for (boolean attached : new boolean[] {false, true}) {
+         for (int piece = 0; piece < 3; piece++) {
             List<GroundBake.FloorPatch> ps = new ArrayList<>();
             ps.add(GroundTilingPatch.INSTANCE);
-            String v = GroundBake.variantSource(frag, ps, 0, attached);
+            String v = GroundBake.variantSource(frag, ps, 0, piece);
             Check.check(v != null && v.contains("pzGtTexel("), base + ": the texel hook is placed");
             Path vp = Files.writeString(Files.createTempFile("pzgt", ".vert"), vert);
             Path fp = Files.writeString(Files.createTempFile("pzgt", ".frag"), v);
@@ -50,7 +50,7 @@ public class GroundTilingShaderTest {
                if (!useMesa && out.contains("no context")) {
                   continue;
                }
-               String tag = base + (attached ? " attached" : "") + (useMesa ? " (Mesa)" : " (driver)");
+               String tag = base + " piece " + piece + (useMesa ? " (Mesa)" : " (driver)");
                Check.check(out.contains("link ok") && out.contains("validate ok"), tag + ":\n" + out);
                n++;
             }
