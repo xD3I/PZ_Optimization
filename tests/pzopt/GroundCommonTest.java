@@ -16,9 +16,31 @@ public class GroundCommonTest {
    public static void main(String[] args) throws Exception {
       tiles();
       regions();
+      chunkSlots();
       int n = shaders();
       int g = stateGpu();
       System.out.println("GroundCommonTest ok (" + n + " variant programs linked, " + g + " GroundState GPU runs)");
+   }
+
+   /** GroundChunk: slots per chunk, dropped and released on reuse, a stale asynchronous result refused. */
+   static void chunkSlots() throws Exception {
+      java.lang.reflect.Field uf = sun.misc.Unsafe.class.getDeclaredField("theUnsafe");
+      uf.setAccessible(true);
+      sun.misc.Unsafe unsafe = (sun.misc.Unsafe) uf.get(null);
+      zombie.iso.IsoChunk c = (zombie.iso.IsoChunk) unsafe.allocateInstance(zombie.iso.IsoChunk.class);
+      List<Object> released = new ArrayList<>();
+      int a = GroundChunk.id("test.a", released::add), b = GroundChunk.id("test.b");
+      Check.check(a != b && GroundChunk.id("test.a") == a, "slot ids");
+      Check.check(GroundChunk.get(c, a) == null, "empty slot");
+      GroundChunk.put(c, a, "A");
+      GroundChunk.put(c, b, "B");
+      Check.check("A".equals(GroundChunk.get(c, a)) && "B".equals(GroundChunk.get(c, b)), "put / get");
+      int g = GroundChunk.gen(c);
+      Check.check(GroundChunk.putIf(c, b, g, "B2") && "B2".equals(GroundChunk.get(c, b)), "putIf same generation");
+      GroundChunk.reused(c);
+      Check.check(GroundChunk.get(c, a) == null && GroundChunk.get(c, b) == null, "reuse drops the slots");
+      Check.check(released.size() == 1 && "A".equals(released.get(0)), "release hook gets the dropped value");
+      Check.check(!GroundChunk.putIf(c, a, g, "late") && GroundChunk.get(c, a) == null, "a stale result is refused");
    }
 
    static void tiles() {
