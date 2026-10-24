@@ -8584,8 +8584,8 @@ one is a static boolean read while no ground key is on (all are off by default),
 - `FBORenderCell.pzoptBakeFloors`: after the floor tiles, `GroundBake.floorPasses` (extra draws of a feature, e.g. leaves),
   deferred to the game thread at its place in the stream on a recording thread (`BakeRecord.DEFER_GROUND`, a new case of
   `pzoptBakeDeferredDraw`); then snow and blood as before.
-- `FBORenderCell.renderOneLevel`: a level-0 bake queues its chunk's ground classes (`GroundBake.bakeBegin`: 10 x 10 bytes,
-  the chunk and a border of one) into the class map texture ahead of its draws.
+- `FBORenderCell.renderOneLevel`: a level-0 bake queues its chunk's ground classes (`GroundBake.bakeBegin`: 10 x 10 texels of
+  two bytes, class and tone, the chunk and a border of one) into the class map texture ahead of its draws.
 - `FBORenderCell.pzoptRenderInternal`: `pzopt.Ground.frameStart` once a frame per player (the frame's ground switches, the
   variant compile request, the movers' gather, the ground state's primitives and its GPU frame).
 - `TextureDraw` (FBORenderChunkStart): `GroundBake.chunkStart` gives the variant programs the texture's world mapping

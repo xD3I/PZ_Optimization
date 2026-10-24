@@ -438,7 +438,7 @@ public final class GroundBake {
 
    /** Render-thread upload of one chunk's classes (10 x 10 squares: the chunk and a border of one). */
    private static final class ClassPatch extends TextureDraw.GenericDrawer {
-      final byte[] b = new byte[100];
+      final byte[] b = new byte[200]; // 10 x 10 squares, RG: GroundTiles.mapByte, tone + flags (toneByte)
       int x0, y0; // world square of b[0]
 
       @Override
@@ -482,7 +482,9 @@ public final class GroundBake {
             } else {
                sq = cell == null ? null : cell.getGridSquare(p.x0 + x, p.y0 + y, 0);
             }
-            p.b[y * 10 + x] = (byte)GroundTiles.mapByte(GroundTiles.square(sq));
+            int code = GroundTiles.square(sq);
+            p.b[(y * 10 + x) * 2] = (byte)GroundTiles.mapByte(code);
+            p.b[(y * 10 + x) * 2 + 1] = (byte)GroundTiles.toneByte(code);
          }
       }
       SpriteRenderer.instance.drawGeneric(p);
@@ -501,12 +503,12 @@ public final class GroundBake {
          GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_WRAP_S, GL11.GL_REPEAT);
          GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_WRAP_T, GL11.GL_REPEAT);
          GL11.glTexParameteri(GL11.GL_TEXTURE_2D, org.lwjgl.opengl.GL12.GL_TEXTURE_MAX_LEVEL, 0);
-         java.nio.ByteBuffer zero = BufferUtils.createByteBuffer(CLASS_N * CLASS_N);
+         java.nio.ByteBuffer zero = BufferUtils.createByteBuffer(CLASS_N * CLASS_N * 2);
          GL11.glPixelStorei(GL11.GL_UNPACK_ALIGNMENT, 1);
-         GL11.glTexImage2D(GL11.GL_TEXTURE_2D, 0, GL30.GL_R8, CLASS_N, CLASS_N, 0, GL11.GL_RED, GL11.GL_UNSIGNED_BYTE, zero);
+         GL11.glTexImage2D(GL11.GL_TEXTURE_2D, 0, GL30.GL_RG8, CLASS_N, CLASS_N, 0, GL30.GL_RG, GL11.GL_UNSIGNED_BYTE, zero);
          GL11.glPixelStorei(GL11.GL_UNPACK_ALIGNMENT, 4);
          classPbo = GL15.glGenBuffers();
-         classBuf = BufferUtils.createByteBuffer(100);
+         classBuf = BufferUtils.createByteBuffer(200);
          GL13.glActiveTexture(GL13.GL_TEXTURE0);
       }
       GpuSections.markNow(Ground.section("ground.class"), false);
@@ -536,12 +538,12 @@ public final class GroundBake {
       GL15.glBindBuffer(GL21.GL_PIXEL_UNPACK_BUFFER, 0);
       GL13.glActiveTexture(GL13.GL_TEXTURE0);
       classUploads++;
-      classBytes += 100;
+      classBytes += 200;
       GpuSections.markNow(Ground.section("ground.class"), true);
    }
 
    private static void sub(int tx, int ty, int w, int h, int sx, int sy) {
-      GL11.glTexSubImage2D(GL11.GL_TEXTURE_2D, 0, tx, ty, w, h, GL11.GL_RED, GL11.GL_UNSIGNED_BYTE, (long)(sy * 10 + sx));
+      GL11.glTexSubImage2D(GL11.GL_TEXTURE_2D, 0, tx, ty, w, h, GL30.GL_RG, GL11.GL_UNSIGNED_BYTE, (long)(sy * 10 + sx) * 2L);
    }
 
    /** Render thread: the class map on its unit (56) for a program outside the bake (left bound; returns false before the first bake made it). */
@@ -559,8 +561,11 @@ public final class GroundBake {
    public static final String GLSL_CLASS = String.join("\n",
       "#ifndef PZG_CLASS",
       "#define PZG_CLASS 1",
-      "uniform sampler2D pzgClassTex;", // GroundBake.CLASS_UNIT: R8, one texel a square, toroidal over 512 squares
+      "uniform sampler2D pzgClassTex;", // GroundBake.CLASS_UNIT: RG8, one texel a square, toroidal over 512 squares
       "int pzgClassAt(ivec2 sq) { return int(texelFetch(pzgClassTex, ivec2(sq.x & 511, sq.y & 511), 0).r * 255.0 + 0.5); }",
+      // G: the tone within the material (grass 0 light, 1 medium, 2 dark) in the low 4 bits, 16 erosion, 32 farm (GroundTiles.toneByte)
+      "int pzgToneByteAt(ivec2 sq) { return int(texelFetch(pzgClassTex, ivec2(sq.x & 511, sq.y & 511), 0).g * 255.0 + 0.5); }",
+      "int pzgToneAt(ivec2 sq) { return pzgToneByteAt(sq) & 15; }",
       "int pzgMaterialOf(int cls) { return cls & 15; }", // GroundTiles.NONE .. DARK_DIRT
       "bool pzgNatural(int cls) { int m = cls & 15; return m != 0 && m != 5 && m != 6 && m != 7 && (cls & 128) == 0; }",
       "#endif",
