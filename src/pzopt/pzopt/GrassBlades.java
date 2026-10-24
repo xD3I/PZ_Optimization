@@ -45,7 +45,7 @@ public final class GrassBlades {
 
    static final float DPXY = (float)PixelLight.DEPTH_PER_XY;
    static final int LANES = 64; // blade candidates per square (one compute workgroup)
-   static final int MAX_SQUARES = 4096;
+   static final int MAX_SQUARES = 8192;
    static final int MAX_BLADES = MAX_SQUARES * LANES;
 
    // ----------------------------------------------------------------------------------------------- knobs (game thread)
@@ -63,6 +63,8 @@ public final class GrassBlades {
       int translucencyPct = 100;
       int aoPct = 100;
       boolean depthCheck = true;
+      boolean trails = true, cut = true, push = true;
+      float trailSeconds = 45F, regrowSeconds = 900F;
       int view; // dev: 1 = flat debug colour
 
       Opts copy() {
@@ -78,6 +80,11 @@ public final class GrassBlades {
          o.translucencyPct = translucencyPct;
          o.aoPct = aoPct;
          o.depthCheck = depthCheck;
+         o.trails = trails;
+         o.cut = cut;
+         o.push = push;
+         o.trailSeconds = trailSeconds;
+         o.regrowSeconds = regrowSeconds;
          o.view = view;
          return o;
       }
@@ -107,6 +114,11 @@ public final class GrassBlades {
                   case "translucency" -> translucencyPct = Integer.parseInt(v);
                   case "ao" -> aoPct = Integer.parseInt(v);
                   case "depthCheck" -> depthCheck = Boolean.parseBoolean(v);
+                  case "trails" -> trails = Boolean.parseBoolean(v);
+                  case "cut" -> cut = Boolean.parseBoolean(v);
+                  case "push" -> push = Boolean.parseBoolean(v);
+                  case "trailSeconds" -> trailSeconds = Float.parseFloat(v);
+                  case "regrowSeconds" -> regrowSeconds = Float.parseFloat(v);
                   case "view" -> view = Integer.parseInt(v);
                   default -> Log.warn("grass blades: unknown alternation knob " + k);
                }
@@ -121,7 +133,7 @@ public final class GrassBlades {
 
    private static Opts optsA() {
       Opts o = new Opts();
-      o.radius = Math.max(2, Math.min(32, Config.GRASS_BLADE_RADIUS));
+      o.radius = Math.max(2, Math.min(40, Config.GRASS_BLADE_RADIUS));
       o.densityPct = Math.max(5, Math.min(400, Config.GRASS_BLADE_DENSITY_PCT));
       o.maxZoom = Config.GRASS_BLADE_MAX_ZOOM_PCT / 100F;
       o.segments = Math.max(1, Math.min(8, Config.GRASS_BLADE_SEGMENTS));
@@ -132,6 +144,11 @@ public final class GrassBlades {
       o.translucencyPct = Config.GRASS_BLADE_TRANSLUCENCY_PCT;
       o.aoPct = Config.GRASS_BLADE_AO_PCT;
       o.depthCheck = Config.GRASS_BLADE_DEPTH_CHECK;
+      o.trails = Config.GRASS_BLADE_TRAILS;
+      o.cut = Config.GRASS_BLADE_CUT;
+      o.push = Config.GRASS_BLADE_PUSH;
+      o.trailSeconds = Math.max(1, Config.GRASS_BLADE_TRAIL_SECONDS);
+      o.regrowSeconds = Math.max(1, Config.GRASS_BLADE_REGROW_SECONDS);
       o.view = Config.DEV_GRASS_VIEW;
       return o;
    }
@@ -284,7 +301,7 @@ public final class GrassBlades {
 
    /** Game thread, FBORenderCell right after the chunk composite (and AO), before pixelLight's pass and the characters. */
    public static void afterComposite(int playerIndex) {
-      boolean on = Config.GRASS_BLADES && Overrides.enabled() && !Gpu.failed && !CoreGl.legacyMac();
+      boolean on = Ground.on(Ground.K_BLADES) && Overrides.enabled() && !Gpu.failed && !CoreGl.legacyMac();
       if (on != lastOn) {
          lastOn = on;
          Log.info("grass blades: " + (on ? "on" : "off") + " (radius " + Config.GRASS_BLADE_RADIUS + ", density " + Config.GRASS_BLADE_DENSITY_PCT
@@ -357,6 +374,7 @@ public final class GrassBlades {
       f.cx = cx - ox;
       f.cy = cy - oy;
       f.zoom = zoom;
+      Movers.update(f, o);
       Sky.update(-1F);
       f.sunX = (float)Sky.sun[0];
       f.sunY = (float)Sky.sun[1];
@@ -364,7 +382,7 @@ public final class GrassBlades {
       frames++;
       squaresTotal += n;
       if (n > 0) {
-         String sec = section("grass");
+         String sec = section(Ground.section("ground.blades"));
          GpuSections.begin(sec);
          SpriteRenderer.instance.drawGeneric(f);
          GpuSections.end(sec);
@@ -397,6 +415,9 @@ public final class GrassBlades {
       public final float[] ph = new float[4];
       public final float[] push = new float[Sway.MAX_PUSH * 4];
       public int nPush;
+      public float[] stamps = new float[0];
+      public int nStamps;
+      public float now;
    }
 
    /** The offline rig's parameters: the knobs of the launch's Config (A set). */
@@ -484,6 +505,11 @@ public final class GrassBlades {
       int[] squares = new int[1024];
       int n;
       float cx, cy, zoom, sunX, sunY, sunZ;
+      final float[] stamps = new float[Movers.MAX_STAMPS * 4];
+      int nStamps;
+      final float[] push = new float[Sway.MAX_PUSH * 4];
+      int nPush;
+      float now;
 
       @Override
       public void render() {
@@ -539,7 +565,7 @@ public final class GrassBlades {
             failed = true;
             return false;
          }
-         gu = Shaders.locations(genProgram, "uColor", "uDepth", "uMapA", "uMapB", "uVp", "uOrigin", "uParams", "uFade", "uHasDepth");
+         gu = Shaders.locations(genProgram, "uColor", "uDepth", "uMapA", "uMapB", "uVp", "uOrigin", "uParams", "uFade", "uHasDepth", "uTrail", "uTrailK");
          du = Shaders.locations(drawProgram, "uMapA", "uMapB", "uVp", "uWind", "uPh", "uGust", "uPush", "uPushN", "uOriginW", "uShape", "uSun", "uShade", "uTs");
          vao = GL30.glGenVertexArrays();
          squareBuf = GL15.glGenBuffers();
@@ -553,6 +579,7 @@ public final class GrassBlades {
          GL15.glBufferData(GL43.GL_SHADER_STORAGE_BUFFER, 16L, GL15.GL_DYNAMIC_DRAW);
          GL15.glBindBuffer(GL43.GL_SHADER_STORAGE_BUFFER, 0);
          squareUpload = BufferUtils.createIntBuffer(MAX_SQUARES);
+         Trails.init();
          ready = true;
          Log.info(String.format(java.util.Locale.ROOT, "grass blades: programs ready (%.1f ms)", (System.nanoTime() - t0) / 1e6));
          return true;
@@ -636,9 +663,12 @@ public final class GrassBlades {
             System.arraycopy(sw.ph, 0, p.ph, 0, 4);
             p.gustU = sw.gustU;
             p.gustV = sw.gustV;
-            System.arraycopy(sw.push, 0, p.push, 0, p.push.length);
-            p.nPush = Config.SWAY_PUSH ? sw.nPush : 0;
          }
+         System.arraycopy(f.push, 0, p.push, 0, p.push.length);
+         p.nPush = f.nPush;
+         p.stamps = f.stamps;
+         p.nStamps = f.nStamps;
+         p.now = f.now;
          if (f.dump != null) {
             Dump.write(f, p);
          }
@@ -676,6 +706,12 @@ public final class GrassBlades {
          GL15.glBufferSubData(GL43.GL_SHADER_STORAGE_BUFFER, 0L, CMD);
          GL15.glBindBuffer(GL43.GL_SHADER_STORAGE_BUFFER, 0);
 
+         // trails: this frame's stamps into the trail map
+         boolean trails = (o.trails || o.cut) && Trails.ready();
+         if (trails && p.nStamps > 0) {
+            Trails.stamp(p);
+         }
+
          // generation
          float zoomFade = 1F - smooth(o.maxZoom * 0.8F, o.maxZoom, p.zoom); // the blades shrink into the painting as the zoom nears the limit
          int perSquare = Math.max(1, Math.min(LANES, Math.round(48F * o.densityPct / 100F)));
@@ -694,6 +730,10 @@ public final class GrassBlades {
          GL20.glUniform4f(gu[6], o.heightPct / 100F * zoomFade, o.widthPct / 100F, 0F, 0F);
          GL20.glUniform4f(gu[7], p.cx, p.cy, o.radius, Math.max(1.5F, o.radius * 0.3F));
          GL20.glUniform1f(gu[8], depthOk ? 1F : 0F);
+         GL13.glActiveTexture(GL13.GL_TEXTURE2);
+         GL11.glBindTexture(GL11.GL_TEXTURE_2D, trails ? Trails.tex : 0);
+         GL20.glUniform1i(gu[9], 2);
+         GL20.glUniform4f(gu[10], trails ? p.now : -1F, o.trails ? 1F / o.trailSeconds : 0F, o.cut ? 1F / o.regrowSeconds : 0F, trails ? 1F : 0F);
          GL30.glBindBufferBase(GL43.GL_SHADER_STORAGE_BUFFER, 0, squareBuf);
          GL30.glBindBufferBase(GL43.GL_SHADER_STORAGE_BUFFER, 1, bladeBuf);
          GL30.glBindBufferBase(GL43.GL_SHADER_STORAGE_BUFFER, 2, cmdBuf);
@@ -701,6 +741,8 @@ public final class GrassBlades {
          GL42.glMemoryBarrier(GL43.GL_SHADER_STORAGE_BARRIER_BIT | GL42.GL_COMMAND_BARRIER_BIT);
          GL30.glBindBufferBase(GL43.GL_SHADER_STORAGE_BUFFER, 0, 0);
          GL30.glBindBufferBase(GL43.GL_SHADER_STORAGE_BUFFER, 2, 0);
+         GL11.glBindTexture(GL11.GL_TEXTURE_2D, 0);
+         GL13.glActiveTexture(GL13.GL_TEXTURE1);
          GL11.glBindTexture(GL11.GL_TEXTURE_2D, 0);
          GL13.glActiveTexture(GL13.GL_TEXTURE0);
          GL11.glBindTexture(GL11.GL_TEXTURE_2D, 0);
@@ -714,14 +756,13 @@ public final class GrassBlades {
             GL20.glUniform4f(du[3], p.amp, p.lean, p.dirX, p.osc);
             GL20.glUniform4f(du[4], p.ph[0], p.ph[1], p.ph[2], p.ph[3]);
             GL20.glUniform4f(du[5], p.gustU, p.gustV, 0F, 0F);
-            PUSH.clear();
-            PUSH.put(p.push, 0, p.push.length).flip();
-            GL20.glUniform4fv(du[6], PUSH);
-            GL20.glUniform1f(du[7], p.nPush);
          } else {
             GL20.glUniform4f(du[3], 0F, 0F, 1F, 0F);
-            GL20.glUniform1f(du[7], 0F);
          }
+         PUSH.clear();
+         PUSH.put(p.push, 0, p.push.length).flip();
+         GL20.glUniform4fv(du[6], PUSH);
+         GL20.glUniform1f(du[7], o.push ? p.nPush : 0F);
          float ou = (float)Math.floorMod(p.ox - p.oy, 256), ov = (float)Math.floorMod(p.ox + p.oy, 256);
          GL20.glUniform4f(du[8], ou, ov, 0F, 0F);
          GL20.glUniform4f(du[9], o.segments, o.widthPct / 100F, o.view, 0F);
@@ -756,6 +797,245 @@ public final class GrassBlades {
       return t * t * (3F - 2F * t);
    }
 
+   // ----------------------------------------------------------------------------------- movers and trails (game thread)
+
+   /**
+    * The characters and cars moving over the grass near the player: each one bends the blades round it this frame (the
+    * push list, foliage sway's kernel) and stamps the trail map when it has moved a little (trample with its heading;
+    * a melee swing stamps a cut arc in front of the swinger).
+    */
+   static final class Movers {
+      static final int MAX_STAMPS = 64;
+      private static final IdentityHashMap<Object, float[]> STATE = new IdentityHashMap<>(); // lastX, lastY, stampX, stampY, strength, seenFrame, radius
+      private static int frame;
+      private static long lastNs;
+      static double now; // trail clock (s), game speed, stops while paused
+      private static final java.util.ArrayList<Object> CAND = new java.util.ArrayList<>();
+      private static final java.util.ArrayList<float[]> CANDPOS = new java.util.ArrayList<>();
+
+      static void update(Frame f, Opts o) {
+         frame++;
+         long t = System.nanoTime();
+         double dt = lastNs == 0L ? 0.0 : Math.min(0.1, (t - lastNs) / 1e9);
+         lastNs = t;
+         boolean paused = zombie.GameTime.isGamePaused();
+         dt *= paused ? 0.0 : Math.min(4.0, Math.max(0.0, zombie.GameTime.getInstance().getTrueMultiplier()));
+         now += dt;
+         f.now = (float)now;
+         f.nStamps = 0;
+         f.nPush = 0;
+         if (!o.trails && !o.cut && !o.push) {
+            return;
+         }
+         float cx = IsoCamera.frameState.camCharacterX, cy = IsoCamera.frameState.camCharacterY;
+         float reach = o.radius + 3F;
+         float reach2 = reach * reach;
+         CAND.clear();
+         CANDPOS.clear();
+         for (zombie.characters.IsoPlayer pl : zombie.characters.IsoPlayer.players) {
+            if (pl != null && !pl.isDead()) {
+               add(pl, pl.getX(), pl.getY(), pl.getZ(), 0.32F, cx, cy, reach2);
+            }
+         }
+         IsoCell cell = IsoWorld.instance.currentCell;
+         java.util.ArrayList<zombie.characters.IsoZombie> zs = cell.getZombieList();
+         for (int i = 0, n = zs.size(); i < n && CAND.size() < 96; i++) {
+            zombie.characters.IsoZombie z = zs.get(i);
+            if (z != null) {
+               add(z, z.getX(), z.getY(), z.getZ(), 0.32F, cx, cy, reach2);
+            }
+         }
+         for (zombie.vehicles.BaseVehicle v : cell.getVehicles()) {
+            if (v != null) {
+               add(v, v.getX(), v.getY(), v.getZ(), 1.0F, cx, cy, reach2);
+            }
+         }
+         for (int i = 0; i < CAND.size(); i++) {
+            Object obj = CAND.get(i);
+            float[] pos = CANDPOS.get(i);
+            float x = pos[0], y = pos[1], r = pos[2];
+            float[] s = STATE.get(obj);
+            if (s == null) {
+               s = new float[] {x, y, x, y, 0F, frame, r};
+               STATE.put(obj, s);
+            }
+            float mx = x - s[0], my = y - s[1];
+            boolean moving = mx * mx + my * my > 1e-6F;
+            s[0] = x;
+            s[1] = y;
+            s[5] = frame;
+            float target = moving ? 1F : 0F;
+            float k = (float)Math.min(1.0, dt / (moving ? 0.15 : 0.6));
+            s[4] += (target - s[4]) * k;
+            float sx = x - s[2], sy = y - s[3];
+            if (o.trails && sx * sx + sy * sy > 0.15F * 0.15F && f.nStamps < MAX_STAMPS) {
+               float dir = (float)Math.atan2(sy, sx);
+               if (r > 0.5F) {
+                  // a car: its two axles' wheel tracks (the body's direction)
+                  float ca = (float)Math.cos(dir), sa = (float)Math.sin(dir);
+                  for (int a = -1; a <= 1; a += 2) {
+                     for (int b = -1; b <= 1; b += 2) {
+                        if (f.nStamps < MAX_STAMPS) {
+                           stamp(f, x + ca * 1.2F * a - sa * 0.8F * b, y + sa * 1.2F * a + ca * 0.8F * b, 0.38F, dir, 0);
+                        }
+                     }
+                  }
+               } else {
+                  stamp(f, x, y, r, dir, 0);
+               }
+               s[2] = x;
+               s[3] = y;
+            }
+            if (o.cut && obj instanceof zombie.characters.IsoGameCharacter ch && ch.isPerformingAttackAnimation() && f.nStamps < MAX_STAMPS - 3) {
+               zombie.inventory.InventoryItem item = ch.getPrimaryHandItem();
+               if (item instanceof zombie.inventory.types.HandWeapon hw && !hw.isRanged()) {
+                  float ang = (float)Math.atan2(ch.getForwardDirectionY(), ch.getForwardDirectionX());
+                  float range = Math.max(0.8F, Math.min(2.0F, hw.getMaxRange()));
+                  for (int a = -1; a <= 1; a++) {
+                     float aa = ang + a * 0.6F;
+                     stamp(f, x + (float)Math.cos(aa) * range * 0.7F, y + (float)Math.sin(aa) * range * 0.7F, 0.45F, ang, 1);
+                  }
+               }
+            }
+         }
+         // the push list: the nearest movers still bending the grass
+         for (int n = 0; n < Sway.MAX_PUSH && o.push; n++) {
+            float[] best = null;
+            float bd = Float.MAX_VALUE;
+            for (int i = 0; i < CAND.size(); i++) {
+               float[] s = STATE.get(CAND.get(i));
+               if (s == null || s[4] < 0.02F || s[6] < 0F) {
+                  continue;
+               }
+               float d = (s[0] - cx) * (s[0] - cx) + (s[1] - cy) * (s[1] - cy);
+               if (d < bd) {
+                  bd = d;
+                  best = s;
+               }
+            }
+            if (best == null) {
+               break;
+            }
+            int i = f.nPush++;
+            float u = best[0] - best[1], v = best[0] + best[1];
+            f.push[i * 4] = (float)(u - Sway.GUST_PERIOD_SQ * Math.floor(u / Sway.GUST_PERIOD_SQ));
+            f.push[i * 4 + 1] = (float)(v - Sway.GUST_PERIOD_SQ * Math.floor(v / Sway.GUST_PERIOD_SQ));
+            f.push[i * 4 + 2] = best[6] > 0.5F ? 1.8F : 0.7F;
+            f.push[i * 4 + 3] = best[4];
+            best[6] = -best[6];
+         }
+         for (float[] s : STATE.values()) {
+            s[6] = Math.abs(s[6]);
+         }
+         if (frame % 120 == 0) {
+            STATE.values().removeIf(s -> frame - s[5] > 600F);
+         }
+      }
+
+      private static void add(Object obj, float x, float y, float z, float r, float cx, float cy, float reach2) {
+         if (z > 0.5F || (x - cx) * (x - cx) + (y - cy) * (y - cy) > reach2) {
+            return;
+         }
+         CAND.add(obj);
+         CANDPOS.add(new float[] {x, y, r});
+      }
+
+      /** kind 0 trample, 1 cut. Stamps: x, y, radius (+ 10 x kind), heading. */
+      private static void stamp(Frame f, float x, float y, float r, float dir, int kind) {
+         int i = f.nStamps++ * 4;
+         f.stamps[i] = x;
+         f.stamps[i + 1] = y;
+         f.stamps[i + 2] = r + 10F * kind;
+         f.stamps[i + 3] = dir;
+      }
+   }
+
+   /** Render thread: the trail map (256 x 256 RGBA32F, two texels a square, toroidal, keyed by the high bits of the texel). */
+   static final class Trails {
+      static int tex, program, stampBuf;
+      private static int[] su;
+      private static boolean failed;
+      private static java.nio.FloatBuffer upload;
+
+      static boolean ready() {
+         return tex != 0 && program != 0;
+      }
+
+      static void init() {
+         if (tex != 0 || failed) {
+            return;
+         }
+         program = Shaders.compute(STAMP, "grass blades: trail stamp");
+         if (program == 0) {
+            failed = true;
+            return;
+         }
+         su = Shaders.locations(program, "uNow");
+         tex = GL11.glGenTextures();
+         GL11.glBindTexture(GL11.GL_TEXTURE_2D, tex);
+         GL42.glTexStorage2D(GL11.GL_TEXTURE_2D, 1, GL30.GL_RGBA32F, 256, 256);
+         GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MIN_FILTER, GL11.GL_NEAREST);
+         GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MAG_FILTER, GL11.GL_NEAREST);
+         GL11.glBindTexture(GL11.GL_TEXTURE_2D, 0);
+         // every texel keyed to nowhere (-1): nothing trampled
+         java.nio.FloatBuffer z = BufferUtils.createFloatBuffer(256 * 256 * 4);
+         for (int i = 0; i < 256 * 256; i++) {
+            z.put(-1e9F).put(-1e9F).put(-1F).put(0F);
+         }
+         z.flip();
+         GL11.glBindTexture(GL11.GL_TEXTURE_2D, tex);
+         GL11.glTexSubImage2D(GL11.GL_TEXTURE_2D, 0, 0, 0, 256, 256, GL11.GL_RGBA, GL11.GL_FLOAT, z);
+         GL11.glBindTexture(GL11.GL_TEXTURE_2D, 0);
+         stampBuf = GL15.glGenBuffers();
+         GL15.glBindBuffer(GL43.GL_SHADER_STORAGE_BUFFER, stampBuf);
+         GL15.glBufferData(GL43.GL_SHADER_STORAGE_BUFFER, (long)Movers.MAX_STAMPS * 16L, GL15.GL_DYNAMIC_DRAW);
+         GL15.glBindBuffer(GL43.GL_SHADER_STORAGE_BUFFER, 0);
+         upload = BufferUtils.createFloatBuffer(Movers.MAX_STAMPS * 4);
+      }
+
+      static void stamp(Params p) {
+         int n = Math.min(p.nStamps, Movers.MAX_STAMPS);
+         upload.clear();
+         upload.put(p.stamps, 0, n * 4).flip();
+         GL15.glBindBuffer(GL43.GL_SHADER_STORAGE_BUFFER, stampBuf);
+         GL15.glBufferSubData(GL43.GL_SHADER_STORAGE_BUFFER, 0L, upload);
+         GL15.glBindBuffer(GL43.GL_SHADER_STORAGE_BUFFER, 0);
+         GL20.glUseProgram(program);
+         GL20.glUniform1f(su[0], p.now);
+         GL30.glBindBufferBase(GL43.GL_SHADER_STORAGE_BUFFER, 3, stampBuf);
+         GL42.glBindImageTexture(0, tex, 0, false, 0, GL15.GL_READ_WRITE, GL30.GL_RGBA32F);
+         GL43.glDispatchCompute(n, 1, 1);
+         GL42.glMemoryBarrier(GL42.GL_TEXTURE_FETCH_BARRIER_BIT | GL42.GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
+         GL42.glBindImageTexture(0, 0, 0, false, 0, GL15.GL_READ_WRITE, GL30.GL_RGBA32F);
+         GL30.glBindBufferBase(GL43.GL_SHADER_STORAGE_BUFFER, 3, 0);
+         stamps += n;
+      }
+
+      static long stamps;
+   }
+
+   /** One workgroup per stamp: the trail texels within its radius (a 16 x 16 box of half squares round it). */
+   static final String STAMP = String.join("\n",
+      "#version 430",
+      "layout(local_size_x = 16, local_size_y = 16) in;",
+      "layout(std430, binding = 3) readonly buffer Stamps { vec4 st[]; };",
+      "layout(rgba32f, binding = 0) uniform image2D uMap;",
+      "uniform float uNow;",
+      "void main() {",
+      "   vec4 s = st[gl_WorkGroupID.x];",
+      "   float kind = s.z >= 10.0 ? 1.0 : 0.0;",
+      "   float r = s.z - 10.0 * kind;",
+      "   ivec2 c = ivec2(floor(s.xy * 2.0)) - 8 + ivec2(gl_LocalInvocationID.xy);",
+      "   vec2 d = (vec2(c) + 0.5) * 0.5 - s.xy;",
+      "   if (dot(d, d) > r * r) return;",
+      "   float key = float((c.x >> 8) & 255) + 256.0 * float((c.y >> 8) & 255);",
+      "   ivec2 q = c & 255;",
+      "   vec4 m = imageLoad(uMap, q);",
+      "   if (m.z != key) m = vec4(-1e9, -1e9, key, 0.0);",
+      "   if (kind < 0.5) { m.x = uNow; m.w = s.w; } else { m.y = uNow; }",
+      "   imageStore(uMap, q, m);",
+      "}");
+
    // ------------------------------------------------------------------------------------------------------------ GLSL
 
    /** The hash and the gust shared by the generation and the draw. */
@@ -785,6 +1065,8 @@ public final class GrassBlades {
       "uniform vec4 uParams;", // height scale, width scale
       "uniform vec4 uFade;", // player x, y (relative), radius, fade width (squares)
       "uniform float uHasDepth;",
+      "uniform sampler2D uTrail;", // 256 x 256 RGBA32F, two texels a square, toroidal: trample time, cut time, key, direction
+      "uniform vec4 uTrailK;", // now (s), 1 / trail recovery (s), 1 / regrow (s), on
       "shared uint sCount;",
       "shared uint sBase;",
       COMMON,
@@ -855,9 +1137,23 @@ public final class GrassBlades {
       "      float phase = gbH01(seed ^ 0x3333u);",
       "      float stiff = 0.7 + 0.3 * gbH01(seed ^ 0x4444u);",
       "      float facing = gbH01(seed ^ 0x6666u);",
+      // the trail map at the root: flattened (lying along the walker's direction), cut (shorter, growing back)
+      "      float flatK = 0.0, cutK = 1.0;",
+      "      if (uTrailK.w > 0.5) {",
+      "         ivec2 tq = ivec2(floor(pw * 2.0));",
+      "         vec4 tr = texelFetch(uTrail, tq & 255, 0);",
+      "         if (tr.z == float((tq.x >> 8) & 255) + 256.0 * float((tq.y >> 8) & 255)) {",
+      "            float age = uTrailK.x - tr.x;",
+      "            if (uTrailK.y > 0.0 && age >= 0.0) { float r = clamp(1.0 - age * uTrailK.y, 0.0, 1.0); flatK = r * sqrt(r) * (0.85 + 0.15 * gbH01(seed ^ 0x9999u)); }",
+      "            float cage = uTrailK.x - tr.y;",
+      "            if (uTrailK.z > 0.0 && cage >= 0.0) cutK = mix(0.15 + 0.1 * gbH01(seed ^ 0xaaaau), 1.0, clamp(cage * uTrailK.z, 0.0, 1.0));",
+      "            if (flatK > 0.02) facing = fract(tr.w / 6.2831853 + 1.0);", // lying along the trail
+      "         }",
+      "      }",
+      "      h *= cutK;",
       "      vec2 l = lean + (gbH2(seed ^ 0x7777u) - 0.5) * 0.3;",
       "      float width = (0.028 + 0.014 * gbH01(seed ^ 0x8888u)) * uParams.y;",
-      "      blades[sBase + li] = Blade(vec4(p, h, uintBitsToFloat(packUnorm4x8(vec4(clamp(col * tone, 0.0, 1.0), 1.0)))),",
+      "      blades[sBase + li] = Blade(vec4(p, h, uintBitsToFloat(packUnorm4x8(vec4(clamp(col * tone, 0.0, 1.0), flatK)))),",
       "         vec4(l, width, uintBitsToFloat(packUnorm4x8(vec4(phase, stiff, facing, 0.0)))));",
       "   }",
       "}");
@@ -930,6 +1226,9 @@ public final class GrassBlades {
       "   if (uPushN > 0.5) dxPx += weight * " + Sway.AMP_MAX_PX + " * 0.9 * gbPushX(wp);",
       "   float du = dxPx / (32.0 * uTs);", // logical px (zoom 1) -> u
       "   vec2 H = bl.b.xy * h + vec2(du * 0.5, -du * 0.5);",
+      // trampled: the blade lies along the trail (facing = the walker's heading), its own lean and the wind mostly gone
+      "   float flatK = col.a;",
+      "   if (flatK > 0.0) { float fa2 = pk.z * 6.2831853; H = mix(H, vec2(cos(fa2), sin(fa2)) * 0.92 * h, flatK); }",
       // length-preserving quadratic Bezier (Jahrmann & Wimmer): the tip leans over and drops so the blade keeps its length
       "   float hl = length(H);",
       "   if (hl > 0.92 * h) { H *= 0.92 * h / hl; hl = 0.92 * h; }",
@@ -963,7 +1262,7 @@ public final class GrassBlades {
       "   float back = sl > 1e-4 ? max(0.0, dot(sunH / sl, vec2(-0.7071, -0.7071))) : 0.0;",
       "   float low = uSun.z > 0.0 ? 1.0 - smoothstep(0.12, 0.55, uSun.z) : 0.0;",
       "   float tr = uSun.w * back * low * t * t;",
-      "   vec3 c3 = base * ao * (1.0 + 0.10 * t + sheen) + base * vec3(0.75, 0.62, 0.18) * tr;",
+      "   vec3 c3 = base * ao * (1.0 + 0.10 * t + sheen + 0.16 * flatK * t) + base * vec3(0.75, 0.62, 0.18) * tr;",
       "   if (uShape.z > 0.5) c3 = mix(vec3(1.0, 0.0, 0.0), vec3(1.0, 1.0, 0.0), t);",
       "   vCol = c3;",
       "}");

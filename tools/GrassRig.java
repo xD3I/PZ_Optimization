@@ -33,7 +33,7 @@ public class GrassRig {
       String knobs = "";
       int frames = 60, crop = 900, scale = 2;
       float time = -1F;
-      boolean off = false;
+      boolean off = false, trail = false;
       for (int i = 3; i < a.length; i++) {
          switch (a[i]) {
             case "--knobs" -> knobs = a[++i];
@@ -42,6 +42,7 @@ public class GrassRig {
             case "--scale" -> scale = Integer.parseInt(a[++i]);
             case "--time" -> time = Float.parseFloat(a[++i]);
             case "--off" -> off = true;
+            case "--trail" -> trail = true;
             default -> throw new IllegalArgumentException(a[i]);
          }
       }
@@ -120,6 +121,22 @@ public class GrassRig {
          p.gustU = (float)(((p.gustU - p.dirX * time * 3.0 / 8.0) % 32.0 + 32.0) % 32.0);
       }
       p.o.apply(knobs);
+      if (trail) {
+         // a walker's trail along x through the player (trampled 5 s ago), a cut patch north-east of him (60 s ago)
+         java.util.ArrayList<float[]> st = new java.util.ArrayList<>();
+         for (float x = -5F; x <= 5F; x += 0.25F) {
+            st.add(new float[] {p.ox + p.cx + x, p.oy + p.cy + 1.5F, 0.32F, 0F});
+         }
+         for (float x = 2F; x <= 4F; x += 0.4F) {
+            st.add(new float[] {p.ox + p.cx + x, p.oy + p.cy - 3F, 10.45F, 0F});
+         }
+         p.stamps = new float[st.size() * 4];
+         for (int i = 0; i < st.size(); i++) {
+            System.arraycopy(st.get(i), 0, p.stamps, i * 4, 4);
+         }
+         p.nStamps = Math.min(st.size(), 64);
+         p.now = 100F;
+      }
       int[] q = new int[2];
       GL15.glGenQueries(q);
       long[] ns = new long[frames];
@@ -131,6 +148,10 @@ public class GrassRig {
          GL11.glViewport(vx, vy, w, h);
          GL33.glQueryCounter(q[0], GL33.GL_TIMESTAMP);
          if (!off) {
+            if (trail && f == 1) {
+               p.nStamps = 0; // stamped once (at now = 100 s); the frames read it 5 s later
+               p.now = 105F;
+            }
             pzopt.GrassBlades.Gpu.run(p);
          }
          GL33.glQueryCounter(q[1], GL33.GL_TIMESTAMP);

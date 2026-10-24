@@ -1667,10 +1667,7 @@ public final class Config {
    public static final boolean DEV_SWAY_VARIANT_ALL = bool("devSwayVariantAll", false); // dev: every chunk composite draw uses the sway variant while sway is on (no program alternation; textures without plants skip the lookup by a uniform)
    public static final boolean DEV_SWAY_NO_PATCH = bool("devSwayNoPatch", false); // dev: no shader patched (the off cost's reference)
    public static final int DEV_SWAY_WIND = integer("devSwayWind", -1); // dev: pins the wind the sway sees (0..100), -1 = the climate's
-   // grass blades (pzopt.GrassBlades, agent grass-blades): near the player at close zoom the painted grass grows blades
-   public static volatile boolean GRASS_BLADES; // grass with blades: near the player at close zoom the grass becomes blades (clumps, wind waves with foliage sway's wind, trails), coloured by the painting at their roots
-   public static volatile int GRASS_BLADE_RADIUS; // grass blades: squares around the player that grow blades
-   public static volatile int GRASS_BLADE_DENSITY_PCT; // grass blades: blades per square, % of 48
+   // grass blades (pzopt.GrassBlades): the technique and look knobs (the switch, radius and density are ground-common's keys above)
    public static final int GRASS_BLADE_MAX_ZOOM_PCT = integer("grassBladeMaxZoomPct", 125); // grass blades: the widest zoom (%, 100 = 1:1) that still has blades; they shrink away over the last fifth
    public static final int GRASS_BLADE_SEGMENTS = integer("grassBladeSegments", 4); // grass blades: Bezier segments per blade (2 x segments + 1 vertices)
    public static final boolean GRASS_BLADE_CLUMPS = bool("grassBladeClumps", true); // grass blades: Voronoi clumps share a height, a lean and a tone
@@ -1679,6 +1676,11 @@ public final class Config {
    public static final int GRASS_BLADE_SHEEN_PCT = integer("grassBladeSheenPct", 100); // grass blades: the gusts' sheen, %
    public static final int GRASS_BLADE_TRANSLUCENCY_PCT = integer("grassBladeTranslucencyPct", 100); // grass blades: a low sun shining through blades lit from behind, %
    public static final int GRASS_BLADE_AO_PCT = integer("grassBladeAoPct", 100); // grass blades: darker toward the root, %
+   public static final boolean GRASS_BLADE_TRAILS = bool("grassBladeTrails", true); // grass blades: characters and cars flatten the blades they walk / drive through, the trail stands up again over grassBladeTrailSeconds
+   public static final int GRASS_BLADE_TRAIL_SECONDS = integer("grassBladeTrailSeconds", 45); // grass blades: how long a trail takes to stand up again (game-speed seconds)
+   public static final boolean GRASS_BLADE_CUT = bool("grassBladeCut", true); // grass blades: a melee swing cuts the blades it sweeps (Ghost of Yotei's cut buffer); they grow back over grassBladeRegrowSeconds
+   public static final int GRASS_BLADE_REGROW_SECONDS = integer("grassBladeRegrowSeconds", 900); // grass blades: how long cut grass takes to grow back
+   public static final boolean GRASS_BLADE_PUSH = bool("grassBladePush", true); // grass blades: the blades bend away from characters and cars moving through them (foliage sway's push kernel)
    public static final boolean GRASS_BLADE_DEPTH_CHECK = bool("grassBladeDepthCheck", true); // grass blades: no blade where the root is covered in the scene (a post, a trunk, a bench) or the ground is not drawn
    public static final int DEV_GRASS_VIEW = integer("devGrassView", 0); // dev: grass blades drawn in a flat debug colour (1)
    public static final int DEV_GRASS_ALTERNATE = integer("devGrassAlternate", 0); // dev: ms; grass blades switch between the A knobs and the B set (devGrassAltB, empty = off) every period (GPU section grass.gbA / .gbB)
@@ -2344,9 +2346,6 @@ public final class Config {
       FOLIAGE_SWAY_PCT = Math.max(0, Math.min(400, integer("foliageSwayPct", 100)));
       FOLIAGE_SWAY_TAPS = Math.max(1, Math.min(4, integer("foliageSwayTaps", 1)));
       WIND_SPRITE_SWAY = bool("windSpriteSway", true);
-      GRASS_BLADES = bool("grassBlades", false);
-      GRASS_BLADE_RADIUS = Math.max(2, Math.min(32, integer("grassBladeRadius", 10)));
-      GRASS_BLADE_DENSITY_PCT = Math.max(5, Math.min(400, integer("grassBladeDensityPct", 100)));
       DEV_SWAY_VIEW = integer("devSwayView", 0);
       GOD_RAYS = bool("godRays", false);
       GOD_RAYS_STRENGTH_PCT = Math.max(0, Math.min(400, integer("godRaysStrengthPct", 100)));
