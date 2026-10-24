@@ -16,7 +16,7 @@ Measured on the desktop: RTX 4090, 5120x2160, power-saver profile.
 | What | Result |
 |---|---|
 | Frame cost, every key on, uncapped static field | +0.9 ± 0.4 µs frame, +0.1 ± 0.6 µs GPU at 852 fps (`gt-cost12-20261024-193120`): 0 in the noise |
-| Bake cost of a natural-ground chunk texture | was ~145 µs GPU median vs 62.5 stock (`gt-cost16`). After ground-common's two fixes (5132c6dd: class-map uploads only of changed texels through a PBO ring; 90fca545: patch `const int` tables rewritten as packed functions, which NVIDIA otherwise fills into local memory on every fragment): stock 61.4, no-op patch 65.5, ident 72.7, hpb+b+m 89.3 (`gc-int-final-20261024-210743`). Tiling's own shader +7..28 µs: **open, back with ground-tiling.** |
+| Bake cost of a natural-ground chunk texture | was ~145 µs GPU median vs 62.5 stock (`gt-cost16`). After ground-common's fixes (5132c6dd class-map uploads only of changed texels through a PBO ring; 90fca545 patch `const int` tables as packed functions) and tiling's bake pass: stock 61.4, no-op 64.5, ident 69.6, hpb+b+m 79.9 (`gt-bc14-20261024-223918`). Tiling's own share +15.6 µs (from +20.5). |
 | Re-bakes on the 120 km/h drive | 13,262 on vs 13,096 off: the difference is the one-time re-bake of ~230 textures when the patch switches on. Both held 156.7 fps (the cap). |
 | Drive tail | p99.9 12.7 vs 12.6 ms, no frame > 33 ms; p99 7.0 vs 6.6 ms (one run each: `gt-drive-on-17-20261024-200009`, `gt-drive-off-17-20261024-200135`) |
 | Repeat score, grass (lower is better; texture floor 0.11) | stock 0.222 → hpb 0.176 |
@@ -50,10 +50,23 @@ Two bugs fixed on the way:
 - **No visible test spot.** Real natural ground near the bench spots is under overlays and trees, so the new rig
   `ground_field=` (harness/CLAUDE.md) lays bare zones.
 
+## Bake overhead pass (2026-10-24 evening)
+
+| Change | Gain per bake | Verdict |
+|---|---|---|
+| One program per tiling mode (the mode in the patch id; NVIDIA allocated the biggest mode's registers for all) | −5.6 µs | kept |
+| One PCG round instead of three nested | −3 µs | kept |
+| Exemplar wrap by mask (power-of-two period; NVIDIA has no integer divider; `lap` +43 → +21) | −2.8 µs | kept |
+| A sprite-table row's fetches at once, class map / field / other art before the lookup | −1.0 µs | kept |
+| gtField on scalars (no local arrays), one class-map fetch a square | in the noise | kept |
+| Macro lattice from uniforms / from a filtered texture; eight-channel field noise; rolled score loop; single call sites; pow-free hpb weights; early outs for alpha-less texels | none or worse | reverted |
+
 ## Open
 
-1. Tiling's own bake overhead, +7 µs (ident) to +28 µs (hpb+b+m) a bake; next suspect the local arrays in `gtField`. The
-   floor variant's own overhead is ~4 µs after ground-common's fixes.
+1. Tiling's own bake overhead, +15.6 µs a bake at hpb+b+m: lookup ~2.5, exemplar fetch ~2.3, hpb's 10 fetches ~4, field
+   ~3-4, macro ~2-4. A diagnostic with the whole program present but never run cost the same as the no-op (+3.8): program
+   size is free, executed fetches are the cost. Next: fewer fetches (hpb basis, `textureGather` on the class map, interior
+   squares skip the field).
 2. The Mac look needs one picture.
 3. The `ground_field` rig leaves trees standing on squares flagged solid.
 4. Default values for the menu: hpb at cell 150 % suggested.
