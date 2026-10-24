@@ -1852,7 +1852,9 @@ public final class Config {
    public static final boolean DEV_SSR_BARRIER_OFF = bool("devSsrBarrierOff", false); // dev: devSsrAlternate's off frames still issue the texture barrier
    public static final int DEV_SSR_SKIP = integer("devSsrSkip", 0); // dev: cost probes, bits: 1 no moving-object scatter, 2 no water resolve (strength 0), 4 no barriers before the water, 8 no composite scatter
    public static final boolean DEV_SSR_NO_STENCIL = bool("devSsrNoStencil", false); // dev: the moving-object scatter takes every pixel of the object's depth band again instead of the pixels the models drew (stencil): the 2026-10-01 puddle flicker beside broken glass while walking
-   public static final int DEV_SSR_VIEW = integer("devSsrView", 0); // dev: 1 = water and puddles show the reflection term alone
+   public static final int DEV_SSR_FLOW_ALTERNATE = integer("devSsrFlowAlternate", 0); // dev: reflectionsFlow flips on / off every N ms (same-run A/B of its cost; devSsrTiming then splits the water pass by it)
+   public static final int DEV_SSR_FLOW_DEBUG = integer("devSsrFlowDebug", 0); // dev: reflectionsFlow probes, bits: 1 the long waves do not pick another key, 2 a key miss there does not break the image, 4 the source shift is not turned over
+   public static final int DEV_SSR_VIEW = integer("devSsrView", 0); // dev: 1 = water and puddles show the reflection term alone, 2 = the water shows reflectionsFlow's inputs (red: current speed, green: waviness, blue: the long waves)
    public static final boolean DEV_SSR_NO_PATCH = bool("devSsrNoPatch", false); // dev: the shaders stay stock (cost of the patched programs with the reflections off)
    public static final boolean DEV_SSR_TRACE = bool("devSsrTrace", false); // dev: one log line per frame of the reflection scatter (map uploads with their water bits, chunk textures near water, composite draws with the scatter on, water draws, render-thread replays) with epoch ms, to line up with a devCapture
    public static final String DEV_SSR_DUMP_AT = string("devSsrDumpAt", ""); // dev: seconds after the world is up at which the world colour + depth before and after the puddles and the water go to ~/Zomboid/pzopt-ssr/ (pzopt.Ssr)
@@ -1903,6 +1905,8 @@ public final class Config {
    public static volatile int BLOOD_REFLECT_PCT; // wet blood: strength of the reflection in the film, % of the water's Fresnel (live)
    public static volatile int BLOOD_SHEEN_PCT; // wet blood: strength of the SDR sun / lamp sheen, % (live)
    public static volatile int BLOOD_GLINT_PCT; // wet blood: strength of the HDR glints, % (live)
+   public static volatile boolean SSR_FLOW; // reflections follow the water: displaced along its flow, as wavy as the water (pzopt.Ssr)
+   public static volatile int SSR_FLOW_PCT; // how much the waviness and the current add to the reflection's displacement, %
    public static volatile boolean SSR_PUDDLES; // reflections in the puddles too (once they are big enough to reflect)
    public static final String SSR_MODE = string("ssrMode", "ppr"); // reflections: ppr = pixel-projected (the chunk composite writes each surface into the pixel it mirrors to; the water reads one texel), march = a ray march up the column in the water shader
    public static final int SSR_REACH_PCT = integer("ssrReachPct", 150); // reflections: the reflection fades out between half and all of this height above the water, % of a level
@@ -2228,6 +2232,8 @@ public final class Config {
       CAR_GLASS_REFLECT_PCT = Math.max(0, Math.min(400, integer("carGlassReflectPct", 100)));
       SSR_STRENGTH_PCT = Math.max(0, Math.min(100, integer("reflectionStrengthPct", 45)));
       SSR_PUDDLES = bool("reflectionPuddles", true);
+      SSR_FLOW = bool("reflectionsFlow", true);
+      SSR_FLOW_PCT = Math.max(0, Math.min(300, integer("reflectionsFlowPct", 100)));
       OCCLUDED_OUTLINES = bool("occludedZombieOutlines", false);
       OCCLUDED_OUTLINE_IGNORE_PLANTS = bool("occludedOutlineIgnorePlants", true);
       OCCLUDED_OUTLINE_WIDTH = Math.max(1, Math.min(4, integer("occludedOutlineWidth", 1)));

@@ -536,7 +536,7 @@ public final class BloodWet {
          "#ifdef PZ_SSR_PPR",
          "   if (uK.z > 0.5) {",
          "      vec3 r;",
-         "      kr = pzSsrLookup(n, r, true);",
+         "      kr = pzSsrLookup(n, vec4(0.0, 1.0, 0.0, 0.0), vec4(0.0), vec4(0.0), r, true); // a still film (reflectionsFlow: calm)",
          "      refl = r;",
          "   }",
          "#endif",

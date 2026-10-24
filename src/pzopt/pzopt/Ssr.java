@@ -20,7 +20,7 @@ import zombie.iso.IsoWorld;
 
 /**
  * Screen-space reflections on water and puddles (Config {@code reflections}, {@code reflectionStrengthPct},
- * {@code reflectionPuddles}; write-up docs/findings-reflections-2026-09-25.md).
+ * {@code reflectionPuddles}, {@code reflectionsFlow}, {@code reflectionsFlowPct}; write-up docs/findings-reflections-2026-09-25.md).
  *
  * <p>The view is an orthographic 2:1 isometric one, so the mirror of the view ray about a horizontal surface is the same
  * for every pixel: on screen it runs straight up the pixel's column, and in the world frame of the mapping below
@@ -36,6 +36,14 @@ import zombie.iso.IsoWorld;
  * are gated by a world-anchored square map (water 255, level-0 puddles 128) and a per-chunk-texture switch. The water
  * and puddle shaders only read: an 8x8 tile stamp first, then the key, the world colour at its source displaced by the
  * waves (the key's colour for a hidden layer), Fresnel and the distance / edge fades.
+ *
+ * <p>{@code reflectionsFlow} / {@code reflectionsFlowPct} (2026-10-24): the reflection follows the water. The water
+ * shader's own inputs give each pixel its current (IsoWaterFlow's angle and the map's WaterSpeed per vertex) and its
+ * waviness (that speed, the wind, the rain); the wave normal it already computes (advected by the current on its 4 s
+ * flow cycle) moves the source as before, scaled by the waviness and stretched along the current, and long waves of the
+ * current (crests across the flow, advected with the same two phases) shift the mirrored water pixel along the flow,
+ * picking that pixel's own key: calm water is near a mirror, a flowing or windy one carries a broken image down the
+ * current. Puddles have no current: their rings and the wind move the source by the waviness only.
  * {@code ssrMode=march} keeps the classic alternative, a ray march up the column inside the water shader.
  */
 public final class Ssr {
@@ -93,7 +101,7 @@ public final class Ssr {
       }
       String c = "#version 150 compatibility\n#extension GL_ARB_shader_image_load_store : require" + ("ppr".equals(mode()) ? "\n#define PZ_SSR_PPR" : "")
             + code.substring("#version 120".length(), mi) + WATER_GLSL + "\n" + code.substring(mi, at + anchor.length())
-            + "\n    fragColor = pzSsrApply(fragColor, gm);" + code.substring(at + anchor.length());
+            + "\n    fragColor = pzSsrApply(fragColor, gm, " + waveArgs(code) + ");" + code.substring(at + anchor.length());
       int test = GL20.glCreateShader(GL20.GL_FRAGMENT_SHADER);
       GL20.glShaderSource(test, c);
       GL20.glCompileShader(test);
@@ -110,6 +118,26 @@ public final class Ssr {
    }
 
    /**
+    * reflectionsFlow: the water's flow, speed, wind and rain as the stock water shaders have them in mainImage ({@code flow}
+    * = (sin, cos) of the flow angle x 0.02, the varying {@code waterSpeed}, the uniforms {@code WParamWindSpeed} and
+    * {@code WParamRainIntensity}); a calm surface if a game update renamed them.
+    */
+   static String waveArgs(String code) {
+      String wave = "pzSsrWave(flow * 50.0, waterSpeed, WParamWindSpeed, WParamRainIntensity)";
+      if (code.contains("vec2 flow = ") && code.contains("waterSpeed") && code.contains("uniform float WParamWindSpeed;") && code.contains("uniform float WParamRainIntensity;")) {
+         if (code.contains("float o1 = 0.0, o2 = 0.0;") && code.contains("float mv = getMixValue(cycle, o1, o2);") && code.contains("float speed = ")
+               && code.contains("vec2 scale = ") && code.contains("vec3 p = ")) {
+            // the long waves: the normal's own wave coordinates and its two flow phases (o1 / o2 of the 4 s cycle, blend mv)
+            return wave + ", vec4(scale * p.xz, mv, 1.0), vec4(flow * o1 * speed, flow * o2 * speed)";
+         }
+         Log.warn("ssr: the water shader's flow phases have changed, its reflections follow the flow without the long waves");
+         return wave + ", vec4(0.0), vec4(0.0)";
+      }
+      Log.warn("ssr: the water shader's flow / wind inputs have changed, its reflections do not follow the flow");
+      return "vec4(0.0, 1.0, 0.0, 0.0), vec4(0.0), vec4(0.0)";
+   }
+
+   /**
     * The puddles' common fragment unit (stock or puddleEarlyZ's copy, HDR's glint patch already in): the scene mixed into
     * the reflective colour of the HQ and MQ puddles (the LQ ones have none), weighted there by the puddle's own mask.
     */
@@ -123,7 +151,9 @@ public final class Ssr {
       String c = "#version 150 compatibility\n#extension GL_ARB_shader_image_load_store : require" + ("ppr".equals(mode()) ? "\n#define PZ_SSR_PPR" : "")
             + code.substring("#version 120".length(), sm) + WATER_GLSL + "\n" + code.substring(sm);
       // only where the puddle shows its reflective colour (ambient / reflective parts), not the wet sheen around it
-      c = c.replace(anchor, anchor + "\n    if (alphaPuddlesAmbient + alphaPuddlesReflection > 0.02) reflection = pzSsrPuddle(reflection, gm);");
+      // reflectionsFlow: no current in a puddle; the wind and the rain ruffle it less than open water
+      c = c.replace(anchor, anchor + "\n    if (alphaPuddlesAmbient + alphaPuddlesReflection > 0.02) reflection = pzSsrPuddle(reflection, gm,"
+            + " pzSsrWave(vec2(0.0, 1.0), 0.0, WParamWindSpeed * 0.5, rainIntensity * 0.6));");
       int test = GL20.glCreateShader(GL20.GL_FRAGMENT_SHADER);
       GL20.glShaderSource(test, c);
       GL20.glCompileShader(test);
@@ -202,61 +232,144 @@ public final class Ssr {
          "   c.a = a;",
          "   return c;",
          "}",
+         "// reflectionsFlow: the wave normal's displacement on calm / choppy water (x the distortion px), the long waves'",
+         "// displacement along the current on choppy water (x the distortion px), stretch of the normal's displacement along",
+         "// the flow at full speed (> 0 = on; 0: the isotropic wave displacement of 2026-09-26)",
+         "uniform vec4 pzSsrF;",
+         "// the surface's flow on screen (a GL-pixel axis, y up), its speed (0..1) and its waviness (0 calm .. 1 choppy), from",
+         "// what the water shader already gets: the flow (sin, cos of IsoWaterFlow's angle per vertex), the speed (the map's",
+         "// WaterSpeed, 0..~1.6, less near the shore), the wind (WParamWindSpeed, the climate's wind intensity x 10) and the rain (0..1)",
+         "vec4 pzSsrWave(vec2 dir, float speed, float wind, float rain) {",
+         "   float s = clamp(speed, 0.0, 1.0); // the Ohio ~0.7 mid-channel, the fast streams 1.2-1.6",
+         "   return vec4(dir.x, -dir.y, s, clamp(0.6 * s + 0.08 * wind + 0.5 * rain, 0.0, 1.0));",
+         "}",
+         "// value noise for the long waves (only evaluated where a reflection is found)",
+         "// an integer hash: the water's sin hash loses its bits at the lattice coordinates far from the map origin (the",
+         "// Riverside pier's ~5000 gave a hair-like pixel noise instead of smooth waves)",
+         "float pzSsrHash1(vec2 p) {",
+         "   uvec2 v = uvec2(ivec2(p));",
+         "   uint h = v.x * 1664525u + v.y * 1013904223u;",
+         "   h ^= h >> 16; h *= 0x7feb352du; h ^= h >> 15; h *= 0x846ca68bu; h ^= h >> 16;",
+         "   return float(h >> 8) * (1.0 / 16777216.0);",
+         "}",
+         "float pzSsrNoise(vec2 p) {",
+         "   vec2 i = floor(p), f = fract(p), u = f * f * (3.0 - 2.0 * f);",
+         "   return mix(mix(pzSsrHash1(i), pzSsrHash1(i + vec2(1.0, 0.0)), u.x), mix(pzSsrHash1(i + vec2(0.0, 1.0)), pzSsrHash1(i + vec2(1.0, 1.0)), u.x), u.y) * 2.0 - 1.0;",
+         "}",
+         "// the long waves of the current: crests across the flow (~60 px apart along it, ~240 px long across it at zoom 1),",
+         "// advected exactly as the water's own normal (its two flow phases a1 / a2 and their blend mv on the water's 4 s",
+         "// cycle), so they travel down the current; -1..1. (Crests along the flow slid along themselves, no visible motion,",
+         "// and a shift changing faster than ~0.3 px a pixel cut the image into a grain.) lq = (the water's wave coordinates",
+         "// scale * p.xz, mv, weight), la = (the two phases' advection offsets)",
+         "float pzSsrLong(vec4 lq, vec4 la, vec2 dirUv) {",
+         "   vec2 fp = vec2(-dirUv.y, dirUv.x);",
+         "   vec2 q1 = lq.xy + la.xy, q2 = lq.xy + la.zw;",
+         "   float n1 = pzSsrNoise(vec2(dot(q1, fp) * 0.4, dot(q1, dirUv) * 1.6));",
+         "   float n2 = pzSsrNoise(vec2(dot(q2, fp) * 0.4, dot(q2, dirUv) * 1.6) + 17.0);",
+         "   return mix(n2, n1, lq.z);",
+         "}",
          "// pixel-projected: the scatter left the first surface above this pixel in its texel (epoch in the top 7 bits, 2047 -",
          "// the rows up to it in the next 11, its colour as 5:5:4); the texel is only read (a later frame's epoch outranks it)",
          "#ifdef PZ_SSR_PPR",
-         "float pzSsrLookup(vec3 n, out vec3 r, bool half_) {",
+         "bool pzSsrKey(inout ivec2 p, bool half_, out uint key) {",
+         "   uint epoch = uint(pzSsrK.y);",
+         "   key = imageLoad(pzSsrHash, p).r;",
+         "   if ((key >> 25) != epoch) {",
+         "      p.y += half_ ? 2 : 1; // a one-row gap: the texel above, its source is ours one row up",
+         "      key = imageLoad(pzSsrHash, p).r;",
+         "      if ((key >> 25) != epoch) return false;",
+         "   }",
+         "   return true;",
+         "}",
+         "float pzSsrLookup(vec3 n, vec4 wv, vec4 lq, vec4 la, out vec3 r, bool half_) {",
          "   r = vec3(0.0);",
          "   ivec2 p = ivec2(gl_FragCoord.xy);",
          "   int px = p.x;",
          "   if (half_) p &= ~1; // puddles: the half-resolution keys",
          "   // the 8x8 tile holds the last frame anything was mirrored into it: most surface pixels stop at this cached read",
          "   if (imageLoad(pzSsrTiles, p >> 3).r != uint(pzSsrFrame)) return 0.0;",
-         "   uint epoch = uint(pzSsrK.y);",
-         "   uint key = imageLoad(pzSsrHash, p).r;",
-         "   if ((key >> 25) != epoch) {",
-         "      p.y += half_ ? 2 : 1; // a one-row gap: the texel above, its source is ours one row up",
-         "      key = imageLoad(pzSsrHash, p).r;",
-         "      if ((key >> 25) != epoch) return 0.0;",
-         "   }",
+         "   ivec2 p0 = p;",
+         "   uint key;",
+         "   if (!pzSsrKey(p, half_, key)) return 0.0;",
          "   int dist = 2047 - int((key >> 14) & 2047u);",
-         "   vec3 pk = vec3(float((key >> 9) & 31u) / 31.0, float((key >> 4) & 31u) / 31.0, float(key & 15u) / 15.0);",
          "   float far = clamp(float(dist) / pzSsrK.z, 0.0, 1.0);",
          "   // the world texture at the source, displaced by the waves: sharp where the object meets the water and rougher the",
          "   // farther the ray went (contact hardening); if it does not match the key's colour the source is a hidden layer",
          "   // (or the waves moved the lookup off it) and the key's own colour stands",
+         "   vec2 tilt = vec2(n.x, -n.z);",
+         "   vec2 off = tilt * pzSsrP.w * (0.3 + 1.4 * far);",
+         "   float keep = 1.0;",
+         "   if (pzSsrF.w > 0.0) {",
+         "      // flow: the same wave normal (it already moves with the current and the wind, on the water's own clock), its",
+         "      // displacement scaled by the waviness and stretched along the flow, plus the current's long waves (a field",
+         "      // narrow across the flow and long along it, advected like the normal) shifting the image along the flow: on",
+         "      // choppy water the mirrored image is cut into streaks along the current. Applied to the water pixel being",
+         "      // mirrored: the whole pixels pick another key (that pixel's own source), the rest moves the source (turned",
+         "      // over, as a mirror turns rows over)",
+         "      vec2 f = wv.xy, fp = vec2(-f.y, f.x);",
+         "      float st = 1.0 + pzSsrF.w * wv.z;",
+         "      float px1 = pzSsrP.w * (0.3 + 1.4 * far);",
+         "      // the long waves cut and shift the image along the current: whole pixels pick another key. Their amplitude",
+         "      // does not follow the key's distance (contact hardening): neighbouring pixels mirror surfaces at very different",
+         "      // distances (a railing's bars and the deck behind), which made the shift, and the image, a grain",
+         "      vec2 lng = lq.w > 0.0 ? f * (pzSsrLong(lq, la, vec2(wv.x, -wv.y)) * pzSsrP.w * pzSsrF.z * wv.w * lq.w) : vec2(0.0);",
+         "      ivec2 dq = (int(pzSsrQ.z) & 1) != 0 ? ivec2(0) : ivec2(floor(lng + 0.5)); // dev bit 1: no key re-pick",
+         "      if (dq != ivec2(0)) {",
+         "         ivec2 q = p0 + dq;",
+         "         if (half_) q &= ~1;",
+         "         uint key2;",
+         "         if (pzSsrKey(q, half_, key2)) {",
+         "            key = key2;",
+         "            p = q;",
+         "            px += dq.x;",
+         "            dist = 2047 - int((key >> 14) & 2047u);",
+         "            far = clamp(float(dist) / pzSsrK.z, 0.0, 1.0);",
+         "            px1 = pzSsrP.w * (0.3 + 1.4 * far);",
+         "            lng -= vec2(dq);",
+         "         } else {",
+         "            keep = (int(pzSsrQ.z) & 2) != 0 ? 1.0 : 1.0 - 0.6 * wv.w; // that pixel mirrors nothing: choppy water breaks the image there (dev bit 2: not)",
+         "         }",
+         "      }",
+         "      // the fine ripple of the normal moves the source (as before, scaled by the waviness and stretched along the",
+         "      // flow), with what is left of the long shift below a pixel; a mirror turns rows over",
+         "      off = (f * (dot(tilt, f) * st) + fp * (dot(tilt, fp) / st)) * (px1 * mix(pzSsrF.x, pzSsrF.y, wv.w)) + lng;",
+         "      if ((int(pzSsrQ.z) & 4) == 0) off.y = -off.y; // dev bit 4: not turned over",
+         "   }",
+         "   vec3 pk = vec3(float((key >> 9) & 31u) / 31.0, float((key >> 4) & 31u) / 31.0, float(key & 15u) / 15.0);",
          "   vec2 src = vec2(float(px) + 0.5, float(p.y + dist) + 0.5);",
-         "   r = texture2D(pzSsrColor, (src + vec2(n.x, -n.z) * pzSsrP.w * (0.3 + 1.4 * far)) / vec2(textureSize(pzSsrColor, 0))).rgb;",
+         "   r = texture2D(pzSsrColor, (src + off) / vec2(textureSize(pzSsrColor, 0))).rgb;",
          "   if (any(greaterThan(abs(r - pk), vec3(pzSsrK.w)))) r = pk;",
          "   // Fresnel (Schlick, water F0 0.02) of the wave normal against the view, relative to flat water at the camera's 30 deg",
          "   float cv = clamp(dot(normalize(n), vec3(0.0, 0.5, 0.8660254)), 0.0, 1.0);",
          "   float fr = (0.02 + 0.98 * pow(1.0 - cv, 5.0)) / 0.050625;",
          "   float fade = clamp(2.0 - 2.0 * far, 0.0, 1.0) * clamp((pzSsrQ.y - src.y) / 48.0, 0.0, 1.0);",
-         "   return clamp(pzSsrMapC.w * fade * clamp(fr, 0.35, 2.2), 0.0, 1.0);",
+         "   return clamp(pzSsrMapC.w * fade * clamp(fr, 0.35, 2.2) * keep, 0.0, 1.0);",
          "}",
-         "vec4 pzSsrPpr(vec4 c, vec3 n) {",
+         "vec4 pzSsrPpr(vec4 c, vec3 n, vec4 wv, vec4 lq, vec4 la) {",
+         "   // dev view 2: the flow inputs (red: speed 0..1, green: waviness 0..1, blue: the long waves)",
+         "   if (pzSsrQ.w > 1.5) return vec4(wv.z, wv.w, lq.w > 0.0 ? pzSsrLong(lq, la, vec2(wv.x, -wv.y)) * 0.5 + 0.5 : 0.0, 1.0);",
          "   vec3 r;",
-         "   float k = pzSsrLookup(n, r, false);",
+         "   float k = pzSsrLookup(n, wv, lq, la, r, false);",
          "   if (pzSsrQ.w > 0.5) return vec4(r * k, 1.0); // dev view: the reflection term alone",
          "   return k > 0.0 ? pzSsrBlend(c, r, k) : c;",
          "}",
          "#endif",
          "// puddles: the scene into the puddle's reflective colour (lit already: the puddle multiplies by its square's light later)",
-         "vec3 pzSsrPuddle(vec3 refl, vec3 n) {",
+         "vec3 pzSsrPuddle(vec3 refl, vec3 n, vec4 wv) {",
          "#ifdef PZ_SSR_PPR",
          "   if (pzSsrMapC.w <= 0.0) return refl;",
          "   vec3 r;",
-         "   float k = pzSsrLookup(n, r, true);",
+         "   float k = pzSsrLookup(n, wv, vec4(0.0), vec4(0.0), r, true);",
          "   if (pzSsrQ.w > 0.5) return r * k / max(vertColour.rgb, vec3(0.15)); // dev view (the puddle's own alpha still applies)",
          "   return k > 0.0 ? mix(refl, r / max(vertColour.rgb, vec3(0.15)), k) : refl;",
          "#else",
          "   return refl;",
          "#endif",
          "}",
-         "vec4 pzSsrApply(vec4 c, vec3 n) {",
+         "vec4 pzSsrApply(vec4 c, vec3 n, vec4 wv, vec4 lq, vec4 la) {",
          "   if (pzSsrMapC.w <= 0.0) return c;",
          "#ifdef PZ_SSR_PPR",
-         "   return pzSsrPpr(c, n);",
+         "   return pzSsrPpr(c, n, wv, lq, la);",
          "#else",
          "   int x = int(gl_FragCoord.x), y0 = int(gl_FragCoord.y);",
          "   float g0 = 2.0 / 3.0 * (pzSsrMapA.z * gl_FragCoord.y + pzSsrMapA.w) + 8.0 * pzSsrMapC.z;",
@@ -969,9 +1082,9 @@ public final class Ssr {
    }
 
    static final String[] UNIFORMS = {"pzSsrMapA", "pzSsrMapC", "pzSsrO", "pzSsrHash", "pzSsrTiles", "pzSsrFrame", "pzSsrMapMin", "pzSsrReach",
-      "pzSsrWater", "pzSsrColor", "pzSsrDepth", "pzSsrP", "pzSsrQ", "pzSsrK"};
+      "pzSsrWater", "pzSsrColor", "pzSsrDepth", "pzSsrP", "pzSsrQ", "pzSsrK", "pzSsrF"};
    static final int U_MAPA = 0, U_MAPC = 1, U_O = 2, U_HASH = 3, U_TILES = 4, U_FRAME = 5, U_MAPMIN = 6, U_REACH = 7, U_WATER = 8, U_COLOR = 9,
-      U_DEPTH = 10, U_P = 11, U_Q = 12, U_K = 13;
+      U_DEPTH = 10, U_P = 11, U_Q = 12, U_K = 13, U_F = 14;
    private static final java.util.HashMap<Integer, int[]> LOCATIONS = new java.util.HashMap<>();
 
    /** A program's uniform locations, looked up once. */
@@ -1092,7 +1205,7 @@ public final class Ssr {
          renderView = this.view;
          charsPending = true; // the moving objects were drawn since any barrier
          if (Config.DEV_SSR_TIMING) {
-            Timing.begin(this.view.on);
+            Timing.begin(Config.DEV_SSR_FLOW_ALTERNATE > 0 ? this.view.on && flowOn() : this.view.on); // devSsrFlowAlternate: on = flow on
          }
       }
    }
@@ -1200,6 +1313,28 @@ public final class Ssr {
    }
 
    private static final Before[] BEFORES = {new Before(), new Before(), new Before(), new Before()};
+
+   static final float FLOW_CALM = 0.6F, FLOW_CHOPPY = 1.6F, FLOW_LONG = 1.2F, FLOW_STRETCH = 1.5F;
+   private static long flowT0;
+
+   /**
+    * Render thread: do this frame's reflections follow the flow (reflectionsFlow)? devSsrFlowAlternate flips it every N ms
+    * from the first call's wall clock (same-run A/B of its cost; harness/contact/alt.py reads the console line).
+    */
+   static boolean flowOn() {
+      if (!Config.SSR_FLOW) {
+         return false;
+      }
+      if (Config.DEV_SSR_FLOW_ALTERNATE <= 0) {
+         return true;
+      }
+      long now = System.currentTimeMillis();
+      if (flowT0 == 0L) {
+         flowT0 = now;
+         Log.info("ssr flow: alternating every " + Config.DEV_SSR_FLOW_ALTERNATE + " ms from epoch_ms " + now + " (on first)");
+      }
+      return ((now - flowT0) / Config.DEV_SSR_FLOW_ALTERNATE & 1L) == 0L;
+   }
 
    private static long alternateT0;
    private static boolean alternateOn = true; // game thread: this frame's state under devSsrAlternate (set before the composite)
@@ -1363,11 +1498,23 @@ public final class Ssr {
          GL20.glUniform4f(uMapC, MAP[4], MAP[5], 0F, (Config.DEV_SSR_SKIP & 2) != 0 ? 0F : Config.SSR_STRENGTH_PCT / 100F);
          float pxPerLevel = pxPerLevel(view, VP);
          GL20.glUniform4f(l[U_P], Config.SSR_STRIDE, Config.SSR_STEPS, Config.SSR_REFINE, Config.SSR_DISTORT_PCT / 100F * pxPerLevel * 0.1F);
-         GL20.glUniform4f(l[U_Q], Math.max(8F, Config.SSR_STRIDE * Config.SSR_STEPS), VP[1] + VP[3], Config.SSR_THICKNESS_PCT / 100F, Config.DEV_SSR_VIEW);
+         // (z: the march's thickness; in ppr mode devSsrFlowDebug's bits)
+         GL20.glUniform4f(l[U_Q], Math.max(8F, Config.SSR_STRIDE * Config.SSR_STEPS), VP[1] + VP[3], usePpr ? Config.DEV_SSR_FLOW_DEBUG : Config.SSR_THICKNESS_PCT / 100F, Config.DEV_SSR_VIEW);
          GL20.glUniform4f(l[U_K], usePpr ? 1F : 0F, usePpr ? pf.epoch : 0F, reachRows(view, VP), 0.14F);
          GL20.glUniform1i(l[U_HASH], HASH_IMAGE_UNIT);
          GL20.glUniform1i(l[U_TILES], TILE_IMAGE_UNIT);
          GL20.glUniform1i(l[U_FRAME], usePpr ? pf.stamp : -1);
+         if (l[U_F] >= 0) {
+            if (flowOn()) {
+               // reflectionsFlow: the wave normal displaces a calm surface's reflection 0.6x as much as on 2026-09-26 (near a
+               // mirror), a choppy one FLOW_CHOPPY x, stretched along the current up to 2.5x at full speed; the long waves
+               // shift it along the current by up to FLOW_LONG x the distortion; the % scales what the waviness adds
+               float k = Config.SSR_FLOW_PCT / 100F;
+               GL20.glUniform4f(l[U_F], FLOW_CALM, FLOW_CALM + (FLOW_CHOPPY - FLOW_CALM) * k, FLOW_LONG * k, Math.max(1.0E-3F, FLOW_STRETCH * k));
+            } else {
+               GL20.glUniform4f(l[U_F], 0F, 0F, 0F, 0F);
+            }
+         }
          draws++;
          trWater++;
       } catch (Throwable t) {
