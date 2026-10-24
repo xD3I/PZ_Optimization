@@ -245,40 +245,43 @@ public final class GroundTilingPatch implements GroundBake.FloorPatch {
          int m = cls & 15;
          return m == 1 ? 5 : (m == 2 || m == 9) ? 3 : m == 8 ? 2 : m == 4 ? 1 : m == 3 ? 0 : -1;
       }
-      // classes are material | tone << 4 (the class map's R and G); out: the winner c1 and its weight w1, the runner-up c2
-      // (weight 1 - w1), whether class want is one of the four squares; false if the pixel has one class
+      // classes are material | tone << 4 (the class map's R and G, one fetch a square); -1 for a square that does not blend
+      int gtCls(ivec2 sq) {
+         vec2 rg = texelFetch(pzgClassTex, ivec2(sq.x & 511, sq.y & 511), 0).rg;
+         int r = int(rg.r * 255.0 + 0.5);
+         return gtRank(r) < 0 ? -1 : (r & 15) | (min(int(rg.g * 255.0 + 0.5) & 15, 3) << 4);
+      }
+      float gtScore(int c, float wc, ivec2 px, vec2 q, ivec2 bi, vec2 bf) {
+         int la = GT_CODE_LAYER[c];
+         float h = la < 0 ? 0.5 : gtFetch(px, ivec2(0), float(la)).a;
+         float nz = gtFbm2(q, bi, bf, 31u + uint(c)) - 0.5;
+         return wc + 0.06 * float(gtRank(c)) + 2.0 * pzGtBlend.y * nz + pzGtBlend.w * (h - 0.5);
+      }
+      void gtTop(int c, float sc, inout int c1, inout float s1, inout int c2, inout float s2) {
+         if (sc > s1) { s2 = s1; c2 = c1; s1 = sc; c1 = c; } else if (sc > s2) { s2 = sc; c2 = c; }
+      }
+      // out: the winner c1 and its weight w1, the runner-up c2 (weight 1 - w1), whether class want is one of the four
+      // squares; false if the pixel has one class. Scalars only (a dynamically indexed local array goes to local memory).
       bool gtField(vec2 wLocal, ivec2 px, int want, out int c1, out float w1, out int c2, out bool hasWant) {
          vec2 g = wLocal - 0.5;
          vec2 gf = floor(g);
          vec2 t = g - gf;
          ivec2 i0 = ivec2(gf) + pzGtWorld;
-         int cl[4]; float wts[4]; int n = 0; float wsum = 0.0;
-         hasWant = false;
-         for (int k = 0; k < 4; k++) {
-            ivec2 d = ivec2(k & 1, k >> 1);
-            int cls = pzgClassAt(i0 + d);
-            if (gtRank(cls) < 0) continue;
-            float w = (d.x == 1 ? t.x : 1.0 - t.x) * (d.y == 1 ? t.y : 1.0 - t.y);
-            int c = (cls & 15) | (min(pzgToneAt(i0 + d), 3) << 4);
-            hasWant = hasWant || c == want;
-            int j = 0;
-            for (; j < n; j++) if (cl[j] == c) break;
-            if (j == n) { cl[n] = c; wts[n] = 0.0; n++; }
-            wts[j] += w;
-            wsum += w;
-         }
+         int k0 = gtCls(i0), k1 = gtCls(i0 + ivec2(1, 0)), k2 = gtCls(i0 + ivec2(0, 1)), k3 = gtCls(i0 + ivec2(1, 1));
+         hasWant = k0 == want || k1 == want || k2 == want || k3 == want;
          c1 = want; c2 = want; w1 = 1.0;
-         if (n < 2 || wsum <= 1e-4) return false;
+         int r = k0 >= 0 ? k0 : k1 >= 0 ? k1 : k2 >= 0 ? k2 : k3;
+         if ((k1 < 0 || k1 == r) && (k2 < 0 || k2 == r) && (k3 < 0 || k3 == r) && (k0 < 0 || k0 == r)) return false;
+         float a0 = k0 < 0 ? 0.0 : (1.0 - t.x) * (1.0 - t.y), a1 = k1 < 0 ? 0.0 : t.x * (1.0 - t.y);
+         float a2 = k2 < 0 ? 0.0 : (1.0 - t.x) * t.y, a3 = k3 < 0 ? 0.0 : t.x * t.y;
+         float inv = 1.0 / (a0 + a1 + a2 + a3);
          ivec2 bi; vec2 bf; gtSplit(pzGtBlend.z, bi, bf);
+         vec2 q = wLocal / pzGtBlend.z;
          float s1 = -1e9, s2 = -1e9;
-         for (int j = 0; j < n; j++) {
-            int c = cl[j];
-            int la = GT_CODE_LAYER[c];
-            float h = la < 0 ? 0.5 : gtFetch(px, ivec2(0), float(la)).a;
-            float nz = gtFbm2(wLocal / pzGtBlend.z, bi, bf, 31u + uint(c)) - 0.5;
-            float sc = wts[j] / wsum + 0.06 * float(gtRank(c)) + 2.0 * pzGtBlend.y * nz + pzGtBlend.w * (h - 0.5);
-            if (sc > s1) { s2 = s1; c2 = c1; s1 = sc; c1 = c; } else if (sc > s2) { s2 = sc; c2 = c; }
-         }
+         if (k0 >= 0) gtTop(k0, gtScore(k0, (a0 + (k1 == k0 ? a1 : 0.0) + (k2 == k0 ? a2 : 0.0) + (k3 == k0 ? a3 : 0.0)) * inv, px, q, bi, bf), c1, s1, c2, s2);
+         if (k1 >= 0 && k1 != k0) gtTop(k1, gtScore(k1, (a1 + (k2 == k1 ? a2 : 0.0) + (k3 == k1 ? a3 : 0.0)) * inv, px, q, bi, bf), c1, s1, c2, s2);
+         if (k2 >= 0 && k2 != k0 && k2 != k1) gtTop(k2, gtScore(k2, (a2 + (k3 == k2 ? a3 : 0.0)) * inv, px, q, bi, bf), c1, s1, c2, s2);
+         if (k3 >= 0 && k3 != k0 && k3 != k1 && k3 != k2) gtTop(k3, gtScore(k3, a3 * inv, px, q, bi, bf), c1, s1, c2, s2);
          w1 = clamp(0.5 + (s1 - s2) / pzGtBlend.x, 0.5, 1.0);
          return true;
       }
