@@ -235,6 +235,11 @@ public final class GroundTracks {
       }
 
       @Override
+      public boolean floorsToo() {
+         return false; // (floors keep their own programs: the patch only touches grass objects)
+      }
+
+      @Override
       public String declarations() {
          return String.join("\n",
             "float gtgCrush(vec4 s) { return clamp(max(-s.x, 0.0) * 25.0 + s.y * 1.2, 0.0, 1.0); }",
