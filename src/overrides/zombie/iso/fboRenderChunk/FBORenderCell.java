@@ -1904,6 +1904,7 @@ public final class FBORenderCell {
       pzopt.Sway.afterComposite(); // pzopt: foliage sway, the motion-vector attachment off the world framebuffer
       pzopt.CloudShadow.afterComposite(); // pzopt: cloudShadows, dev timing of the composite
       pzopt.AmbientOcclusion.queue(playerIndex); // pzopt: ambient occlusion on the static world, before anything else is drawn over it
+      pzopt.GrassBlades.afterComposite(playerIndex); // pzopt: grass blades, grown over the composited ground (its colour at their roots), before pixelLight's pass and the characters
       pzopt.PixelLight.afterComposite(playerIndex); // pzopt: pixelLight, the per-pixel light pass (pass mode) and the dev dumps, before anything else is drawn over the static world
       pzopt.OccludedOutline.begin(playerIndex); // pzopt: occluded outlines, the characters and vehicles below mark the stencil
       pzopt.CapsuleShadow.queue(playerIndex); // pzopt: sunShadows, the characters' sun shadows onto the static world (they add themselves below)
