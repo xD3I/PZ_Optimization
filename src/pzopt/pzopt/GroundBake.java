@@ -596,6 +596,7 @@ public final class GroundBake {
       if (!CLASS_ON || c == null || level != 0) {
          return;
       }
+      GroundState.baked(c);
       if (Config.DEV_GROUND_NOOP && "noupload".equals(Ground.variant()) && Ground.on(Ground.K_HEX)) {
          return; // dev probe: the variant without its class-map uploads
       }
