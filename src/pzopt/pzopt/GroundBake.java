@@ -91,12 +91,16 @@ public final class GroundBake {
       /** GLSL inserted before main (after the stock declarations and the ground helpers): uniforms, functions. */
       String declarations();
 
-      /** The name of a {@code vec4 f(vec4 texel)} applied to the floor's art texel, or null. */
+      /**
+       * The name of a {@code vec4 f(vec4 texel)} applied to the floor's art texel, or null. Texels are premultiplied (the
+       * game's pages, ImageData.performPreMultipliedAlpha) and floors bake with ONE / ONE_MINUS_SRC_ALPHA: return
+       * premultiplied colour (un-premultiply, work, return rgb * a), or partial-alpha edges come out bright (ground-tiling).
+       */
       default String texel() {
          return null;
       }
 
-      /** The name of a {@code vec4 f(vec4 colour)} applied to the colour the program writes, or null. */
+      /** The name of a {@code vec4 f(vec4 colour)} applied to the colour the program writes (premultiplied too), or null. */
       default String color() {
          return null;
       }
@@ -328,6 +332,21 @@ public final class GroundBake {
       return sh != null ? sh : stock;
    }
 
+   /** IsoSprite.startTileDepthShader, the seam strip of a border floor (IsoSprite.seamFix2): the variant's seam program. */
+   public static zombie.tileDepth.TileSeamShader seamShader(zombie.tileDepth.TileSeamShader stock, IsoObject obj) {
+      if (!FLOOR_ON || stock == null || !CUR.get()[0]) {
+         return stock;
+      }
+      if (Config.DEV_GROUND_SEAM_STOCK && obj != null && obj.square != null && ((obj.square.x >> 3) + (obj.square.y >> 3) & 1) == 0) {
+         return stock; // dev: the stock strips on every other chunk (one picture shows both)
+      }
+      Variant v = current;
+      if (v == null || v.state != Variant.READY || v.seamShader == null || stock.getID() != v.stockSeam) {
+         return stock;
+      }
+      return v.seamShader;
+   }
+
    // ------------------------------------------------------------------------------------------------ (c) floor passes
 
    /** FBORenderCell.pzoptBakeFloors after the floor tiles (game thread, or deferred to the splice). */
@@ -423,7 +442,7 @@ public final class GroundBake {
 
    /** Render-thread upload of one chunk's classes (10 x 10 squares: the chunk and a border of one). */
    private static final class ClassPatch extends TextureDraw.GenericDrawer {
-      final byte[] b = new byte[100];
+      final byte[] b = new byte[200]; // 10 x 10 squares, RG: GroundTiles.mapByte, tone + flags (toneByte)
       int x0, y0; // world square of b[0]
 
       @Override
@@ -467,7 +486,9 @@ public final class GroundBake {
             } else {
                sq = cell == null ? null : cell.getGridSquare(p.x0 + x, p.y0 + y, 0);
             }
-            p.b[y * 10 + x] = (byte)GroundTiles.mapByte(GroundTiles.square(sq));
+            int code = GroundTiles.square(sq);
+            p.b[(y * 10 + x) * 2] = (byte)GroundTiles.mapByte(code);
+            p.b[(y * 10 + x) * 2 + 1] = (byte)GroundTiles.toneByte(code);
          }
       }
       SpriteRenderer.instance.drawGeneric(p);
@@ -486,12 +507,12 @@ public final class GroundBake {
          GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_WRAP_S, GL11.GL_REPEAT);
          GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_WRAP_T, GL11.GL_REPEAT);
          GL11.glTexParameteri(GL11.GL_TEXTURE_2D, org.lwjgl.opengl.GL12.GL_TEXTURE_MAX_LEVEL, 0);
-         java.nio.ByteBuffer zero = BufferUtils.createByteBuffer(CLASS_N * CLASS_N);
+         java.nio.ByteBuffer zero = BufferUtils.createByteBuffer(CLASS_N * CLASS_N * 2);
          GL11.glPixelStorei(GL11.GL_UNPACK_ALIGNMENT, 1);
-         GL11.glTexImage2D(GL11.GL_TEXTURE_2D, 0, GL30.GL_R8, CLASS_N, CLASS_N, 0, GL11.GL_RED, GL11.GL_UNSIGNED_BYTE, zero);
+         GL11.glTexImage2D(GL11.GL_TEXTURE_2D, 0, GL30.GL_RG8, CLASS_N, CLASS_N, 0, GL30.GL_RG, GL11.GL_UNSIGNED_BYTE, zero);
          GL11.glPixelStorei(GL11.GL_UNPACK_ALIGNMENT, 4);
          classPbo = GL15.glGenBuffers();
-         classBuf = BufferUtils.createByteBuffer(100);
+         classBuf = BufferUtils.createByteBuffer(200);
          GL13.glActiveTexture(GL13.GL_TEXTURE0);
       }
       GpuSections.markNow(Ground.section("ground.class"), false);
@@ -521,12 +542,12 @@ public final class GroundBake {
       GL15.glBindBuffer(GL21.GL_PIXEL_UNPACK_BUFFER, 0);
       GL13.glActiveTexture(GL13.GL_TEXTURE0);
       classUploads++;
-      classBytes += 100;
+      classBytes += 200;
       GpuSections.markNow(Ground.section("ground.class"), true);
    }
 
    private static void sub(int tx, int ty, int w, int h, int sx, int sy) {
-      GL11.glTexSubImage2D(GL11.GL_TEXTURE_2D, 0, tx, ty, w, h, GL11.GL_RED, GL11.GL_UNSIGNED_BYTE, (long)(sy * 10 + sx));
+      GL11.glTexSubImage2D(GL11.GL_TEXTURE_2D, 0, tx, ty, w, h, GL30.GL_RG, GL11.GL_UNSIGNED_BYTE, (long)(sy * 10 + sx) * 2L);
    }
 
    /** Render thread: the class map on its unit (56) for a program outside the bake (left bound; returns false before the first bake made it). */
@@ -544,8 +565,11 @@ public final class GroundBake {
    public static final String GLSL_CLASS = String.join("\n",
       "#ifndef PZG_CLASS",
       "#define PZG_CLASS 1",
-      "uniform sampler2D pzgClassTex;", // GroundBake.CLASS_UNIT: R8, one texel a square, toroidal over 512 squares
+      "uniform sampler2D pzgClassTex;", // GroundBake.CLASS_UNIT: RG8, one texel a square, toroidal over 512 squares
       "int pzgClassAt(ivec2 sq) { return int(texelFetch(pzgClassTex, ivec2(sq.x & 511, sq.y & 511), 0).r * 255.0 + 0.5); }",
+      // G: the tone within the material (grass 0 light, 1 medium, 2 dark) in the low 4 bits, 16 erosion, 32 farm (GroundTiles.toneByte)
+      "int pzgToneByteAt(ivec2 sq) { return int(texelFetch(pzgClassTex, ivec2(sq.x & 511, sq.y & 511), 0).g * 255.0 + 0.5); }",
+      "int pzgToneAt(ivec2 sq) { return pzgToneByteAt(sq) & 15; }",
       "int pzgMaterialOf(int cls) { return cls & 15; }", // GroundTiles.NONE .. DARK_DIRT
       "bool pzgNatural(int cls) { int m = cls & 15; return m != 0 && m != 5 && m != 6 && m != 7 && (cls & 128) == 0; }",
       "#endif",
@@ -554,7 +578,7 @@ public final class GroundBake {
    // ------------------------------------------------------------------------------------------------ the floor variant (render thread)
 
    private static final java.util.HashMap<String, Variant> VARIANTS = new java.util.HashMap<>();
-   private static String tileVert, tileFrag, opaqueVert, opaqueFrag;
+   private static String tileVert, tileFrag, opaqueVert, opaqueFrag, seamVert, seamFrag;
    private static Variant compiling;
    private static int compilingKind; // piece * 2 + (0 tile, 1 opaque)
 
@@ -569,6 +593,9 @@ public final class GroundBake {
       final zombie.tileDepth.TileDepthShader[] shaders = new zombie.tileDepth.TileDepthShader[6];
       int stockTile, stockOpaque;
       final int[] mapLoc = new int[6];
+      // the chunk-edge seam strips (IsoSprite.seamFix2: a border floor drawn again, shifted, through seamFix2's mask)
+      int seamProg, stockSeam = -1, seamMapLoc = -1;
+      zombie.tileDepth.TileSeamShader seamShader;
 
       Variant(String sig, ArrayList<FloorPatch> patches, boolean attachedFlag, int view) {
          this.sig = sig;
@@ -606,6 +633,19 @@ public final class GroundBake {
          case "opaqueWithDepth.frag":
             opaqueFrag = code;
             return code;
+         case "seamFix2.vert":
+            seamVert = code;
+            return code;
+         case "seamFix2.frag":
+            seamFrag = code;
+            return code;
+         case "pzopt_grSeam.vert":
+            return seamVert != null ? seamVert : code;
+         case "pzopt_grSeam.frag": {
+            Variant v = compiling;
+            String p = v == null || seamFrag == null ? null : variantSource(seamFrag, v, 0);
+            return p != null ? p : FAILED_SOURCE;
+         }
          case "pzopt_grTile.vert":
             return (compilingKind & 1) == 0 ? (tileVert != null ? tileVert : code) : (opaqueVert != null ? opaqueVert : code);
          case "pzopt_grTile.frag": {
@@ -781,12 +821,60 @@ public final class GroundBake {
                return;
             }
          }
+         compileSeam(v);
          v.state = Variant.READY;
-         Log.info("ground: floor variant " + v.sig + " = programs " + java.util.Arrays.toString(v.prog) + " (tile / opaque per piece: floor, natural edge, overlay), stock " + v.stockTile + " / " + v.stockOpaque);
+         Log.info("ground: floor variant " + v.sig + " = programs " + java.util.Arrays.toString(v.prog) + " (tile / opaque per piece: floor, natural edge, overlay), seam " + v.seamProg + ", stock " + v.stockTile + " / " + v.stockOpaque + " / " + v.stockSeam);
       } catch (Throwable t) {
          Log.warn("ground: floor variant " + v.sig + " failed: " + t);
          v.state = Variant.FAILED;
       }
+   }
+
+   /** The seam strips' variant (piece 0): without it the border strips keep the stock art (a line along every chunk edge). */
+   private static void compileSeam(Variant v) {
+      zombie.tileDepth.TileSeamShader ss = zombie.core.SceneShaderStore.tileSeamShader;
+      if (ss == null || !ss.isCompiled() || seamFrag == null || seamVert == null) {
+         return;
+      }
+      compiling = v;
+      compilingKind = 0;
+      try {
+         zombie.tileDepth.TileSeamShader s = new zombie.tileDepth.TileSeamShader("pzopt_grSeam");
+         if (s.getProgram() == null || !s.isCompiled()) {
+            Log.warn("ground: floor variant " + v.sig + ": the seam program did not compile (stock seam strips)");
+            return;
+         }
+         int id = s.getID();
+         Sway.aliasPatchedTile("pzopt_grSeam", "seamFix2");
+         initSamplers(v, id);
+         v.seamMapLoc = GL20.glGetUniformLocation(id, "pzgMap");
+         v.seamShader = s;
+         v.seamProg = id;
+         v.stockSeam = ss.getID();
+      } catch (Throwable t) {
+         Log.warn("ground: floor variant " + v.sig + ": seam program failed: " + t);
+      } finally {
+         compiling = null;
+      }
+   }
+
+   /** The variant's samplers off unit 0 (the game numbered them in order at the link), the patches' own, its view. */
+   private static void initSamplers(Variant v, int id) {
+      int prev = Ssr.boundProgram();
+      GL20.glUseProgram(id);
+      set1i(id, "pzgClassTex", CLASS_UNIT);
+      set1i(id, "pzgStateTex", STATE_UNIT);
+      for (FloorPatch p : v.patches) {
+         for (String[] sm : p.samplers()) {
+            set1i(id, sm[0], Integer.parseInt(sm[1]));
+         }
+      }
+      int lb = GL20.glGetUniformLocation(id, "pzgBake");
+      if (lb >= 0) {
+         GL20.glUniform4f(lb, 0F, v.view, 0F, 0F);
+      }
+      zombie.core.ShaderHelper.forgetCurrentlyBound();
+      GL20.glUseProgram(prev > 0 ? prev : 0);
    }
 
    /** One variant program; 0 when it does not compile or a stock uniform moved. */
@@ -807,22 +895,7 @@ public final class GroundBake {
          }
          int id = s.getID();
          Sway.aliasPatchedTile("pzopt_grTile", kind % 2 == 0 ? "tileWithDepth" : "opaqueWithDepth");
-         // samplers off unit 0 (the game numbered them in order at the link); the patches' own
-         int prev = Ssr.boundProgram();
-         GL20.glUseProgram(id);
-         set1i(id, "pzgClassTex", CLASS_UNIT);
-         set1i(id, "pzgStateTex", STATE_UNIT);
-         for (FloorPatch p : v.patches) {
-            for (String[] sm : p.samplers()) {
-               set1i(id, sm[0], Integer.parseInt(sm[1]));
-            }
-         }
-         int lb = GL20.glGetUniformLocation(id, "pzgBake");
-         if (lb >= 0) {
-            GL20.glUniform4f(lb, 0F, v.view, 0F, 0F);
-         }
-         zombie.core.ShaderHelper.forgetCurrentlyBound();
-         GL20.glUseProgram(prev > 0 ? prev : 0);
+         initSamplers(v, id);
          v.mapLoc[kind] = GL20.glGetUniformLocation(id, "pzgMap");
          return id;
       } finally {
@@ -883,14 +956,14 @@ public final class GroundBake {
       GpuSections.markNow(Ground.section("ground.bakeStart"), false);
       int prev = Ssr.boundProgram();
       boolean bound = false;
-      for (int k = 0; k < 6; k++) {
-         int id = v.prog[k];
+      for (int k = 0; k < 7; k++) {
+         int id = k < 6 ? v.prog[k] : v.seamProg;
          if (id == 0) {
             continue;
          }
          GL20.glUseProgram(id);
          bound = true;
-         int l = v.mapLoc[k];
+         int l = k < 6 ? v.mapLoc[k] : v.seamMapLoc;
          if (l >= 0) {
             GL20.glUniform4f(l, MAP[0], MAP[1], MAP[2], MAP[3]);
          }

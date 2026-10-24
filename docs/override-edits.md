@@ -8577,11 +8577,15 @@ one is a static boolean read while no ground key is on (all are off by default),
   piece, overlay / dug soil), else the stock shader. The variant is built from the stock program's final source (every
   other pzopt patch in it) as a TileDepthShader of its own, and the uniform setters of the draw come from it: NVIDIA
   assigns uniform locations in name order, so the variant's extra uniforms move the stock ones (pzoptVD 5 -> 7).
+  The seam branch of the same method (a floor on a chunk's south / east border drawn again, shifted, through
+  `seamFix2`'s mask, `IsoSprite.seamFix2` set) takes `GroundBake.seamShader(stock)` the same way: the variant of
+  `seamFix2` for a natural floor, so the strip shows the ground feature's art and not the stock tile (a line along every
+  chunk edge otherwise); `StartShader` gets the chosen program's id instead of `SceneShaderStore.tileSeamShader`'s.
 - `FBORenderCell.pzoptBakeFloors`: after the floor tiles, `GroundBake.floorPasses` (extra draws of a feature, e.g. leaves),
   deferred to the game thread at its place in the stream on a recording thread (`BakeRecord.DEFER_GROUND`, a new case of
   `pzoptBakeDeferredDraw`); then snow and blood as before.
-- `FBORenderCell.renderOneLevel`: a level-0 bake queues its chunk's ground classes (`GroundBake.bakeBegin`: 10 x 10 bytes,
-  the chunk and a border of one) into the class map texture ahead of its draws.
+- `FBORenderCell.renderOneLevel`: a level-0 bake queues its chunk's ground classes (`GroundBake.bakeBegin`: 10 x 10 texels of
+  two bytes, class and tone, the chunk and a border of one) into the class map texture ahead of its draws.
 - `FBORenderCell.pzoptRenderInternal`: `pzopt.Ground.frameStart` once a frame per player (the frame's ground switches, the
   variant compile request, the movers' gather, the ground state's primitives and its GPU frame).
 - `TextureDraw` (FBORenderChunkStart): `GroundBake.chunkStart` gives the variant programs the texture's world mapping

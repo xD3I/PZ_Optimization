@@ -122,7 +122,7 @@ public final class Ground {
     * The feature classes, loaded (static init: they register their patches, passes, rules) the first frame a ground key or
     * a ground dev rig is on; a name whose class does not exist is skipped. Each feature branch adds its own name.
     */
-   static final String[] FEATURES = {"pzopt.GroundTilingPatch", "pzopt.GroundTracks"};
+   static final String[] FEATURES = {"pzopt.GroundTilingPatch", "pzopt.GroundCover", "pzopt.GroundTracks", "pzopt.GrassBlades"}; // (every feature branch's class; one absent on a branch is skipped)
    private static boolean featuresLoaded;
    /** A ground dev rig runs (the shared parts then run every frame whatever the keys). */
    private static final boolean DEV_ANY = Config.DEV_GROUND_ALTERNATE > 0 || !Config.DEV_GROUND_CYCLE.isEmpty() || Config.DEV_GROUND_STATE_TEST
@@ -156,6 +156,9 @@ public final class Ground {
 
    /** FBORenderCell.renderInternal, game thread, once a frame per player: the frame's switches, then the shared parts. */
    public static void frameStart(int playerIndex) {
+      if (Scene.snowPin) {
+         Scene.pinSnow(); // (harness snow=N: pinned after the frame's climate update, the bakes see one value)
+      }
       long m = configMask();
       if (!featuresLoaded && (m != 0L || DEV_ANY || Config.DEV_GROUND_VIEW != 0)) {
          loadFeatures();
