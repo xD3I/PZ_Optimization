@@ -74,7 +74,7 @@ public final class Glints {
 
    public static String stats() {
       return "glints: frames=" + frames + " queued=" + framesQueued + " instances=" + instances + " max=" + maxInstances + " maskRebuilds=" + maskRebuilds
-            + " draws=" + draws + " queue_us=" + (frames > 0 ? String.format(java.util.Locale.ROOT, "%.1f (masks %.1f, lights %.1f, points %.1f)", queueNs / 1000.0 / frames, maskNs / 1000.0 / frames, lightsNs / 1000.0 / frames, pointNs / 1000.0 / frames) : "0") + (framesFull > 0 ? String.format(java.util.Locale.ROOT, " queue_us_cached=%.1f queue_us_qfull=%.1f", (queueNs - queueFullNs) / 1000.0 / Math.max(1, frames - framesFull), queueFullNs / 1000.0 / framesFull) : "") + " async=" + asyncJobs + "/" + syncJobs + " join_us=" + (asyncJobs > 0 ? String.format(java.util.Locale.ROOT, "%.2f", joinNs / 1000.0 / asyncJobs) : "0") + " join_waits=" + joinWaits + " join_max_us=" + joinMaxNs / 1000 + " soft_deferred=" + softDeferred + " levels=" + levelsWalked + " relit=" + levelsRelit + " dispatch_us=" + (asyncJobs > 0 ? String.format(java.util.Locale.ROOT, "%.2f", dispatchNs / 1000.0 / asyncJobs) : "0") + " worker_us=" + (asyncJobs > 0 ? String.format(java.util.Locale.ROOT, "%.1f", workerNs / 1000.0 / asyncJobs) : "0") + " render_waits=" + renderWaits + vstats() + " bulk=" + bulkCopies + " mask_us=" + (maskRebuilds > 0 ? String.format(java.util.Locale.ROOT, "%.2f", maskNs / 1000.0 / maskRebuilds) : "0") + " ring=" + Gpu.ringWrites + " hdr=" + hdrQueued + "/" + Gpu.hdrDraws + " lightFrames=" + lightFrames + " noMaskFrames=" + noMaskFrames + " sunFrames=" + sunFrames + " pointSquares=" + pointSquares + " sunSquares=" + sunSquares + " model=" + model() + " pass=" + PASS_NAMES[passMode()] + " lamps=" + lampsCell + "/" + lampN + "/" + lampsActive + (failed ? " (failed)" : "");
+            + " draws=" + draws + " queue_us=" + (frames > 0 ? String.format(java.util.Locale.ROOT, "%.1f (masks %.1f, lights %.1f, points %.1f)", queueNs / 1000.0 / frames, maskNs / 1000.0 / frames, lightsNs / 1000.0 / frames, pointNs / 1000.0 / frames) : "0") + (framesFull > 0 ? String.format(java.util.Locale.ROOT, " queue_us_cached=%.1f queue_us_qfull=%.1f", (queueNs - queueFullNs) / 1000.0 / Math.max(1, frames - framesFull), queueFullNs / 1000.0 / framesFull) : "") + " async=" + asyncJobs + "/" + syncJobs + " join_us=" + (asyncJobs > 0 ? String.format(java.util.Locale.ROOT, "%.2f", joinNs / 1000.0 / asyncJobs) : "0") + " join_waits=" + joinWaits + " join_max_us=" + joinMaxNs / 1000 + " soft_deferred=" + softDeferred + " levels=" + levelsWalked + " relit=" + levelsRelit + " dispatch_us=" + (asyncJobs > 0 ? String.format(java.util.Locale.ROOT, "%.2f", dispatchNs / 1000.0 / asyncJobs) : "0") + " worker_us=" + (asyncJobs > 0 ? String.format(java.util.Locale.ROOT, "%.1f", workerNs / 1000.0 / asyncJobs) : "0") + " render_waits=" + renderWaits + vstats() + " bulk=" + bulkCopies + " mask_us=" + (maskRebuilds > 0 ? String.format(java.util.Locale.ROOT, "%.2f", maskNs / 1000.0 / maskRebuilds) : "0") + " ring=" + Gpu.ringWrites + " hdr=" + hdrQueued + "/" + Gpu.hdrDraws + " lightFrames=" + lightFrames + " noMaskFrames=" + noMaskFrames + " sunFrames=" + sunFrames + " pointSquares=" + pointSquares + " sunSquares=" + sunSquares + " model=" + model() + " pass=" + PASS_NAMES[passMode()] + " lamps=" + lampsCell + "/" + lampN + "/" + lampsActive + String.format(java.util.Locale.ROOT, " key: sun %.1f deg day %.2f cloud %.2f", lastSunElev, lastDay, lastCloud) + (failed ? " (failed)" : "");
    }
 
    /** The model in force (devGlintCycle steps through them, then "off"). */
@@ -337,6 +337,7 @@ public final class Glints {
 
    private static long skyMs = Long.MIN_VALUE / 2, lampScanMs = Long.MIN_VALUE / 2;
    private static float lampScanX = Float.NaN, lampScanY;
+   private static float lastDay, lastCloud, lastSunElev; // the key light's inputs, last frame (stats)
    private static int lampN, lampsCell, lampsActive;
    private static final IsoLightSource[] lamps = new IsoLightSource[2048];
    private static final float[] candD = new float[2048];
@@ -382,6 +383,9 @@ public final class Glints {
          }
          float day = cm != null ? Math.max(0F, Math.min(1F, cm.getDayLightStrength())) : 1F;
          float cloud = cm != null ? Math.max(0F, Math.min(1F, cm.getCloudIntensity())) : 0F;
+         lastDay = day;
+         lastCloud = cloud;
+         lastSunElev = (float)Sky.sunElevDeg;
          float clear = 1F - 0.85F * cloud;
          if (Sky.sun[2] > 0.0 && day > 0.05F) {
             L.sun[0] = (float)Sky.sun[0];
