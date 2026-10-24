@@ -401,7 +401,7 @@ public final class Config {
     */
    static final String[] PERFORMANCE_CATEGORY_MASTERS = {"catSmoothEnabled", "catDriveEnabled", "catWorldEnabled",
       "catWeatherEnabled", "catZombiesEnabled", "catLoadEnabled", "catUiEnabled", "catSystemEnabled"};
-   static final String[] VISUALS_CATEGORY_MASTERS = {"catImageEnabled", "catLightEnabled", "catReflEnabled", "catAtmosEnabled"};
+   static final String[] VISUALS_CATEGORY_MASTERS = {"catImageEnabled", "catLightEnabled", "catReflEnabled", "catAtmosEnabled", "catGroundEnabled"};
    private static final Properties props = load();
    /** The player's Options > Optimizations choices (Zomboid/pzopt/options.ini), below props and -D. */
    private static final Properties userProps = UserOptions.load();
@@ -1608,6 +1608,27 @@ public final class Config {
    public static final boolean CLOUD_CULL = bool("cloudCull", true); // cloudShadows: chunk textures no cloud reaches this frame skip the cloud work in the composite (a coarse max map of the field, per texture on the game thread)
    public static final int DEV_CLOUD_SKIP = integer("devCloudSkip", 0); // dev (cost split): 1 = no kept-term tap (a constant share), 2 = no detail tap (no erosion), 4 = the kept term bound once a frame (wrong picture: the cost of per-draw binds); bits
    public static final int DEV_CLOUD_ALTERNATE = integer("devCloudAlternate", 0); // dev: ms; cloud shadows switch on and off every period (the frames' GPU time split by it)
+   // ground and grass (2026-10-24, the ground proposal: pzopt.Ground / GroundBake / GroundState / GroundHash / GroundTiles; the
+   // features live on their own branches): the Visuals category catGroundEnabled, every switch off by default, all live
+   public static volatile boolean GROUND_HEX_TILING; // natural ground (grass, dirt, sand, gravel) baked without its visible tile repeat (hex-tiling, Mikkelsen 2022)
+   public static volatile int GROUND_MACRO_PCT; // natural ground: large-scale colour drift and dry patches over tens of squares, strength %; 0 = off
+   public static volatile boolean GROUND_HEIGHT_BLEND; // natural ground: grass grows over the dirt edge (height-blended transitions instead of the even alpha fade)
+   public static volatile boolean GROUND_SCATTER; // seasonal ground cover baked into the floor pass: leaves, flowers, litter, frost
+   public static volatile int GROUND_SCATTER_DENSITY_PCT; // ground cover: how much of it, %
+   public static volatile boolean GLINTS; // frost, snow and wet asphalt glint under the sun and point lights
+   public static volatile boolean GROUND_TRACKS; // tyre ruts, footprints and horde paths that stay on mud, snow and grass (pzopt.GroundState)
+   public static volatile boolean GROUND_TRACKS_PERSIST; // tracks: kept per save in Zomboid/pzopt/ground/ (never inside the save), back when you return
+   public static volatile int GROUND_TRACKS_DAYS; // tracks: game days a track takes to fade
+   public static volatile boolean GRASS_BLADES; // grass near the player drawn as real blades (clumps, wind waves, trampling)
+   public static volatile int GRASS_BLADE_RADIUS; // grass blades: squares round the player
+   public static volatile int GRASS_BLADE_DENSITY_PCT; // grass blades: how many, %
+   public static volatile int DEV_GROUND_VIEW; // dev: ground views (GroundBake: 1 = the bake's world position as a checker, 2 = the class map)
+   public static final int DEV_GROUND_ALTERNATE = integer("devGroundAlternate", 0); // dev: ms; the ground keys in devGroundAlternateKeys switch off and on every period (within-run A/B: harness/ground/ab.py), or devGroundCycle steps
+   public static final String DEV_GROUND_ALTERNATE_KEYS = string("devGroundAlternateKeys", "all"); // dev: comma list of ground keys the alternation switches ("all" = every ground switch)
+   public static final String DEV_GROUND_CYCLE = string("devGroundCycle", ""); // dev: comma list of variant names stepped every devGroundAlternate ms (pzopt.Ground.cycle(); a feature reads its own names)
+   public static final boolean DEV_GROUND_ALTERNATE_REBAKE = bool("devGroundAlternateRebake", true); // dev: each switch of a bake-time ground key re-bakes the natural ground on screen (so both halves show their picture)
+   public static final boolean DEV_GROUND_STATE_TEST = bool("devGroundStateTest", false); // dev: GroundState stamps a test pattern round the player (rig for the upload / persistence path)
+   public static final int DEV_GROUND_WALKERS = integer("devGroundWalkers", 0); // dev: GroundState stamps N synthetic walkers circling the player every frame (stamping cost rig)
    // god rays (pzopt.GodRays, docs/findings-god-rays-2026-09-27.md): light shafts in the haze and the dust of rooms, sun and moon
    public static volatile boolean FOLIAGE_SWAY; // grass, bushes and trees sway in the wind while they stay baked in the chunk textures (the chunk composite looks each texel up through the wind's displacement; pzopt.Sway)
    public static volatile int FOLIAGE_SWAY_PCT; // foliage sway: how far the plants bend, %
@@ -2303,6 +2324,19 @@ public final class Config {
       CLOUD_OPACITY_PCT = Math.max(0, Math.min(100, integer("cloudOpacityPct", 85)));
       CLOUD_SPEED_PCT = integer("cloudSpeedPct", 100);
       CLOUD_SCALE_PCT = Math.max(25, Math.min(400, integer("cloudScalePct", 100)));
+      GROUND_HEX_TILING = bool("groundHexTiling", false);
+      GROUND_MACRO_PCT = Math.max(0, Math.min(200, integer("groundMacroPct", 0)));
+      GROUND_HEIGHT_BLEND = bool("groundHeightBlend", false);
+      GROUND_SCATTER = bool("groundScatter", false);
+      GROUND_SCATTER_DENSITY_PCT = Math.max(0, Math.min(400, integer("groundScatterDensityPct", 100)));
+      GLINTS = bool("glints", false);
+      GROUND_TRACKS = bool("groundTracks", false);
+      GROUND_TRACKS_PERSIST = bool("groundTracksPersist", true);
+      GROUND_TRACKS_DAYS = Math.max(1, Math.min(30, integer("groundTracksDays", 2)));
+      GRASS_BLADES = bool("grassBlades", false);
+      GRASS_BLADE_RADIUS = Math.max(2, Math.min(40, integer("grassBladeRadius", 12)));
+      GRASS_BLADE_DENSITY_PCT = Math.max(10, Math.min(400, integer("grassBladeDensityPct", 100)));
+      DEV_GROUND_VIEW = integer("devGroundView", 0);
       FOLIAGE_SWAY = bool("foliageSway", false);
       FOLIAGE_SWAY_PCT = Math.max(0, Math.min(400, integer("foliageSwayPct", 100)));
       FOLIAGE_SWAY_TAPS = Math.max(1, Math.min(4, integer("foliageSwayTaps", 1)));
@@ -2481,7 +2515,8 @@ public final class Config {
          {"enhancementsEnabled", "upscaler", "off", "dynRes", "false", "spriteFilter", "stock", "hdr", "false", "hdrAuto", "false",
             "ambientOcclusion", "false", "sunShadows", "false", "reflections", "false", "ripples", "false", "bloodWet", "false", "occludedZombieOutlines", "false", "darknessFloorPct", "0",
             "memoryTint", "false", "colorGrading", "false", "pixelLight", "false", "godRays", "false", "foliageSway", "false", "relief", "false", "carGlass", "false",
-            "torchSource", "false", "mirrors", "false", "voxelLight", "false"},
+            "torchSource", "false", "mirrors", "false", "voxelLight", "false",
+            "groundHexTiling", "false", "groundMacroPct", "0", "groundHeightBlend", "false", "groundScatter", "false", "glints", "false", "groundTracks", "false", "grassBlades", "false"},
          // everything that makes the overlay measure or show (Overlay.configure; harness runs still measure)
          {"profilerEnabled", "overlaySampling", "false", "overlay", "false", "overlayLog", "false"},
          // The Visuals categories: the same feature switches, by category (a key is off when either switch is off)
@@ -2490,6 +2525,7 @@ public final class Config {
          {"catReflEnabled", "reflections", "false", "ripples", "false", "mirrors", "false", "carGlass", "false", "bloodWet", "false"},
          {"catAtmosEnabled", "darknessFloorPct", "0", "memoryTint", "false", "colorGrading", "false", "foliageSway", "false", "relief", "false",
             "occludedZombieOutlines", "false"},
+         {"catGroundEnabled", "groundHexTiling", "false", "groundMacroPct", "0", "groundHeightBlend", "false", "groundScatter", "false", "glints", "false", "groundTracks", "false", "grassBlades", "false"},
          // The Performance categories: each key at its stock value (the tab's "off = stock" / "0 = stock" entries). Left
          // out: tuning numbers of a gated switch (inert once it is off), the worker pools shared across categories
          // (parallel, workers, loadWorkers, frameThreads, charDrawThreads, fileThreads), guards against races and stock

@@ -130,6 +130,13 @@ PzoptSettingsLayout = {
                 { title = "Relief", sections = { "Relief" } },
                 { title = "Zombie outlines", sections = { "Occluded zombie outlines" } },
               } },
+            { id = "ground", master = "catGroundEnabled", title = "Ground and grass", blurb = "Ground without the tile grid, seasonal ground cover and glints, tracks that stay, grass with blades.",
+              subs = {
+                { title = "Ground without the grid", sections = { "Ground and grass: tiling" } },
+                { title = "Ground cover and glints", sections = { "Ground and grass: cover" } },
+                { title = "Tracks", sections = { "Ground and grass: tracks" } },
+                { title = "Grass blades", sections = { "Ground and grass: blades" } },
+              } },
           } },
         { id = "tools", title = "Tools", page = 3, colour = { 0.45, 0.68, 0.98 },
           note = "The performance overlay (F9), its game-thread profiler and the console log.",
@@ -219,6 +226,7 @@ PzoptSettingsLayout = {
         "sunShadows", "sunShadowStrengthPct", "entityShadows", "moonShadows", "cloudShadows", "ambientOcclusion", "godRays", "godRaysStrengthPct",
         "reflections", "reflectionPuddles", "ripples", "ripplesStrengthPct", "ripplesRain", "ripplesWake", "mirrors", "mirrorsWindows", "mirrorsWallMirrors", "mirrorsProps", "carGlass", "carOccupant", "bloodWet", "darknessFloorPct",
         "memoryTint", "colorGrading", "foliageSway", "foliageSwayPct", "relief", "occludedZombieOutlines",
+        "groundHexTiling", "groundMacroPct", "groundScatter", "glints", "groundTracks", "grassBlades",
         "overlaySampling", "overlay", "overlayStats", "overlayGraph", "overlayCorner", "overlayFont", "overlayFpsColor", "consoleLog" },
 
     -- tuning numbers and thread counts (Everything view); names matching expertPatterns count too, on the Performance pages
