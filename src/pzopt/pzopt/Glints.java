@@ -74,7 +74,7 @@ public final class Glints {
 
    public static String stats() {
       return "glints: frames=" + frames + " queued=" + framesQueued + " instances=" + instances + " max=" + maxInstances + " maskRebuilds=" + maskRebuilds
-            + " draws=" + draws + " queue_us=" + (frames > 0 ? String.format(java.util.Locale.ROOT, "%.1f (masks %.1f, lights %.1f)", queueNs / 1000.0 / frames, maskNs / 1000.0 / frames, lightsNs / 1000.0 / frames) : "0") + " mask_us=" + (maskRebuilds > 0 ? String.format(java.util.Locale.ROOT, "%.2f", maskNs / 1000.0 / maskRebuilds) : "0") + " ring=" + Gpu.ringWrites + " hdr=" + hdrQueued + "/" + Gpu.hdrDraws + " lightFrames=" + lightFrames + " noMaskFrames=" + noMaskFrames + " sunFrames=" + sunFrames + " pointSquares=" + pointSquares + " sunSquares=" + sunSquares + " model=" + model() + " pass=" + PASS_NAMES[passMode()] + " lamps=" + lampsCell + "/" + lampN + "/" + lampsActive + (failed ? " (failed)" : "");
+            + " draws=" + draws + " queue_us=" + (frames > 0 ? String.format(java.util.Locale.ROOT, "%.1f (masks %.1f, lights %.1f)", queueNs / 1000.0 / frames, maskNs / 1000.0 / frames, lightsNs / 1000.0 / frames) : "0") + (framesFull > 0 ? String.format(java.util.Locale.ROOT, " queue_us_cached=%.1f queue_us_qfull=%.1f", (queueNs - queueFullNs) / 1000.0 / Math.max(1, frames - framesFull), queueFullNs / 1000.0 / framesFull) : "") + " mask_us=" + (maskRebuilds > 0 ? String.format(java.util.Locale.ROOT, "%.2f", maskNs / 1000.0 / maskRebuilds) : "0") + " ring=" + Gpu.ringWrites + " hdr=" + hdrQueued + "/" + Gpu.hdrDraws + " lightFrames=" + lightFrames + " noMaskFrames=" + noMaskFrames + " sunFrames=" + sunFrames + " pointSquares=" + pointSquares + " sunSquares=" + sunSquares + " model=" + model() + " pass=" + PASS_NAMES[passMode()] + " lamps=" + lampsCell + "/" + lampN + "/" + lampsActive + (failed ? " (failed)" : "");
    }
 
    /** The model in force (devGlintCycle steps through them, then "off"). */
@@ -465,7 +465,7 @@ public final class Glints {
     * Game thread, FBORenderCell after the players / items and before the puddles: this frame's masked squares in a light's
     * reach, queued as one draw. Nothing queued when there are none.
     */
-   public static long queueNs, maskNs, lightsNs, hdrQueued, noMaskFrames;
+   public static long queueNs, maskNs, lightsNs, hdrQueued, noMaskFrames, queueFullNs, framesFull;
    private static Frame queuedFrame;
    private static int queuedFrameNo = -1;
 
@@ -502,7 +502,12 @@ public final class Glints {
       long t0 = System.nanoTime();
       try {
          build(playerIndex, chunks);
-         queueNs += System.nanoTime() - t0;
+         long dt = System.nanoTime() - t0;
+         queueNs += dt;
+         if ("qfull".equals(Ground.variant())) { // dev: the per-square caches' A/B, game-thread side
+            queueFullNs += dt;
+            framesFull++;
+         }
       } catch (RuntimeException e) {
          failed = true;
          Log.warn("glints: frame build failed, glints off: " + e);
@@ -595,7 +600,7 @@ public final class Glints {
             byte[] flags = cut.squareFlags[playerIndex];
             float chunkDepth = IsoDepthHelper.getChunkDepthData(camCX, camCY, c.wx, c.wy, level).depthStart;
             // the lights that reach the chunk level at all (its 8 x 8 box + reach): the squares test only those
-            int cb = 0;
+            int cb = 0, full = 0;
             float bx0 = c.wx * 8 - ox, by0 = c.wy * 8 - oy, pz = level * METRIC_Z;
             for (int li = 0; li < L.n; li++) {
                int k = li * 4;
@@ -604,6 +609,9 @@ public final class Glints {
                // a light lights its own level and the levels under it within its reach (a street lamp's light sits a level up)
                if (qx * qx + qy * qy <= r * r && L.p[k + 2] >= pz - METRIC_Z * 0.5F && L.p[k + 2] - pz <= METRIC_Z * 2.5F) {
                   cb |= 1 << li;
+                  if (!"qfull".equals(variant) && coversChunk(L, k, bx0, by0)) {
+                     full |= 1 << li; // every square of the chunk level: no per-square test for this light
+                  }
                }
             }
             boolean sunOn = L.sun[3] > 0F;
@@ -640,7 +648,7 @@ public final class Glints {
                if (lightsSame) {
                   lb = m.lbits[s] & 255;
                } else {
-                  lb = squareLights(L, cb, x + 0.5F - ox, y + 0.5F - oy);
+                  lb = full | squareLights(L, cb & ~full, x + 0.5F - ox, y + 0.5F - oy);
                   m.lbits[s] = (byte)lb;
                }
                if ((flags[s] & 1) == 0) {
@@ -716,6 +724,32 @@ public final class Glints {
       GpuSections.begin(sec);
       SpriteRenderer.instance.drawGeneric(p);
       GpuSections.end(sec);
+   }
+
+   /**
+    * Light k covers the whole 8 x 8 chunk box (bx0, by0): its four corners within the reach and, for a cone narrower than a
+    * half plane (convex), inside it; every square centre then passes squareLights' test.
+    */
+   static boolean coversChunk(Lights L, int k, float bx0, float by0) {
+      float r = L.p[k + 3];
+      boolean cone = L.d[k + 2] > -1.5F;
+      if (cone && L.d[k + 2] <= 0F) {
+         return false;
+      }
+      for (int i = 0; i < 4; i++) {
+         float dx = bx0 + ((i & 1) != 0 ? 8F : 0F) - L.p[k], dy = by0 + ((i & 2) != 0 ? 8F : 0F) - L.p[k + 1];
+         float d2 = dx * dx + dy * dy;
+         if (d2 > r * r) {
+            return false;
+         }
+         if (cone) {
+            float len = (float)Math.sqrt(d2);
+            if (len > 1e-4F && (dx * L.d[k] + dy * L.d[k + 1]) / len < L.d[k + 2]) {
+               return false;
+            }
+         }
+      }
+      return true;
    }
 
    /** Which of the chunk level's lights (cb) reach a square's centre (px, py, frame-origin squares): reach + half a diagonal. */
