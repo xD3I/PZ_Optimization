@@ -1616,9 +1616,6 @@ public final class Config {
    public static volatile boolean GROUND_SCATTER; // seasonal ground cover baked into the floor pass: leaves, flowers, litter, frost
    public static volatile int GROUND_SCATTER_DENSITY_PCT; // ground cover: how much of it, %
    public static volatile boolean GLINTS; // frost, snow and wet asphalt glint under the sun and point lights
-   public static volatile boolean GROUND_TRACKS; // tyre ruts, footprints and horde paths that stay on mud, snow and grass (pzopt.GroundState)
-   public static volatile boolean GROUND_TRACKS_PERSIST; // tracks: kept per save in Zomboid/pzopt/ground/ (never inside the save), back when you return
-   public static volatile int GROUND_TRACKS_DAYS; // tracks: game days a track takes to fade
    public static volatile boolean GRASS_BLADES; // grass near the player drawn as real blades (clumps, wind waves, trampling)
    public static volatile int GRASS_BLADE_RADIUS; // grass blades: squares round the player
    public static volatile int GRASS_BLADE_DENSITY_PCT; // grass blades: how many, %
@@ -2331,9 +2328,6 @@ public final class Config {
       GROUND_SCATTER = bool("groundScatter", false);
       GROUND_SCATTER_DENSITY_PCT = Math.max(0, Math.min(400, integer("groundScatterDensityPct", 100)));
       GLINTS = bool("glints", false);
-      GROUND_TRACKS = bool("groundTracks", false);
-      GROUND_TRACKS_PERSIST = bool("groundTracksPersist", true);
-      GROUND_TRACKS_DAYS = Math.max(1, Math.min(30, integer("groundTracksDays", 2)));
       GRASS_BLADES = bool("grassBlades", false);
       GRASS_BLADE_RADIUS = Math.max(2, Math.min(40, integer("grassBladeRadius", 12)));
       GRASS_BLADE_DENSITY_PCT = Math.max(10, Math.min(400, integer("grassBladeDensityPct", 100)));
