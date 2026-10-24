@@ -102,7 +102,7 @@ public final class FogPass {
     */
    public static void sceneDepthAsTexture(zombie.core.textures.TextureFBO fbo, Texture tex) {
       boolean ordinaryDepth = !Config.FOG_DEPTH_COPY && (Config.FOG_PASS || Config.AO && "screen".equals(Config.AO_MODE)
-         || Config.PIXEL_LIGHT || Config.SSR || Config.GOD_RAYS);
+         || Config.PIXEL_LIGHT || Config.SSR || Config.GOD_RAYS || Config.GRASS_BLADES);
       if (!Overrides.enabled() || (!ordinaryDepth && !OccludedOutline.depthTextureNeeded()) || fbo == null) {
          return;
       }

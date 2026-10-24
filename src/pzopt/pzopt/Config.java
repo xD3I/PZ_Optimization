@@ -401,7 +401,7 @@ public final class Config {
     */
    static final String[] PERFORMANCE_CATEGORY_MASTERS = {"catSmoothEnabled", "catDriveEnabled", "catWorldEnabled",
       "catWeatherEnabled", "catZombiesEnabled", "catLoadEnabled", "catUiEnabled", "catSystemEnabled"};
-   static final String[] VISUALS_CATEGORY_MASTERS = {"catImageEnabled", "catLightEnabled", "catReflEnabled", "catAtmosEnabled"};
+   static final String[] VISUALS_CATEGORY_MASTERS = {"catImageEnabled", "catLightEnabled", "catReflEnabled", "catAtmosEnabled", "catGroundEnabled"};
    private static final Properties props = load();
    /** The player's Options > Optimizations choices (Zomboid/pzopt/options.ini), below props and -D. */
    private static final Properties userProps = UserOptions.load();
@@ -1608,7 +1608,66 @@ public final class Config {
    public static final boolean CLOUD_CULL = bool("cloudCull", true); // cloudShadows: chunk textures no cloud reaches this frame skip the cloud work in the composite (a coarse max map of the field, per texture on the game thread)
    public static final int DEV_CLOUD_SKIP = integer("devCloudSkip", 0); // dev (cost split): 1 = no kept-term tap (a constant share), 2 = no detail tap (no erosion), 4 = the kept term bound once a frame (wrong picture: the cost of per-draw binds); bits
    public static final int DEV_CLOUD_ALTERNATE = integer("devCloudAlternate", 0); // dev: ms; cloud shadows switch on and off every period (the frames' GPU time split by it)
+   // ground without the grid (pzopt.GroundTilingPatch / GroundTiling / GroundTileArt; groundHexTiling): the tiling technique
+   // and its cell (the in-run comparison steps through devGroundCycle=hex,hpb,... instead)
+   public static final String DEV_GROUND_TILING_MODE = string("devGroundTilingMode", "hpb"); // dev: hex | hpb | bomb | voronoi | two | lap
+   public static final int DEV_GROUND_TILING_CELL_PCT = Math.max(50, Math.min(800, integer("devGroundTilingCellPct", 150))); // dev: the tiling cell, % of a square
+   public static final boolean DEV_GROUND_TILING_DUMP = bool("devGroundTilingDump", false); // dev: the built art layers as PNGs in Zomboid/pzopt/ground-tiling/
+   // ground and grass (2026-10-24, the ground proposal: pzopt.Ground / GroundBake / GroundState / GroundHash / GroundTiles; the
+   // features live on their own branches): the Visuals category catGroundEnabled, every switch off by default, all live
+   public static volatile boolean GROUND_HEX_TILING; // natural ground (grass, dirt, sand, gravel) baked without its visible tile repeat (hex-tiling, Mikkelsen 2022)
+   public static volatile int GROUND_MACRO_PCT; // natural ground: large-scale colour drift and dry patches over tens of squares, strength %; 0 = off
+   public static volatile boolean GROUND_HEIGHT_BLEND; // natural ground: grass grows over the dirt edge (height-blended transitions instead of the even alpha fade)
+   public static volatile boolean GROUND_SCATTER; // seasonal ground cover baked into the floor pass: leaves, flowers, litter, frost
+   public static volatile int GROUND_SCATTER_DENSITY_PCT; // ground cover: how much of it, %
+   public static volatile boolean GLINTS; // frost, snow and wet asphalt glint under the sun and point lights
+   public static volatile boolean GROUND_TRACKS; // tyre ruts, footprints and horde paths that stay on mud, snow and grass (pzopt.GroundState)
+   public static volatile boolean GROUND_TRACKS_PERSIST; // tracks: kept per save in Zomboid/pzopt/ground/ (never inside the save), back when you return
+   public static volatile int GROUND_TRACKS_DAYS; // tracks: game days a track takes to fade
+   public static volatile boolean GRASS_BLADES; // grass near the player drawn as real blades (clumps, wind waves, trampling)
+   public static volatile int GRASS_BLADE_RADIUS; // grass blades: squares round the player
+   public static volatile int GRASS_BLADE_DENSITY_PCT; // grass blades: how many, %
+   public static volatile int DEV_GROUND_VIEW; // dev: ground views (GroundBake: 1 = the bake's world position as a checker, 2 = the class map, 3 = the ground state: ruts blue, berms red, wear green)
+   public static final int DEV_GROUND_ALTERNATE = integer("devGroundAlternate", 0); // dev: ms; the ground keys in devGroundAlternateKeys switch off and on every period (within-run A/B: harness/ground/ab.py), or devGroundCycle steps
+   public static final String DEV_GROUND_ALTERNATE_KEYS = string("devGroundAlternateKeys", "all"); // dev: comma list of ground keys the alternation switches ("all" = every ground switch)
+   public static final String DEV_GROUND_CYCLE = string("devGroundCycle", ""); // dev: comma list of variant names stepped every devGroundAlternate ms (pzopt.Ground.cycle(); a feature reads its own names)
+   public static final boolean DEV_GROUND_ALTERNATE_REBAKE = bool("devGroundAlternateRebake", true); // dev: each switch of a bake-time ground key re-bakes the natural ground on screen (so both halves show their picture)
+   public static final boolean DEV_GROUND_STATE_TEST = bool("devGroundStateTest", false); // dev: GroundState stamps a test pattern round the player (rig for the upload / persistence path)
+   public static final int DEV_GROUND_WALKERS = integer("devGroundWalkers", 0); // dev: GroundState stamps N synthetic walkers circling the player every frame (stamping cost rig)
+   public static final int DEV_GROUND_STATE_HZ = integer("devGroundStateHz", 30); // dev: GroundState's stamp batches a second (0: every frame); the GPU pass has a fixed cost per dispatch
+   public static final boolean DEV_GROUND_CLASS_ALWAYS = bool("devGroundClassAlways", false); // dev: GroundBake uploads every level-0 bake's classes into the class map, as before the shadow copy skipped unchanged ones (the A/B)
+   public static final boolean DEV_GROUND_NOOP = bool("devGroundNoop", false); // dev: no-op floor patches keyed by groundHexTiling and the cycle token (full | nofetch | noupload): what the floor variant itself costs a bake (GroundBake.registerNoopProbes)
+   public static final String DEV_GROUND_READBACK = string("devGroundReadback", "pack"); // dev: the ground state's read-backs: pack (a compute pass packs the chunks into a buffer, one copy a batch) | get (glGetTextureSubImage a chunk) | pixels (glReadPixels a chunk) | alternate (pack / get flush by flush, sections ground.rb.*)
+   public static final boolean DEV_GROUND_SEAM_STOCK = bool("devGroundSeamStock", false); // dev: the floor variant's chunk-edge seam strips stay stock on every other chunk (before / after in one picture)
    // god rays (pzopt.GodRays, docs/findings-god-rays-2026-09-27.md): light shafts in the haze and the dust of rooms, sun and moon
+   // ---- ground cover (pzopt.GroundCover, pzopt.Glints; 2026-10-24): the variants of groundScatter and glints (GROUND_SCATTER,
+   // GLINTS above). Every variant below is off or at its measured default.
+   public static volatile String GLINT_MODEL; // db23 | db23iso | jamsi | sparkle | explicit (pzopt.GlintGlsl)
+   public static volatile String GLINT_PASS; // where glints are drawn: particles (default since gcv-cost-pass4: 18 us GPU worst case vs 101 for diamonds) | compact | diamonds (a floor diamond per masked square in reach, per-pixel model)
+   public static volatile int GLINT_PCT; // glints: brightness, %
+   public static volatile int GLINT_FLAKES; // glints: facets per square (the density of crystals / aggregate grains)
+   public static volatile int GLINT_ROUGH_PCT; // glints: width of the facets' normal distribution, % of each surface's own
+   public static volatile int GLINT_TWINKLE_PCT; // glints: the angular cell (how long a glint lives as the light moves), % of each surface's own
+   public static volatile boolean GLINT_SUN; // glints: the sun / moon as a light (the iso camera's view vector is fixed: these barely move)
+   public static volatile boolean GLINT_POINT; // glints: torches, headlights and lamps as lights
+   public static volatile int DEV_GLINT_VIEW; // dev: 1 masks (frost blue, snow white, wet cyan), 2 the lights reaching each square, 3 glints x 20
+   public static final int DEV_GLINT_CYCLE = integer("devGlintCycle", 0); // dev: ms; the glint model cycles db23 -> db23iso -> jamsi -> sparkle -> explicit -> off (GPU section ground.glints.<model>)
+   public static final int DEV_GLINT_ALTERNATE = integer("devGlintAlternate", 0); // dev: ms; glints switch on and off every period (GPU section ground.glints / ground.glints.off)
+   public static volatile int GLINT_HDR_PCT; // glints: with HDR output on, the glints once more into the HDR glint target (past the 8-bit white), x this %; 0 = 8-bit only
+   public static final boolean DEV_GLINT_NO_UPLOAD = bool("devGlintNoUpload", false); // dev: glint data uploaded only for the ring's first round (the upload's cost A/B; stale glints)
+   public static final int DEV_GLINT_RING = integer("devGlintRing", 3); // dev: glint data textures in the ring (1 = one texture rewritten each frame, the implicit-sync A/B)
+   public static final String DEV_GLINT_FORCE = string("devGlintForce", "").trim(); // dev: frost | snow | wet: every outdoor floor square in view gets that mask (cost and look rigs)
+   public static volatile String GROUND_COVER_PLACEMENT; // ground cover: jitter (6 x 6 jittered grid a square, hashed thresholds) | bluenoise (a progressive blue-noise 4 x 4 square tile, rank-dithered)
+   public static volatile String GROUND_COVER_ASSETS; // ground cover: mixed (procedural shapes + the game's leaf-clump and litter decals) | procedural | sprites
+   public static volatile boolean GROUND_COVER_FROST; // ground cover: morning frost in the shade (cold clear nights; melts where the sun has shone)
+   public static volatile boolean GROUND_COVER_WIND; // ground cover: in autumn wind a few leaves (<= 32) lift off the covered ground and tumble downwind (the one per-frame part of the cover)
+   public static final int DEV_WIND_LEAVES_KPH = integer("devWindLeavesKph", -1); // dev: the wind (kph) the wind-blown leaves see
+   public static volatile boolean GLINT_ASYNC; // glints: the frame's glint list built on a worker while the game thread renders on (joined before the frame is handed to the render thread); false = built on the game thread
+   public static volatile boolean GROUND_COVER_ASYNC; // ground cover: level-0 cover built on a worker (squares gathered on the game thread), prefetched for the loaded chunks; false = built in the bake
+   public static volatile int GROUND_REBAKE_PER_FRAME; // ground cover: chunk levels re-baked a frame at a season / frost step
+   public static volatile int DEV_GROUND_COVER_VIEW; // dev: 1 cover kinds in flat colours
+   public static final int DEV_GROUND_TEMP = integer("devGroundTemp", -999); // dev: the temperature (C) the cover and the frost see
+   public static final boolean DEV_FROST_FORCE = bool("devFrostForce", false); // dev: the frost potential at its maximum whatever the weather
    public static volatile boolean FOLIAGE_SWAY; // grass, bushes and trees sway in the wind while they stay baked in the chunk textures (the chunk composite looks each texel up through the wind's displacement; pzopt.Sway)
    public static volatile int FOLIAGE_SWAY_PCT; // foliage sway: how far the plants bend, %
    public static volatile int FOLIAGE_SWAY_TAPS; // foliage sway: 1 = texels move inside their plant's outline only, 2..4 = + 1..3 upwind probes so a plant's leading edge moves over what is behind it
@@ -1646,6 +1705,39 @@ public final class Config {
    public static final boolean DEV_SWAY_VARIANT_ALL = bool("devSwayVariantAll", false); // dev: every chunk composite draw uses the sway variant while sway is on (no program alternation; textures without plants skip the lookup by a uniform)
    public static final boolean DEV_SWAY_NO_PATCH = bool("devSwayNoPatch", false); // dev: no shader patched (the off cost's reference)
    public static final int DEV_SWAY_WIND = integer("devSwayWind", -1); // dev: pins the wind the sway sees (0..100), -1 = the climate's
+   // grass blades (pzopt.GrassBlades): the technique and look knobs (the switch, radius and density are ground-common's keys above)
+   public static final int GRASS_BLADE_MAX_ZOOM_PCT = integer("grassBladeMaxZoomPct", 125); // grass blades: the widest zoom (%, 100 = 1:1) that still has blades; they shrink away over the last fifth
+   public static final int GRASS_BLADE_SEGMENTS = integer("grassBladeSegments", 4); // grass blades: Bezier segments per blade (2 x segments + 1 vertices)
+   public static final boolean GRASS_BLADE_CLUMPS = bool("grassBladeClumps", true); // grass blades: Voronoi clumps share a height, a lean and a tone
+   public static final int GRASS_BLADE_HEIGHT_PCT = integer("grassBladeHeightPct", 100); // grass blades: height, %
+   public static final int GRASS_BLADE_WIDTH_PCT = integer("grassBladeWidthPct", 100); // grass blades: width, %
+   public static final int GRASS_BLADE_SHEEN_PCT = integer("grassBladeSheenPct", 100); // grass blades: the gusts' sheen, %
+   public static final int GRASS_BLADE_TRANSLUCENCY_PCT = integer("grassBladeTranslucencyPct", 100); // grass blades: a low sun shining through blades lit from behind, %
+   public static final int GRASS_BLADE_AO_PCT = integer("grassBladeAoPct", 100); // grass blades: darker toward the root, %
+   public static final boolean GRASS_BLADE_TRAILS = bool("grassBladeTrails", true); // grass blades: characters and cars flatten the blades they walk / drive through, the trail stands up again over grassBladeTrailSeconds
+   public static final int GRASS_BLADE_TRAIL_SECONDS = integer("grassBladeTrailSeconds", 45); // grass blades: how long a trail takes to stand up again (game-speed seconds)
+   public static final boolean GRASS_BLADE_CUT = bool("grassBladeCut", true); // grass blades: a melee swing cuts the blades it sweeps (Ghost of Yotei's cut buffer); they grow back over grassBladeRegrowSeconds
+   public static final int GRASS_BLADE_REGROW_SECONDS = integer("grassBladeRegrowSeconds", 900); // grass blades: how long cut grass takes to grow back
+   public static final boolean GRASS_BLADE_WEAR = bool("grassBladeWear", true); // grass blades: worn paths (ground-common's GroundState compaction from feet and wheels, game days) keep the blades short and lying
+   public static final int GRASS_BLADE_DRAW_MODE = integer("grassBladeDrawMode", 1); // grass blades: 0 = one instance a blade (a strip each), 1 = one strip of all blades joined by degenerate triangles (no per-instance cost), 2 = vertex-only (no compute: a root pass reads each candidate's root colour / depth, then every candidate is an instance making its own blade; the OpenGL 4.1 path)
+   public static final int GRASS_BLADE_GEN_EVERY = integer("grassBladeGenEvery", 1); // grass blades: the blades are regenerated every N frames (the frames between draw the last ones; a zoom, a new square list or a stamp regenerates at once)
+   public static final int GRASS_BLADE_GEN_MS = integer("grassBladeGenMs", 4); // grass blades: the blades are regenerated at most every N ms of wall time (wins over grassBladeGenEvery when > 0): at 1000 fps every ~4th frame, at 240 fps or less every frame, so the root colour (a moving torch, a cloud shadow) lags by under one 240 Hz frame; 0 = by grassBladeGenEvery
+   public static final int GRASS_BLADE_LOD_PX = integer("grassBladeLodPx", 0); // grass blades: blades shorter than this on screen (px) draw with grassBladeLodSegments segments (a second indirect draw); 0 = one draw
+   public static final int GRASS_BLADE_LOD_SEGMENTS = integer("grassBladeLodSegments", 1); // grass blades: segments of the short blades (grassBladeLodPx)
+   public static final boolean GRASS_BLADE_PUSH = bool("grassBladePush", true); // grass blades: the blades bend away from characters and cars moving through them (foliage sway's push kernel)
+   public static final int GRASS_BLADE_LAYER_DIV = integer("grassBladeLayerDiv", 0); // grass blades: draw into a 1 / N resolution layer composited depth-aware over the world (0 = straight into the world)
+   public static final int GRASS_BLADE_LAYER_EVERY = integer("grassBladeLayerEvery", 1); // grass blades, layer path: the layer is redrawn every N frames and moved with the camera between (the cached impostor variant)
+   public static final boolean GRASS_BLADE_FEEDBACK = bool("grassBladeFeedback", false); // grass blades: squares whose on-screen blades were all hidden by the static scene are left out for 30 frames (visibility feedback through a persistent buffer, no sync)
+   public static final int GRASS_BLADE_FEET_PCT = integer("grassBladeFeetPct", 100); // grass blades: blades just in front of a character's feet are drawn in front of the model (characters stand in the grass), % of the depth push
+   public static final boolean GRASS_BLADE_TUFTS = bool("grassBladeTufts", true); // grass blades: an erosion grass tuft standing on a grass square grows taller blades round its foot, in its own colours
+   public static final int GRASS_BLADE_WAVES_PCT = integer("grassBladeWavesPct", 100); // grass blades: Ghost of Tsushima's rolling wind waves over foliage sway's gusts (bend + sheen travelling downwind), %
+   public static final boolean GRASS_BLADE_DEPTH_CHECK = bool("grassBladeDepthCheck", true); // grass blades: no blade where the root is covered in the scene (a post, a trunk, a bench) or the ground is not drawn
+   public static final int DEV_GRASS_VIEW = integer("devGrassView", 0); // dev: grass blades drawn in a flat debug colour (1)
+   public static final int DEV_GRASS_ALTERNATE = integer("devGrassAlternate", 0); // dev: ms; grass blades switch between the A knobs and the B set (devGrassAltB, empty = off) every period (GPU section grass.gbA / .gbB)
+   public static final String DEV_GRASS_ALT_B = string("devGrassAltB", "").trim(); // dev: the alternation's B knobs, "key:value;..." (GrassBlades.Opts.apply)
+   public static final boolean DEV_GRASS_FORCE_INLINE = bool("devGrassForceInline", false); // dev: grass blades take the OpenGL 4.1 vertex-only path even on 4.3 (the Mac's path on the desktop)
+   public static final boolean DEV_GRASS_TIMING = bool("devGrassTiming", false); // dev: GPU timestamps round the blades' generation + draw (A / B halves of devGrassAlternate apart), in the 10 s log line
+   public static final String DEV_GRASS_DUMP_AT = string("devGrassDumpAt", "").trim(); // dev: seconds after the world is up, comma separated: the world colour + depth under the blades, the view, the squares and the wind to ~/Zomboid/pzopt-grass/ (tools/GrassRig.java replays them)
    public static volatile boolean GOD_RAYS; // light shafts: the sun (or moon) through windows, doors, tree crowns and between buildings, lit in the haze and the dust of rooms (world composite)
    public static volatile int GOD_RAYS_STRENGTH_PCT; // how bright the shafts are, %
    public static volatile int GOD_RAYS_HAZE_PCT; // how hazy the open air is, % of the weather's own (fog, rain, morning mist add to it)
@@ -1886,6 +1978,26 @@ public final class Config {
    public static volatile String RIPPLES_RAIN; // puddle ripples: the raindrops' rings on puddles and wet ground: stock (the game's) | none | cells | texture | flipbook | field | sim (live; docs/findings-rain-wakes-2026-10-11.md)
    public static volatile String RIPPLES_WAKE; // puddle ripples: what a car leaves in the puddles: rings (a wheel ring every few squares) | trail | kelvin | particles | sim (live; docs/findings-rain-wakes-2026-10-11.md)
    public static volatile int RIPPLES_RAIN_PCT; // puddle ripples: the raindrops' rings, how strongly they tilt the surface (live)
+   // ground tracks (2026-10-24, pzopt.GroundTracks, the "Ground and grass" Visuals): ruts, footprints, worn paths that persist and fade
+   public static volatile String GROUND_TRACKS_LOOK; // groundTracksLook: bake (drawn into the chunk textures, 0 a frame) | composite (drawn over the picture each frame where tracks are)
+   public static volatile String GROUND_TRACKS_WATER; // groundTracksWater: auto (puddles when ripples patched the puddle program, else bake) | bake (murky water drawn with the look) | puddles (the game's puddle pass fills the ruts, with ripples on) | off
+   public static volatile boolean GROUND_TRACKS_POM; // groundTracksPom: relief offset sampling along the fixed view ray (the near wall of a rut hides its floor)
+   public static volatile int GROUND_TRACKS_SHADOW_STEPS; // groundTracksShadowSteps: the self-shadow march toward the key light (0 off)
+   public static volatile boolean GROUND_TRACKS_AO; // groundTracksAo: the cavity term in ruts
+   public static volatile int GROUND_TRACKS_STRENGTH_PCT; // groundTracksStrengthPct: how deep everything presses (100)
+   public static volatile int GROUND_TRACKS_REBAKE_MS; // groundTracksRebakeMs: a chunk being stamped re-bakes at most this often (bake look)
+   public static volatile int GROUND_TRACKS_REBAKES_PER_SEC; // groundTracksRebakesPerSec: the stamping's chunk re-bakes a second at most (a horde over many chunks stretches the per-chunk interval instead; 0 no cap)
+   public static volatile int GROUND_TRACKS_DECAY_MINUTES; // groundTracksDecayMinutes: game minutes between decay passes
+   public static volatile boolean GROUND_TRACKS_VEHICLES, GROUND_TRACKS_FEET, GROUND_TRACKS_BODIES; // the stamp sources
+   public static volatile boolean GROUND_TRACKS_GRASS; // groundTracksGrass: the game's grass objects (erosion grass, overlays) fade and go to straw where trodden
+   public static volatile int DEV_GROUND_TRACKS_VIEW; // devGroundTracksView: 1 the height field drawn as colour (blue ruts, red berms)
+   public static volatile int DEV_GROUND_TRACKS_TIME_SCALE; // devGroundTracksTimeScale: the decay runs this many times faster than the game clock (the recovery in seconds)
+   public static volatile int DEV_GROUND_TRACKS_WET_PCT; // devGroundTracksWetPct: the ground's wetness pinned (0..100; -1 = from the rain)
+   public static volatile int DEV_GROUND_TRACKS_COMP_BIAS_PCT; // devGroundTracksCompBiasPct: the composite look's diamond, hundredths of a square of x + y toward the camera (the depth test against the floor)
+   public static volatile int DEV_GROUND_TRACKS_RIG_SECONDS; // devGroundTracksRigSeconds: the look rig stamps for this many seconds, then stops (0: all the run)
+   public static volatile int DEV_GROUND_TRACKS_RIG; // devGroundTracksRig: 1 a scripted scene round the player (a car pass with a skid, three walkers, a body, a drag), the look rig
+   public static volatile boolean DEV_GROUND_TRACKS_LOG; // devGroundTracksLog: a stats line every 600 frames
+   public static volatile boolean DEV_GROUND_MOVERS_SYNC; // devGroundMoversSync: the characters' footprint gather on the game thread again (A/B of GroundMovers' worker)
    public static final int DEV_RAIN_SCALE_PCT = integer("devRainScalePct", 40); // dev: a raindrop's ring against a footstep's (% in space; time sqrt of it); read at launch
    public static final int DEV_RAIN_AMP_PCT = integer("devRainAmpPct", 150); // dev: a raindrop's slope against a footstep's (%); read at launch
    public static final int DEV_RAIN_LIT_PCT = integer("devRainLitPct", 120); // dev: how much a rain ring's / wake's slope brightens / darkens the puddle's final colour (%); read at launch
@@ -2295,6 +2407,38 @@ public final class Config {
       CLOUD_OPACITY_PCT = Math.max(0, Math.min(100, integer("cloudOpacityPct", 85)));
       CLOUD_SPEED_PCT = integer("cloudSpeedPct", 100);
       CLOUD_SCALE_PCT = Math.max(25, Math.min(400, integer("cloudScalePct", 100)));
+      GROUND_HEX_TILING = bool("groundHexTiling", false);
+      GROUND_MACRO_PCT = Math.max(0, Math.min(200, integer("groundMacroPct", 0)));
+      GROUND_HEIGHT_BLEND = bool("groundHeightBlend", false);
+      GROUND_SCATTER = bool("groundScatter", false);
+      GROUND_SCATTER_DENSITY_PCT = Math.max(0, Math.min(400, integer("groundScatterDensityPct", 100)));
+      GLINTS = bool("glints", false);
+      GROUND_TRACKS = bool("groundTracks", false);
+      GROUND_TRACKS_PERSIST = bool("groundTracksPersist", true);
+      GROUND_TRACKS_DAYS = Math.max(1, Math.min(30, integer("groundTracksDays", 2)));
+      GRASS_BLADES = bool("grassBlades", false);
+      GRASS_BLADE_RADIUS = Math.max(2, Math.min(40, integer("grassBladeRadius", 12)));
+      GRASS_BLADE_DENSITY_PCT = Math.max(10, Math.min(400, integer("grassBladeDensityPct", 100)));
+      DEV_GROUND_VIEW = integer("devGroundView", 0);
+      // ground cover (pzopt.GroundCover, pzopt.Glints)
+      GLINT_MODEL = string("glintModel", "db23iso").trim().toLowerCase(java.util.Locale.ROOT);
+      GLINT_PASS = string("glintPass", "particles").trim().toLowerCase(java.util.Locale.ROOT);
+      GLINT_PCT = Math.max(0, Math.min(400, integer("glintPct", 100)));
+      GLINT_FLAKES = Math.max(4, Math.min(16384, integer("glintFlakes", 3072)));
+      GLINT_ROUGH_PCT = Math.max(25, Math.min(400, integer("glintRoughPct", 100)));
+      GLINT_TWINKLE_PCT = Math.max(25, Math.min(400, integer("glintTwinklePct", 100)));
+      GLINT_SUN = bool("glintSun", true);
+      GLINT_POINT = bool("glintPoint", true);
+      GLINT_HDR_PCT = Math.max(0, Math.min(400, integer("glintHdrPct", 100)));
+      DEV_GLINT_VIEW = integer("devGlintView", 0);
+      GROUND_COVER_PLACEMENT = string("groundCoverPlacement", "bluenoise").trim().toLowerCase(java.util.Locale.ROOT);
+      GROUND_COVER_ASSETS = string("groundCoverAssets", "mixed").trim().toLowerCase(java.util.Locale.ROOT);
+      GROUND_COVER_FROST = bool("groundCoverFrost", true);
+      GLINT_ASYNC = bool("glintAsync", true);
+      GROUND_COVER_ASYNC = bool("groundCoverAsync", true);
+      GROUND_COVER_WIND = bool("groundCoverWind", false);
+      GROUND_REBAKE_PER_FRAME = Math.max(1, Math.min(32, integer("groundRebakePerFrame", 2)));
+      DEV_GROUND_COVER_VIEW = integer("devGroundCoverView", 0);
       FOLIAGE_SWAY = bool("foliageSway", false);
       FOLIAGE_SWAY_PCT = Math.max(0, Math.min(400, integer("foliageSwayPct", 100)));
       FOLIAGE_SWAY_TAPS = Math.max(1, Math.min(4, integer("foliageSwayTaps", 1)));
@@ -2388,6 +2532,27 @@ public final class Config {
       OVERLAY_FPS_COLOR_GREEN = string("overlayFpsColorGreen", "green");
       OVERLAY_FPS_COLOR_YELLOW = string("overlayFpsColorYellow", "yellow");
       OVERLAY_FPS_COLOR_RED = string("overlayFpsColorRed", "red");
+      GROUND_TRACKS_LOOK = string("groundTracksLook", "bake").trim().toLowerCase(java.util.Locale.ROOT);
+      GROUND_TRACKS_WATER = string("groundTracksWater", "auto").trim().toLowerCase(java.util.Locale.ROOT);
+      GROUND_TRACKS_POM = bool("groundTracksPom", true);
+      GROUND_TRACKS_SHADOW_STEPS = Math.max(0, Math.min(16, integer("groundTracksShadowSteps", 8)));
+      GROUND_TRACKS_AO = bool("groundTracksAo", true);
+      GROUND_TRACKS_STRENGTH_PCT = Math.max(0, Math.min(300, integer("groundTracksStrengthPct", 100)));
+      GROUND_TRACKS_REBAKE_MS = Math.max(0, integer("groundTracksRebakeMs", 300));
+      GROUND_TRACKS_REBAKES_PER_SEC = Math.max(0, integer("groundTracksRebakesPerSec", 12));
+      GROUND_TRACKS_DECAY_MINUTES = Math.max(1, integer("groundTracksDecayMinutes", 30));
+      GROUND_TRACKS_VEHICLES = bool("groundTracksVehicles", true);
+      GROUND_TRACKS_FEET = bool("groundTracksFeet", true);
+      GROUND_TRACKS_BODIES = bool("groundTracksBodies", true);
+      GROUND_TRACKS_GRASS = bool("groundTracksGrass", true);
+      DEV_GROUND_TRACKS_VIEW = integer("devGroundTracksView", 0);
+      DEV_GROUND_TRACKS_COMP_BIAS_PCT = integer("devGroundTracksCompBiasPct", 5);
+      DEV_GROUND_TRACKS_RIG_SECONDS = integer("devGroundTracksRigSeconds", 0);
+      DEV_GROUND_TRACKS_LOG = bool("devGroundTracksLog", false);
+      DEV_GROUND_MOVERS_SYNC = bool("devGroundMoversSync", false);
+      DEV_GROUND_TRACKS_RIG = integer("devGroundTracksRig", 0);
+      DEV_GROUND_TRACKS_TIME_SCALE = Math.max(1, integer("devGroundTracksTimeScale", 1));
+      DEV_GROUND_TRACKS_WET_PCT = integer("devGroundTracksWetPct", -1);
       loadingLive = false;
    }
 
@@ -2458,7 +2623,8 @@ public final class Config {
          {"enhancementsEnabled", "upscaler", "off", "dynRes", "false", "spriteFilter", "stock", "hdr", "false", "hdrAuto", "false",
             "ambientOcclusion", "false", "sunShadows", "false", "reflections", "false", "ripples", "false", "bloodWet", "false", "occludedZombieOutlines", "false", "darknessFloorPct", "0",
             "memoryTint", "false", "colorGrading", "false", "pixelLight", "false", "godRays", "false", "foliageSway", "false", "relief", "false", "carGlass", "false",
-            "torchSource", "false", "mirrors", "false", "voxelLight", "false"},
+            "torchSource", "false", "mirrors", "false", "voxelLight", "false",
+            "groundHexTiling", "false", "groundMacroPct", "0", "groundHeightBlend", "false", "groundScatter", "false", "glints", "false", "groundTracks", "false", "grassBlades", "false"},
          // everything that makes the overlay measure or show (Overlay.configure; harness runs still measure)
          {"profilerEnabled", "overlaySampling", "false", "overlay", "false", "overlayLog", "false"},
          // The Visuals categories: the same feature switches, by category (a key is off when either switch is off)
@@ -2467,6 +2633,7 @@ public final class Config {
          {"catReflEnabled", "reflections", "false", "ripples", "false", "mirrors", "false", "carGlass", "false", "bloodWet", "false"},
          {"catAtmosEnabled", "darknessFloorPct", "0", "memoryTint", "false", "colorGrading", "false", "foliageSway", "false", "relief", "false",
             "occludedZombieOutlines", "false"},
+         {"catGroundEnabled", "groundHexTiling", "false", "groundMacroPct", "0", "groundHeightBlend", "false", "groundScatter", "false", "glints", "false", "groundTracks", "false", "grassBlades", "false"},
          // The Performance categories: each key at its stock value (the tab's "off = stock" / "0 = stock" entries). Left
          // out: tuning numbers of a gated switch (inert once it is off), the worker pools shared across categories
          // (parallel, workers, loadWorkers, frameThreads, charDrawThreads, fileThreads), guards against races and stock

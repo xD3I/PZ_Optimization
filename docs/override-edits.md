@@ -8563,3 +8563,90 @@ press through the PZ OPTIMIZATION search's on-screen keyboard). Three latencies 
   "`"); and while the keyboard is up, `queueCharEvent` / `queueKeyEvent` (Backspace, arrows) go straight to the keyboard's
   entry the way `Core.updateKeyboardAux` hands them over instead of through the render thread and a later frame's keyboard
   swap (2 frames); Enter, Shift, a full or first-key-ignoring entry and non-ASCII characters keep the stock queue.
+
+### Ground and grass, shared part (2026-10-24, worktree ground-common): FBORenderCell, IsoSprite, TextureDraw, ShaderUnit
+
+The hooks the ground features (hex-tiling, ground cover, tracks, grass blades) use inside the chunk-texture bake. Every
+one is a static boolean read while no ground key is on (all are off by default), so the bake is the stock bake then.
+
+- `FBORenderCell.renderFloor(IsoObject)`: between `pzopt.GroundBake.floorBegin` / `floorEnd` a natural floor (level 0,
+  `pzopt.GroundTiles.natural`: grass, dirt, sand, gravel, clay; not farmland, water, roads or built floors) is marked on
+  the drawing thread (a bake unit's recording thread too), so its tile draws take the ground floor variant.
+- `IsoSprite.startTileDepthShader`: the tile-depth shader a floor starts goes through `GroundBake.shader(stock, sprite,
+  attached)`: the variant of `tileWithDepth` / `opaqueWithDepth` for a marked floor (by piece kind: floor, natural edge
+  piece, overlay / dug soil), else the stock shader. The variant is built from the stock program's final source (every
+  other pzopt patch in it) as a TileDepthShader of its own, and the uniform setters of the draw come from it: NVIDIA
+  assigns uniform locations in name order, so the variant's extra uniforms move the stock ones (pzoptVD 5 -> 7).
+  The seam branch of the same method (a floor on a chunk's south / east border drawn again, shifted, through
+  `seamFix2`'s mask, `IsoSprite.seamFix2` set) takes `GroundBake.seamShader(stock)` the same way: the variant of
+  `seamFix2` for a natural floor, so the strip shows the ground feature's art and not the stock tile (a line along every
+  chunk edge otherwise); `StartShader` gets the chosen program's id instead of `SceneShaderStore.tileSeamShader`'s.
+- `FBORenderCell.renderMinusFloor(IsoObject)` (the object pass of a bake, flattened vegetation included): while a ground
+  patch asks for grass objects (`FloorPatch.overlayObjects`, `GroundBake.OVERLAY_ON`), a level-0 object whose sprite is a
+  grass / plant overlay (`GroundTiles.F_OVERLAY`: erosion grass, grass overlays, ground-cover plants) is drawn between
+  `GroundBake.overlayBegin` / `overlayEnd`, so its tile draws take the variant's grass-object programs (piece 3, only the
+  patches that asked): the tracks fade and tint trodden grass. Trees never qualify (their sprites are not overlays), so the
+  tree branch below is skipped only for objects it would not have taken.
+- `FBORenderCell.pzoptBakeFloors`: after the floor tiles, `GroundBake.floorPasses` (extra draws of a feature, e.g. leaves),
+  deferred to the game thread at its place in the stream on a recording thread (`BakeRecord.DEFER_GROUND`, a new case of
+  `pzoptBakeDeferredDraw`); then snow and blood as before.
+- `FBORenderCell.renderOneLevel`: a level-0 bake queues its chunk's ground classes (`GroundBake.bakeBegin`: 10 x 10 texels of
+  two bytes, class and tone, the chunk and a border of one) into the class map texture ahead of its draws, only when a
+  texel differs from the game thread's copy of the map (a re-bake of a loaded chunk uploads nothing: an upload into the
+  texture the bake's earlier draws sampled cost ~20 us of GPU a bake on NVIDIA).
+- `FBORenderCell.pzoptRenderInternal`: `pzopt.Ground.frameStart` once a frame per player (the frame's ground switches, the
+  variant compile request, the movers' gather, the ground state's primitives and its GPU frame).
+- `TextureDraw` (FBORenderChunkStart): `GroundBake.chunkStart` gives the variant programs the texture's world mapping
+  (`pzgMap`: gl_FragCoord to u = x - y, v = x + y - 6z, Sway's mapping) on the render thread.
+- `ShaderUnit.compile`: `GroundBake.patchShader` outermost but for the dev dump: records the final tile sources and
+  returns the variant source for the `pzopt_grTile` placeholder.
+- `IsoSprite`: new field `pzoptGround`, the sprite's ground class cached by `GroundTiles.of` (0 = not looked up yet).
+- `FBORenderCell.pzoptBakeSnow` (the stock snow section of a bake, in place or deferred to the game thread): at its end
+  `GroundBake.afterSnowPasses`, the floor passes of phase `PHASE_AFTER_SNOW` (tracks pressed into the snow are drawn over
+  it, before the blood); a static boolean read while none is on.
+- `IsoMovingObject`: new fields `pzoptGm*` for `pzopt.GroundMovers`, the one gather a frame of what moves over the ground
+  that the tracks, the blades and the ground state share (it replaces two IdentityHashMaps and the tracks branch's own
+  `pzoptGt*` fields): a character's stride anchor, the foot that stepped last, the body imprint done, the near-mover
+  tracking (last position, its frame, the smoothed moving strength), a vehicle's wheel points, and two floats a consumer
+  keeps per mover (the blades' last trail stamp). No initializers: 0 / null are the "none yet" values.
+- `IsoChunk`: new fields `pzoptGround` (an array of per-chunk slots, `pzopt.GroundChunk`: the ground cover's and the
+  glints' per-chunk caches, which were IdentityHashMaps keyed by chunk) and `pzoptGroundGen` (a counter); `resetForStore`
+  calls `GroundChunk.reused`, which drops the slots, hands each value to its feature's release hook and bumps the counter,
+  so an asynchronous build that still holds the chunk object can tell that the chunk was reused and drop its result. One
+  static read while no feature registered a slot.
+- `pzopt.Scene` (harness, no override): `snow=0..100` pins the snow on the ground; `ground_map=N` prints natural ground by
+  material.
+
+### FBORenderCell: grass blades (2026-10-24, branch grass-blades)
+
+One line in the chunk composite pass of `FBORenderCell`, right after the cloud-shadow composite hook:
+`pzopt.GrassBlades.afterComposite(playerIndex)`. Near the player at close zoom it queues one generic draw that grows grass
+blades over the ground just composited. Each blade takes its colour and depth from the world framebuffer at its root, so the
+chunk textures' lighting, AO, sun and cloud shadows carry over. The draw comes before pixelLight's pass and the characters,
+so both still apply on top. The call returns at once when `grassBlades` is off, the zoom is wider than
+`grassBladeMaxZoomPct`, or there is no cell; no GL work happens then. Off by default.
+
+### FBORenderCell: ground tracks (2026-10-24, branch ground-tracks)
+
+One line in `renderInternal`, right before `AmbientOcclusion.queue`: `pzopt.GroundTracks.afterComposite(playerIndex)`. It
+returns at once unless `groundTracksLook=composite`, a dev mode that is off by default. In that mode the tracks are drawn over
+the frame's floors after the chunk composite, as depth-tested floor diamonds at the analytic floor depth, so objects in front
+stay clean. The default look (`groundTracksLook=bake`) and the trodden grass go through ground-common's bake hooks
+(`FloorPatch`, the grass-object piece), so the branch's earlier hooks in this class were removed. The `Ripples` hooks (the rut
+water level in the puddle shader, `GroundTracks.puddleUniforms`) are in the pzopt package and need no marker.
+
+### FBORenderCell: ground cover and glints (2026-10-24, branch ground-cover)
+
+Two one-line hooks in the floor pass. Right before the puddles are drawn, `pzopt.Glints.queue(playerIndex, onScreenChunks)`
+queues the frame's glints on frost, snow and wet asphalt: over the floor and its baked ground cover, under the puddles, so a
+puddle covers the glints beneath it. The same call steps and queues the wind-blown leaves (`pzopt.WindLeaves`). When glints
+are off, or nothing on screen can glint, it returns without walking the chunks. Inside the HDR glint-only block, right after
+`pzopt.BloodWet.queueGlint()`, `pzopt.Glints.queueHdr()` draws the same frame's glints a second time into HdrGlint's target,
+so they can go past 8-bit white (`glintHdrPct`); it draws nothing unless the normal glint draw ran that frame and HDR output
+is on. The ground cover itself (`groundScatter`) bakes through ground-common's hooks and needs no line here. Neither hook
+changes stock behaviour with the keys off.
+
+A third line at the end of the level loop, right after `pzopt.TileRecord.endFrame()`: `pzopt.Glints.endFrame()` waits for the
+glint worker's list for this frame before the frame goes to the render thread. With `glintAsync` (default on),
+`Glints.queue` only gathers the sun or moon, queues the draw at its place and starts the worker, which walks the chunk levels
+and fills the frame's records while the game thread draws the rest. It returns at once when glints are off or no job is out.

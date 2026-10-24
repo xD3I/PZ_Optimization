@@ -85,6 +85,31 @@ public final class Scene {
    private static String torch = "";
    private static int fires; // fire=N: N fires lit near the player at the route start (HDR scenes)
    private static boolean headlights;
+   /** snow=N parsed (Ground.frameStart calls {@link #pinSnow} at every render start: after the climate update of the frame). */
+   public static volatile boolean snowPin;
+
+   /**
+    * The snow on the ground at the pinned amount (game thread). The game draws ground snow only in winter or with Core's force
+    * snow (FBORenderSnow.SnowGrid.init): outside winter the snow=N flag showed nothing (ground-tracks' snow run, 2026-10-24).
+    * Force snow makes the climate set the target to 70 on its climate ticks; pinned again at the render start (after the
+    * climate update) the bake never sees that value, so no invalidateAll churn.
+    */
+   public static void pinSnow() {
+      zombie.iso.IsoCell cell = zombie.iso.IsoWorld.instance.currentCell;
+      if (snow < 0 || cell == null) {
+         return;
+      }
+      if (snow > 0 && !zombie.core.Core.getInstance().isForceSnow()) {
+         zombie.core.Core.getInstance().setForceSnow(true);
+      }
+      if (cell.getSnowTarget() != Math.min(100, snow)) {
+         cell.setSnowTarget(Math.min(100, snow));
+      }
+   }
+
+   private static int snowLogs;
+   private static long snowLogNs;
+   private static int snow = -1; // snow=0..100: the snow on the ground pinned (IsoCell snow target, the sandbox's snow-on-ground switch on; ground and grass scenes, 2026-10-24)
    private static float puddleMud = -1F; // puddle_mud=V: the puddles' mud pinned (0 = clear puddles, as in a shower's first minutes; rain raises it to muddy)
    private static float puddles = -1F; // puddles=V: wet ground and puddle size pinned to V (0..1) through the puddles' admin overrides (HDR glint scenes) // headlights=on: the player's vehicle keeps its headlights on (HDR night drives)
    private static String lights = ""; // lights=on: grid power on and every light switch within 50 tiles on (HDR scenes)
@@ -152,6 +177,8 @@ public final class Scene {
       headlights = "on".equalsIgnoreCase(HarnessFlags.get("headlights", "").trim());
       puddles = Float.parseFloat(HarnessFlags.get("puddles", "-1").trim());
       puddleMud = Float.parseFloat(HarnessFlags.get("puddle_mud", "-1").trim());
+      snow = Integer.parseInt(HarnessFlags.get("snow", "-1").trim());
+      snowPin = snow >= 0;
       Showcase.apply(); // showcase=horde
       RoomLightRig.init(); // room_light=auto (PR #26 HDR rig)
       Showcase.worldReady(p); // showcase=horde: god mode, unseen, power off, the area cleared until the scene starts
@@ -330,6 +357,9 @@ public final class Scene {
          crowd = Integer.parseInt(HarnessFlags.get("crowd", "0").trim());
          crowdAtNs = nowNs + 3_000_000_000L;
       }
+      if (crowdWalkNs > 0L && !CROWD.isEmpty() && nowNs >= crowdWalkAtNs) {
+         crowdWalk(nowNs);
+      }
       if (crowd <= 0 || nowNs < crowdAtNs) {
          return;
       }
@@ -363,11 +393,52 @@ public final class Scene {
          if (list != null) {
             for (zombie.characters.IsoZombie z : list) {
                z.setUseless(true); // never targets anyone (IsoZombie spotted / RespondToSound): stands and idles, still animated
+               CROWD.add(z);
             }
             spawned += list.size();
          }
       }
       Log.info("harness: crowd: " + spawned + " zombies spawned around " + px + "," + py + " (" + ground.size() + " outdoor squares)");
+      double walkS = Double.parseDouble(HarnessFlags.get("crowd_walk", "0").trim());
+      if (walkS > 0.0) {
+         crowdWalkNs = (long)(walkS * 1e9);
+         crowdWalkAtNs = nowNs;
+         crowdX = px;
+         crowdY = py;
+         crowdRMin = rMin;
+         crowdRMax = rMax;
+      }
+   }
+
+   // crowd_walk=S (2026-10-24, the ground tracks' stamping cost with a horde that walks): every S seconds each crowd zombie
+   // paths to a new random outdoor point of the crowd's ring (they stay useless: they walk, never target the ghost player)
+   private static final java.util.ArrayList<zombie.characters.IsoZombie> CROWD = new java.util.ArrayList<>();
+   private static long crowdWalkNs, crowdWalkAtNs;
+   private static int crowdX, crowdY, crowdRMin, crowdRMax, crowdWalks;
+   private static final java.util.Random CROWD_RNG = new java.util.Random(7);
+
+   private static void crowdWalk(long nowNs) {
+      crowdWalkAtNs = nowNs + crowdWalkNs;
+      zombie.iso.IsoCell cell = zombie.iso.IsoWorld.instance.currentCell;
+      int moved = 0;
+      for (zombie.characters.IsoZombie z : CROWD) {
+         if (z == null || z.isDead() || z.getCurrentSquare() == null) {
+            continue;
+         }
+         for (int tries = 0; tries < 8; tries++) {
+            double a = CROWD_RNG.nextDouble() * Math.PI * 2.0, r = crowdRMin + CROWD_RNG.nextDouble() * (crowdRMax - crowdRMin);
+            int tx = crowdX + (int)Math.round(Math.cos(a) * r), ty = crowdY + (int)Math.round(Math.sin(a) * r);
+            zombie.iso.IsoGridSquare sq = cell.getGridSquare(tx, ty, 0);
+            if (sq != null && sq.isOutside() && sq.isFree(false) && !sq.isWaterSquare()) {
+               z.pathToLocation(tx, ty, 0);
+               moved++;
+               break;
+            }
+         }
+      }
+      if (crowdWalks++ < 3) {
+         Log.info("harness: crowd walk: " + moved + " of " + CROWD.size() + " zombies given a new point");
+      }
    }
 
    private static final String[][] PLANT = {{"e_riverbirchJUMBOXL_1_0", "e_riverbirchJUMBOXL_1_4"}, {"e_dogwoodJUMBO_1_0", "e_dogwoodJUMBO_1_8"}};
@@ -503,6 +574,22 @@ public final class Scene {
    private static boolean hideUi;
 
    static void tick(IsoPlayer p, long nowNs) {
+      if (snow >= 0 && zombie.iso.IsoWorld.instance.currentCell != null) {
+         if (!zombie.SandboxOptions.instance.enableSnowOnGround.getValue()) {
+            zombie.SandboxOptions.instance.enableSnowOnGround.setValue(true);
+            Log.info("harness: snow on the ground pinned to " + snow + " (sandbox snow on ground switched on)");
+         }
+         pinSnow();
+         if (snowLogs < 3 && nowNs - snowLogNs > 2_000_000_000L) {
+            snowLogNs = nowNs; // (2026-10-24: a snow=100 run showed no snow; what the game holds)
+            snowLogs++;
+            zombie.iso.weather.ClimateManager cm = zombie.iso.weather.ClimateManager.getInstance();
+            Log.info("harness: snow target " + zombie.iso.IsoWorld.instance.currentCell.getSnowTarget() + " (sandbox snow on ground "
+               + zombie.SandboxOptions.instance.enableSnowOnGround.getValue() + ", climate snow " + (cm == null ? -1F : cm.getSnowFracNow())
+               + ", force snow " + zombie.core.Core.getInstance().isForceSnow() + ", debug snow " + zombie.debug.DebugOptions.instance.weather.snow.getValue()
+               + ", snow anywhere " + zombie.iso.fboRenderChunk.FBORenderSnow.getInstance().isSnowAnywhere() + ")");
+         }
+      }
       Season.tick(); // season=winter: the snow on the ground stays pinned
       if (hideUi) {
          // what the hide-UI key does (ISUIHandler.setVisibleAllUI): every visible element hidden (the clock, the car's
@@ -810,7 +897,9 @@ public final class Scene {
    }
 
    /** ground_map=N: the level-0 squares within N tiles of the player at the route start, one console line per row
-    *  (x grows to the right, y downwards: world axes, not the screen's): P the player's square, W water, # a dry floor,
+    *  (x grows to the right, y downwards: world axes, not the screen's): P the player's square, W water, # a dry floor that is
+    *  not natural ground, natural ground by material (GroundTiles: g grass, d dirt, D dark dirt, s sand, v gravel, c clay;
+    *  upper case with grass / plants lying on it),
     *  . no floor / not loaded; then the player's square (floor sprite, water, water squares within 1 and 2 tiles). The
     *  standing-spot check of the preview shots (is the character on the dock, not over the river). */
    private static void logGroundMap(IsoPlayer p, int n) {
@@ -827,10 +916,30 @@ public final class Scene {
                if (d <= 1) w1++;
                if (d <= 2) w2++;
             }
-            row.append(x == px && y == py ? 'P' : water ? 'W' : sq != null && sq.getFloor() != null ? '#' : '.');
+            int gc = sq == null ? 0 : GroundTiles.square(sq); // ground and grass (2026-10-24): natural ground by material
+            char gch = GroundTiles.natural(gc) ? "?gdsv?" .charAt(Math.min(5, GroundTiles.material(gc))) : '#';
+            if (GroundTiles.natural(gc) && GroundTiles.material(gc) == GroundTiles.CLAY) gch = 'c';
+            if (GroundTiles.natural(gc) && GroundTiles.material(gc) == GroundTiles.DARK_DIRT) gch = 'D';
+            if (gch != '#' && (gc & GroundTiles.F_OVERLAY) != 0) gch = Character.toUpperCase(gch) == gch ? gch : Character.toUpperCase(gch);
+            row.append(x == px && y == py ? 'P' : water ? 'W' : sq != null && sq.getFloor() != null ? gch : '.');
          }
          Log.info("harness: ground map y=" + y + " x=" + (px - n) + ".." + (px + n) + ": " + row);
       }
+      // the floor sprites of the area, most common first, with their ground class (GroundTiles)
+      java.util.HashMap<String, int[]> census = new java.util.HashMap<>();
+      for (int y = py - n; y <= py + n; y++) {
+         for (int x = px - n; x <= px + n; x++) {
+            zombie.iso.IsoGridSquare s2 = cell.getGridSquare(x, y, 0);
+            zombie.iso.IsoObject f2 = s2 == null ? null : s2.getFloor();
+            if (f2 != null && f2.getSprite() != null) {
+               census.computeIfAbsent(String.valueOf(f2.getSprite().getName()), k -> new int[] {0, GroundTiles.of(f2.getSprite())})[0]++;
+            }
+         }
+      }
+      StringBuilder cs = new StringBuilder();
+      census.entrySet().stream().sorted((a, b) -> b.getValue()[0] - a.getValue()[0]).limit(16)
+         .forEach(e -> cs.append(' ').append(e.getKey()).append('=').append(e.getValue()[0]).append("(0x").append(Integer.toHexString(e.getValue()[1])).append(')'));
+      Log.info("harness: ground map floors:" + cs);
       zombie.iso.IsoGridSquare sq = cell.getGridSquare(px, py, 0);
       zombie.iso.IsoObject floor = sq == null ? null : sq.getFloor();
       Log.info("harness: ground under the player " + px + "," + py + ": floor=" + (floor == null || floor.getSprite() == null ? "none" : floor.getSprite().getName())
@@ -985,7 +1094,7 @@ public final class Scene {
    }
 
    static boolean requested() {
-      return timeOfDay >= 0f || !weather.isEmpty() || fog >= 0f || wind >= 0f || !torch.isEmpty() || visible || population >= 0f || carSpawn > 0 || seeAll || zombiesOff || soundRadius > 0 || helicopter || fires > 0 || !lights.isEmpty() || headlights || puddles >= 0F || puddleMud >= 0F || SoundProbe.requested() || CarGlassRig.active();
+      return timeOfDay >= 0f || !weather.isEmpty() || fog >= 0f || wind >= 0f || !torch.isEmpty() || visible || population >= 0f || carSpawn > 0 || seeAll || zombiesOff || soundRadius > 0 || helicopter || fires > 0 || !lights.isEmpty() || headlights || puddles >= 0F || puddleMud >= 0F || snow >= 0 || SoundProbe.requested() || CarGlassRig.active();
    }
 
    /** Flag see_all=true: read by the LightingJNI override on every player update (false until apply() ran). */

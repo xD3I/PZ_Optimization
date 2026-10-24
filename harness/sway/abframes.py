@@ -25,7 +25,7 @@ def main():
     for run in args:
         per = t0 = None
         for line in open(os.path.join(run, "console.txt"), errors="replace"):
-            m = re.search(r"(?:god rays|foliage sway): alternating every (\d+) ms from epoch_ms (\d+)", line)
+            m = re.search(r"(?:god rays|foliage sway|grass blades): alternating every (\d+) ms from epoch_ms (\d+)", line)
             if m:
                 per, t0 = int(m.group(1)), int(m.group(2))
         if per is None:

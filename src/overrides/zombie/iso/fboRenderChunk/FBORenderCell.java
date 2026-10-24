@@ -221,6 +221,7 @@ public final class FBORenderCell {
       int playerIndex = IsoCamera.frameState.playerIndex;
       pzopt.EntityShadow.frameStart(playerIndex); // pzopt: entity shadows, the frame's light and probe bricks (its compute first in the frame: the pipeline has drained at the swap)
       pzopt.Ripples.frameStart(playerIndex); // pzopt: rain rings / car wakes, last frame's compute passes first in this frame
+      pzopt.Ground.frameStart(playerIndex); // pzopt: ground and grass, the frame's switches, the floor variant, the ground state's stamps and uploads
       if (pzopt.CharDraw.enabled()) {
          pzopt.CharDraw.walk(IsoWorld.instance.getCell().getObjectList(), this); // pzopt: charDrawPrep, the object walk on a worker from here
       }
@@ -1903,7 +1904,9 @@ public final class FBORenderCell {
       pzopt.Ssr.afterComposite(); // pzopt: reflections, dev timing of the composite with its scatter
       pzopt.Sway.afterComposite(); // pzopt: foliage sway, the motion-vector attachment off the world framebuffer
       pzopt.CloudShadow.afterComposite(); // pzopt: cloudShadows, dev timing of the composite
+      pzopt.GroundTracks.afterComposite(playerIndex); // pzopt: groundTracksLook=composite, the tracks over the picture's floors each frame
       pzopt.AmbientOcclusion.queue(playerIndex); // pzopt: ambient occlusion on the static world, before anything else is drawn over it
+      pzopt.GrassBlades.afterComposite(playerIndex); // pzopt: grass blades, grown over the composited ground (its colour at their roots), before pixelLight's pass and the characters
       pzopt.PixelLight.afterComposite(playerIndex); // pzopt: pixelLight, the per-pixel light pass (pass mode) and the dev dumps, before anything else is drawn over the static world
       pzopt.OccludedOutline.begin(playerIndex); // pzopt: occluded outlines, the characters and vehicles below mark the stencil
       pzopt.CapsuleShadow.queue(playerIndex); // pzopt: sunShadows, the characters' sun shadows onto the static world (they add themselves below)
@@ -1928,6 +1931,7 @@ public final class FBORenderCell {
          SpriteRenderer.instance.endProfile(itemsProbe);
       }
 
+      pzopt.Glints.queue(playerIndex, this.perPlayerData[playerIndex].onScreenChunks); // pzopt: glints on frost, snow and wet asphalt, over the floor and under the puddles
       if (PerformanceSettings.puddlesQuality < 2) {
          AbstractPerformanceProfileProbe var29 = puddles.profile();
 
@@ -1975,6 +1979,7 @@ public final class FBORenderCell {
             this.pzoptWaterOnly = false; // pzopt: HDR output
             this.renderPuddles(playerIndex); // pzopt: HDR output
             pzopt.BloodWet.queueGlint(); // pzopt: wet blood, its sun / sky / lamp glints
+            pzopt.Glints.queueHdr(); // pzopt: glints on frost, snow and wet asphalt, past the 8-bit white
             pzopt.HdrGlint.queueOff(); // pzopt: HDR output
          }
       } catch (Throwable var26) {
@@ -2118,6 +2123,7 @@ public final class FBORenderCell {
       }
 
       pzopt.TileRecord.endFrame(); // pzopt: tileRecordAsync, a level the loop did not pass leaves nothing recording
+      pzopt.Glints.endFrame(); // pzopt: glints, the worker's glint list finished before the frame is handed over
       FBORenderShadows.getInstance().endRender();
       pzopt.Mirrors.afterLevels(); // pzopt: mirrors, mirrorsCompositeOnce: every level's panes in one composite
       pzopt.GpuSections.end("zloop"); // pzopt: GPU section
@@ -2212,6 +2218,9 @@ public final class FBORenderCell {
             break; // pzopt
          case pzopt.BakeRecord.DEFER_TREES_END: // pzopt
             this.pzoptBakeTreesEnd(); // pzopt
+            break; // pzopt
+         case pzopt.BakeRecord.DEFER_GROUND: // pzopt: ground and grass, the floor passes at their place in the stream
+            pzopt.GroundBake.floorPasses((IsoChunk)a, (Integer)b, IsoCamera.frameState.playerIndex); // pzopt
             break; // pzopt
          default: // pzopt
             break; // pzopt
@@ -2689,6 +2698,9 @@ public final class FBORenderCell {
                if (var59 != null) {
                   var59.close();
                }
+      if (pzopt.GroundBake.PASS_ON && !pzopt.BakeRecord.deferHere(pzopt.BakeRecord.DEFER_GROUND, c, level)) { // pzopt: ground and grass, the floor passes (scatter) after the floor tiles, on the game thread
+         pzopt.GroundBake.floorPasses(c, level, IsoCamera.frameState.playerIndex); // pzopt
+      } // pzopt
       if (!pzopt.BakeRecord.deferHere(pzopt.BakeRecord.DEFER_SNOW, c, level)) { // pzopt: snow and blood on the game thread (shared state)
          this.pzoptBakeSnow(c, level); // pzopt
       } // pzopt
@@ -2722,6 +2734,7 @@ public final class FBORenderCell {
                if (var59 != null) {
                   var59.close();
                }
+      if (pzopt.GroundBake.PASS_AFTER_SNOW_ON) pzopt.GroundBake.afterSnowPasses(c, level, IsoCamera.frameState.playerIndex); // pzopt: ground and grass, the passes drawn over the snow (tracks in snow), before the blood
    } // pzopt
 
    /** pzopt: bakeRecordParallel, stock's blood section of a bake. */
@@ -3155,6 +3168,7 @@ public final class FBORenderCell {
             pzopt.BakeMips.onBake(FBORenderChunkManager.instance.renderChunk, FBORenderChunkManager.instance.renderChunk.getTexture()); // pzopt
          } // pzopt
          if (isDirty && canRender && FBORenderChunkManager.instance.renderChunk != null) pzopt.SpriteFilter.bakeBegin(FBORenderChunkManager.instance.renderChunk.getTexture()); // pzopt: sprite filter, the texture's sharp level 1 after the bake
+         if (isDirty && canRender && pzopt.GroundBake.CLASS_ON) pzopt.GroundBake.bakeBegin(c, level); // pzopt: ground and grass, the chunk's ground classes into the class map ahead of its draws
          if (DebugOptions.instance.delayObjectRender.getValue()) {
             canRender = frameNo == c.loadedFrame || frameNo >= c.renderFrame;
          }
@@ -4583,10 +4597,12 @@ public final class FBORenderCell {
    public void renderFloor(IsoObject object) { // pzopt
       if (pzopt.BakeRecord.deferFloor(object)) return; // pzopt: bakeRecordParallel, a floor a recording thread may not draw goes to the game thread
       boolean pzoptFloor = pzopt.Sway.floorBegin(); // pzopt: swayFloorExact, a floor bakes its depth exactly as stock
+      boolean pzoptGround = pzopt.GroundBake.FLOOR_ON && pzopt.GroundBake.floorBegin(object); // pzopt: ground and grass, a natural floor bakes with the ground variant (GroundBake)
       try { // pzopt
          this.pzoptRenderFloor(object); // pzopt
       } finally { // pzopt
          if (pzoptFloor) pzopt.Sway.floorEnd(); // pzopt
+         if (pzoptGround) pzopt.GroundBake.floorEnd(); // pzopt: ground and grass
       } // pzopt
    } // pzopt
 
@@ -4819,6 +4835,14 @@ public final class FBORenderCell {
       if (pzopt.ResumeShot.noTrees && object instanceof IsoTree) {
          return; // pzopt: resumeShot's exit capture (buildings): no trees
       }
+      if (pzopt.GroundBake.OVERLAY_ON && pzopt.GroundBake.overlayBegin(object)) { // pzopt: ground and grass, a level-0 grass / plant object bakes with the ground variant's grass-object programs (GroundBake)
+         try { // pzopt
+            this.pzoptRenderMinusFloorInner(object); // pzopt
+         } finally { // pzopt
+            pzopt.GroundBake.overlayEnd(); // pzopt
+         } // pzopt
+         return; // pzopt
+      } // pzopt
       if (object instanceof IsoTree && pzopt.Config.TREES_IN_CHUNK_TEXTURE && pzopt.Overrides.enabled() && pzopt.Config.TREE_BAKE_DIRECT) {
          // pzopt: bake the tree through the plain sprite path (IsoTree.render without a FBORenderTrees batch)
          FBORenderTrees batch = FBORenderTrees.current;
