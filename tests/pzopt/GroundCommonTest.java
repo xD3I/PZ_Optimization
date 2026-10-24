@@ -118,10 +118,11 @@ public class GroundCommonTest {
          String vert = Files.readString(game.resolve(base + ".vert"));
          String frag = Files.readString(game.resolve(base + ".frag"));
          for (int view = 0; view <= 2; view++) {
-            for (boolean attached : new boolean[] {false, true}) {
+            for (int piece = 0; piece < 3; piece++) {
+               boolean attached = piece != 0;
                List<GroundBake.FloorPatch> ps = new ArrayList<>();
                ps.add(TEST);
-               String v = GroundBake.variantSource(frag, ps, view, attached);
+               String v = GroundBake.variantSource(frag, ps, view, piece);
                Check.check(v != null, base + ": a variant source");
                Check.check(v.contains("pzgTexel(texture2D(DIFFUSE") && v.contains("pzgColor(c)") && v.contains("pzgSetup();"), base + ": hooks placed:\n" + v);
                Path vp = Files.writeString(Files.createTempFile("pzg", ".vert"), vert);
@@ -141,7 +142,7 @@ public class GroundCommonTest {
                   if (!useMesa && out.contains("no context")) {
                      continue;
                   }
-                  String tag = base + " view " + view + (attached ? " attached" : "") + (useMesa ? " (Mesa)" : " (driver)");
+                  String tag = base + " view " + view + (attached ? " piece " + piece : "") + (useMesa ? " (Mesa)" : " (driver)");
                   Check.check(out.contains("link ok") && out.contains("validate ok"), tag + ":\n" + out + "\n" + v);
                   n++;
                }

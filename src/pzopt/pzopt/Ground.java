@@ -118,10 +118,37 @@ public final class Ground {
       return m;
    }
 
+   /**
+    * The feature classes, loaded (static init: they register their patches, passes, rules) the first frame a ground key or
+    * a ground dev rig is on; a name whose class does not exist is skipped. Each feature branch adds its own name.
+    */
+   static final String[] FEATURES = {"pzopt.GroundTilingPatch"};
+   private static boolean featuresLoaded;
+   /** A ground dev rig runs (the shared parts then run every frame whatever the keys). */
+   private static final boolean DEV_ANY = Config.DEV_GROUND_ALTERNATE > 0 || !Config.DEV_GROUND_CYCLE.isEmpty() || Config.DEV_GROUND_STATE_TEST
+      || Config.DEV_GROUND_WALKERS > 0;
+
+   private static void loadFeatures() {
+      featuresLoaded = true;
+      for (String n : FEATURES) {
+         try {
+            Class.forName(n, true, Ground.class.getClassLoader());
+            Log.info("ground: feature " + n + " loaded");
+         } catch (ClassNotFoundException e) {
+            // (not on this branch)
+         } catch (Throwable t) {
+            Log.warn("ground: feature " + n + " failed to load and is off: " + t);
+         }
+      }
+   }
+
    /** FBORenderCell.renderInternal, game thread, once a frame per player: the frame's switches, then the shared parts. */
    public static void frameStart(int playerIndex) {
       long m = configMask();
-      if (m == 0L && Config.DEV_GROUND_ALTERNATE <= 0 && frameMask == 0L && !GroundBake.FLOOR_ON && !GroundBake.PASS_ON && !GroundState.active()) {
+      if (!featuresLoaded && (m != 0L || DEV_ANY || Config.DEV_GROUND_VIEW != 0)) {
+         loadFeatures();
+      }
+      if (m == 0L && !DEV_ANY && frameMask == 0L && !GroundBake.FLOOR_ON && !GroundBake.PASS_ON && !GroundState.active()) {
          // every key off: nothing below has work (the registered patches answer off from the same keys)
          if (GroundBake.anyRegistered()) {
             GroundBake.frameStart(playerIndex);
