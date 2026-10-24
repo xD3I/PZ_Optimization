@@ -8597,5 +8597,10 @@ one is a static boolean read while no ground key is on (all are off by default),
   `pzoptGt*` fields): a character's stride anchor, the foot that stepped last, the body imprint done, the near-mover
   tracking (last position, its frame, the smoothed moving strength), a vehicle's wheel points, and two floats a consumer
   keeps per mover (the blades' last trail stamp). No initializers: 0 / null are the "none yet" values.
+- `IsoChunk`: new fields `pzoptGround` (an array of per-chunk slots, `pzopt.GroundChunk`: the ground cover's and the
+  glints' per-chunk caches, which were IdentityHashMaps keyed by chunk) and `pzoptGroundGen` (a counter); `resetForStore`
+  calls `GroundChunk.reused`, which drops the slots, hands each value to its feature's release hook and bumps the counter,
+  so an asynchronous build that still holds the chunk object can tell that the chunk was reused and drop its result. One
+  static read while no feature registered a slot.
 - `pzopt.Scene` (harness, no override): `snow=0..100` pins the snow on the ground; `ground_map=N` prints natural ground by
   material.

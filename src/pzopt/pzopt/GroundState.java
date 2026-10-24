@@ -176,6 +176,7 @@ public final class GroundState {
    private static final CopyOnWriteArrayList<ChangeListener> LISTENERS = new CopyOnWriteArrayList<>();
    private static boolean rebakeOnChange;
    private static int usedFrame = -100;
+   private static int fullRebakeFrame = -100;
 
    public static void setRules(Rules r) {
       rules = r == null ? new DefaultRules() : r;
@@ -196,6 +197,15 @@ public final class GroundState {
    /** Changed chunks re-bake their level 0 (low priority) through GroundBake, whatever the rules say. */
    public static void rebakeOnChange(boolean on) {
       rebakeOnChange = on;
+   }
+
+   /**
+    * Game thread, every frame it applies (e.g. from {@link Ground#onFrame}): a feature whose floor pass reads the state (the
+    * cover crushed in the ruts) needs changed chunks re-baked whole, not only their after-snow decals; the full re-bake then
+    * replaces the rules' DIRTY_BLOOD one, so a change costs one re-bake whoever reads it.
+    */
+   public static void wantFullRebakes() {
+      fullRebakeFrame = frame;
    }
 
    /** Game thread, once a frame: a feature reads or writes the map (keeps it on into the next frame). */
@@ -717,6 +727,8 @@ public final class GroundState {
    /** The primitives binned per square: cells (one work group each) and their primitive lists, counting-sorted by cell. */
    private static void bin(Frame f, long nowMs) {
       int ox = wcx * CS, oy = wcy * CS;
+      int lastCx = Integer.MIN_VALUE, lastCy = Integer.MIN_VALUE;
+      byte[] lastMats = null;
       int nPairs = 0;
       f.nPrims = 0;
       f.nCells = 0;
@@ -734,7 +746,12 @@ public final class GroundState {
          for (int sy = y0; sy <= y1; sy++) {
             for (int sx = x0; sx <= x1; sx++) {
                int cx = sx >> 3, cy = sy >> 3;
-               int mat = surfaces(cx, cy, nowMs)[(sx & 7) + (sy & 7) * CS];
+               if (cx != lastCx || cy != lastCy) { // (a primitive's squares are mostly in one chunk)
+                  lastCx = cx;
+                  lastCy = cy;
+                  lastMats = surfaces(cx, cy, nowMs);
+               }
+               int mat = lastMats[(sx & 7) + (sy & 7) * CS];
                if (mat == GroundTiles.SURF_NONE) {
                   continue;
                }
@@ -881,7 +898,8 @@ public final class GroundState {
    private static void changes(long nowMs) {
       Rules r = rules;
       boolean viewRebake = Config.DEV_GROUND_VIEW == 3; // (the state view draws the map into the bake)
-      boolean rebake = r.rebakes() || rebakeOnChange || viewRebake;
+      boolean full = rebakeOnChange || fullRebakeFrame >= frame - 2;
+      boolean rebake = r.rebakes() || full || viewRebake;
       if (!rebake && LISTENERS.isEmpty()) {
          return;
       }
@@ -907,7 +925,7 @@ public final class GroundState {
             if (rebake) {
                IsoChunk c = cell == null ? null : cell.getChunk(cx, cy);
                if (c != null) {
-                  if (rebakeOnChange || viewRebake && !r.rebakes()) {
+                  if (full || viewRebake && !r.rebakes()) {
                      GroundBake.rebakeChunk(cx, cy, "tracks", true);
                   } else {
                      c.invalidateRenderChunkLevel(0, 1L); // DIRTY_BLOOD: a floor decal changed
