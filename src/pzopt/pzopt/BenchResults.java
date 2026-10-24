@@ -815,7 +815,8 @@ public final class BenchResults {
       StringBuilder b = new StringBuilder("v=1\n");
       for (String line : txt.split("\n")) {
          String[] c = line.split("\t", -1);
-         if (c[0].equals("SYS") && c.length > 2 && (c[1].equals("cpu") || c[1].equals("gpu") || c[1].equals("screen") || c[1].equals("os") || c[1].equals("pzopt_build") || c[1].equals("frame_cap"))) {
+         if (c[0].equals("SYS") && c.length > 2 && (c[1].equals("cpu") || c[1].equals("gpu") || c[1].equals("screen") || c[1].equals("os") || c[1].equals("pzopt_build") || c[1].equals("frame_cap")
+               || c[1].equals("power_profile"))) {
             b.append(c[1]).append('=').append(c[2]).append('\n');
          } else if (c[0].equals("SCORE")) {
             b.append("score.").append(c[1]).append('=').append(c[2]).append('\n');

@@ -485,6 +485,20 @@ ORDER BY 1"""
 
 # the Runs table sent every run in range (8,188 rows, 4.6 MB) to each visitor of the public dashboard
 RUNS_TABLE_MAX = 500
+# the CPU power state at launch (runs.power_profile / cpu_*, run.opts from 2026-10-24): power-saver costs uncapped CPU-bound
+# scenes up to ~19 % on the desktop, so the tables name it beside the numbers; empty for older runs
+POWER_COLS = 'power_profile AS power, cpu_governor AS governor, cpu_epp AS epp, cpu_boost AS boost, cpu_max_khz / 1e6 AS "max GHz"'
+POWER_DESC = ("power / governor / epp / boost / max GHz: the CPU power state when the run launched (run.opts power_profile= and "
+              "cpu_power=, from 2026-10-24; empty before). Orange = a power-saving profile or boost off: uncapped CPU-bound "
+              "numbers are up to ~19 % lower there, so compare runs only within one power state.")
+POWER_MAP = [{"type": "value", "options": {v: {"color": c, "index": i} for i, (v, c) in enumerate(
+    [("power-saver", "orange"), ("low-power", "orange"), ("quiet", "orange"), ("off", "orange"), ("balanced", "text"),
+     ("performance", "green"), ("on", "text")])}}]
+
+
+def power_ovs():
+    return [ov("power", color_text=True, mappings=POWER_MAP, width=95), ov("boost", color_text=True, mappings=POWER_MAP, width=60),
+            ov("governor", width=95), ov("epp", width=95), ov("max GHz", decimals=2, width=75)]
 
 
 def runs_dashboard():
@@ -502,14 +516,14 @@ SELECT started, run, CASE WHEN v.url IS NOT NULL THEN 'video' END AS video, v.ur
   CASE WHEN rd.url IS NOT NULL THEN 'data' END AS data, rd.url AS data_url, fps_mean AS fps, fps_1pct_low AS "1% low", p50_ms AS p50, p99_ms AS p99, p99_9_ms AS "p99.9", max_ms AS max,
   over_33ms AS ">33ms", jitter_ms AS jitter, cpu_pct AS "CPU %", busiest_core_pct AS "busiest core %", gpu_pct AS "GPU %",
   game_thread_pct AS "game thread %", total_w AS "W", j_per_frame AS "J/frame", {BOUND} AS bound, verdict, round(verdict_confidence::numeric, 2) AS conf, valid,
-  variant, machine, mode, preset, chunk_p99_ms AS "chunk p99", gc_events AS gc, zoom, resolution, label,
+  variant, machine, {POWER_COLS}, mode, preset, chunk_p99_ms AS "chunk p99", gc_events AS gc, zoom, resolution, label,
   lag(run) OVER (PARTITION BY label ORDER BY started) AS previous
 FROM runs LEFT JOIN run_videos v USING (run) LEFT JOIN run_data rd USING (run) WHERE {where} ORDER BY started DESC LIMIT {RUNS_TABLE_MAX}""",
         desc=f"The newest {RUNS_TABLE_MAX} runs in the time range (narrow with the label regex or the time picker). "
              "Frame times in ms over the route window (pzopt-frames.out); CPU / GPU from sysmon, game thread from pzopt-threads.out. "
              "Click a run for its dashboard, 'previous' to compare with the last run of the same label, 'video' for its recording, "
              "'data' for its run folder: frame logs and every other file (the cold-storage bucket gs://diegov-videos-coldline; "
-             "harness/cold-store.py uploads and links them).",
+             "harness/cold-store.py uploads and links them). " + POWER_DESC,
         overrides=[
             ov("run", link=[("Run dashboard", "/d/pzopt-run/run?var-run=${__value.raw}")], width=300),
             ov("previous", link=[("Compare with this run", "/d/pzopt-compare/compare?var-runs=${__data.fields.previous}&var-runs=${__data.fields.run}&var-base=${__data.fields.previous}")], width=260),
@@ -525,6 +539,7 @@ FROM runs LEFT JOIN run_videos v USING (run) LEFT JOIN run_data rd USING (run) W
             *[ov(n, thresholds=UTIL_STEPS, color_cell=True, decimals=0, unit="percent") for n in ("CPU %", "busiest core %", "GPU %", "game thread %")],
             ov("chunk p99", unit="ms", decimals=0),
             ov("W", unit="watt", decimals=0), ov("J/frame", unit="joule", decimals=3),
+            *power_ovs(),
         ]), 24, 14)
     L.row("Trends (one point per run, series = label or machine)")
     trend = lambda col: trend_sql(where, col)  # noqa: E731
@@ -649,6 +664,7 @@ def run_dashboard():
 SELECT k AS fact, v AS value FROM runs, LATERAL (VALUES
   ('started', to_char(started, 'YYYY-MM-DD HH24:MI:SS')), ('machine', machine), ('platform', platform), ('mode', mode), ('preset', preset),
   ('route', route), ('zoom', zoom), ('resolution', resolution), ('opengl', opengl), ('jvm', jvm), ('launcher', launcher),
+  ('power profile', power_profile), ('cpu power', cpu_power),
   ('variant', variant), ('props', props), ('flags', flags), ('route seconds', round(route_seconds::numeric, 2)::text),
   ('zombies loaded', zombies_loaded::text), ('verdict', verdict || ' (' || round(verdict_confidence::numeric, 2) || ')'), ('path', path)
 ) AS x(k, v) WHERE run = {RUN} AND v IS NOT NULL""", overrides=[ov("fact", width=130)]), 24, 11)
@@ -858,9 +874,10 @@ METRICS = [("fps_mean", "fps", "none", True), ("fps_1pct_low", "1% low", "none",
 def compare_dashboard():
     L = Layout()
     cols = ", ".join(f"{c} AS \"{n}\"" for c, n, _, _ in METRICS)
-    L.add(table_panel("Runs", f"SELECT run, variant, machine, mode, preset, verdict, {cols} FROM runs WHERE run IN ({RUNS}) ORDER BY started",
+    L.add(table_panel("Runs", f"SELECT run, variant, machine, {POWER_COLS}, mode, preset, verdict, {cols} FROM runs WHERE run IN ({RUNS}) ORDER BY started",
+                      desc=POWER_DESC,
                       overrides=[ov("run", link=[("Run dashboard", "/d/pzopt-run/run?var-run=${__value.raw}")], width=300),
-                                 *[ov(n, unit=u, decimals=2) for _, n, u, _ in METRICS]]), 24, 7)
+                                 *[ov(n, unit=u, decimals=2) for _, n, u, _ in METRICS], *power_ovs()]), 24, 7)
     deltas = ", ".join(f"round((100.0 * (r.{c} - b.{c}) / nullif(b.{c}, 0))::numeric, 1) AS \"{n}\"" for c, n, _, _ in METRICS)
     L.add(table_panel(
         "Change vs the base run (%)", f"SELECT r.run, {deltas} FROM runs r, runs b WHERE r.run IN ({RUNS}) AND b.run = ${{base:sqlstring}} AND r.run <> b.run ORDER BY r.started",

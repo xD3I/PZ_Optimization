@@ -20,7 +20,7 @@ harness/run.sh --label <name> [--mode verify|bench|drive|parity|play] [--flag k=
 What it does: installs the pzopt-harness Lua mod, creates/points at the bench save
 `Saves/Sandbox/pzopt-bench`, writes the flag file the mod reads, launches the game, starts
 `sysmon.sh` and the MangoHud log, waits for exit, collects console.txt and every `pzopt-*.out`
-into the run dir, restores `latestSave.ini`. `run.opts` records launcher, renderer, flags, and the CPU power state at launch (`power_profile=`, `cpu_power=` governor / EPP / boost / max clock; the desktop sat in power-saver, 4.7 GHz, before 2026-10-24).
+into the run dir, restores `latestSave.ini`. `run.opts` records launcher, renderer, flags, and the CPU power state at launch (`power_profile=`, `cpu_power=` governor / EPP / boost / max clock; the desktop sat in power-saver, 4.7 GHz, before 2026-10-24; `run-mac.sh` writes the same two lines from pmset: `source= thermal= lowpowermode= powermode=`). Grafana: `runs.power_profile` / `cpu_power` / `cpu_governor` / `cpu_epp` / `cpu_boost` / `cpu_max_khz` (`ingest.power_state`), columns power / governor / epp / boost / max GHz in every Runs table, the Compare runs table and a machine page's setup table, two facts on the Run page; empty for older runs.
 
 `--mod ID` enables a mod for the run (default.txt + the bench save's mods.txt, restored after). An id not in
 `Zomboid/mods` is looked up in the Steam Workshop downloads beside the game (`workshop/content/108600/*/mods/*`, by the
@@ -824,7 +824,7 @@ EUR 5 budget alert (20 / 50 / 100 %) on that label; `harness/grafana/cloud.sh de
   computes in 0.2 s): `hero_scenes` (`derived.py`: HERO_SCENES per machine; the hero stats, "Faster than stock", "Every scene
   measured both ways") is recomputed on the local DB after each import and its rows copied to the cloud DB
   (`ingest.refresh_derived`); `runs.boot_s` / `load_s` (from the run's load trace, the daily boot-and-load chart) and
-  `runs.run_s` (opts run_seconds, the run-hours chart) are filled at import. The Runs tables show the newest 500 in range.
+  `runs.run_s` (opts run_seconds, the run-hours chart) and the power columns (`power_profile`, `cpu_*`) are filled at import. The Runs tables show the newest 500 in range.
   A new panel over many runs reads plain `runs` columns or a derived table, never the jsonb columns or a sample table.
 - **Grafana** on Cloud Run `pzopt-dashboard`: the image from `harness/grafana/Dockerfile` (dashboards + `cloud/datasource.yaml`
   baked in, Grafana's own DB migrated at build time for fast cold starts, no login form / basic auth / explore / snapshots /

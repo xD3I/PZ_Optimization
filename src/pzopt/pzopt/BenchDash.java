@@ -239,6 +239,8 @@ final class BenchDash {
       fact(b, "resolution", p.get("sys.screen"));
       fact(b, "opengl", p.get("sys.gl"));
       fact(b, "jvm", p.get("sys.java"));
+      fact(b, "power profile", p.get("sys.power_profile")); // BenchPower; Grafana's Run table shows the same two rows
+      fact(b, "cpu power", p.get("sys.cpu_power"));
       fact(b, "variant", cfgName(cfg));
       fact(b, "props", p.get("sys.settings"));
       if (sc != null && !sc.flags.isEmpty()) {

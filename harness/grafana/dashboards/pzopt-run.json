@@ -621,7 +621,7 @@
      "rawQuery": true,
      "editorMode": "code",
      "format": "table",
-     "rawSql": "SELECT k AS fact, v AS value FROM runs, LATERAL (VALUES\n  ('started', to_char(started, 'YYYY-MM-DD HH24:MI:SS')), ('machine', machine), ('platform', platform), ('mode', mode), ('preset', preset),\n  ('route', route), ('zoom', zoom), ('resolution', resolution), ('opengl', opengl), ('jvm', jvm), ('launcher', launcher),\n  ('variant', variant), ('props', props), ('flags', flags), ('route seconds', round(route_seconds::numeric, 2)::text),\n  ('zombies loaded', zombies_loaded::text), ('verdict', verdict || ' (' || round(verdict_confidence::numeric, 2) || ')'), ('path', path)\n) AS x(k, v) WHERE run = ${run:sqlstring} AND v IS NOT NULL",
+     "rawSql": "SELECT k AS fact, v AS value FROM runs, LATERAL (VALUES\n  ('started', to_char(started, 'YYYY-MM-DD HH24:MI:SS')), ('machine', machine), ('platform', platform), ('mode', mode), ('preset', preset),\n  ('route', route), ('zoom', zoom), ('resolution', resolution), ('opengl', opengl), ('jvm', jvm), ('launcher', launcher),\n  ('power profile', power_profile), ('cpu power', cpu_power),\n  ('variant', variant), ('props', props), ('flags', flags), ('route seconds', round(route_seconds::numeric, 2)::text),\n  ('zombies loaded', zombies_loaded::text), ('verdict', verdict || ' (' || round(verdict_confidence::numeric, 2) || ')'), ('path', path)\n) AS x(k, v) WHERE run = ${run:sqlstring} AND v IS NOT NULL",
      "hide": false
     }
    ],

@@ -264,7 +264,8 @@ final class BenchSetup {
       // the machine
       String[][] sys = {{"cpu", "CPU"}, {"gpu", "GPU"}, {"gl", "Graphics driver"}, {"ram_gb", "RAM (GB)"}, {"os", "System"}, {"java", "Java"},
          {"screen", "Screen"}, {"refresh_hz", "Refresh rate (Hz)"}, {"game_version", "Game version"}, {"pzopt_build", "PZ Optimization build"},
-         {"frame_cap", "Frame cap"}, {"vsync", "Vsync"}};
+         {"frame_cap", "Frame cap"}, {"vsync", "Vsync"}, {"power_profile", "Power profile"},
+         {"cpu_power", "CPU power (governor, EPP, boost, max clock / scheme, mode / source, thermal)"}};
       for (String[] s : sys) {
          add(rows, "sys", s[0], s[1], sysA.getOrDefault(s[0], ""), sysB.getOrDefault(s[0], ""));
       }
