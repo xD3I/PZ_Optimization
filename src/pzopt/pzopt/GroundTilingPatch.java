@@ -52,13 +52,15 @@ public final class GroundTilingPatch implements GroundBake.FloorPatch {
     * The program is specialised to the tiling mode (GT_MODE): with every mode's sampler in one program NVIDIA allocates
     * the registers of the biggest (lap, voronoi) for all of them, which cost the bake ~10 us with the patch returning the
     * texel at once. The mode is part of {@link #id()}, so a mode change compiles its own variant. Dev flags after the
-    * mode name: {@code a} every mode in one program (the old layout), {@code o} the old three-PCG lattice hash.
+    * mode name: {@code a} every mode in one program (the old layout), {@code o} the old three-PCG lattice hash, {@code w} the exemplar
+    * wrap by integer modulo.
     */
    @Override
    public String defines() {
       String sp = spec;
       int m = specMode(sp);
-      return "#define GT_MODE " + m + (specFlags(sp).contains("o") ? "\n#define GT_OLD_HASH 1" : "");
+      String f = specFlags(sp);
+      return "#define GT_MODE " + m + (f.contains("o") ? "\n#define GT_OLD_HASH 1" : "") + (f.contains("w") ? "\n#define GT_OLD_WRAP 1" : "");
    }
 
    static String specFlags(String sp) {
@@ -120,7 +122,7 @@ public final class GroundTilingPatch implements GroundBake.FloorPatch {
          for (int i = 1; i < t.length; i++) {
             height |= t[i].equals("b");
             macro = t[i].equals("m") ? 100 : macro;
-            flags += t[i].equals("a") || t[i].equals("o") ? t[i] : "";
+            flags += t[i].length() == 1 && "aow".contains(t[i]) ? t[i] : "";
          }
          spec = MODES[mode] + (flags.isEmpty() ? "" : "D" + flags);
          if (mode == 0 && !height && macro == 0) {
@@ -334,10 +336,15 @@ public final class GroundTilingPatch implements GroundBake.FloorPatch {
       #endif
          if (mode == 10) return t; // dev cost split: the variant's own overhead (no lookup)
          int row = gtSpriteRow();
-         if (row < 0 || mode == 9) return t; // (9: dev cost split, the lookup alone)
+         if (row < 0) return t;
+         if (mode == 9) return vec4(t.rgb * 0.999, t.a); // (9: dev cost split, the lookup alone; kept from folding away)
          int code = gtSprCode(row);
          int layer = code & 15, kind = code >> 4;
+      #ifdef GT_OLD_WRAP
          ivec2 px = gtWrap(ivec2(gl_FragCoord.xy) / pzGtBakeI.z + pzGtBakeI.xy);
+      #else
+         ivec2 px = gtWrap((ivec2(gl_FragCoord.xy) >> (pzGtBakeI.z - 1)) + pzGtBakeI.xy); // (s = 1 or 2)
+      #endif
          vec2 uv = vec2(gl_FragCoord.x * pzGtBakeF.x + pzGtBakeF.y, gl_FragCoord.y * pzGtBakeF.z + pzGtBakeF.w);
          vec2 wLocal = vec2(uv.y + uv.x, uv.y - uv.x) * 0.5;
          if (mode == 8) {

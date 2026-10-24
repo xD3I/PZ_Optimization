@@ -60,7 +60,13 @@ public final class GroundTiling {
       vec2 gtRand2(ivec2 c, uint salt) { uint h = gtHash3(c, salt); return vec2(float(h & 0xFFFFu), float(h >> 16u)) * (1.0 / 65536.0); }
       float gtRand1(ivec2 c, uint salt) { return float(gtHash3(c, salt) >> 8u) * (1.0 / 16777216.0); }
 
+      #ifdef GT_OLD_WRAP
       ivec2 gtWrap(ivec2 p) { ivec2 m = pzGtPeriod.xy; return ((p % m) + m) % m; }
+      #else
+      // the period is a power of two (128N x 64N px at tile scale 1 or 2): a mask, not two integer modulos (NVIDIA has no
+      // integer divider: each % is a few dozen instructions)
+      ivec2 gtWrap(ivec2 p) { return p & (pzGtPeriod.xy - 1); }
+      #endif
       ivec2 gtLayer(ivec2 p, float layer) { return p + ivec2(0, int(layer) * pzGtPeriod.y); }
       vec4 gtFetch(ivec2 px, ivec2 off, float layer) { return texelFetch(pzGtArt, gtLayer(gtWrap(px + off), layer), 0); }
       vec4 gtFetchG(ivec2 px, ivec2 off, float layer) { return texelFetch(pzGtGauss, gtLayer(gtWrap(px + off), layer), 0); }
@@ -150,10 +156,11 @@ public final class GroundTiling {
          vec2 q = (vec2(gtWrap(px + off)) + 0.5) / float(1 << k) - 0.5;
          vec2 f = floor(q); vec2 t = q - f; ivec2 b = ivec2(f);
          int ly = int(layer) * m.y;
-         vec4 c00 = texelFetch(pzGtArt, ivec2((b.x % m.x + m.x) % m.x, (b.y % m.y + m.y) % m.y + ly), k);
-         vec4 c10 = texelFetch(pzGtArt, ivec2(((b.x + 1) % m.x + m.x) % m.x, (b.y % m.y + m.y) % m.y + ly), k);
-         vec4 c01 = texelFetch(pzGtArt, ivec2((b.x % m.x + m.x) % m.x, ((b.y + 1) % m.y + m.y) % m.y + ly), k);
-         vec4 c11 = texelFetch(pzGtArt, ivec2(((b.x + 1) % m.x + m.x) % m.x, ((b.y + 1) % m.y + m.y) % m.y + ly), k);
+         ivec2 mm = m - 1, b1 = (b + 1) & mm; b &= mm; // (powers of two)
+         vec4 c00 = texelFetch(pzGtArt, ivec2(b.x, b.y + ly), k);
+         vec4 c10 = texelFetch(pzGtArt, ivec2(b1.x, b.y + ly), k);
+         vec4 c01 = texelFetch(pzGtArt, ivec2(b.x, b1.y + ly), k);
+         vec4 c11 = texelFetch(pzGtArt, ivec2(b1.x, b1.y + ly), k);
          return mix(mix(c00, c10, t.x), mix(c01, c11, t.x), t.y);
       }
       vec4 gtLap(ivec2 px, vec2 wLocal, float layer) {

@@ -18,7 +18,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("run")
     ap.add_argument("--skip", type=float, default=0.0, help="fraction of each period to skip at its start")
-    ap.add_argument("--keep-first", action="store_false", dest="keep_first", help="keep each name's first period (default: dropped)")
+    ap.add_argument("--drop", type=int, default=1, help="periods left out at the start of each name (its program's compile)")
     a = ap.parse_args()
     run = Path(a.run)
     con = (run / "console.txt").read_text(errors="replace")
@@ -47,10 +47,10 @@ def main():
         halves.setdefault(name, []).append(int(f[2]) / 1000.0)
         periods.setdefault(name, {}).setdefault(k, []).append(int(f[2]) / 1000.0)
     # each name's first period may hold its program's compile (a new variant bakes stock until it is in): left out
-    first = {n: min(ks) for n, ks in periods.items()}
+    first = {n: sorted(ks)[:a.drop] for n, ks in periods.items()}
     offmed = {k: statistics.median(x) for k, x in periods.get("off", {}).items() if len(x) >= 20}
     for name in sorted(halves):
-        ks = sorted(k for k in periods[name] if k != first[name] or not a.keep_first)
+        ks = sorted(k for k in periods[name] if k not in first[name])
         v = [x for k in ks for x in periods[name][k]]
         if not v:
             continue
