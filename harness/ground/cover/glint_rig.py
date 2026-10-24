@@ -11,6 +11,9 @@ dimetric camera, on the desktop GPU through headless EGL (moderngl):
          on a 48 x 48-square frosty patch: energy of the drawn flakes against the smooth NDF's, flakes lit per square
   pcost  GPU time of the particle / compact passes alone (shader-dump programs) over SQUARES (5225) sun-lit squares,
          the data texture's upload timed apart (timer queries, median of 30)              -> printed
+  fused  the "fused into the chunk composite" placement, emulated: a full-screen composite-like pass (an RGBA8 chunk
+         picture + an R16 depth read, blended into RGBA8) without glints, with db23iso fused behind a per-pixel mask fetch
+         (mask 0 / 10 / 100 % of the screen), and the base + a separate masked pass over the same share  -> printed
   ppan   the particle pass's temporal stability, as pan (motion-compensated |I_t - I_t-1| / mean I), 512 x 512
   pan    temporal stability: the camera pans 0.37 px a frame, the light still;       -> printed
          flicker = mean |I_t - I_t-1| / mean I over 48 frames, per model and zoom
@@ -453,9 +456,105 @@ def mode_ppan():
         print("ppan %-10s particles flicker raw/blurred: %.3f/%.3f  (lit px %d, energy %.3g)" % (name, raw, bl, lit, frames[0].sum()))
 
 
+COMP = """
+#version 430
+%LIB%
+uniform sampler2D uPic;
+uniform sampler2D uDepth;
+uniform sampler2D uMask;
+uniform vec2 uRes;
+uniform float uZoom;
+uniform vec2 uOff;
+uniform vec3 uLight;
+uniform vec3 uParams;
+uniform int uFused;
+out vec4 fragColor;
+const vec3 V = vec3(0.61237244, 0.61237244, 0.5);
+void main() {
+   vec2 uv = gl_FragCoord.xy / uRes;
+   vec4 c = texture(uPic, uv);
+   float dz = texture(uDepth, uv).r;
+   c.rgb *= 0.5 + 0.5 * dz; // stands in for the composite's per-texture work
+   if (uFused == 1) {
+      float mk = texture(uMask, uv).r;
+      if (mk > 0.0) {
+         vec2 g = vec2(gl_FragCoord.x, uRes.y - gl_FragCoord.y) * uZoom + uOff;
+         vec3 L = normalize(uLight), H = normalize(L + V);
+         vec2 m = H.xy / H.z;
+         float D = pzgDb23Iso(g, uZoom, uParams.x, m, uParams.y, uParams.z, 7);
+         float c4 = H.z * H.z * H.z * H.z;
+         float F = 0.02 + 0.98 * pow(1.0 - dot(L, H), 5.0);
+         c.rgb += vec3(F * D / c4 / (4.0 * V.z)) * mk;
+      }
+   }
+   fragColor = c;
+}
+"""
+
+
+def mode_fused():
+    import moderngl
+    ctx = moderngl.create_standalone_context(backend="egl", require=430)
+    W, H = 5120, 2160
+    rng = np.random.default_rng(1)
+    pic = ctx.texture((W, H), 4, rng.integers(0, 255, (H, W, 4), dtype=np.uint8).tobytes())
+    dep = ctx.texture((W, H), 1, (rng.random((H, W)).astype("f2")).tobytes(), dtype="f2")
+    out = ctx.texture((W, H), 4)
+    fbo = ctx.framebuffer(color_attachments=[out])
+    comp = ctx.program(vertex_shader=VERT, fragment_shader=COMP.replace("%LIB%", glsl_lib()))
+    glint = ctx.program(vertex_shader=VERT, fragment_shader=FRAG.replace("%LIB%", glsl_lib()))
+    vbo = ctx.buffer(np.array([-1, -1, 3, -1, -1, 3], dtype="f4").tobytes())
+    vc = ctx.vertex_array(comp, [(vbo, "2f", "pos")])
+    vg = ctx.vertex_array(glint, [(vbo, "2f", "pos")])
+    sun = (-0.35, -0.55, 0.76)
+    for k, v in dict(uPic=0, uDepth=1, uMask=2, uRes=(float(W), float(H)), uZoom=1.0, uOff=(0.0, 0.0), uLight=sun,
+                     uParams=(DEFAULT["rho"], DEFAULT["a"], DEFAULT["b"])).items():
+        if k in comp:
+            comp[k].value = v
+    for k, v in dict(uRes=(float(W), float(H)), uZoom=1.0, uOff=(0.0, 0.0), uModel=1, uLightKind=0, uLight=sun,
+                     uParams=(DEFAULT["rho"], DEFAULT["a"], DEFAULT["b"]), uSalt=7).items():
+        if k in glint:
+            glint[k].value = v
+    pic.use(0); dep.use(1)
+    q = ctx.query(time=True)
+    fbo.use()
+
+    def timed(fn, reps=36):
+        ts = []
+        for i in range(reps):
+            with q:
+                fn()
+            if i >= 6:
+                ts.append(q.elapsed / 1000.0)
+        return np.median(ts)
+    ctx.enable(moderngl.BLEND)
+    ctx.blend_func = moderngl.ONE, moderngl.ONE
+    comp["uFused"].value = 0
+    base = timed(lambda: vc.render())
+    print("fused: composite stand-in alone          %7.1f us" % base)
+    for share in (0.0, 0.1, 1.0):
+        m = np.zeros((H, W), np.uint8)
+        m[: int(H * share), :] = 255
+        mask = ctx.texture((W, H), 1, m.tobytes())
+        mask.use(2)
+        comp["uFused"].value = 1
+        fu = timed(lambda: vc.render())
+        comp["uFused"].value = 0
+
+        def sep():
+            vc.render()
+            if share > 0.0:
+                ctx.scissor = (0, H - int(H * share), W, int(H * share))
+                vg.render()
+                ctx.scissor = None
+        sp = timed(sep)
+        print("fused: mask %3d %%: fused %7.1f us (+%6.1f)   separate pass %7.1f us (+%6.1f)" % (share * 100, fu, fu - base, sp, sp - base))
+        mask.release()
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("mode", choices=["img", "cost", "stats", "pan", "src", "flakes", "pcost", "ppan"])
+    ap.add_argument("mode", choices=["img", "cost", "stats", "pan", "src", "flakes", "pcost", "ppan", "fused"])
     ap.add_argument("--out", default=os.path.join(ROOT, "build", "glint-rig"))
     a = ap.parse_args()
     if a.mode == "src":
@@ -470,6 +569,8 @@ def main():
         mode_pcost()
     elif a.mode == "ppan":
         mode_ppan()
+    elif a.mode == "fused":
+        mode_fused()
     elif a.mode == "stats":
         mode_stats()
     else:

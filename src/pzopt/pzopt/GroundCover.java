@@ -138,7 +138,7 @@ public final class GroundCover {
 
    public static String stats() {
       return "ground cover: bakes=" + bakes + " skipped=" + bakesSkipped + " builds=" + builds + " build_us=" + (builds > 0 ? buildNs / 1000 / builds : 0) + " (hood " + (builds > 0 ? hoodNs / 1000 / builds : 0) + " corners " + (builds > 0 ? cornersNs / 1000 / builds : 0) + ") build_min_us=" + (builds > 0 ? buildMinNs / 1000 : 0) + " build_late_us=" + (buildLate > 0 ? buildLateNs / 1000 / buildLate : 0)
-            + " async=" + asyncBuilds + " sync=" + syncBuilds + " submit_us=" + (submits > 0 ? submitNs / 1000 / submits : 0) + " gathers=" + gathers + " land_rebakes=" + landRebakes + " stale_draws=" + staleDraws + " dropped=" + droppedBuilds
+            + " async=" + asyncBuilds + " sync=" + syncBuilds + " submit_us=" + (submits > 0 ? submitNs / 1000 / submits : 0) + " gathers=" + gathers + " gather_us=" + (gathers > 0 ? gatherNs / 1000 / gathers : 0) + " land_rebakes=" + landRebakes + " stale_draws=" + staleDraws + " dropped=" + droppedBuilds
             + " instances=" + instancesDrawn + " rebakes=" + rebakesIssued + " tracksWantFrames=" + tracksRebakes + " step=" + step + " frostStep=" + frostStep + " month=" + season.month
             + String.format(java.util.Locale.ROOT, " fall=%.2f flowers=%.2f frost=%.2f tmin=%.1f", season.leafFall, season.flowers, season.frost, season.tMin)
             + (failed ? " (failed)" : "");
@@ -485,6 +485,19 @@ public final class GroundCover {
          default:
             return M_DIRT; // dirt, sand, clay, dark dirt (snow: the game's)
       }
+      Integer cached = NAME_MAT.get(floor.sprite);
+      if (cached != null) {
+         return cached;
+      }
+      int m = nameMaterial(n);
+      NAME_MAT.put(floor.sprite, m);
+      return m;
+   }
+
+   /** Paved / built floors by sprite name, memoised per sprite (the gather runs on the game thread). */
+   private static final java.util.IdentityHashMap<Object, Integer> NAME_MAT = new java.util.IdentityHashMap<>();
+
+   private static int nameMaterial(String n) {
       if (n.startsWith("blends_street_01_") || n.startsWith("floors_exterior_street")) {
          int i = index(n);
          // blends_street_01: asphalt rows; floors_exterior_street: sidewalk / pavement
@@ -519,10 +532,21 @@ public final class GroundCover {
       int species; // 0 deciduous yellow, 1 red, 2 orange, 3 purple-red, 4 evergreen (needles)
    }
 
+   private static final java.util.HashMap<String, Integer> SPECIES = new java.util.HashMap<>();
+
    static int species(String name) {
       if (name == null) {
          return 0;
       }
+      Integer v = SPECIES.get(name);
+      if (v == null) {
+         v = species0(name);
+         SPECIES.put(name, v);
+      }
+      return v;
+   }
+
+   private static int species0(String name) {
       if (name.contains("pine") || name.contains("hemlock") || name.contains("holly")) {
          return 4;
       }
@@ -588,7 +612,10 @@ public final class GroundCover {
    public static long gathers;
 
    /** Game thread: chunk c's squares (64 lookups) and its zone. */
+   public static long gatherNs;
+
    static ChunkInfo gather(IsoChunk c) {
+      long g0 = System.nanoTime();
       ChunkInfo info = new ChunkInfo();
       info.wx = c.wx;
       info.wy = c.wy;
@@ -651,6 +678,7 @@ public final class GroundCover {
          }
       }
       gathers++;
+      gatherNs += System.nanoTime() - g0;
       return info;
    }
 
