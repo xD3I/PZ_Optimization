@@ -60,7 +60,7 @@ public final class GroundTracks {
    }
 
    public static String stats() {
-      return "ground tracks: " + (on() ? "on" : "off") + " frames=" + frames + " bakeDraws=" + bakeDraws + " grassObjects=" + GroundBake.overlayObjects
+      return "ground tracks: " + (on() ? "on" : "off") + " frames=" + frames + " bakeDraws=" + bakeDraws + " grassObjects=" + GroundBake.overlayObjects + " lightSteps=" + lightSteps
          + " game_us/frame=" + (frames == 0 ? 0 : gameNs / 1000L / frames) + (failed ? " (failed)" : "") + " | " + GroundState.stats();
    }
 
@@ -237,16 +237,15 @@ public final class GroundTracks {
       @Override
       public String declarations() {
          return String.join("\n",
+            "float gtgCrush(vec4 s) { return clamp(max(-s.x, 0.0) * 25.0 + s.y * 1.2, 0.0, 1.0); }",
             "vec4 gtgGrass(vec4 c) {",
             "#if PZG_PIECE == 3",
             "   if (c.a <= 0.0) return c;",
-            "   float cr = 0.0, fr = 0.0;",
-            "   const float W[3] = float[3](0.4, 0.35, 0.25);",
-            "   for (int i = 0; i < 3; i++) {",
-            "      vec4 s = pzgStateAt(pzgW.xy + vec2(1.22474 * 0.17 * float(i)));",
-            "      cr += W[i] * clamp(max(-s.x, 0.0) * 25.0 + s.y * 1.2, 0.0, 1.0);",
-            "      fr += W[i] * s.z;",
-            "   }",
+            "   vec4 s1 = pzgStateAt(pzgW.xy + vec2(1.22474 * 0.17));", // the footprint's middle first: untouched ground stops here
+            "   if (abs(s1.x) < 0.002 && s1.y < 0.01) return c;",
+            "   vec4 s0 = pzgStateAt(pzgW.xy), s2 = pzgStateAt(pzgW.xy + vec2(1.22474 * 0.34));",
+            "   float cr = 0.4 * gtgCrush(s0) + 0.35 * gtgCrush(s1) + 0.25 * gtgCrush(s2);",
+            "   float fr = 0.4 * s0.z + 0.35 * s1.z + 0.25 * s2.z;",
             "   if (cr < 0.01) return c;",
             "   vec3 rgb = c.rgb / c.a;",
             "   float l = dot(rgb, vec3(0.299, 0.587, 0.114));",
@@ -322,6 +321,9 @@ public final class GroundTracks {
       src.strengthPct = Config.GROUND_TRACKS_STRENGTH_PCT;
       wetness();
       puddleWet = wet;
+      if ((frames & 63L) == 7L && RULES.rebakes()) {
+         lightStep();
+      }
       if (PATCH.active() && (frames & 15L) == 1L) {
          // the patch's light, weather and sky (a fresh array: the render thread reads the last one whole)
          Bake lb = PATCH_LIGHT;
@@ -335,6 +337,44 @@ public final class GroundTracks {
       gameNs += System.nanoTime() - t0;
       if (Config.DEV_GROUND_TRACKS_LOG && frames % 600L == 0L) {
          Log.info(stats());
+      }
+   }
+
+   private static final Bake STEP_LIGHT = new Bake(); // (game thread scratch)
+   private static float stepX, stepY, stepZ = -9F, stepShare;
+   public static long lightSteps;
+
+   /**
+    * The relight is baked: when the key light has moved ~8 degrees or its share changed by 0.12 since the last step (the sun
+    * over ~half a game hour, dusk, the moon rising, clouds), the chunks holding tracks re-bake at low priority (the bake
+    * scheduler's optional budget), so their walls keep facing the light the floor around them was lit by.
+    */
+   private static void lightStep() {
+      Bake b = STEP_LIGHT;
+      light(b);
+      float dot = b.lx * stepX + b.ly * stepY + b.lz * stepZ;
+      if (stepZ > -9F && dot > 0.99F && Math.abs(b.share - stepShare) < 0.12F) {
+         return;
+      }
+      boolean first = stepZ <= -9F;
+      stepX = b.lx;
+      stepY = b.ly;
+      stepZ = b.lz;
+      stepShare = b.share;
+      if (first) {
+         return;
+      }
+      lightSteps++;
+      int wx0 = GroundState.windowX(), wy0 = GroundState.windowY();
+      if (wx0 == Integer.MIN_VALUE) {
+         return;
+      }
+      for (int cy = wy0; cy < wy0 + GroundState.SLOTS; cy++) {
+         for (int cx = wx0; cx < wx0 + GroundState.SLOTS; cx++) {
+            if (GroundState.isLive(cx, cy)) {
+               GroundBake.rebakeChunk(cx, cy, "tracks light step", true);
+            }
+         }
       }
    }
 
@@ -472,7 +512,7 @@ public final class GroundTracks {
       return cm == null ? 0.15F : 0.06F + 0.24F * clamp01(cm.getSnowFracNow());
    }
 
-   /** The key light now: the sun (pzopt.Sky; the moon at night carries no relief here) and its direct share of the floor's light. */
+   /** The key light now: the sun (pzopt.Sky), the moon at night by its phase, and its direct share of the floor's light. */
    private static void light(Bake b) {
       Sky.update(-1F);
       double[] sun = Sky.sun;
@@ -480,6 +520,11 @@ public final class GroundTracks {
       float day = cm == null ? 1F : clamp01(cm.getDayLightStrength());
       float cloud = cm == null ? 0F : clamp01(cm.getCloudIntensity());
       float share = sun[2] > 0.0 ? 0.7F * day * (1F - 0.75F * cloud) : 0F;
+      if (sun[2] <= 0.0 && Sky.moon[2] > 0.05) {
+         // night: the moon is the key light (its phase's brightness; a night's floor is mostly moonlight where nothing else lights it)
+         sun = Sky.moon;
+         share = 0.45F * (float)Sky.moonBrightness * (1F - 0.85F * cloud);
+      }
       b.lx = (float)sun[0];
       b.ly = (float)sun[1];
       b.lz = (float)Math.max(sun[2], 0.02);
