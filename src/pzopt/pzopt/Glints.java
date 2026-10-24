@@ -146,6 +146,9 @@ public final class Glints {
       final byte[] sun = new byte[64]; // 0..255: the square's sun visibility (frost's shade term)
       long builtMs = Long.MIN_VALUE;
       int level, ts;
+      int coverStamp, wetBucket; // what the mask was built from: the chunk level's ground cover (frost, sun), the wet ground
+      boolean snow;
+      String force = "";
       /** per masked square, its data block's frame-independent part (the frame adds its chunk depth, origin, light bits) */
       final float[] block = new float[64 * TEXELS * 4];
    }
@@ -158,7 +161,7 @@ public final class Glints {
 
    /** The masks ride on their chunk (GroundChunk slot: dropped when the game reuses the chunk). */
    static final int SLOT = GroundChunk.id("glint masks");
-   static final int REFRESH_MS = 400; // + a chunk stagger of up to 250 ms (milliseconds: at 800 fps 30 frames was 40 ms)
+   static final int REFRESH_MS = 400, SAFETY_MS = 5000; // + a chunk stagger of up to 250 ms (milliseconds: at 800 fps 30 frames was 40 ms)
 
    static ChunkMasks masks(IsoChunk c, long now) {
       ChunkMasks cm = (ChunkMasks)GroundChunk.get(c, SLOT);
@@ -182,12 +185,23 @@ public final class Glints {
          m = cm.levels[li] = new LevelMask();
          m.level = level;
       }
+      // rebuilt when what it reads changed (the cover's frost / sun, the wet ground's 5 % steps, the forcing, the tile
+      // scale), while snow lies (it drifts square by square) every REFRESH_MS, and every SAFETY_MS whatever (a floor
+      // placed or dug); the first version rebuilt every 400 ms: 15 rebuilds a frame at 60 fps at zoom 2.5 (gcv-final-smoke)
       int stagger = ((c.wx * 7 + c.wy * 13) & 31) * 8;
-      if (m.builtMs != Long.MIN_VALUE && now - m.builtMs < REFRESH_MS + stagger && m.ts == Core.tileScale) {
+      int stamp = GroundCover.coverStamp(c, level), wb = (int)(wetGround * 20F);
+      String force = Config.DEV_GLINT_FORCE;
+      long age = now - m.builtMs;
+      if (m.builtMs != Long.MIN_VALUE && age >= 0L && m.ts == Core.tileScale && m.coverStamp == stamp && m.wetBucket == wb
+            && m.force.equals(force) && m.snow == snowAny && !(snowAny && age > REFRESH_MS + stagger) && age < SAFETY_MS + stagger * 10L) {
          return m;
       }
       m.builtMs = now;
       m.ts = Core.tileScale;
+      m.coverStamp = stamp;
+      m.wetBucket = wb;
+      m.force = force;
+      m.snow = snowAny;
       maskRebuilds++;
       long t0 = System.nanoTime();
       build(c, level, m, wetGround, snowAny);

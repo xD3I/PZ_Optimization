@@ -928,6 +928,12 @@ public final class GroundCover {
       return lc == null ? 0F : (lc.frostSq[i] & 255) / 255F;
    }
 
+   /** What a chunk level's cover is (Glints rebuilds its masks when it changes): 0 = none built. */
+   public static int coverStamp(IsoChunk c, int level) {
+      LevelCover lc = built(c, level);
+      return lc == null ? 0 : System.identityHashCode(lc) * 31 + lc.key * 17 + lc.fkey * 7 + lc.skey;
+   }
+
    private static LevelCover built(IsoChunk c, int level) {
       if (level < -32 || level > 31) {
          return null;
