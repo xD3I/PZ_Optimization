@@ -2121,6 +2121,7 @@ public final class FBORenderCell {
       }
 
       pzopt.TileRecord.endFrame(); // pzopt: tileRecordAsync, a level the loop did not pass leaves nothing recording
+      pzopt.Glints.endFrame(); // pzopt: glints, the worker's glint list finished before the frame is handed over
       FBORenderShadows.getInstance().endRender();
       pzopt.Mirrors.afterLevels(); // pzopt: mirrors, mirrorsCompositeOnce: every level's panes in one composite
       pzopt.GpuSections.end("zloop"); // pzopt: GPU section

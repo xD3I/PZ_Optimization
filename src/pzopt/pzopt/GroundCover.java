@@ -934,7 +934,7 @@ public final class GroundCover {
       return lc == null ? 0 : System.identityHashCode(lc) * 31 + lc.key * 17 + lc.fkey * 7 + lc.skey;
    }
 
-   private static LevelCover built(IsoChunk c, int level) {
+   static LevelCover built(IsoChunk c, int level) { // Glints reads a chunk level's frost / sun once per mask build
       if (level < -32 || level > 31) {
          return null;
       }

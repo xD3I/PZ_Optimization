@@ -2436,6 +2436,12 @@ local ENHANCEMENT_SECTIONS = {
               why = {
                   gpu = "Measured on the desktop at 5K with every outdoor square frosty in full sun: particles ~0.012 ms of GPU a frame, compact ~0.019 ms, diamonds ~0.10 ms. Nothing at all without frost, snow or a wet road in a light.",
               } },
+            { key = "glintAsync", label = "Glints: worked out beside the game",
+              tip = "Which frosty, snowy or wet squares catch a light is worked out on a thread of its own while the game draws the rest of the frame, instead of on the game's main thread.",
+              why = {
+                  cpu = "Wet town road at night with two cars' lights and the street lamps, zoom 2.5, on the desktop: ~0.004 ms of the game thread a frame on, ~0.06-0.07 ms off.",
+                  cores = "The work moves to a thread of its own: ~0.06 ms a frame there in the same scene, nothing without frost, snow or a wet road in a light.",
+              } },
             { key = "glintPct", label = "Glints: brightness (%)",
               choices = { "50", "100", "150", "200" }, note = { ["100"] = "default" },
               tip = "How bright the glints are." },
@@ -3304,6 +3310,7 @@ local EFFECTS = {
     groundScatterDensityPct = {},
     glints = { gpu = 1 },
     glintPass = { gpu = 1 },
+    glintAsync = { cpu = -1, cores = 1 },
     glintPct = {},
     glintHdrPct = {},
     groundCoverFrost = {},

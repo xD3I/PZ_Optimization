@@ -74,7 +74,7 @@ public final class Glints {
 
    public static String stats() {
       return "glints: frames=" + frames + " queued=" + framesQueued + " instances=" + instances + " max=" + maxInstances + " maskRebuilds=" + maskRebuilds
-            + " draws=" + draws + " queue_us=" + (frames > 0 ? String.format(java.util.Locale.ROOT, "%.1f (masks %.1f, lights %.1f)", queueNs / 1000.0 / frames, maskNs / 1000.0 / frames, lightsNs / 1000.0 / frames) : "0") + (framesFull > 0 ? String.format(java.util.Locale.ROOT, " queue_us_cached=%.1f queue_us_qfull=%.1f", (queueNs - queueFullNs) / 1000.0 / Math.max(1, frames - framesFull), queueFullNs / 1000.0 / framesFull) : "") + " bulk=" + bulkCopies + " mask_us=" + (maskRebuilds > 0 ? String.format(java.util.Locale.ROOT, "%.2f", maskNs / 1000.0 / maskRebuilds) : "0") + " ring=" + Gpu.ringWrites + " hdr=" + hdrQueued + "/" + Gpu.hdrDraws + " lightFrames=" + lightFrames + " noMaskFrames=" + noMaskFrames + " sunFrames=" + sunFrames + " pointSquares=" + pointSquares + " sunSquares=" + sunSquares + " model=" + model() + " pass=" + PASS_NAMES[passMode()] + " lamps=" + lampsCell + "/" + lampN + "/" + lampsActive + (failed ? " (failed)" : "");
+            + " draws=" + draws + " queue_us=" + (frames > 0 ? String.format(java.util.Locale.ROOT, "%.1f (masks %.1f, lights %.1f, points %.1f)", queueNs / 1000.0 / frames, maskNs / 1000.0 / frames, lightsNs / 1000.0 / frames, pointNs / 1000.0 / frames) : "0") + (framesFull > 0 ? String.format(java.util.Locale.ROOT, " queue_us_cached=%.1f queue_us_qfull=%.1f", (queueNs - queueFullNs) / 1000.0 / Math.max(1, frames - framesFull), queueFullNs / 1000.0 / framesFull) : "") + " async=" + asyncJobs + "/" + syncJobs + " join_us=" + (asyncJobs > 0 ? String.format(java.util.Locale.ROOT, "%.2f", joinNs / 1000.0 / asyncJobs) : "0") + " join_waits=" + joinWaits + " join_max_us=" + joinMaxNs / 1000 + " soft_deferred=" + softDeferred + " levels=" + levelsWalked + " relit=" + levelsRelit + " dispatch_us=" + (asyncJobs > 0 ? String.format(java.util.Locale.ROOT, "%.2f", dispatchNs / 1000.0 / asyncJobs) : "0") + " worker_us=" + (asyncJobs > 0 ? String.format(java.util.Locale.ROOT, "%.1f", workerNs / 1000.0 / asyncJobs) : "0") + " render_waits=" + renderWaits + vstats() + " bulk=" + bulkCopies + " mask_us=" + (maskRebuilds > 0 ? String.format(java.util.Locale.ROOT, "%.2f", maskNs / 1000.0 / maskRebuilds) : "0") + " ring=" + Gpu.ringWrites + " hdr=" + hdrQueued + "/" + Gpu.hdrDraws + " lightFrames=" + lightFrames + " noMaskFrames=" + noMaskFrames + " sunFrames=" + sunFrames + " pointSquares=" + pointSquares + " sunSquares=" + sunSquares + " model=" + model() + " pass=" + PASS_NAMES[passMode()] + " lamps=" + lampsCell + "/" + lampN + "/" + lampsActive + (failed ? " (failed)" : "");
    }
 
    /** The model in force (devGlintCycle steps through them, then "off"). */
@@ -188,7 +188,10 @@ public final class Glints {
       return cm;
    }
 
-   static LevelMask mask(IsoChunk c, ChunkMasks cm, int level, long now, float wetGround, boolean snowAny) {
+   /** Mask rebuilds a frame for a mask that is only out of date (a 5 % wet step, the frost / sun moved): the rest next frame. */
+   static final int SOFT_BUDGET = 12;
+
+   static LevelMask mask(IsoChunk c, ChunkMasks cm, int level, long now, float wetGround, boolean snowAny, Job j) {
       int li = level + 32;
       if (li < 0 || li >= 64) {
          return null;
@@ -205,9 +208,19 @@ public final class Glints {
       int stamp = GroundCover.coverStamp(c, level), wb = (int)(wetGround * 20F);
       String force = Config.DEV_GLINT_FORCE;
       long age = now - m.builtMs;
-      if (m.builtMs != Long.MIN_VALUE && age >= 0L && m.ts == Core.tileScale && m.coverStamp == stamp && m.wetBucket == wb
-            && m.force.equals(force) && m.snow == snowAny && !(snowAny && age > REFRESH_MS + stagger) && age < SAFETY_MS + stagger * 10L) {
+      boolean hard = m.builtMs == Long.MIN_VALUE || age < 0L || m.ts != Core.tileScale || !m.force.equals(force);
+      if (!hard && m.coverStamp == stamp && m.wetBucket == wb && m.snow == snowAny && !(snowAny && age > REFRESH_MS + stagger)
+            && age < SAFETY_MS + stagger * 10L) {
          return m;
+      }
+      // a mask that is only out of date waits its turn (gcv-cost-wetnight6: a wet step rebuilt ~400 chunk levels in one
+      // frame, 4-5 ms on the worker, which the frame's end then waited for); new / rescaled / forced ones are built at once
+      if (!hard && !"qfull".equals(j.variant)) {
+         if (j.softLeft <= 0) {
+            softDeferred++;
+            return m;
+         }
+         j.softLeft--;
       }
       m.builtMs = now;
       m.ts = Core.tileScale;
@@ -230,6 +243,8 @@ public final class Glints {
       String force = Config.DEV_GLINT_FORCE;
       int forceKind = "frost".equals(force) ? K_FROST : "snow".equals(force) ? K_SNOW : "wet".equals(force) ? K_WET : -1;
       zombie.iso.fboRenderChunk.FBORenderSnow snow = snowAny ? zombie.iso.fboRenderChunk.FBORenderSnow.getInstance() : null;
+      GroundCover.LevelCover lc = GroundCover.built(c, level);
+      boolean frostOn = GroundCover.on();
       for (int i = 0; i < 64; i++) {
          IsoGridSquare sq = c.getGridSquare(i & 7, i >> 3, level);
          if (sq == null || sq.getFloor() == null || !sq.isOutside()) {
@@ -237,7 +252,7 @@ public final class Glints {
          }
          int kind = -1;
          float s = 0F;
-         float sunVis = GroundCover.squareSun(c, level, i);
+         float sunVis = lc == null ? 1F : (lc.sunSq[i] & 255) / 255F;
          if (forceKind >= 0) {
             kind = forceKind;
             s = 1F;
@@ -245,7 +260,7 @@ public final class Glints {
             kind = K_SNOW;
             s = 1F;
          } else {
-            float frost = GroundCover.on() ? GroundCover.squareFrost(c, level, i) : 0F;
+            float frost = frostOn && lc != null ? (lc.frostSq[i] & 255) / 255F : 0F;
             if (frost > 0.05F) {
                kind = K_FROST;
                s = frost;
@@ -285,6 +300,39 @@ public final class Glints {
       final float[] sun = new float[4]; // direction (x east, y south, z up), strength (0 = no key light)
       final float[] sunC = new float[4];
       final int[] key = new int[MAX_LIGHTS]; // each light's quantised position, reach and cone (unchanged = same squares)
+      // the snapped light the square tests use (a function of the key alone, so cached light bits always match it):
+      // x, y, z, reach, dir x, dir y, cone cos; and the slack that covers the snapping (reach, cone)
+      final float[] q = new float[MAX_LIGHTS * 8];
+      float slackR, slackPos;
+   }
+
+   /** Light-key steps: positions / reach in 1/QPOS of a square, directions in 1/QDIR (dev variant "q64": the first, finer keys). */
+   static void snapLights(Lights L, int ox, int oy, boolean fine) {
+      float qp = fine ? 64F : 4F, qd = fine ? 256F : 32F;
+      // what the snapping can move: a position half a step per axis, the reach half a step; fine keys kept the old slack
+      L.slackPos = fine ? 0F : 0.5F / qp * 1.4143F;
+      L.slackR = fine ? 0F : 0.5F / qp;
+      for (int i = 0; i < L.n; i++) {
+         int k = i * 4, o = i * 8;
+         int ix = Math.round((L.p[k] + ox) * qp), iy = Math.round((L.p[k + 1] + oy) * qp), iz = Math.round(L.p[k + 2] * qp), ir = Math.round(L.p[k + 3] * qp);
+         int idx = Math.round(L.d[k] * qd), idy = Math.round(L.d[k + 1] * qd), ic = Math.round(L.d[k + 2] * qd);
+         int h = ix;
+         h = h * 31 + iy;
+         h = h * 31 + iz;
+         h = h * 31 + ir;
+         h = h * 31 + idx;
+         h = h * 31 + idy;
+         L.key[i] = h * 31 + ic;
+         L.q[o] = ix / qp - ox;
+         L.q[o + 1] = iy / qp - oy;
+         L.q[o + 2] = iz / qp;
+         L.q[o + 3] = ir / qp;
+         float dx = idx / qd, dy = idy / qd, len = (float)Math.sqrt(dx * dx + dy * dy);
+         L.q[o + 4] = len > 1e-4F ? dx / len : 0F;
+         L.q[o + 5] = len > 1e-4F ? dy / len : 0F;
+         // the cone's cos, lowered by what the direction's snapping can turn it (each component half a step) plus its own step
+         L.q[o + 6] = L.d[k + 2] < -1.5F ? -2F : fine ? ic / qd : ic / qd - (len > 1e-4F ? 0.75F / qd / len : 2F) - 0.5F / qd;
+      }
    }
 
    private static long skyMs = Long.MIN_VALUE / 2, lampScanMs = Long.MIN_VALUE / 2;
@@ -322,8 +370,8 @@ public final class Glints {
       L.n++;
    }
 
-   static void gatherLights(Lights L, float ox, float oy, float cx, float cy, float view) {
-      L.n = 0;
+   /** The key light (sun / moon): the game thread (Sky.update writes what the sun shadows read too). */
+   static void gatherSun(Lights L) {
       L.sun[3] = 0F;
       if (Config.GLINT_SUN) {
          ClimateManager cm = ClimateManager.getInstance();
@@ -353,6 +401,14 @@ public final class Glints {
             L.sunC[2] = 1.0F;
          }
       }
+   }
+
+   /**
+    * The point lights (torches, headlights, lamps) and their keys: the worker under glintAsync. The torch list is rebuilt in
+    * the frame's logic (LightingThread.update) and the cell's lamp list when lamps come and go, never during the render.
+    */
+   static void gatherPoints(Lights L, float ox, float oy, float cx, float cy, float view) {
+      L.n = 0;
       if (!Config.GLINT_POINT) {
          return;
       }
@@ -457,9 +513,13 @@ public final class Glints {
    static final class Pass extends TextureDraw.GenericDrawer {
       Frame frame;
       boolean hdr;
+      int seq; // the worker's job (0 = built on the game thread)
 
       @Override
       public void render() {
+         if (!ready(seq)) {
+            return;
+         }
          Gpu.draw(this);
       }
    }
@@ -472,7 +532,7 @@ public final class Glints {
     * Game thread, FBORenderCell after the players / items and before the puddles: this frame's masked squares in a light's
     * reach, queued as one draw. Nothing queued when there are none.
     */
-   public static long queueNs, maskNs, lightsNs, hdrQueued, noMaskFrames, queueFullNs, framesFull, bulkCopies;
+   public static long queueNs, maskNs, lightsNs, pointNs, hdrQueued, noMaskFrames, queueFullNs, framesFull, bulkCopies;
    private static Frame queuedFrame;
    private static int queuedFrameNo = -1;
 
@@ -484,6 +544,7 @@ public final class Glints {
       if (!on() || Config.GLINT_HDR_PCT <= 0 || !Hdr.active || Hdr.alphaGain || Hdr.tune.glint <= 0F) {
          return;
       }
+      join(); // the worker's list finished (long since: the water drew in between)
       Frame f = queuedFrame;
       if (f == null || f.n == 0 || queuedFrameNo != IsoWorld.instance.getFrameNo() || Config.DEV_GLINT_VIEW != 0) {
          return;
@@ -494,6 +555,7 @@ public final class Glints {
       }
       p.frame = f;
       p.hdr = true;
+      p.seq = 0;
       hdrQueued++;
       String sec = Ground.section("ground.glints.hdr");
       GpuSections.begin(sec);
@@ -503,25 +565,167 @@ public final class Glints {
 
    public static void queue(int playerIndex, java.util.List<IsoChunk> chunks) {
       WindLeaves.queue(playerIndex); // the ground cover's wind-blown leaves draw at this spot too
+      join(); // a job still out (split screen: the other player's; a frame whose end hook did not run)
       if (!on() || chunks == null) {
          return;
       }
       long t0 = System.nanoTime();
+      String variant = Ground.variant();
       try {
-         build(playerIndex, chunks);
-         long dt = System.nanoTime() - t0;
-         queueNs += dt;
-         if ("qfull".equals(Ground.variant())) { // dev: the per-square caches' A/B, game-thread side
-            queueFullNs += dt;
-            framesFull++;
-         }
+         build(playerIndex, chunks, variant);
       } catch (RuntimeException e) {
          failed = true;
          Log.warn("glints: frame build failed, glints off: " + e);
       }
+      long dt = System.nanoTime() - t0;
+      queueNs += dt;
+      vstat(variant)[0] += dt;
+      vstat(variant)[1]++;
+      if ("qfull".equals(variant)) { // dev: the per-square caches' A/B, game-thread side
+         queueFullNs += dt;
+         framesFull++;
+      }
    }
 
-   private static void build(int playerIndex, java.util.List<IsoChunk> chunks) {
+   /** Game thread, FBORenderCell at the end of the level loop: the frame's glint list finished before the frame is handed over. */
+   public static void endFrame() {
+      join();
+   }
+
+   // ------------------------------------------------------------------------------------------------ the worker (glintAsync)
+
+   /** One frame's build: what the chunk walk reads, snapshotted on the game thread. */
+   static final class Job {
+      int playerIndex, camCX, camCY, ox, oy, seq;
+      float wet, camZ, cx, cy, view;
+      boolean snowAny;
+      long now;
+      String variant;
+      Frame f;
+      java.util.List<IsoChunk> list; // the synchronous build walks the game's list
+      IsoChunk[] chunks = new IsoChunk[512]; // the worker walks a copy
+      int nChunks;
+      long workNs;
+      int softLeft; // soft mask rebuilds left this frame
+   }
+
+   private static final Job SYNC_JOB = new Job(), ASYNC_JOB = new Job();
+   private static Thread worker;
+   private static volatile Job job; // the job the worker is to run
+   private static volatile int doneSeq; // the last job the worker finished
+   private static volatile Throwable workerFailure;
+   private static int startedSeq;
+   private static Job pending; // game thread: dispatched, not joined
+   private static boolean asyncFailed;
+   public static long levelsWalked, levelsRelit, softDeferred, joinMaxNs, dispatchNs, asyncJobs, joinNs, joinWaits, workerNs, renderWaits, syncJobs;
+   private static final java.util.HashMap<String, long[]> VSTAT = new java.util.HashMap<>(); // per dev variant: game-thread ns, frames, worker ns, jobs
+
+   /** Per dev variant: game-thread us a build (queue + join), worker us a job. */
+   static String vstats() {
+      StringBuilder sb = new StringBuilder();
+      for (java.util.Map.Entry<String, long[]> e : VSTAT.entrySet()) {
+         long[] v = e.getValue();
+         sb.append(String.format(java.util.Locale.ROOT, " gt_%s=%.1f wk_%s=%.1f", e.getKey(), v[1] > 0 ? v[0] / 1000.0 / v[1] : 0.0, e.getKey(), v[3] > 0 ? v[2] / 1000.0 / v[3] : 0.0));
+      }
+      return sb.toString();
+   }
+
+   static long[] vstat(String variant) {
+      return VSTAT.computeIfAbsent(variant == null ? "-" : variant, k -> new long[4]);
+   }
+
+   private static boolean asyncUsable(String variant) {
+      return Config.GLINT_ASYNC && !asyncFailed && !"qsync".equals(variant) && Config.DEV_GLINT_VIEW != 1;
+   }
+
+   private static void dispatch(Job j) {
+      if (worker == null) {
+         worker = new Thread(Glints::loop, "pzopt-glints");
+         worker.setDaemon(true);
+         worker.start();
+      }
+      j.seq = ++startedSeq;
+      if (j.seq == 0) {
+         j.seq = ++startedSeq; // 0 marks a synchronous frame
+      }
+      asyncJobs++;
+      pending = j;
+      job = j;
+      java.util.concurrent.locks.LockSupport.unpark(worker);
+   }
+
+   private static void loop() {
+      while (true) {
+         Job j = job;
+         if (j == null) {
+            java.util.concurrent.locks.LockSupport.park();
+            continue;
+         }
+         CorePlacement.frameCritical(); // macOS: workerQosMac
+         long t0 = System.nanoTime();
+         try {
+            fill(j);
+         } catch (Throwable t) {
+            workerFailure = t;
+            j.f.n = 0;
+         }
+         j.workNs = System.nanoTime() - t0;
+         job = null;
+         doneSeq = j.seq;
+      }
+   }
+
+   /** Game thread: the dispatched job finished (waits for it if needed) and its frame's counters landed. */
+   static void join() {
+      Job j = pending;
+      if (j == null) {
+         return;
+      }
+      pending = null;
+      long t0 = System.nanoTime();
+      if (doneSeq != j.seq) {
+         joinWaits++;
+         int spins = 0;
+         while (doneSeq != j.seq) {
+            if (++spins < 200) {
+               Thread.onSpinWait();
+            } else {
+               ShortWait.pause(20_000L);
+               if (System.nanoTime() - t0 > 200_000_000L) {
+                  asyncFailed = true; // the worker is lost: the game thread builds from now on (its own job object)
+                  Log.warn("glints: the worker did not finish a frame in 200 ms, the game thread builds the glints from now on");
+                  j.f.n = 0;
+                  break;
+               }
+            }
+         }
+      }
+      long dt = System.nanoTime() - t0;
+      joinNs += dt;
+      joinMaxNs = Math.max(joinMaxNs, dt);
+      long[] v = vstat(j.variant);
+      v[0] += dt;
+      v[2] += j.workNs;
+      v[3]++;
+      workerNs += j.workNs;
+      Throwable t = workerFailure;
+      if (t != null) {
+         workerFailure = null;
+         asyncFailed = true;
+         Log.warn("glints: the worker's build failed, the game thread builds the glints from now on: " + t);
+      }
+      land(j.f);
+   }
+
+   private static void land(Frame f) {
+      instances += f.n;
+      maxInstances = Math.max(maxInstances, f.n);
+      if (f.n > 0) {
+         framesQueued++;
+      }
+   }
+
+   private static void build(int playerIndex, java.util.List<IsoChunk> chunks, String variant) {
       frames++;
       int frameNo = IsoWorld.instance.getFrameNo();
       int model = model();
@@ -550,43 +754,150 @@ public final class Glints {
       Frame f = FRAMES[frameIndex++ & 3];
       Lights L = f.lights;
       long tl = System.nanoTime();
-      gatherLights(L, ox, oy, cx, cy, view);
-      for (int i = 0; i < L.n; i++) { // quantised to 1/64 square, absolute (the origin moves)
-         int k = i * 4;
-         int h = Math.round((L.p[k] + ox) * 64F);
-         h = h * 31 + Math.round((L.p[k + 1] + oy) * 64F);
-         h = h * 31 + Math.round(L.p[k + 2] * 64F);
-         h = h * 31 + Math.round(L.p[k + 3] * 64F);
-         h = h * 31 + Math.round(L.d[k] * 256F);
-         h = h * 31 + Math.round(L.d[k + 1] * 256F);
-         L.key[i] = h * 31 + Math.round(L.d[k + 2] * 256F);
-      }
+      gatherSun(L);
+      L.n = 0;
       lightsNs += System.nanoTime() - tl;
+      if (L.sun[3] > 0F) {
+         sunFrames++;
+      }
+      // no key light and no point light anywhere (no torch, no lamp in the cell): no glint anywhere
+      if (L.sun[3] <= 0F && Config.DEV_GLINT_VIEW != 1 && (!Config.GLINT_POINT
+            || LightingJNI.pzoptTorches().isEmpty() && IsoWorld.instance.currentCell.getLamppostPositions().isEmpty())) {
+         return;
+      }
+      boolean async = asyncUsable(variant);
+      Job j = async ? ASYNC_JOB : SYNC_JOB;
+      j.playerIndex = playerIndex;
+      j.camCX = zombie.core.math.PZMath.fastfloor(cx / 8F);
+      j.camCY = zombie.core.math.PZMath.fastfloor(cy / 8F);
+      j.camZ = camZ;
+      j.ox = ox;
+      j.oy = oy;
+      j.wet = wet;
+      j.snowAny = snowAny;
+      j.now = System.currentTimeMillis();
+      j.variant = variant;
+      j.cx = cx;
+      j.cy = cy;
+      j.view = view;
+      j.f = f;
+      f.n = 0;
+      f.model = model;
+      f.pass = passMode;
+      f.zoom = zoom;
+      f.ts = ts;
+      f.jx = camera.fixJigglyModelsX * zoom;
+      f.jy = camera.fixJigglyModelsY * zoom;
+      f.stamp = ++stampCounter;
+      f.ox = ox;
+      f.oy = oy;
+      if (!async) {
+         j.list = chunks;
+         syncJobs++;
+         fill(j);
+         land(f);
+         if (f.n > 0) {
+            queuePass(f, 0, frameNo, model, passMode);
+         }
+         return;
+      }
+      int n = Math.min(chunks.size(), 4096);
+      if (j.chunks.length < n) {
+         j.chunks = new IsoChunk[Math.max(n, j.chunks.length * 2)];
+      }
+      for (int i = 0; i < n; i++) {
+         j.chunks[i] = chunks.get(i);
+      }
+      for (int i = n; i < j.nChunks; i++) {
+         j.chunks[i] = null;
+      }
+      j.nChunks = n;
+      j.list = null;
+      // the draw goes in the list now (its spot under the puddles); its data is the worker's, finished by the frame's end
+      long td = System.nanoTime();
+      dispatch(j);
+      dispatchNs += System.nanoTime() - td;
+      queuePass(f, j.seq, frameNo, model, passMode);
+   }
+
+   private static void queuePass(Frame f, int seq, int frameNo, int model, int passMode) {
+      Pass p = PASSES[passIndex++ & 7];
+      if (p == null) {
+         p = PASSES[(passIndex - 1) & 7] = new Pass();
+      }
+      p.frame = f;
+      p.hdr = false;
+      p.seq = seq;
+      queuedFrame = f;
+      queuedFrameNo = frameNo;
+      String sec = section(model, passMode);
+      GpuSections.begin(sec);
+      SpriteRenderer.instance.drawGeneric(p);
+      GpuSections.end(sec);
+   }
+
+   /** Render thread: the worker's frame finished (the game thread joins it before the hand-over: this only guards). */
+   static boolean ready(int seq) {
+      if (seq == 0 || doneSeq - seq >= 0) {
+         return true;
+      }
+      renderWaits++;
+      long t0 = System.nanoTime();
+      while (doneSeq - seq < 0) {
+         if (System.nanoTime() - t0 > 50_000_000L) {
+            return false;
+         }
+         Thread.onSpinWait();
+      }
+      return true;
+   }
+
+   /** The square's vertex light as lit (pixelLight's white during a bake left out: the worker may read it mid-bake). */
+   static int vertLight(IsoGridSquare sq, int corner, int playerIndex) {
+      IsoGridSquare.ILighting l = sq.lighting[playerIndex];
+      if (l instanceof zombie.iso.LightingJNI.JNILighting jl) {
+         return jl.pzoptVert(corner);
+      }
+      return l == null ? 0 : l.lightverts(corner);
+   }
+
+   /** The chunk walk: the masked squares in a light's reach into the job's frame (the worker, or the game thread). */
+   private static void fill(Job j) {
+      Frame f = j.f;
+      Lights L = f.lights;
+      int playerIndex = j.playerIndex, camCX = j.camCX, camCY = j.camCY, ox = j.ox, oy = j.oy;
+      float camZ = j.camZ, wet = j.wet;
+      boolean snowAny = j.snowAny;
+      long now = j.now;
+      String variant = j.variant; // dev cycle "qfull": light bits and square light worked out every frame (the cache's A/B)
+      java.util.List<IsoChunk> list = j.list;
+      int nc = list != null ? list.size() : j.nChunks;
+      f.n = 0;
+      j.softLeft = SOFT_BUDGET;
+      long tl = System.nanoTime();
+      gatherPoints(L, ox, oy, j.cx, j.cy, j.view);
+      snapLights(L, ox, oy, "q64".equals(variant));
+      pointNs += System.nanoTime() - tl;
       if (L.n > 0) {
          lightFrames++;
       }
       if (Config.DEV_GLINT_VIEW == 1 && frames == 600) { // dev: the lights of one frame (gating checks)
-         StringBuilder sb = new StringBuilder("glints: lights at frame 600, camera " + cx + "," + cy + " origin " + ox + "," + oy + ":");
+         StringBuilder sb = new StringBuilder("glints: lights at frame 600, camera " + j.cx + "," + j.cy + " origin " + ox + "," + oy + ":");
          for (int i = 0; i < L.n; i++) {
             sb.append(String.format(java.util.Locale.ROOT, " [%d] p=%.1f,%.1f,%.2f r=%.1f cone=%.2f s=%.2f c=%.2f,%.2f,%.2f w=%.0f", i, L.p[i * 4] + ox, L.p[i * 4 + 1] + oy,
                   L.p[i * 4 + 2], L.p[i * 4 + 3], L.d[i * 4 + 2], L.d[i * 4 + 3], L.c[i * 4], L.c[i * 4 + 1], L.c[i * 4 + 2], L.c[i * 4 + 3]));
          }
          Log.info(sb.append(" sun=").append(L.sun[3]).toString());
       }
-      if (L.sun[3] > 0F) {
-         sunFrames++;
-      }
       if (L.n == 0 && L.sun[3] <= 0F && Config.DEV_GLINT_VIEW != 1) {
-         return; // no light: no glint anywhere
+         return; // no light reaches the view: no glint anywhere
       }
-      int camCX = zombie.core.math.PZMath.fastfloor(cx / 8F), camCY = zombie.core.math.PZMath.fastfloor(cy / 8F);
-      float K = BloodDecals.K;
-      f.n = 0;
       float[] d = f.data;
-      long now = System.currentTimeMillis();
-      String variant = Ground.variant(); // dev cycle "qfull": light bits and square light worked out every frame (the cache's A/B)
-      for (int ci = 0; ci < chunks.size() && f.n < MAX; ci++) {
-         IsoChunk c = chunks.get(ci);
+      for (int ci = 0; ci < nc && f.n < MAX; ci++) {
+         IsoChunk c = list != null ? list.get(ci) : j.chunks[ci];
+         if (c == null) {
+            continue;
+         }
          zombie.iso.fboRenderChunk.FBORenderLevels levels = c.getRenderLevels(playerIndex);
          ChunkMasks cms = null;
          for (int level = c.minLevel; level <= c.maxLevel && f.n < MAX; level++) {
@@ -596,7 +907,7 @@ public final class Glints {
             if (cms == null) {
                cms = masks(c, now);
             }
-            LevelMask m = mask(c, cms, level, now, wet, snowAny);
+            LevelMask m = mask(c, cms, level, now, wet, snowAny, j);
             if (m == null || m.bits == 0L) {
                continue;
             }
@@ -610,11 +921,11 @@ public final class Glints {
             int cb = 0, full = 0;
             float bx0 = c.wx * 8 - ox, by0 = c.wy * 8 - oy, pz = level * METRIC_Z;
             for (int li = 0; li < L.n; li++) {
-               int k = li * 4;
-               float qx = Math.max(bx0, Math.min(bx0 + 8F, L.p[k])) - L.p[k], qy = Math.max(by0, Math.min(by0 + 8F, L.p[k + 1])) - L.p[k + 1];
-               float r = L.p[k + 3] + 0.75F;
+               int k = li * 8; // the snapped light (Lights.q): what the cached bits were worked out from
+               float qx = Math.max(bx0, Math.min(bx0 + 8F, L.q[k])) - L.q[k], qy = Math.max(by0, Math.min(by0 + 8F, L.q[k + 1])) - L.q[k + 1];
+               float r = L.q[k + 3] + 0.75F + L.slackR + L.slackPos;
                // a light lights its own level and the levels under it within its reach (a street lamp's light sits a level up)
-               if (qx * qx + qy * qy <= r * r && L.p[k + 2] >= pz - METRIC_Z * 0.5F && L.p[k + 2] - pz <= METRIC_Z * 2.5F) {
+               if (qx * qx + qy * qy <= r * r && L.q[k + 2] >= pz - METRIC_Z * 0.5F && L.q[k + 2] - pz <= METRIC_Z * 2.5F) {
                   cb |= 1 << li;
                   if (!"qfull".equals(variant) && coversChunk(L, k, bx0, by0)) {
                      full |= 1 << li; // every square of the chunk level: no per-square test for this light
@@ -636,6 +947,10 @@ public final class Glints {
                lk = lk * 31 + li * 1000003 + L.key[li];
             }
             boolean lightsSame = !"qfull".equals(variant) && m.lightKeyOk && m.lightKey == lk;
+            levelsWalked++;
+            if (!lightsSame) {
+               levelsRelit++;
+            }
             int lstag = ((c.wx * 5 + c.wy * 11) & 15) * 6;
             boolean lumFresh = true;
             if (m.lumPlayer != playerIndex || now - m.lumMs > LUM_MS + lstag || now < m.lumMs || "qfull".equals(variant)) {
@@ -701,7 +1016,7 @@ public final class Glints {
                      float lum = 1F;
                      IsoGridSquare sq = c.getGridSquare(s & 7, s >> 3, level);
                      if (sq != null) {
-                        int l0 = sq.getVertLight(0, playerIndex), l2 = sq.getVertLight(2, playerIndex);
+                        int l0 = vertLight(sq, 0, playerIndex), l2 = vertLight(sq, 2, playerIndex);
                         lum = Math.min(1F, 0.5F * (luma(l0) + luma(l2)) * 2.5F);
                      }
                      lum255 = Math.round(lum * 255F);
@@ -734,33 +1049,6 @@ public final class Glints {
             }
          }
       }
-      instances += f.n;
-      maxInstances = Math.max(maxInstances, f.n);
-      if (f.n == 0) {
-         return;
-      }
-      framesQueued++;
-      f.model = model;
-      f.pass = passMode;
-      f.zoom = zoom;
-      f.ts = ts;
-      f.jx = camera.fixJigglyModelsX * zoom;
-      f.jy = camera.fixJigglyModelsY * zoom;
-      f.stamp = ++stampCounter;
-      f.ox = ox;
-      f.oy = oy;
-      Pass p = PASSES[passIndex++ & 7];
-      if (p == null) {
-         p = PASSES[(passIndex - 1) & 7] = new Pass();
-      }
-      p.frame = f;
-      p.hdr = false;
-      queuedFrame = f;
-      queuedFrameNo = frameNo;
-      String sec = section(model, passMode);
-      GpuSections.begin(sec);
-      SpriteRenderer.instance.drawGeneric(p);
-      GpuSections.end(sec);
    }
 
    /**
@@ -768,20 +1056,21 @@ public final class Glints {
     * half plane (convex), inside it; every square centre then passes squareLights' test.
     */
    static boolean coversChunk(Lights L, int k, float bx0, float by0) {
-      float r = L.p[k + 3];
-      boolean cone = L.d[k + 2] > -1.5F;
-      if (cone && L.d[k + 2] <= 0F) {
+      float r = L.q[k + 3];
+      float c = L.q[k + 6];
+      boolean cone = c > -1.5F;
+      if (cone && c <= 0F) {
          return false;
       }
       for (int i = 0; i < 4; i++) {
-         float dx = bx0 + ((i & 1) != 0 ? 8F : 0F) - L.p[k], dy = by0 + ((i & 2) != 0 ? 8F : 0F) - L.p[k + 1];
+         float dx = bx0 + ((i & 1) != 0 ? 8F : 0F) - L.q[k], dy = by0 + ((i & 2) != 0 ? 8F : 0F) - L.q[k + 1];
          float d2 = dx * dx + dy * dy;
          if (d2 > r * r) {
             return false;
          }
          if (cone) {
             float len = (float)Math.sqrt(d2);
-            if (len > 1e-4F && (dx * L.d[k] + dy * L.d[k + 1]) / len < L.d[k + 2]) {
+            if (len > 1e-4F && (dx * L.q[k + 4] + dy * L.q[k + 5]) / len < c) {
                return false;
             }
          }
@@ -789,20 +1078,27 @@ public final class Glints {
       return true;
    }
 
-   /** Which of the chunk level's lights (cb) reach a square's centre (px, py, frame-origin squares): reach + half a diagonal. */
+   /**
+    * Which of the chunk level's lights (cb) reach a square's centre (px, py, frame-origin squares): the snapped light's reach +
+    * half a diagonal + the snapping's slack; a cone with a square's half-width of slack (+ the snapped position's).
+    */
    static int squareLights(Lights L, int cb, float px, float py) {
       int lb = 0;
+      float sp = L.slackPos, sr = L.slackR;
       for (int rest = cb; rest != 0; rest &= rest - 1) {
          int li = Integer.numberOfTrailingZeros(rest);
-         int k = li * 4;
-         float dx = px - L.p[k], dy = py - L.p[k + 1];
-         float r = L.p[k + 3] + 0.75F;
-         if (dx * dx + dy * dy > r * r) {
+         int k = li * 8;
+         float dx = px - L.q[k], dy = py - L.q[k + 1];
+         float r = L.q[k + 3] + 0.75F + sr + sp;
+         float d2 = dx * dx + dy * dy;
+         if (d2 > r * r) {
             continue;
          }
-         if (L.d[k + 2] > -1.5F) { // a cone: the square's centre inside it (a square's half-width of slack)
-            float len = (float)Math.sqrt(dx * dx + dy * dy);
-            if (len > 0.75F && (dx * L.d[k] + dy * L.d[k + 1]) / len < L.d[k + 2] - 0.75F / len) {
+         float c = L.q[k + 6];
+         if (c > -1.5F) { // a cone: the square's centre inside it (a square's half-width of slack)
+            float len = (float)Math.sqrt(d2);
+            float slack = 0.75F + sp;
+            if (len > slack && (dx * L.q[k + 4] + dy * L.q[k + 5]) / len < c - slack / len) {
                continue;
             }
          }
