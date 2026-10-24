@@ -615,7 +615,7 @@ public final class Glints {
          "   if (light == -2) return false;",
          "   if (uView.z == 1.0) { // dev: one dot a square and light, where the flakes would be (positions, depth, gating)",
          "      if (cell != 0 || fi != 0) return false;",
-         "      energy = light == -1 ? vec3(1.0, 0.8, 0.0) : vec3(0.0, 0.6, 1.0);",
+         "      energy = light == -1 ? vec3(4.0, 3.2, 0.0) : vec3(0.0, 2.4, 4.0);",
          "      vec2 o = vec2(0.5);",
          "      vec2 scr = a.xy + vec2((o.x - o.y) * 32.0 * uTs, (o.x + o.y) * 16.0 * uTs);",
          "      clip = uMVP * vec4(scr + uJ.xy, 0.0, 1.0);",
@@ -1046,8 +1046,8 @@ public final class Glints {
    static void kindParams(FloatBuffer out) {
       float rho = Config.GLINT_FLAKES / 1024F;
       float rough = Config.GLINT_ROUGH_PCT / 100F, tw = Config.GLINT_TWINKLE_PCT / 100F;
-      out.put(rho).put(0.9F * rough).put(0.04F * tw).put(0.018F);
-      out.put(rho * 1.6F).put(0.75F * rough).put(0.035F * tw).put(0.018F);
+      out.put(rho).put(1.6F * rough).put(0.04F * tw).put(0.018F);
+      out.put(rho * 1.6F).put(1.3F * rough).put(0.035F * tw).put(0.018F);
       out.put(rho * 0.6F).put(0.22F * rough).put(0.025F * tw).put(0.02F);
    }
 }

@@ -265,7 +265,7 @@ def mode_flakes():
         lc = np.zeros((8, 4), "f4"); lc[0] = (1, 1, 1, 0)
         put("uLp", lp.tobytes(), True); put("uLd", ld.tobytes(), True); put("uLc", lc.tobytes(), True)
         put("uSun", (0.0, 0.0, 1.0, 0.0))
-        kinds = np.array([[rho, a, b, 0.018], [rho * 1.6, 0.55, 0.03, 0.018], [rho * 0.6, 0.22, 0.025, 0.02]], "f4")
+        kinds = np.array([[rho, float(os.environ.get("ROUGH", "1.6")), 0.04, 0.018], [rho * 1.6, 0.55, 0.03, 0.018], [rho * 0.6, 0.22, 0.025, 0.02]], "f4")
         put("uKind", kinds.tobytes(), True)
         put("uView", (0.5, 1.0, 0.0, 4096.0))
         flakes.bind_to_storage_buffer(0)
