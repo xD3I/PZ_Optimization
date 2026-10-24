@@ -151,7 +151,8 @@ public final class Showcase {
    private static float pierX, pierY;
    private static String gunType, ambulanceType, hordeDir;
    private static HandWeapon gun;
-   private static InventoryItem angleLight;
+   static InventoryItem angleLight; // webbing=true or HordeTactics.angleLight (angle_light); kept lit and attached each tick
+   static String angleLightSlot = "Webbing Left Walkie";
    private static BaseVehicle ambulance;
    private static int siren = 1;
    private static final ArrayList<IsoZombie> zombies = new ArrayList<>();
@@ -473,7 +474,8 @@ public final class Showcase {
       String magType = gun.getMagazineType();
       int filled = 0;
       // webbing=false (the default with tactics=kite, a daylight fight): no webbing belt and no angle-head light; their
-      // 3.5 of weight carry seven more magazines
+      // 3.5 of weight carry seven more magazines. The light alone comes with tactics=kite through angle_light (default true,
+      // HordeTactics.angleLight, after buffs' chest rig, which takes the webbing body location the belt would)
       boolean webbing = "true".equalsIgnoreCase(HarnessFlags.get("webbing", Boolean.toString(!HordeTactics.on)).trim());
       InventoryItem belt = webbing ? p.getInventory().AddItem("Base.Bag_ALICE_BeltSus_Green") : null; // provides the webbing slots
       if (belt != null && belt.canBeEquipped() != null) {
@@ -482,7 +484,8 @@ public final class Showcase {
       angleLight = webbing ? p.getInventory().AddItem("Base.FlashLight_AngleHead") : null;
       if (angleLight != null) {
          angleLight.setActivated(true);
-         p.setAttachedItem("Webbing Left Walkie", angleLight);
+         angleLightSlot = "Webbing Left Walkie";
+         p.setAttachedItem(angleLightSlot, angleLight);
       }
       // tactics=kite: the rifle's parts (rifle_parts, Base.Laser;Base.RedDot; the maintainer, 2026-10-22: "the best attachments
       // for range and accuracy"). Of the M16's mounts (media/scripts weaponpart.txt) the Laser gives +5 hit chance and -10
@@ -551,6 +554,7 @@ public final class Showcase {
       if (HordeTactics.on) HordeTactics.boots(p);
       if (HordeTactics.on) HordeTactics.desensitize(p);
       if (HordeTactics.on) HordeTactics.buffs(p);
+      if (HordeTactics.on) HordeTactics.angleLight(p); // angle_light (default true): the angle head flashlight on the chest, lit
       if (HordeTactics.on && "true".equalsIgnoreCase(HarnessFlags.get("pack", "true").trim())) {
          InventoryItem pack = p.getInventory().AddItem("Base.Bag_ALICEpack");
          if (pack instanceof zombie.inventory.types.InventoryContainer bag && pack.canBeEquipped() != null) {
@@ -982,8 +986,8 @@ public final class Showcase {
       }
       if (angleLight != null) {
          if (!angleLight.isActivated()) angleLight.setActivated(true);
-         if (p.getAttachedItem("Webbing Left Walkie") != angleLight) {
-            p.setAttachedItem("Webbing Left Walkie", angleLight);
+         if (p.getAttachedItem(angleLightSlot) != angleLight) {
+            p.setAttachedItem(angleLightSlot, angleLight);
             reattached++;
          }
       }

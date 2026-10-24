@@ -72,7 +72,7 @@ public final class BenchSuite {
             "game thread, render thread, ragdolls", 6445, 5195, 0, "normal", 70 + 6,
             "mode", "bench", "showcase", "horde", "tactics", "kite", "start", "6445,5195", "pier", "6436,5186", "arena", "6450,5198,22",
             "horde_dir", "SE", "horde_gap", "12",
-            "burn", "false", "fire_line", "false", "ambulance", "Base.VanAmbulance", "siren", "1", "horde", "150", "mags", "20", "horde_when", "ready",
+            "burn", "false", "fire_line", "false", "angle_light", "true", "ambulance", "Base.VanAmbulance", "siren", "1", "horde", "150", "mags", "20", "horde_when", "ready",
             "sidearm", "Base.Revolver_Long", "sidearm_rounds", "24",
             // the tuned fight of h80-p39 (the M16's draw of the .44 is off: a magazine swap is faster)
             "body_shot_ms", "300", "crowd_zombies", "20", "sidearm_draw", "false", "kite_tiles", "3", "shoot_tiles", "5.5",
