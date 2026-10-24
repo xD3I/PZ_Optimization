@@ -456,6 +456,8 @@ public final class GroundState {
          java.util.Arrays.fill(slotListed, false);
          nPending = 0;
          java.util.Arrays.fill(slotBaked, false);
+         java.util.Arrays.fill(slotFresh, 0L);
+         java.util.Arrays.fill(slotMirrored, false);
          java.util.Arrays.fill(slotFromLoad, false);
          java.util.Arrays.fill(slotMat, null);
          java.util.Arrays.fill(PEEK_KEY, NONE);
@@ -605,7 +607,110 @@ public final class GroundState {
       int s = slot(c.wx, c.wy);
       if (slotKey[s] == key(c.wx, c.wy)) {
          slotBaked[s] = true;
+         java.util.Arrays.fill(slotFresh, s * FRESH_WORDS, s * FRESH_WORDS + FRESH_WORDS, 0L); // (the bake reads the map as the stamps queued so far leave it)
+         java.util.function.IntPredicate h = bakedHook;
+         slotMirrored[s] = h != null && h.test(s);
       }
+   }
+
+   // ------------------------------------------------------------------------------------------------ fresh stamps
+   // ground-tracks realtime (2026-10-25): where a chunk's picture may have changed since its last level-0 bake, a bit per half
+   // square over the chunk and a margin of one square (a chunk's look reads its neighbours' map up to ~0.7 squares across the
+   // border): FRESH_N x FRESH_N cells, bit (x + 2) + (y + 2) * FRESH_N for local half squares x, y in -2 .. 17, the primitive's
+   // box within each binned square, marked in every chunk whose margin holds it. bakedHook (game thread, at bakeBegin, in the
+   // bake's place in the render stream) lets the feature copy the slot's region of the map with that margin as the bake reads
+   // it; slotMirrored says that copy exists for the chunk now in the slot.
+
+   public static final int FRESH_N = 20, FRESH_WORDS = 7; // (400 bits)
+   private static final long[] slotFresh = new long[SLOTS * SLOTS * FRESH_WORDS];
+   private static final boolean[] slotMirrored = new boolean[SLOTS * SLOTS];
+   /** Game thread, at a level-0 bake of slot s's chunk: true when the feature queued its copy of the slot's map region. */
+   public static volatile java.util.function.IntPredicate bakedHook;
+   public static long freshMarks;
+
+   /** Square (sx, sy) takes a primitive with box (x0, y0) .. (x1, y1): its half squares under the box, in every chunk near. */
+   private static void fresh(int sx, int sy, double x0, double y0, double x1, double y1) {
+      int hx0 = Math.max((int)Math.floor(x0 * 2.0), sx * 2), hx1 = Math.min((int)Math.floor(x1 * 2.0), sx * 2 + 1);
+      int hy0 = Math.max((int)Math.floor(y0 * 2.0), sy * 2), hy1 = Math.min((int)Math.floor(y1 * 2.0), sy * 2 + 1);
+      for (int hy = hy0; hy <= hy1; hy++) {
+         for (int hx = hx0; hx <= hx1; hx++) {
+            int cx = hx >> 4, cy = hy >> 4, lx = hx & 15, ly = hy & 15;
+            for (int dy = (ly < 2 ? -1 : 0); dy <= (ly >= 14 ? 1 : 0); dy++) {
+               for (int dx = (lx < 2 ? -1 : 0); dx <= (lx >= 14 ? 1 : 0); dx++) {
+                  int s = slot(cx + dx, cy + dy);
+                  if (slotKey[s] != key(cx + dx, cy + dy)) {
+                     continue;
+                  }
+                  int i = (lx - dx * 16 + 2) + (ly - dy * 16 + 2) * FRESH_N;
+                  slotFresh[s * FRESH_WORDS + (i >> 6)] |= 1L << (i & 63);
+                  if ((dx | dy) != 0 && slotLive[s] && !slotPending[s]) {
+                     pend(s); // (its look reads this square's map across the border: its re-bake takes the marks over; a chunk
+                              // with no tracks of its own does not draw them, in the bake or here)
+                  }
+               }
+            }
+         }
+      }
+      freshMarks++;
+   }
+
+   /** Stats: slots holding marks, and of them the ones without a mirrored bake (their marks wait for one). */
+   static String freshStats() {
+      int marked = 0, unmirrored = 0;
+      for (int s = 0; s < SLOTS * SLOTS; s++) {
+         long any = 0L;
+         for (int w = 0; w < FRESH_WORDS; w++) {
+            any |= slotFresh[s * FRESH_WORDS + w];
+         }
+         if (any != 0L) {
+            marked++;
+            if (!slotMirrored[s]) {
+               unmirrored++;
+            }
+         }
+      }
+      return "fresh slots " + marked + " (no mirrored bake " + unmirrored + ")";
+   }
+
+   /** Dev: the marked slots' chunks with their mirrored and live flags. */
+   static String freshList() {
+      StringBuilder b = new StringBuilder();
+      for (int s = 0; s < SLOTS * SLOTS; s++) {
+         int bits = 0;
+         for (int w = 0; w < FRESH_WORDS; w++) {
+            bits += Long.bitCount(slotFresh[s * FRESH_WORDS + w]);
+         }
+         if (bits > 0) {
+            long k = slotKey[s];
+            b.append(' ').append((int)(k >> 32)).append(',').append((int)k).append(':').append(bits).append(slotMirrored[s] ? "m" : "-").append(slotLive[s] ? "l" : "-");
+         }
+      }
+      return b.toString();
+   }
+
+   /**
+   * Chunk (cx, cy)'s half squares changed since its last bake into out[0 .. FRESH_WORDS - 1] (bit (x + 2) + (y + 2) * FRESH_N):
+   * false when none, not in the window, or its bake has no copy of the map (the per-frame draw needs the state the bake drew).
+   */
+   public static boolean freshMask(int cx, int cy, long[] out) {
+      int s = slot(cx, cy);
+      if (!activeNow || slotKey[s] != key(cx, cy) || !slotMirrored[s]) {
+         return false;
+      }
+      long any = 0L;
+      for (int w = 0; w < FRESH_WORDS; w++) {
+         any |= out[w] = slotFresh[s * FRESH_WORDS + w];
+      }
+      return any != 0L;
+   }
+
+   /** The texel corner of slot s's region in the map (the toroidal map puts chunk (cx, cy) at its slot's place). */
+   public static int slotTexelX(int s) {
+      return (s & (SLOTS - 1)) * CS * TPS;
+   }
+
+   public static int slotTexelY(int s) {
+      return (s / SLOTS) * CS * TPS;
    }
 
    private static void submit(Frame f) {
@@ -643,6 +748,8 @@ public final class GroundState {
             slotPending[s] = false;
             slotBaked[s] = false;
             slotFromLoad[s] = false;
+            java.util.Arrays.fill(slotFresh, s * FRESH_WORDS, s * FRESH_WORDS + FRESH_WORDS, 0L);
+            slotMirrored[s] = false;
             slotMat[s] = null;
             PEEK_KEY[s] = NONE;
             if (Config.GROUND_TRACKS_PERSIST && saveId != null) {
@@ -974,6 +1081,7 @@ public final class GroundState {
                } else {
                   ci = cellOf[li];
                }
+               fresh(sx, sy, PB[b], PB[b + 1], PB[b + 2], PB[b + 3]);
                if (nPairs >= MAX_PAIRS) {
                   continue;
                }

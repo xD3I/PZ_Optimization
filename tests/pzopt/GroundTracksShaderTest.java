@@ -31,6 +31,8 @@ public class GroundTracksShaderTest {
       Path cvp = Files.writeString(Files.createTempFile("pzgt", ".vert"), h0 + GroundTracks.COMP_VERT);
       Path cfp = Files.writeString(Files.createTempFile("pzgt", ".frag"), GroundTracks.bakeFrag(h0));
       n += checkBoth(check, mesa, "composite program", cvp.toString(), cfp.toString());
+      Path rfp = Files.writeString(Files.createTempFile("pzgt", ".frag"), GroundTracks.rtFrag(h0));
+      n += checkBoth(check, mesa, "realtime program", cvp.toString(), rfp.toString());
       Path cp = Files.writeString(Files.createTempFile("pzgt", ".comp"), GroundState.computeSource(GroundTracks.RULES));
       String out = RipplesLinkTest.run(new ProcessBuilder(check.toString(), cp.toString()));
       if (out.contains("usage") || (!out.contains("link ok") && out.contains("vertex"))) {

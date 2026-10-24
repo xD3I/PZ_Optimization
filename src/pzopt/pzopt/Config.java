@@ -1989,8 +1989,9 @@ public final class Config {
    public static volatile int GROUND_TRACKS_REBAKES_PER_SEC; // groundTracksRebakesPerSec: the stamping's chunk re-bakes a second at most (a horde over many chunks stretches the per-chunk interval instead; 0 no cap)
    public static volatile int GROUND_TRACKS_DECAY_MINUTES; // groundTracksDecayMinutes: game minutes between decay passes
    public static volatile boolean GROUND_TRACKS_VEHICLES, GROUND_TRACKS_FEET, GROUND_TRACKS_BODIES; // the stamp sources
+   public static volatile boolean GROUND_TRACKS_REALTIME; // groundTracksRealtime: what was stamped since a chunk's last bake drawn over the picture each frame, so tracks show at once; the bake stays the store
    public static volatile boolean GROUND_TRACKS_GRASS; // groundTracksGrass: the game's grass objects (erosion grass, overlays) fade and go to straw where trodden
-   public static volatile int DEV_GROUND_TRACKS_VIEW; // devGroundTracksView: 1 the height field drawn as colour (blue ruts, red berms)
+   public static volatile int DEV_GROUND_TRACKS_VIEW; // devGroundTracksView: 1 the height field drawn as colour (blue ruts, red berms); 9 the realtime draw's pixels (red: changed since the bake, blue: tested, alike)
    public static volatile int DEV_GROUND_TRACKS_TIME_SCALE; // devGroundTracksTimeScale: the decay runs this many times faster than the game clock (the recovery in seconds)
    public static volatile int DEV_GROUND_TRACKS_WET_PCT; // devGroundTracksWetPct: the ground's wetness pinned (0..100; -1 = from the rain)
    public static volatile int DEV_GROUND_TRACKS_COMP_BIAS_PCT; // devGroundTracksCompBiasPct: the composite look's diamond, hundredths of a square of x + y toward the camera (the depth test against the floor)
@@ -2545,6 +2546,7 @@ public final class Config {
       GROUND_TRACKS_FEET = bool("groundTracksFeet", true);
       GROUND_TRACKS_BODIES = bool("groundTracksBodies", true);
       GROUND_TRACKS_GRASS = bool("groundTracksGrass", true);
+      GROUND_TRACKS_REALTIME = bool("groundTracksRealtime", true);
       DEV_GROUND_TRACKS_VIEW = integer("devGroundTracksView", 0);
       DEV_GROUND_TRACKS_COMP_BIAS_PCT = integer("devGroundTracksCompBiasPct", 5);
       DEV_GROUND_TRACKS_RIG_SECONDS = integer("devGroundTracksRigSeconds", 0);

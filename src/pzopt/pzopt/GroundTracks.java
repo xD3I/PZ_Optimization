@@ -7,6 +7,7 @@ import org.joml.Matrix4f;
 import org.lwjgl.BufferUtils;
 import org.lwjgl.opengl.GL;
 import org.lwjgl.opengl.GL11;
+import org.lwjgl.opengl.GL12;
 import org.lwjgl.opengl.GL13;
 import org.lwjgl.opengl.GL14;
 import org.lwjgl.opengl.GL20;
@@ -61,6 +62,7 @@ public final class GroundTracks {
 
    public static String stats() {
       return "ground tracks: " + (on() ? "on" : "off") + " frames=" + frames + " bakeDraws=" + bakeDraws + " grassObjects=" + GroundBake.overlayObjects + " lightSteps=" + lightSteps + " rebakeMs=" + Math.max(Config.GROUND_TRACKS_REBAKE_MS, rebakeMsNow) + " (max " + rebakeStretchMax + ")"
+         + " realtime=" + (realtime() ? "on" : "off") + " rtFrames=" + rtFrames + " rtChunks=" + rtChunks + " rtHalfSquares=" + rtHalves + " mirrorCopies=" + mirrorCopies + " " + GroundState.freshStats()
          + " game_us/frame=" + (frames == 0 ? 0 : gameNs / 1000L / frames) + (failed ? " (failed)" : "") + " | " + GroundState.stats();
    }
 
@@ -163,6 +165,15 @@ public final class GroundTracks {
          return v;
       }
       return Config.GROUND_TRACKS_LOOK;
+   }
+
+   /**
+    * groundTracksRealtime: the bake look with the squares stamped since a chunk's last bake drawn over the picture each frame
+    * (afterComposite), so a print shows the frame it is pressed; the bake stays the store. devGroundCycle "norealtime" is the
+    * in-run off half.
+    */
+   static boolean realtime() {
+      return Config.GROUND_TRACKS_REALTIME && on() && "bake".equals(look()) && !"norealtime".equals(Ground.variant());
    }
 
    /** The light, the weather and the sky of the frame for the patch's uniforms (game thread writes, render thread reads). */
@@ -280,6 +291,7 @@ public final class GroundTracks {
       GroundBake.register(GRASS);
       GroundBake.register(PASS);
       Ground.onFrame(GroundTracks::frameStart);
+      GroundState.bakedHook = GroundTracks::mirrorAtBake;
    }
 
    // ------------------------------------------------------------------------------------------------ the frame (game thread)
@@ -341,6 +353,9 @@ public final class GroundTracks {
          rig(pl);
       }
       gameNs += System.nanoTime() - t0;
+      if (Config.DEV_GROUND_TRACKS_LOG && Config.DEV_GROUND_TRACKS_RIG > 0 && frames % 30L == 0L) {
+         Log.info("ground tracks rig: frame " + frames + " epoch_ms " + System.currentTimeMillis() + " rig_t " + (System.currentTimeMillis() - rigT0) + " fresh" + GroundState.freshList());
+      }
       if (Config.DEV_GROUND_TRACKS_LOG && frames % 600L == 0L) {
          Log.info(stats());
       }
@@ -777,14 +792,22 @@ public final class GroundTracks {
     * its colour, no depth read in the shader. No re-bake when a track changes (stamps show the frame they land).
     */
    public static void afterComposite(int playerIndex) {
-      if (!on() || !"composite".equals(look()) || playerIndex != 0) {
+      if (!on() || playerIndex != 0) {
          return;
+      }
+      boolean rt = false;
+      if (!"composite".equals(look())) {
+         if (!realtime()) {
+            return;
+         }
+         rt = true;
       }
       int wx0 = GroundState.windowX(), wy0 = GroundState.windowY();
       if (wx0 == Integer.MIN_VALUE) {
          return;
       }
       Comp f = Comp.alloc();
+      f.rt = rt;
       Core core = Core.getInstance();
       f.zoom = core.getZoom(playerIndex);
       f.ts = Core.tileScale;
@@ -800,6 +823,21 @@ public final class GroundTracks {
       light(lb);
       lb.wet = wet;
       lb.snowDepth = snowDepth();
+      if (rt) {
+         // how far from its own point a pixel's look reads the map, in squares: the relief's view ray down to K * 0.32 toward
+         // -x -y and K * 0.06 up, the AO ring (3 texels), the normal (1), a filtered texel, the shadow march toward the light
+         // (0.03 high: 0.03 / tan(elevation) along the light's ground direction)
+         float sx = 0F, sy = 0F;
+         if (lb.lz > 0.02F && lb.share > 0F) {
+            sx = lb.lx / lb.lz * 0.03F;
+            sy = lb.ly / lb.lz * 0.03F;
+         }
+         // (at most the mirror's margin, a square: a lower sun's longer march is left to the re-bake)
+         f.reach[0] = Math.max(-1F, -0.66F + Math.min(0F, sx));
+         f.reach[1] = Math.max(-1F, -0.66F + Math.min(0F, sy));
+         f.reach[2] = Math.min(1F, 0.34F + Math.max(0F, sx));
+         f.reach[3] = Math.min(1F, 0.34F + Math.max(0F, sy));
+      }
       // the screen in (x - y, x + y) relative to the origin, for the cull (zoomed screen px over the tile size, a chunk's margin)
       double a32 = 32.0 * f.ts, a16 = 16.0 * f.ts;
       double aMin = (f.offX) / a32 - (ox - oy), aMax = (f.offX + f.screenW * f.zoom) / a32 - (ox - oy);
@@ -810,6 +848,33 @@ public final class GroundTracks {
          for (int cx = wx0; cx < wx0 + GroundState.SLOTS; cx++) {
             if (!GroundState.isLive(cx, cy) || f.n >= Comp.MAX) {
                continue;
+            }
+            float rx0 = 0F, ry0 = 0F, rx1 = CS, ry1 = CS; // the whole chunk
+            int k0 = f.n;
+            if (rt) {
+               long[] fm = f.fresh[k0];
+               if (!GroundState.freshMask(cx, cy, fm)) {
+                  continue;
+               }
+               // the pixels whose look reads a changed half square (reach below; the mask has the neighbours' changes within a
+               // square of the border, the mirror tile the map with that margin); the shader tests each pixel's half squares
+               int qx0 = 99, qy0 = 99, qx1 = -99, qy1 = -99, bits = 0;
+               for (int w = 0; w < GroundState.FRESH_WORDS; w++) {
+                  for (long b = fm[w]; b != 0L; b &= b - 1L) {
+                     int i = w * 64 + Long.numberOfTrailingZeros(b), qx = i % GroundState.FRESH_N - 2, qy = i / GroundState.FRESH_N - 2;
+                     qx0 = Math.min(qx0, qx);
+                     qy0 = Math.min(qy0, qy);
+                     qx1 = Math.max(qx1, qx);
+                     qy1 = Math.max(qy1, qy);
+                     bits++;
+                  }
+               }
+               f.mir[k0] = GroundState.slot(cx, cy);
+               rx0 = Math.max(0F, qx0 * 0.5F - f.reach[2]);
+               ry0 = Math.max(0F, qy0 * 0.5F - f.reach[3]);
+               rx1 = Math.min(CS, (qx1 + 1) * 0.5F - f.reach[0]);
+               ry1 = Math.min(CS, (qy1 + 1) * 0.5F - f.reach[1]);
+               rtHalves += bits;
             }
             double x = cx * CS - ox, y = cy * CS - oy;
             // the diamond's A = x - y spans [x - y - 8, x - y + 8], B = x + y spans [x + y, x + y + 16]
@@ -831,6 +896,11 @@ public final class GroundTracks {
             }
             f.cx[k] = (float)x;
             f.cy[k] = (float)y;
+            f.rect[k * 4] = rx0;
+            f.rect[k * 4 + 1] = ry0;
+            f.rect[k * 4 + 2] = rx1;
+            f.rect[k * 4 + 3] = ry1;
+
             f.uvX[k] = ((cx * CS * TPS) & (TN - 1)) / (float)TN;
             f.uvY[k] = ((cy * CS * TPS) & (TN - 1)) / (float)TN;
          }
@@ -839,12 +909,119 @@ public final class GroundTracks {
          f.release();
          return;
       }
-      compFrames++;
-      compChunks += f.n;
+      if (rt) {
+         rtFrames++;
+         rtChunks += f.n;
+      } else {
+         compFrames++;
+         compChunks += f.n;
+      }
       SpriteRenderer.instance.drawGeneric(f);
    }
 
-   static long compFrames, compChunks;
+   static long compFrames, compChunks, rtFrames, rtChunks, rtHalves, mirrorCopies;
+
+   // ------------------------------------------------------------------------------------------------ realtime: the baked mirror
+
+   /**
+    * The state map as each chunk's last level-0 bake read it: GroundState.baked calls this (game thread, at bakeBegin, in the
+    * bake's place in the render stream) and the copy of the slot's 128 x 128 texels runs on the render thread right ahead of
+    * the bake's draws, after the frame's stamps (GroundState's compute frame ends in a texture-update barrier). The per-frame
+    * draw divides the look of the map now by the look of the mirror: exactly 1 where nothing changed since the bake, so the
+    * handover to the re-bake is invisible (the re-bake holds F(now), the mirror then equals now).
+    */
+   static boolean mirrorAtBake(int slot) {
+      if (!realtime()) {
+         return false;
+      }
+      MirrorCopy m = MirrorCopy.alloc();
+      m.slot = slot;
+      SpriteRenderer.instance.drawGeneric(m);
+      mirrorCopies++;
+      return true;
+   }
+
+   private static int mirrorTex;
+   private static boolean mirrorFailed;
+
+   static final class MirrorCopy extends TextureDraw.GenericDrawer {
+      private static final ArrayList<MirrorCopy> mpool = new ArrayList<>();
+      int slot;
+
+      static MirrorCopy alloc() {
+         synchronized (mpool) {
+            return mpool.isEmpty() ? new MirrorCopy() : mpool.remove(mpool.size() - 1);
+         }
+      }
+
+      @Override
+      public void render() {
+         copyToMirror(slot);
+      }
+
+      @Override
+      public void postRender() {
+         synchronized (mpool) {
+            if (mpool.size() < 64) {
+               mpool.add(this);
+            }
+         }
+      }
+   }
+
+   private static void copy(int st, int sx, int sy, int dx, int dy, int w, int h) {
+      org.lwjgl.opengl.GL43.glCopyImageSubData(st, GL11.GL_TEXTURE_2D, 0, sx, sy, 0, mirrorTex, GL11.GL_TEXTURE_2D, 0, dx, dy, 0, w, h, 1);
+   }
+
+   private static final ByteBuffer MIRROR_REST = BufferUtils.createByteBuffer(4).put((byte)192).put((byte)0).put((byte)0).put((byte)0).flip();
+
+   /** The mirror's tiles: a chunk and a square round it (160 texels), 16 x 16 tiles by slot. */
+   static final int MT = (CS + 2) * TPS, MN = MT * GroundState.SLOTS;
+
+   /**
+    * Render thread: slot s's chunk and a square round it, from the toroidal map into the slot's mirror tile (made on first
+    * use: the map's format, linear; the shader keeps its reads inside the tile).
+    */
+   static void copyToMirror(int slot) {
+      int st = GroundState.texture();
+      if (st == 0 || mirrorFailed) {
+         return;
+      }
+      try {
+         if (mirrorTex == 0) {
+            int t = GL11.glGenTextures();
+            GL11.glBindTexture(GL11.GL_TEXTURE_2D, t);
+            GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MIN_FILTER, GL11.GL_LINEAR);
+            GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MAG_FILTER, GL11.GL_LINEAR);
+            GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_WRAP_S, GL12.GL_CLAMP_TO_EDGE);
+            GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_WRAP_T, GL12.GL_CLAMP_TO_EDGE);
+            org.lwjgl.opengl.GL42.glTexStorage2D(GL11.GL_TEXTURE_2D, 1, GL11.GL_RGBA8, MN, MN);
+            org.lwjgl.opengl.GL44.glClearTexImage(t, 0, GL11.GL_RGBA, GL11.GL_UNSIGNED_BYTE, MIRROR_REST);
+            GL11.glBindTexture(GL11.GL_TEXTURE_2D, 0);
+            Texture.lastTextureID = -1;
+            SpriteRenderer.ringBuffer.restoreBoundTextures = true;
+            mirrorTex = t;
+            Log.info("ground tracks: realtime mirror ready (" + MN + "^2 RGBA8, tiles of " + MT + ")");
+         }
+         // the source corner one square before the slot's, wrapped: up to two pieces a side
+         int sx0 = Math.floorMod(GroundState.slotTexelX(slot) - TPS, TN), sy0 = Math.floorMod(GroundState.slotTexelY(slot) - TPS, TN);
+         int dx0 = (slot & 15) * MT, dy0 = (slot >> 4) * MT;
+         int wx = Math.min(MT, TN - sx0), wy = Math.min(MT, TN - sy0);
+         copy(st, sx0, sy0, dx0, dy0, wx, wy);
+         if (wx < MT) {
+            copy(st, 0, sy0, dx0 + wx, dy0, MT - wx, wy);
+         }
+         if (wy < MT) {
+            copy(st, sx0, 0, dx0, dy0 + wy, wx, MT - wy);
+            if (wx < MT) {
+               copy(st, 0, 0, dx0 + wx, dy0 + wy, MT - wx, MT - wy);
+            }
+         }
+      } catch (Throwable t) {
+         mirrorFailed = true;
+         Log.warn("ground tracks: realtime mirror failed, off: " + t);
+      }
+   }
 
    static final class Comp extends TextureDraw.GenericDrawer {
       static final int MAX = 64;
@@ -852,6 +1029,11 @@ public final class GroundTracks {
       final Bake light = new Bake();
       final float[] cx = new float[MAX], cy = new float[MAX], uvX = new float[MAX], uvY = new float[MAX];
       final int[][] mat = new int[MAX][8];
+      final float[] rect = new float[MAX * 4]; // the drawn rectangle, local squares (x0, y0, x1, y1)
+      final long[][] fresh = new long[MAX][GroundState.FRESH_WORDS]; // realtime: the half squares changed since the bake
+      final int[] mir = new int[MAX]; // realtime: the chunk's slot (its mirror tile)
+      final float[] reach = new float[4]; // realtime: a pixel's reads from its point, squares (lo x, lo y, hi x, hi y)
+      boolean rt;
       int n, ts, ox, oy, screenW, screenH;
       float zoom, offX, offY, d0;
 
@@ -885,10 +1067,11 @@ public final class GroundTracks {
       "uniform vec4 uVp;", // viewport x, y, w, h
       "uniform vec4 uC;", // the chunk's corner relative to the origin (x, y), the origin's floor depth, the depth per unit of x + y
       "uniform float uBias;", // squares of x + y toward the camera
+      "uniform vec4 uR;", // the drawn rectangle of the chunk, local squares (x0, y0, x1, y1): 0, 0, 8, 8 the whole chunk
       "out vec2 vP;",
       "void main() {",
       "   int c = gl_VertexID;",
-      "   vec2 p = vec2((c == 1 || c == 3) ? 8.0 : 0.0, (c >= 2) ? 8.0 : 0.0);",
+      "   vec2 p = vec2((c == 1 || c == 3) ? uR.z : uR.x, (c >= 2) ? uR.w : uR.y);",
       "   vec2 w = uC.xy + p;",
       "   float A = w.x - w.y, B = w.x + w.y;",
       "   vec2 px = vec2((A - uMapA.y) / uMapA.x, (B - uMapA.w) / uMapA.z);",
@@ -901,19 +1084,25 @@ public final class GroundTracks {
 
    private static final java.util.HashMap<String, int[]> COMP_PROGRAMS = new java.util.HashMap<>();
    private static int compProg;
-   private static int cMapA, cVp, cC, cBias, cState, cUv, cMat, cLight, cWeather, cSky;
+   private static int cMapA, cVp, cC, cBias, cState, cUv, cMat, cLight, cWeather, cSky, cR, cBaked, cFresh, cReach, cMir;
+   private static final java.nio.IntBuffer FRESH_INTS = BufferUtils.createIntBuffer(16);
    private static int compFbo = -1, compFboLast = Integer.MIN_VALUE, compAge;
    private static final int[] VPI = new int[4];
 
-   private static boolean initComposite() {
+   static String rtFrag(String h) {
+      return h + GroundTracksGlsl.RT_FRAG.replace("// (gt_look.glsl follows)", GroundTracksGlsl.LOOK);
+   }
+
+   private static boolean initComposite(boolean rt) {
       String h = header();
-      int[] cached = COMP_PROGRAMS.get(h);
+      String key = rt ? "rt\n" + h : h;
+      int[] cached = COMP_PROGRAMS.get(key);
       if (cached == null) {
-         int p = link(h + COMP_VERT, bakeFrag(h), "ground tracks composite");
+         int p = link(h + COMP_VERT, rt ? rtFrag(h) : bakeFrag(h), rt ? "ground tracks realtime" : "ground tracks composite");
          cached = new int[] {p};
-         COMP_PROGRAMS.put(h, cached);
+         COMP_PROGRAMS.put(key, cached);
          if (p != 0) {
-            Log.info("ground tracks: composite program for " + h.replace("\n", " ").replace("#define ", ""));
+            Log.info("ground tracks: " + (rt ? "realtime" : "composite") + " program for " + h.replace("\n", " ").replace("#define ", ""));
          }
       }
       compProg = cached[0];
@@ -930,6 +1119,11 @@ public final class GroundTracks {
       cLight = GL20.glGetUniformLocation(compProg, "uLight");
       cWeather = GL20.glGetUniformLocation(compProg, "uWeather");
       cSky = GL20.glGetUniformLocation(compProg, "uSky");
+      cR = GL20.glGetUniformLocation(compProg, "uR");
+      cBaked = GL20.glGetUniformLocation(compProg, "uBaked");
+      cFresh = GL20.glGetUniformLocation(compProg, "uFresh");
+      cReach = GL20.glGetUniformLocation(compProg, "uReach");
+      cMir = GL20.glGetUniformLocation(compProg, "uMir");
       if (vao == 0) {
          vao = GL30.glGenVertexArrays();
       }
@@ -937,10 +1131,11 @@ public final class GroundTracks {
    }
 
    static void renderComposite(Comp f) {
-      if (failed || GroundState.texture() == 0 || !initComposite()) {
+      if (failed || GroundState.texture() == 0 || (f.rt && (mirrorTex == 0 || mirrorFailed)) || !initComposite(f.rt)) {
          return;
       }
-      GpuSections.markNow("ground.comp", false);
+      String section = f.rt ? Ground.section("ground.rt") : "ground.comp";
+      GpuSections.markNow(section, false);
       try {
          // the viewport of the world framebuffer: asked once per framebuffer (and every 120 frames), never per frame
          int last = zombie.core.textures.TextureFBO.lastID;
@@ -964,6 +1159,12 @@ public final class GroundTracks {
          GL13.glActiveTexture(GL13.GL_TEXTURE3);
          GL11.glBindTexture(GL11.GL_TEXTURE_2D, GroundState.texture());
          GL20.glUniform1i(cState, 3);
+         if (f.rt) {
+            GL13.glActiveTexture(GL13.GL_TEXTURE4);
+            GL11.glBindTexture(GL11.GL_TEXTURE_2D, mirrorTex);
+            GL20.glUniform1i(cBaked, 4);
+            GL20.glUniform4f(cReach, f.reach[0], f.reach[1], f.reach[2], f.reach[3]);
+         }
          Bake l = f.light;
          GL20.glUniform4f(cLight, l.lx, l.ly, l.lz, l.share);
          GL20.glUniform4f(cWeather, l.wet, l.snowDepth, Config.DEV_GROUND_TRACKS_VIEW, 0F);
@@ -979,6 +1180,18 @@ public final class GroundTracks {
          GL30.glBindVertexArray(vao);
          for (int i = 0; i < f.n; i++) {
             GL20.glUniform4f(cC, f.cx[i], f.cy[i], f.d0, (float)PixelLight.DEPTH_PER_XY);
+            GL20.glUniform4f(cR, f.rect[i * 4], f.rect[i * 4 + 1], f.rect[i * 4 + 2], f.rect[i * 4 + 3]);
+            if (f.rt) {
+               long[] m = f.fresh[i];
+               FRESH_INTS.clear();
+               for (int w = 0; w < GroundState.FRESH_WORDS; w++) {
+                  FRESH_INTS.put((int)m[w]).put((int)(m[w] >>> 32));
+               }
+               FRESH_INTS.put(0).put(0).flip();
+               GL30.glUniform4uiv(cFresh, FRESH_INTS);
+               int ms = f.mir[i];
+               GL20.glUniform4f(cMir, (ms & 15) * MT / (float)MN, (ms >> 4) * MT / (float)MN, TPS / (float)MN, 0F);
+            }
             GL20.glUniform4f(cUv, f.uvX[i], f.uvY[i], TPS / (float)TN, 0F);
             INTS.clear();
             INTS.put(f.mat[i], 0, 8).flip();
@@ -988,10 +1201,14 @@ public final class GroundTracks {
          GL30.glBindVertexArray(0);
       } catch (Throwable t) {
          failed = true;
-         Log.warn("ground tracks: composite failed, off: " + t);
+         Log.warn("ground tracks: " + (f.rt ? "realtime" : "composite") + " failed, off: " + t);
       } finally {
          GL11.glColorMask(true, true, true, true);
          GL20.glUseProgram(0);
+         if (f.rt) {
+            GL13.glActiveTexture(GL13.GL_TEXTURE4);
+            GL11.glBindTexture(GL11.GL_TEXTURE_2D, 0);
+         }
          GL13.glActiveTexture(GL13.GL_TEXTURE3);
          GL11.glBindTexture(GL11.GL_TEXTURE_2D, 0);
          GL13.glActiveTexture(GL13.GL_TEXTURE0);
@@ -1000,7 +1217,7 @@ public final class GroundTracks {
          zombie.core.ShaderHelper.forgetCurrentlyBound();
          SpriteRenderer.ringBuffer.restoreVbos = true;
          SpriteRenderer.ringBuffer.restoreBoundTextures = true;
-         GpuSections.markNow("ground.comp", true);
+         GpuSections.markNow(section, true);
       }
    }
 
