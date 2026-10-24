@@ -14,7 +14,7 @@ package pzopt;
  *   <li>ambientOcclusion, aoScalePct, aoRadiusPct, the five aoStrength*Pct: {@link ChunkAo#reconfigure} (every loaded
  *       chunk texture bakes again with the new AO, or without it); sunShadows the same, sunShadowStrengthPct and
  *       sunShadowSoftnessPct through {@link SunShadow#update} (the kept shadows compute again, no re-bake).</li>
- *   <li>reflections, reflectionStrengthPct, reflectionPuddles: read every frame by {@link Ssr}.</li>
+ *   <li>reflections, reflectionStrengthPct, reflectionPuddles, reflectionsFlow, reflectionsFlowPct: read every frame by {@link Ssr}.</li>
  *   <li>ambientOcclusion, sunShadows and reflections also switch {@link TileDepthFix}'s fitted tile depth in or out
  *       (tileDepthFix=auto; the chunk textures it touched bake again).</li>
  *   <li>darknessFloorPct, darknessFloorBasements, memoryTint, memoryLightPct: {@link Darkness#reconfigure} (every loaded
@@ -40,7 +40,7 @@ final class Enhancements {
    /** Game thread, after Config.reloadLive(key) returned true. */
    static void apply(String key) {
       switch (key) {
-         case "fsrSharpnessPct", "upscalerObjectMv", "dlssWaterCurrent", "dlssWaterHistoryPct", "reflections", "reflectionStrengthPct", "reflectionPuddles",
+         case "fsrSharpnessPct", "upscalerObjectMv", "dlssWaterCurrent", "dlssWaterHistoryPct", "reflections", "reflectionStrengthPct", "reflectionPuddles", "reflectionsFlow", "reflectionsFlowPct",
                "ripples", "ripplesMode", "ripplesStrengthPct", "ripplesVehicles", "ripplesPerSec", "ripplesRain", "ripplesWake", "ripplesRainPct", "bloodWet", "bloodWetMinutes", "bloodReflectPct", "bloodSheenPct", "bloodGlintPct", "occludedZombieOutlines", "occludedOutlineIgnorePlants",
                "occludedOutlineWidth", "occludedOutlineColour", "occludedOutlineOpacityPct" -> {
             // read every frame
