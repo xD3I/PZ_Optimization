@@ -13,7 +13,11 @@ import org.lwjgl.opengl.GL32;
 import org.lwjgl.opengl.GL33;
 import org.lwjglx.input.GamepadState;
 import org.lwjglx.input.Keyboard;
+import se.krka.kahlua.vm.KahluaTable;
+import se.krka.kahlua.vm.KahluaTableIterator;
 import zombie.GameWindow;
+import zombie.Lua.LuaManager;
+import zombie.ui.UITransition;
 import zombie.ZomboidFileSystem;
 import zombie.characters.IsoPlayer;
 import zombie.input.GameKeyboard;
@@ -195,6 +199,11 @@ public final class InputLag {
          bits |= (ly < -0.5f ? 1 << 6 : 0) | (ly > 0.5f ? 1 << 7 : 0) | (lx < -0.5f ? 1 << 8 : 0) | (lx > 0.5f ? 1 << 9 : 0)
                | (ry < -0.5f ? 1 << 10 : 0) | (ry > 0.5f ? 1 << 11 : 0) | (rx < -0.5f ? 1 << 12 : 0) | (rx > 0.5f ? 1 << 13 : 0)
                | (s.buttons(0) != 0 ? 1 << 14 : 0) | (lt > 0.0f ? 1 << 15 : 0); // triggers rest at -1 in GLFW
+         for (int i = 0; i < 15; i++) { // 2026-10-24 (osk-lag): every GLFW gamepad button, bit 16 + i (A B X Y LB RB Back Start Guide L3 R3 Up Right Down Left)
+            if (s.buttons(i) != 0) {
+               bits |= 1 << (16 + i);
+            }
+         }
       }
       return bits;
    }
@@ -323,6 +332,75 @@ public final class InputLag {
          panim = anim;
          paim = aim;
          append("R " + us(System.nanoTime()) + " " + x + " " + y + " " + Math.round(dir) + " " + Math.round(anim) + " " + (aim ? 1 : 0) + "\n");
+      }
+   }
+
+   private static String oskLast = "";
+   private static boolean oskOff;
+   private static Field fadeUpdateMs, fadeNow;
+
+   /**
+    * Game thread, GameWindow.frameStep right after renderInternal (2026-10-24, the on-screen keyboard latency profile):
+    * what the frame just recorded (P {@code pushes}) drew of the game's on-screen keyboard (ISOnScreenKeyboard), one
+    * {@code U <frame> <us> <visible> <row>,<col> <focus> <text length> <text hash> <focused key fade> <max other fade>
+    * <fresh> <internal text length>} line whenever it changed: the key panel's joypad row / column, where the pad focus is (k = key panel, e =
+    * entry, - = elsewhere), the entry's text, the UITransition fraction the focused key and the brightest other key were
+    * drawn with this frame (stock fades a key's highlight in over 100 ms and out over 200 ms), whether the key buttons'
+    * Lua render ran this frame (their fade was updated at this frame's UITransition time) and the entry's internal text
+    * length (UITextBox2 draws {@code text}, copied from the internal text in its update()).
+    */
+   public static void afterRender() {
+      if (oskOff || !on()) {
+         return;
+      }
+      try {
+         Object osk = LuaManager.env == null ? null : LuaManager.env.rawget("OnScreenKeyboard");
+         Object inst = osk instanceof KahluaTable t ? t.rawget("instance") : null;
+         String s;
+         if (!(inst instanceof KahluaTable it)) {
+            s = "none";
+         } else {
+            boolean vis = it.rawget("javaObject") instanceof zombie.ui.UIElement el && el.isVisible();
+            KahluaTable kp = it.rawget("keyPanel") instanceof KahluaTable k ? k : null;
+            KahluaTable entry = it.rawget("entry") instanceof KahluaTable e ? e : null;
+            int row = kp != null && kp.rawget("joypadIndexY") instanceof Double d ? d.intValue() : -1;
+            int col = kp != null && kp.rawget("joypadIndex") instanceof Double d ? d.intValue() : -1;
+            String focus = entry != null && entry.rawget("joyfocus") != null ? "e" : kp != null && kp.rawget("joyfocus") != null ? "k" : "-";
+            String text = entry != null && entry.rawget("javaObject") instanceof zombie.ui.UITextBox2 tb ? tb.getText() : "";
+            int internal = entry != null && entry.rawget("javaObject") instanceof zombie.ui.UITextBox2 tb2 ? tb2.getInternalText().length() : -1;
+            float fFocus = -1f, fOther = 0f;
+            boolean fresh = false;
+            Object children = kp == null ? null : kp.rawget("children");
+            if (children instanceof KahluaTable ch) {
+               if (fadeUpdateMs == null) {
+                  fadeUpdateMs = accessible(UITransition.class.getDeclaredField("updateTimeMs"));
+                  fadeNow = accessible(UITransition.class.getDeclaredField("currentTimeMS"));
+               }
+               long now = fadeNow.getLong(null);
+               KahluaTableIterator iter = ch.iterator();
+               while (iter.advance()) {
+                  if (!(iter.getValue() instanceof KahluaTable b) || !(b.rawget("fade") instanceof UITransition f)) {
+                     continue;
+                  }
+                  float fr = f.fraction();
+                  if (b.rawget("joypadFocused") == Boolean.TRUE) {
+                     fFocus = fr;
+                  } else {
+                     fOther = Math.max(fOther, fr);
+                  }
+                  fresh |= fadeUpdateMs.getLong(f) == now;
+               }
+            }
+            s = (vis ? "1 " : "0 ") + row + "," + col + " " + focus + " " + text.length() + " " + Integer.toHexString(text.hashCode()) + " "
+               + Math.round(fFocus * 100f) / 100f + " " + Math.round(fOther * 100f) / 100f + " " + (fresh ? 1 : 0) + " " + internal;
+         }
+         if (!s.equals(oskLast)) {
+            oskLast = s;
+            append("U " + pushes + " " + us(System.nanoTime()) + " " + s + "\n");
+         }
+      } catch (ReflectiveOperationException | RuntimeException e) {
+         Log.warn("input lag: on-screen keyboard probe off after " + e);
+         oskOff = true;
       }
    }
 

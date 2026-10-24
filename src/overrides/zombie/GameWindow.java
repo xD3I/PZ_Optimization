@@ -381,6 +381,9 @@ public final class GameWindow {
          uiVoice.close();
       }
 
+      if (pzopt.InputLatch.TEXT_ENTRY_EARLY) { // pzopt: textEntryEarly, the text box takes the swapped-in characters before this frame's UI update and render
+         Core.getInstance().updateKeyboard(); // pzopt: textEntryEarly (stock: only in DoFrameReady, after the render)
+      } // pzopt: textEntryEarly
       GameInput.updateGameThread();
       pzopt.InputLag.afterGameInput(); // pzopt: harness input-lag probe, the input this game frame sees
       if (CoopMaster.instance != null) {
@@ -995,6 +998,7 @@ public final class GameWindow {
             long pzoptRenderT = pzopt.GtAb.begin(); // pzopt: devGtAlternate section timer
             renderInternal();
             pzopt.GtAb.end(pzopt.GtAb.S_RENDER, pzoptRenderT); // pzopt
+            pzopt.InputLag.afterRender(); // pzopt: harness input-lag probe, what this frame drew of the on-screen keyboard
             pzopt.VehicleSmooth.afterRender(); // pzopt: vehicleSmooth, the simulation's values back
             if (doRenderEvent) {
                ProfileArea var35 = profilerx.profile("On Render");

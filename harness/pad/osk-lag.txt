@@ -1,0 +1,225 @@
+# On-screen keyboard latency (2026-10-24, worktree osk-lag): run.sh --pad harness/pad/osk-lag.txt --flag inputlag=1;
+# main menu -> PZ OPTIMIZATION (4 downs from SOLO) -> Back opens the search's on-screen keyboard (tab layout), then
+# typing (A on the default key g), D-pad moves across the keys, X (backspace), Y (space); B closes the keyboard and the
+# screen. Uneven gaps so the presses land on every phase of the frame. harness/osklag.py <run> reads it.
+mark activate
+a
+sleep 1.5
+mark main-to-pzmenu
+down
+sleep 0.5
+down
+sleep 0.5
+down
+sleep 0.5
+down
+sleep 0.5
+mark pzmenu-open
+a
+sleep 3
+mark osk-open
+back
+sleep 1.5
+mark type
+a
+sleep 0.37
+a
+sleep 0.43
+a
+sleep 0.41
+a
+sleep 0.47
+a
+sleep 0.39
+a
+sleep 0.45
+a
+sleep 0.35
+a
+sleep 0.44
+a
+sleep 0.37
+a
+sleep 0.43
+a
+sleep 0.41
+a
+sleep 0.47
+a
+sleep 0.39
+a
+sleep 0.45
+a
+sleep 0.35
+a
+sleep 0.44
+a
+sleep 0.37
+a
+sleep 0.43
+a
+sleep 0.41
+a
+sleep 0.47
+a
+sleep 0.39
+a
+sleep 0.45
+a
+sleep 0.35
+a
+sleep 0.44
+mark nav-h
+right
+sleep 0.37
+right
+sleep 0.43
+right
+sleep 0.41
+right
+sleep 0.47
+right
+sleep 0.39
+right
+sleep 0.45
+left
+sleep 0.35
+left
+sleep 0.44
+left
+sleep 0.37
+left
+sleep 0.43
+left
+sleep 0.41
+left
+sleep 0.47
+right
+sleep 0.39
+right
+sleep 0.45
+right
+sleep 0.35
+right
+sleep 0.44
+right
+sleep 0.37
+right
+sleep 0.43
+left
+sleep 0.41
+left
+sleep 0.47
+left
+sleep 0.39
+left
+sleep 0.45
+left
+sleep 0.35
+left
+sleep 0.44
+mark nav-v
+down
+sleep 0.37
+down
+sleep 0.43
+up
+sleep 0.41
+up
+sleep 0.47
+up
+sleep 0.39
+up
+sleep 0.45
+down
+sleep 0.35
+down
+sleep 0.44
+down
+sleep 0.37
+down
+sleep 0.43
+up
+sleep 0.41
+up
+sleep 0.47
+up
+sleep 0.39
+up
+sleep 0.45
+down
+sleep 0.35
+down
+sleep 0.44
+down
+sleep 0.37
+down
+sleep 0.43
+up
+sleep 0.41
+up
+sleep 0.47
+up
+sleep 0.39
+up
+sleep 0.45
+down
+sleep 0.35
+down
+sleep 0.44
+mark backspace
+x
+sleep 0.37
+x
+sleep 0.43
+x
+sleep 0.41
+x
+sleep 0.47
+x
+sleep 0.39
+x
+sleep 0.45
+x
+sleep 0.35
+x
+sleep 0.44
+x
+sleep 0.37
+x
+sleep 0.43
+x
+sleep 0.41
+x
+sleep 0.47
+mark space
+y
+sleep 0.39
+y
+sleep 0.45
+y
+sleep 0.35
+y
+sleep 0.44
+y
+sleep 0.37
+y
+sleep 0.43
+y
+sleep 0.41
+y
+sleep 0.47
+y
+sleep 0.39
+y
+sleep 0.45
+y
+sleep 0.35
+y
+sleep 0.44
+mark osk-close
+b
+sleep 1
+b
+sleep 1
+done
