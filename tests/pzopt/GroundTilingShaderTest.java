@@ -20,7 +20,8 @@ public class GroundTilingShaderTest {
          Check.check(decl.contains(" " + u + ";") || decl.contains(" " + u + "["), "declared: " + u);
       }
       if (game == null || tool == null) {
-         System.out.println("GroundTilingShaderTest ok (text only: " + (game == null ? "no game shaders" : "no glslcheck") + ")");
+         GroundTilingPatch.spec = "hpb";
+      System.out.println("GroundTilingShaderTest ok (text only: " + (game == null ? "no game shaders" : "no glslcheck") + ")");
          return;
       }
       Path mesa = Path.of("/usr/share/glvnd/egl_vendor.d/50_mesa.json");
@@ -28,7 +29,9 @@ public class GroundTilingShaderTest {
       for (String base : new String[] {"tileWithDepth", "opaqueWithDepth"}) {
          String vert = Files.readString(game.resolve(base + ".vert"));
          String frag = Files.readString(game.resolve(base + ".frag"));
+         for (String spec : new String[] {"hpb", "hpbDao", "lap", "stock"})
          for (int piece = 0; piece < 3; piece++) {
+            GroundTilingPatch.spec = spec;
             List<GroundBake.FloorPatch> ps = new ArrayList<>();
             ps.add(GroundTilingPatch.INSTANCE);
             String v = GroundBake.variantSource(frag, ps, 0, piece);
@@ -50,12 +53,13 @@ public class GroundTilingShaderTest {
                if (!useMesa && out.contains("no context")) {
                   continue;
                }
-               String tag = base + " piece " + piece + (useMesa ? " (Mesa)" : " (driver)");
+               String tag = base + " " + spec + " piece " + piece + (useMesa ? " (Mesa)" : " (driver)");
                Check.check(out.contains("link ok") && out.contains("validate ok"), tag + ":\n" + out);
                n++;
             }
          }
       }
+      GroundTilingPatch.spec = "hpb";
       System.out.println("GroundTilingShaderTest ok (" + n + " links)");
    }
 }

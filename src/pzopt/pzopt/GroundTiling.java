@@ -48,7 +48,15 @@ public final class GroundTiling {
       uniform vec4 pzGtOF;              //   and the fractions: xy fract(skew(origin)), zw fract(origin / cell)
 
       uint gtPcg(uint v) { uint s = v * 747796405u + 2891336453u; uint w = ((s >> ((s >> 28u) + 4u)) ^ s) * 277803737u; return (w >> 22u) ^ w; }
+      #ifndef GT_MODE
+      #define GT_MODE -1
+      #endif
+      #ifdef GT_OLD_HASH
       uint gtHash3(ivec2 c, uint salt) { return gtPcg(uint(c.x) ^ gtPcg(uint(c.y) ^ gtPcg(salt ^ uint(pzGtPeriod.w)))); }
+      #else
+      // one PCG round over the lattice point and the salt spread by odd constants (a third of the nested hash's work)
+      uint gtHash3(ivec2 c, uint salt) { return gtPcg((uint(c.x) * 0x8DA6B343u) ^ (uint(c.y) * 0xD8163841u) ^ ((salt + uint(pzGtPeriod.w)) * 0xCB1AB31Fu)); }
+      #endif
       vec2 gtRand2(ivec2 c, uint salt) { uint h = gtHash3(c, salt); return vec2(float(h & 0xFFFFu), float(h >> 16u)) * (1.0 / 65536.0); }
       float gtRand1(ivec2 c, uint salt) { return float(gtHash3(c, salt) >> 8u) * (1.0 / 16777216.0); }
 
@@ -284,12 +292,24 @@ public final class GroundTiling {
       }
 
       vec4 gtSample(ivec2 px, vec2 wLocal, float layer, int mode) {
+      #if GT_MODE < 0 || GT_MODE == 1
          if (mode == 1) return gtHex(px, wLocal, layer);
+      #endif
+      #if GT_MODE < 0 || GT_MODE == 2
          if (mode == 2) return gtHpb(px, wLocal, layer);
+      #endif
+      #if GT_MODE < 0 || GT_MODE == 3
          if (mode == 3) return gtBomb(px, wLocal, layer);
+      #endif
+      #if GT_MODE < 0 || GT_MODE == 4
          if (mode == 4) return gtVoronoi(px, wLocal, layer);
+      #endif
+      #if GT_MODE < 0 || GT_MODE == 5
          if (mode == 5) return gtTwo(px, wLocal, layer);
+      #endif
+      #if GT_MODE < 0 || GT_MODE == 6
          if (mode == 6) return gtLap(px, wLocal, layer);
+      #endif
          return gtFetch(px, ivec2(0), layer);
       }
       // ---- end pzopt ground tiling ----

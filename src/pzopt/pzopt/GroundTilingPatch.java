@@ -23,6 +23,8 @@ import zombie.iso.weather.ClimateManager;
  * does in double ({@link GroundTiling#origin}).
  */
 public final class GroundTilingPatch implements GroundBake.FloorPatch {
+   /** The compiled spec: the mode's name, then "D" and the dev flags (a, o) if any; set by active() before id(). */
+   static volatile String spec = "hpb";
    static final GroundTilingPatch INSTANCE = new GroundTilingPatch();
    /** Texture units: the sprite table, then the art, Gaussian and LUT arrays. */
    static final int UNIT = 60;
@@ -43,7 +45,35 @@ public final class GroundTilingPatch implements GroundBake.FloorPatch {
 
    @Override
    public String id() {
-      return "tiling";
+      return "tiling" + spec;
+   }
+
+   /**
+    * The program is specialised to the tiling mode (GT_MODE): with every mode's sampler in one program NVIDIA allocates
+    * the registers of the biggest (lap, voronoi) for all of them, which cost the bake ~10 us with the patch returning the
+    * texel at once. The mode is part of {@link #id()}, so a mode change compiles its own variant. Dev flags after the
+    * mode name: {@code a} every mode in one program (the old layout), {@code o} the old three-PCG lattice hash.
+    */
+   @Override
+   public String defines() {
+      String sp = spec;
+      int m = specMode(sp);
+      return "#define GT_MODE " + m + (specFlags(sp).contains("o") ? "\n#define GT_OLD_HASH 1" : "");
+   }
+
+   static String specFlags(String sp) {
+      int u = sp.indexOf('D');
+      return u < 0 ? "" : sp.substring(u + 1);
+   }
+
+   /** The mode a spec compiles (-1: every mode, the uniform picks). */
+   static int specMode(String sp) {
+      int u = sp.indexOf('D');
+      String name = u < 0 ? sp : sp.substring(0, u);
+      if (specFlags(sp).contains("a")) {
+         return -1;
+      }
+      return Math.max(0, modeIndex(name));
    }
 
    // ---------------------------------------------------------------------------------------------- game thread
@@ -86,10 +116,13 @@ public final class GroundTilingPatch implements GroundBake.FloorPatch {
          mode = Math.max(0, modeIndex(t[0]));
          height = false;
          macro = 0;
+         String flags = "";
          for (int i = 1; i < t.length; i++) {
             height |= t[i].equals("b");
             macro = t[i].equals("m") ? 100 : macro;
+            flags += t[i].equals("a") || t[i].equals("o") ? t[i] : "";
          }
+         spec = MODES[mode] + (flags.isEmpty() ? "" : "D" + flags);
          if (mode == 0 && !height && macro == 0) {
             return false;
          }
@@ -98,6 +131,9 @@ public final class GroundTilingPatch implements GroundBake.FloorPatch {
          if (mode <= 0) {
             mode = 2;
          }
+         spec = MODES[mode];
+      } else {
+         spec = MODES[0];
       }
       float dry = seasonDryness();
       float[] p = {
@@ -290,7 +326,12 @@ public final class GroundTilingPatch implements GroundBake.FloorPatch {
       #if defined(PZG_PIECE) && PZG_PIECE == 2
          return t; // a grass / erosion overlay or dug soil on the natural floor: stock (with the attached flag only)
       #endif
+      #if GT_MODE >= 0
+         if (pzGtPeriod.z != GT_MODE) return t; // (a program of another spec: the stock texel until its own is in)
+         const int mode = GT_MODE;
+      #else
          int mode = pzGtPeriod.z;
+      #endif
          if (mode == 10) return t; // dev cost split: the variant's own overhead (no lookup)
          int row = gtSpriteRow();
          if (row < 0 || mode == 9) return t; // (9: dev cost split, the lookup alone)
