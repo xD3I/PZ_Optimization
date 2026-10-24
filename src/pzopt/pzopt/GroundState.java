@@ -313,7 +313,9 @@ public final class GroundState {
    private static final AtomicInteger inFlight = new AtomicInteger();
    public static long frames, primsTotal, primsDropped, cellsTotal, dispatches, decayPasses, decayCells, rebakesAsked, clears, readbacks, chunksSaved,
       chunksLoaded, loadsDropped, uploads;
-   public static long gameNs, sourcesNs, rigNs, binNs, batches;
+   public static long gameNs, sourcesNs, rigNs, binNs, batches, winNs, loadNs, decayNs, changesNs, tailNs;
+   private static boolean anyPending; // a slot waits for its listeners / re-bake (changes() scans the window only then)
+   private static long lastScanMs;
    private static long lastStampNs, lastWeatherMs;
    private static final long STAMP_PERIOD_NS = Config.DEV_GROUND_STATE_HZ <= 0 ? 0L : 1_000_000_000L / Config.DEV_GROUND_STATE_HZ;
 
@@ -394,14 +396,18 @@ public final class GroundState {
          lastDecayHours = -1.0;
          saveId = sid;
       }
+      boolean inst = Config.INSTRUMENT;
+      long tw = inst ? System.nanoTime() : 0L;
       window(f, pl.getX(), pl.getY());
       long nowMs = System.currentTimeMillis();
       if (nowMs - lastWeatherMs >= 1000L) {
          lastWeatherMs = nowMs;
          weather();
       }
-      applyLoads(f, nowMs);
-      boolean inst = Config.INSTRUMENT;
+      long tl = inst ? System.nanoTime() : 0L;
+      if (!LOADS.isEmpty()) {
+         applyLoads(f, nowMs);
+      }
       long ta = inst ? System.nanoTime() : 0L;
       if (SOURCES.on) {
          GroundMovers.wantEvents();
@@ -424,14 +430,25 @@ public final class GroundState {
          nP = 0; // (cleared after binning: a feature's frame hook queues before this turn)
          batches++;
       }
+      long td = inst ? System.nanoTime() : 0L;
       if (inst) {
-         long td = System.nanoTime();
+         winNs += tl - tw;
+         loadNs += ta - tl;
          sourcesNs += tb - ta;
          rigNs += tc - tb;
          binNs += td - tc;
       }
       decay(f, nowMs);
-      changes(nowMs);
+      long te = inst ? System.nanoTime() : 0L;
+      if (anyPending && nowMs - lastScanMs >= 20L) {
+         lastScanMs = nowMs;
+         changes(nowMs);
+      }
+      long tf = inst ? System.nanoTime() : 0L;
+      if (inst) {
+         decayNs += te - td;
+         changesNs += tf - te;
+      }
       if (Config.GROUND_TRACKS_PERSIST && nowMs - lastSaveMs > 30_000L) {
          lastSaveMs = nowMs;
          readbackModified(f, false);
@@ -446,7 +463,11 @@ public final class GroundState {
       } else {
          release(f);
       }
-      gameNs += System.nanoTime() - t0;
+      long tg = System.nanoTime();
+      if (inst) {
+         tailNs += tg - tf;
+      }
+      gameNs += tg - t0;
    }
 
    private static void submit(Frame f) {
@@ -774,6 +795,7 @@ public final class GroundState {
                   slotLive[s] = true;
                   slotModified[s] = true;
                   slotPending[s] = true;
+            anyPending = true;
                } else {
                   ci = cellOf[li];
                }
@@ -888,6 +910,7 @@ public final class GroundState {
             }
             decayChunk(f, cx, cy, dt, nowMs);
             slotPending[s] = true;
+            anyPending = true;
             slotModified[s] = true;
          }
       }
@@ -907,10 +930,15 @@ public final class GroundState {
       long every = Math.max(CHANGE_MS, r.rebakeMs());
       IsoCell cell = IsoWorld.instance.getCell();
       int budget = 4;
+      boolean left = false;
       for (int cy = wcy; cy < wcy + SLOTS && budget > 0; cy++) {
          for (int cx = wcx; cx < wcx + SLOTS && budget > 0; cx++) {
             int s = slot(cx, cy);
-            if (!slotPending[s] || nowMs - slotRebakeMs[s] < every) {
+            if (!slotPending[s]) {
+               continue;
+            }
+            if (nowMs - slotRebakeMs[s] < every) {
+               left = true;
                continue;
             }
             slotPending[s] = false;
@@ -937,6 +965,7 @@ public final class GroundState {
             }
          }
       }
+      anyPending = left || budget == 0; // (budget spent: the rest of the window not looked at)
    }
 
    // ------------------------------------------------------------------------------------------------ the frame's GPU work
@@ -1622,6 +1651,7 @@ public final class GroundState {
          slotLive[s] = true;
          slotModified[s] = false;
          slotPending[s] = true;
+            anyPending = true;
          slotLoadedFrame[s] = frame;
          if (age > 0.0) {
             System.arraycopy(WEATHER, 0, f.weather, 0, 4);
@@ -1796,7 +1826,8 @@ public final class GroundState {
          + "), cells " + cellsTotal + ", dispatches " + dispatches + ", decay passes " + decayPasses + " (" + decayCells + " cells), clears " + clears
          + ", read-backs " + readbacks + " (in flight " + inFlight.get() + "), chunks saved " + chunksSaved + " loaded " + chunksLoaded + " dropped "
          + loadsDropped + ", re-bakes " + rebakesAsked + ", stamp batches " + batches + ", game " + us(gameNs) + " us/frame (sources " + us(sourcesNs)
-         + ", dev rigs " + us(rigNs) + ", binning " + us(binNs) + ")" + (failed ? " (failed)" : "");
+         + ", dev rigs " + us(rigNs) + ", binning " + us(binNs) + ", window " + us(winNs) + ", loads " + us(loadNs) + ", decay " + us(decayNs) + ", changes " + us(changesNs)
+         + ", tail " + us(tailNs) + ")" + (failed ? " (failed)" : "");
    }
 
    private static String us(long ns) {
