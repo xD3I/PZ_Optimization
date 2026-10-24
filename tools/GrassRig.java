@@ -167,6 +167,7 @@ public class GrassRig {
          if (f0 >= 0) ns[f] = GL33.glGetQueryObjecti64(q[1], GL15.GL_QUERY_RESULT) - GL33.glGetQueryObjecti64(q[0], GL15.GL_QUERY_RESULT);
       }
       java.util.Arrays.sort(ns);
+      System.out.println("stats " + pzopt.GrassBlades.rigStats());
       System.out.printf(java.util.Locale.ROOT, "squares %d, gpu us median %.1f p10 %.1f p90 %.1f (frames %d)%n", n, ns[frames / 2] / 1e3, ns[frames / 10] / 1e3, ns[frames * 9 / 10] / 1e3, frames);
       // read back
       GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, dst[0]);

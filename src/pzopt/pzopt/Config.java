@@ -1686,6 +1686,9 @@ public final class Config {
    public static final int GRASS_BLADE_LOD_PX = integer("grassBladeLodPx", 0); // grass blades: blades shorter than this on screen (px) draw with grassBladeLodSegments segments (a second indirect draw); 0 = one draw
    public static final int GRASS_BLADE_LOD_SEGMENTS = integer("grassBladeLodSegments", 1); // grass blades: segments of the short blades (grassBladeLodPx)
    public static final boolean GRASS_BLADE_PUSH = bool("grassBladePush", true); // grass blades: the blades bend away from characters and cars moving through them (foliage sway's push kernel)
+   public static final int GRASS_BLADE_LAYER_DIV = integer("grassBladeLayerDiv", 0); // grass blades: draw into a 1 / N resolution layer composited depth-aware over the world (0 = straight into the world)
+   public static final int GRASS_BLADE_LAYER_EVERY = integer("grassBladeLayerEvery", 1); // grass blades, layer path: the layer is redrawn every N frames and moved with the camera between (the cached impostor variant)
+   public static final boolean GRASS_BLADE_FEEDBACK = bool("grassBladeFeedback", false); // grass blades: squares whose on-screen blades were all hidden by the static scene are left out for 30 frames (visibility feedback through a persistent buffer, no sync)
    public static final boolean GRASS_BLADE_TUFTS = bool("grassBladeTufts", true); // grass blades: an erosion grass tuft standing on a grass square grows taller blades round its foot, in its own colours
    public static final int GRASS_BLADE_WAVES_PCT = integer("grassBladeWavesPct", 100); // grass blades: Ghost of Tsushima's rolling wind waves over foliage sway's gusts (bend + sheen travelling downwind), %
    public static final boolean GRASS_BLADE_DEPTH_CHECK = bool("grassBladeDepthCheck", true); // grass blades: no blade where the root is covered in the scene (a post, a trunk, a bench) or the ground is not drawn

@@ -51,6 +51,7 @@ public final class GrassBlades {
    static final int LANES = 64; // blade candidates per square (one compute workgroup)
    static final int MAX_SQUARES = 8192;
    static final int MAX_BLADES = MAX_SQUARES * LANES;
+   static final int MESH_BLADES = 16; // blades a mesh shader workgroup (4 segments: 144 vertices, 112 triangles)
 
    // ----------------------------------------------------------------------------------------------- knobs (game thread)
 
@@ -75,6 +76,9 @@ public final class GrassBlades {
       boolean genOnStamp = true;
       int drawMode; // 0 instanced strips, 1 one strip with degenerate joins
       int lodSegments = 1;
+      int layerDiv; // the layer path: blades drawn into a 1 / N resolution layer, composited depth-aware (0 = off)
+      int layerEvery = 1;
+      boolean feedback; // squares whose on-screen blades were all hidden by the static scene are skipped for a while (persistent buffer, no sync) // the layer is redrawn every N frames, reprojected (pan) between: the impostor / cache variant
       float trailSeconds = 45F, regrowSeconds = 900F;
       int view; // dev: 1 = flat debug colour
       int devGen; // dev (rig): generation bisection 1 = empty, 2 = after the clumps, 3 = nothing kept
@@ -105,6 +109,9 @@ public final class GrassBlades {
          o.genEvery = genEvery;
          o.genOnStamp = genOnStamp;
          o.lodSegments = lodSegments;
+         o.layerDiv = layerDiv;
+         o.layerEvery = layerEvery;
+         o.feedback = feedback;
          o.trailSeconds = trailSeconds;
          o.regrowSeconds = regrowSeconds;
          o.view = view;
@@ -150,6 +157,9 @@ public final class GrassBlades {
                   case "genEvery" -> genEvery = Integer.parseInt(v);
                   case "genOnStamp" -> genOnStamp = Boolean.parseBoolean(v);
                   case "lodSegments" -> lodSegments = Integer.parseInt(v);
+                  case "layerDiv" -> layerDiv = Integer.parseInt(v);
+                  case "layerEvery" -> layerEvery = Integer.parseInt(v);
+                  case "feedback" -> feedback = Boolean.parseBoolean(v);
                   case "trailSeconds" -> trailSeconds = Float.parseFloat(v);
                   case "regrowSeconds" -> regrowSeconds = Float.parseFloat(v);
                   case "view" -> view = Integer.parseInt(v);
@@ -190,6 +200,9 @@ public final class GrassBlades {
       o.drawMode = Config.GRASS_BLADE_DRAW_MODE;
       o.genEvery = Math.max(1, Config.GRASS_BLADE_GEN_EVERY);
       o.lodSegments = Config.GRASS_BLADE_LOD_SEGMENTS;
+      o.layerDiv = Config.GRASS_BLADE_LAYER_DIV;
+      o.layerEvery = Math.max(1, Config.GRASS_BLADE_LAYER_EVERY);
+      o.feedback = Config.GRASS_BLADE_FEEDBACK;
       o.trailSeconds = Math.max(1, Config.GRASS_BLADE_TRAIL_SECONDS);
       o.regrowSeconds = Math.max(1, Config.GRASS_BLADE_REGROW_SECONDS);
       o.view = Config.DEV_GRASS_VIEW;
@@ -508,6 +521,11 @@ public final class GrassBlades {
       public int variant;
    }
 
+   /** The offline rig's counters. */
+   public static String rigStats() {
+      return "feedback tested " + Feedback.tested + " skipped " + Feedback.skipped + " | layer draws " + Gpu.layerDraws + " | raster area " + Gpu.rasterArea;
+   }
+
    /** The offline rig's parameters: the knobs of the launch's Config (A set). */
    public static Params rigParams() {
       Params p = new Params();
@@ -656,7 +674,7 @@ public final class GrassBlades {
       private static int genProgram, drawProgram, vao, squareBuf, bladeBuf, cmdBuf;
       private static int[] gu, du;
       private static IntBuffer squareUpload;
-      private static final ByteBuffer CMD = BufferUtils.createByteBuffer(40);
+      private static final ByteBuffer CMD = BufferUtils.createByteBuffer(60);
       private static final float[] VP = new float[4];
       private static final int[] VPI = new int[4];
       private static final float[] MAP = new float[6];
@@ -677,7 +695,7 @@ public final class GrassBlades {
       }
 
       static final String[] GU_NAMES = {"uColor", "uDepth", "uMapA", "uMapB", "uVp", "uOrigin", "uParams", "uFade", "uHasDepth", "uTrail", "uTrailK",
-         "pzgStateInfo", "uLod", "uDraw", "uCopy"};
+         "pzgStateInfo", "uLod", "uDraw", "uCopy", "uFb"};
       static final String[] DU_NAMES = {"uMapA", "uMapB", "uVp", "uWind", "uPh", "uGust", "uPush", "uPushN", "uOriginW", "uShape", "uSun", "uShade", "uTs",
          "uBase", "uStrip", "uWave"};
       /** OpenGL 4.3 (compute, storage buffers, indirect draws): the compute path; else (4.1) only the vertex-only path. */
@@ -720,7 +738,7 @@ public final class GrassBlades {
             GL15.glBufferData(GL43.GL_SHADER_STORAGE_BUFFER, (long)MAX_BLADES * 32L, GL15.GL_DYNAMIC_COPY);
             cmdBuf = GL15.glGenBuffers();
             GL15.glBindBuffer(GL43.GL_SHADER_STORAGE_BUFFER, cmdBuf);
-            GL15.glBufferData(GL43.GL_SHADER_STORAGE_BUFFER, 40L, GL15.GL_DYNAMIC_DRAW);
+            GL15.glBufferData(GL43.GL_SHADER_STORAGE_BUFFER, 60L, GL15.GL_DYNAMIC_DRAW);
             GL15.glBindBuffer(GL43.GL_SHADER_STORAGE_BUFFER, 0);
             Trails.init();
          } else {
@@ -951,15 +969,22 @@ public final class GrassBlades {
             genOy = p.oy;
             gens++;
             int n = Math.min(p.n, MAX_SQUARES);
+            int[] list = p.squares;
+            int fbRegion = -1;
+            if (o.feedback && Feedback.ready()) {
+               list = Feedback.filter(p, n);
+               n = Feedback.n;
+               fbRegion = Feedback.begin(p, list, n);
+            }
             squareUpload.clear();
-            squareUpload.put(p.squares, 0, n).flip();
+            squareUpload.put(list, 0, n).flip();
             GL15.glBindBuffer(GL43.GL_SHADER_STORAGE_BUFFER, squareBuf);
             GL15.glBufferSubData(GL43.GL_SHADER_STORAGE_BUFFER, 0L, squareUpload);
             CMD.clear();
             if (strip) {
-               CMD.putInt(0).putInt(1).putInt(0).putInt(0).putInt(0).putInt(1).putInt(0).putInt(0).putInt(0).putInt(0).flip();
+               CMD.putInt(0).putInt(1).putInt(0).putInt(0).putInt(0).putInt(1).putInt(0).putInt(0).putInt(0).putInt(0).putInt(0).putInt(0).putInt(0).putInt(1).putInt(1).flip();
             } else {
-               CMD.putInt(verts).putInt(0).putInt(0).putInt(0).putInt(2 * lodSegs + 1).putInt(0).putInt(0).putInt(0).putInt(0).putInt(0).flip();
+               CMD.putInt(verts).putInt(0).putInt(0).putInt(0).putInt(2 * lodSegs + 1).putInt(0).putInt(0).putInt(0).putInt(0).putInt(0).putInt(0).putInt(0).putInt(0).putInt(1).putInt(1).flip();
             }
             GL15.glBindBuffer(GL43.GL_SHADER_STORAGE_BUFFER, cmdBuf);
             GL15.glBufferSubData(GL43.GL_SHADER_STORAGE_BUFFER, 0L, CMD);
@@ -973,6 +998,10 @@ public final class GrassBlades {
             GL20.glUseProgram(genProgram);
             genUniforms(gu, p, trails, p.colorTex, p.depthTex, 1F, 0F, 0F, genProgram);
             GL20.glUniform4f(gu[13], strip ? 1F : 0F, vBig, vSmall, 0F);
+            GL20.glUniform1i(gu[15], fbRegion < 0 ? -1 : fbRegion * MAX_SQUARES);
+            if (fbRegion >= 0) {
+               GL30.glBindBufferBase(GL43.GL_SHADER_STORAGE_BUFFER, 5, Feedback.buf);
+            }
             GL30.glBindBufferBase(GL43.GL_SHADER_STORAGE_BUFFER, 0, squareBuf);
             GL30.glBindBufferBase(GL43.GL_SHADER_STORAGE_BUFFER, 1, bladeBuf);
             GL30.glBindBufferBase(GL43.GL_SHADER_STORAGE_BUFFER, 2, cmdBuf);
@@ -980,6 +1009,7 @@ public final class GrassBlades {
             GL42.glMemoryBarrier(GL43.GL_SHADER_STORAGE_BARRIER_BIT | GL42.GL_COMMAND_BARRIER_BIT);
             GL30.glBindBufferBase(GL43.GL_SHADER_STORAGE_BUFFER, 0, 0);
             GL30.glBindBufferBase(GL43.GL_SHADER_STORAGE_BUFFER, 2, 0);
+            GL30.glBindBufferBase(GL43.GL_SHADER_STORAGE_BUFFER, 5, 0);
             unbindGenTextures();
          }
 
@@ -988,6 +1018,33 @@ public final class GrassBlades {
             return;
          }
          // draw
+         if (o.layerDiv > 0 && layerReady()) {
+            drawLayer(p, strip, vBig);
+            return;
+         }
+         if (o.drawMode == 4 && rasterReady()) {
+            drawRaster(p);
+            return;
+         }
+         if (o.drawMode == 3 && meshProgram(o.segments) != 0) {
+            GL20.glUseProgram(meshProgram);
+            drawUniforms(mu, p, genOx, genOy);
+            drawState();
+            GL30.glBindVertexArray(vao);
+            GL30.glBindBufferBase(GL43.GL_SHADER_STORAGE_BUFFER, 1, bladeBuf);
+            GL30.glBindBufferBase(GL43.GL_SHADER_STORAGE_BUFFER, 2, cmdBuf);
+            GL15.glBindBuffer(GL40.GL_DRAW_INDIRECT_BUFFER, cmdBuf);
+            org.lwjgl.opengl.NVMeshShader.glDrawMeshTasksIndirectNV(40L);
+            GL15.glBindBuffer(GL40.GL_DRAW_INDIRECT_BUFFER, 0);
+            GL30.glBindBufferBase(GL43.GL_SHADER_STORAGE_BUFFER, 1, 0);
+            GL30.glBindBufferBase(GL43.GL_SHADER_STORAGE_BUFFER, 2, 0);
+            GL30.glBindVertexArray(0);
+            GL20.glUseProgram(0);
+            GL11.glColorMask(true, true, true, true);
+            draws++;
+            squaresDrawn += p.n;
+            return;
+         }
          GL20.glUseProgram(drawProgram);
          drawUniforms(du, p, genOx, genOy);
          drawState();
@@ -1084,6 +1141,305 @@ public final class GrassBlades {
          squaresDrawn += p.n;
       }
 
+      private static int rasterProgram, resolveProgram, pixBuf, pixW, pixH;
+      private static int[] ru;
+      private static int resolveRect;
+      private static boolean rasterFailed;
+
+      private static boolean rasterReady() {
+         if (rasterProgram != 0) {
+            return true;
+         }
+         if (rasterFailed) {
+            return false;
+         }
+         org.lwjgl.opengl.GLCapabilities c = org.lwjgl.opengl.GL.getCapabilities();
+         if (!c.GL_NV_shader_atomic_int64 || !c.GL_ARB_gpu_shader_int64) {
+            rasterFailed = true;
+            Log.info("grass blades: no 64-bit atomics: the software raster draws as drawMode 1");
+            return false;
+         }
+         rasterProgram = Shaders.compute(RASTER, "grass blades: software raster");
+         resolveProgram = Shaders.link(RESOLVE_VERT, RESOLVE_FRAG, "grass blades: raster resolve");
+         if (rasterProgram == 0 || resolveProgram == 0) {
+            rasterFailed = true;
+            rasterProgram = 0;
+            return false;
+         }
+         ru = Shaders.locations(rasterProgram, DU_NAMES);
+         rasterRectLoc = GL20.glGetUniformLocation(rasterProgram, "uRect");
+         resolveRect = GL20.glGetUniformLocation(resolveProgram, "uRect");
+         pixBuf = GL15.glGenBuffers();
+         return true;
+      }
+
+      private static int rasterRectLoc;
+      static long rasterArea;
+      private static final int[] RECT = new int[4];
+
+      /** The blades' screen rectangle (window px): the squares' bounds, a blade's reach above them. */
+      static void bladeRect(Params p, int[] r) {
+         float minU = 1e9F, maxU = -1e9F, minV = 1e9F, maxV = -1e9F;
+         for (int i = 0; i < p.n; i++) {
+            int s = p.squares[i];
+            int rx = (s & 255) - 128, ry = (s >> 8 & 255) - 128;
+            float u = rx - ry, v = rx + ry;
+            minU = Math.min(minU, u - 1F);
+            maxU = Math.max(maxU, u + 1F);
+            minV = Math.min(minV, v - 1.6F); // a 0.7-square blade reaches 1.4 v above its root
+            maxV = Math.max(maxV, v + 2F);
+         }
+         float x0 = (minU - p.map[1]) / p.map[0], x1 = (maxU - p.map[1]) / p.map[0];
+         float y0 = (minV - p.map[3]) / p.map[2], y1 = (maxV - p.map[3]) / p.map[2];
+         int vx = (int)p.vp[0], vy = (int)p.vp[1], vw = (int)p.vp[2], vh = (int)p.vp[3];
+         int ax = Math.max(vx, (int)Math.floor(Math.min(x0, x1)) - 4), bx = Math.min(vx + vw, (int)Math.ceil(Math.max(x0, x1)) + 4);
+         int ay = Math.max(vy, (int)Math.floor(Math.min(y0, y1)) - 4), by = Math.min(vy + vh, (int)Math.ceil(Math.max(y0, y1)) + 4);
+         r[0] = ax;
+         r[1] = ay;
+         r[2] = Math.max(0, bx - ax);
+         r[3] = Math.max(0, by - ay);
+      }
+
+      private static int layerFbo, layerColor, layerDepth, layerW, layerH, compositeProgram, layerAge = 1 << 20;
+      private static int[] lcu;
+      private static boolean layerFailed;
+      private static final float[] LAYER_MAP = new float[6];
+      private static final int[] LAYER_RECT = new int[4];
+      private static int layerOx, layerOy, layerDivNow, layerVariant = -1;
+
+      private static boolean layerReady() {
+         if (compositeProgram != 0) {
+            return true;
+         }
+         if (layerFailed) {
+            return false;
+         }
+         compositeProgram = Shaders.link(RESOLVE_VERT.replace("#version 450", "#version 430"), LAYER_COMPOSITE, "grass blades: layer composite");
+         if (compositeProgram == 0) {
+            layerFailed = true;
+            return false;
+         }
+         lcu = Shaders.locations(compositeProgram, "uLayerC", "uLayerD", "uL", "uLd");
+         layerFbo = GL30.glGenFramebuffers();
+         return true;
+      }
+
+      /**
+       * The layer path (grassBladeLayerDiv N): the blades of the rectangle drawn into a 1 / N resolution colour + depth
+       * layer, then composited over the world (bilinear over the layer's blade texels, their nearest depth through the
+       * hardware test). With grassBladeLayerEvery M the layer is redrawn every M frames and moved with the camera between
+       * (an ortho pan is a translation in window px and depth).
+       */
+      private static void drawLayer(Params p, boolean strip, int vBig) {
+         Opts o = p.o;
+         int div = Math.max(1, o.layerDiv);
+         int vx = (int)p.vp[0], vy = (int)p.vp[1], vw = (int)p.vp[2], vh = (int)p.vp[3];
+         int lw = vw / div + 2, lh = vh / div + 2;
+         if (lw != layerW || lh != layerH) {
+            if (layerColor != 0) {
+               GL11.glDeleteTextures(layerColor);
+               GL11.glDeleteTextures(layerDepth);
+            }
+            layerW = lw;
+            layerH = lh;
+            layerColor = GL11.glGenTextures();
+            GL11.glBindTexture(GL11.GL_TEXTURE_2D, layerColor);
+            GL11.glTexImage2D(GL11.GL_TEXTURE_2D, 0, GL11.GL_RGBA8, lw, lh, 0, GL11.GL_RGBA, GL11.GL_UNSIGNED_BYTE, (ByteBuffer)null);
+            texNearest();
+            layerDepth = GL11.glGenTextures();
+            GL11.glBindTexture(GL11.GL_TEXTURE_2D, layerDepth);
+            GL11.glTexImage2D(GL11.GL_TEXTURE_2D, 0, GL30.GL_DEPTH_COMPONENT32F, lw, lh, 0, GL11.GL_DEPTH_COMPONENT, GL11.GL_FLOAT, (ByteBuffer)null);
+            texNearest();
+            GL11.glBindTexture(GL11.GL_TEXTURE_2D, 0);
+            GL30.glBindFramebuffer(GL30.GL_DRAW_FRAMEBUFFER, layerFbo);
+            GL30.glFramebufferTexture2D(GL30.GL_DRAW_FRAMEBUFFER, GL30.GL_COLOR_ATTACHMENT0, GL11.GL_TEXTURE_2D, layerColor, 0);
+            GL30.glFramebufferTexture2D(GL30.GL_DRAW_FRAMEBUFFER, GL30.GL_DEPTH_ATTACHMENT, GL11.GL_TEXTURE_2D, layerDepth, 0);
+            GL30.glBindFramebuffer(GL30.GL_DRAW_FRAMEBUFFER, p.targetFbo);
+            layerAge = 1 << 20;
+         }
+         layerAge++;
+         boolean redraw = layerAge >= Math.max(1, o.layerEvery) || div != layerDivNow || p.map[0] != LAYER_MAP[0] || p.map[2] != LAYER_MAP[2]
+            || p.map[4] != LAYER_MAP[4] || p.variant != layerVariant || Math.abs(p.ox - layerOx) > 8 || Math.abs(p.oy - layerOy) > 8;
+         if (redraw) {
+            bladeRect(p, LAYER_RECT);
+            if (LAYER_RECT[2] == 0 || LAYER_RECT[3] == 0) {
+               return;
+            }
+            layerAge = 0;
+            layerDivNow = div;
+            layerVariant = p.variant;
+            System.arraycopy(p.map, 0, LAYER_MAP, 0, 6);
+            layerOx = p.ox;
+            layerOy = p.oy;
+            int rw = (LAYER_RECT[2] + div - 1) / div, rh = (LAYER_RECT[3] + div - 1) / div;
+            GL30.glBindFramebuffer(GL30.GL_DRAW_FRAMEBUFFER, layerFbo);
+            GL11.glViewport(0, 0, rw, rh);
+            GL11.glDisable(GL11.GL_SCISSOR_TEST);
+            GL11.glColorMask(true, true, true, true);
+            GL11.glDepthMask(true);
+            GL11.glClearColor(0F, 0F, 0F, 0F);
+            GL11.glClearDepth(1.0);
+            GL11.glClear(GL11.GL_COLOR_BUFFER_BIT | GL11.GL_DEPTH_BUFFER_BIT);
+            // the blades into the layer: the rectangle (in full-resolution window px, rw * div wide) is the draw's viewport
+            float[] vp = p.vp;
+            float s0 = vp[0], s1 = vp[1], s2 = vp[2], s3 = vp[3];
+            vp[0] = LAYER_RECT[0];
+            vp[1] = LAYER_RECT[1];
+            vp[2] = rw * div;
+            vp[3] = rh * div;
+            minHalfW = 0.45F * div;
+            GL20.glUseProgram(drawProgram);
+            drawUniforms(du, p, genOx, genOy);
+            minHalfW = 0.45F;
+            vp[0] = s0;
+            vp[1] = s1;
+            vp[2] = s2;
+            vp[3] = s3;
+            GL11.glDisable(GL11.GL_BLEND);
+            GL11.glDisable(GL11.GL_CULL_FACE);
+            GL11.glEnable(GL11.GL_DEPTH_TEST);
+            GL11.glDepthFunc(GL11.GL_LEQUAL);
+            GL30.glBindVertexArray(vao);
+            GL30.glBindBufferBase(GL43.GL_SHADER_STORAGE_BUFFER, 1, bladeBuf);
+            GL15.glBindBuffer(GL40.GL_DRAW_INDIRECT_BUFFER, cmdBuf);
+            GL20.glUniform1i(du[13], 0);
+            GL20.glUniform1f(du[14], strip ? vBig : 0F);
+            GL40.glDrawArraysIndirect(GL11.GL_TRIANGLE_STRIP, 0L);
+            GL15.glBindBuffer(GL40.GL_DRAW_INDIRECT_BUFFER, 0);
+            GL30.glBindBufferBase(GL43.GL_SHADER_STORAGE_BUFFER, 1, 0);
+            GL30.glBindFramebuffer(GL30.GL_DRAW_FRAMEBUFFER, p.targetFbo);
+            GL11.glViewport(vx, vy, vw, vh);
+            layerDraws++;
+         }
+         // the camera's pan since the layer was drawn: a translation in window px and depth
+         int du0 = (p.ox - p.oy) - (layerOx - layerOy), dv0 = (p.ox + p.oy) - (layerOx + layerOy);
+         float sx = (-du0 - p.map[1] + LAYER_MAP[1]) / p.map[0];
+         float sy = (-dv0 - p.map[3] + LAYER_MAP[3]) / p.map[2];
+         float sd = (-dv0 - p.map[5] + LAYER_MAP[5]) / p.map[4];
+         int rw = (LAYER_RECT[2] + div - 1) / div, rh = (LAYER_RECT[3] + div - 1) / div;
+         GL20.glUseProgram(compositeProgram);
+         GL13.glActiveTexture(GL13.GL_TEXTURE1);
+         GL11.glBindTexture(GL11.GL_TEXTURE_2D, layerDepth);
+         GL13.glActiveTexture(GL13.GL_TEXTURE0);
+         GL11.glBindTexture(GL11.GL_TEXTURE_2D, layerColor);
+         GL20.glUniform1i(lcu[0], 0);
+         GL20.glUniform1i(lcu[1], 1);
+         GL20.glUniform4f(lcu[2], LAYER_RECT[0] + sx, LAYER_RECT[1] + sy, div, 0F);
+         GL20.glUniform4f(lcu[3], sd, rw - 1, rh - 1, 0F);
+         drawState();
+         GL11.glEnable(GL11.GL_SCISSOR_TEST);
+         int x0 = (int)Math.floor(LAYER_RECT[0] + sx), y0 = (int)Math.floor(LAYER_RECT[1] + sy);
+         GL11.glScissor(x0, y0, rw * div + 1, rh * div + 1);
+         GL30.glBindVertexArray(vao);
+         GL11.glDrawArrays(GL11.GL_TRIANGLES, 0, 3);
+         GL11.glDisable(GL11.GL_SCISSOR_TEST);
+         GL30.glBindVertexArray(0);
+         GL11.glBindTexture(GL11.GL_TEXTURE_2D, 0);
+         GL13.glActiveTexture(GL13.GL_TEXTURE1);
+         GL11.glBindTexture(GL11.GL_TEXTURE_2D, 0);
+         GL13.glActiveTexture(GL13.GL_TEXTURE0);
+         GL20.glUseProgram(0);
+         GL11.glColorMask(true, true, true, true);
+         draws++;
+         squaresDrawn += p.n;
+      }
+
+      static long layerDraws;
+
+      /** drawMode 4: the software raster over the generated blades, then the resolve through the depth test. */
+      private static void drawRaster(Params p) {
+         int vw = (int)p.vp[2], vh = (int)p.vp[3];
+         if (vw != pixW || vh != pixH) {
+            pixW = vw;
+            pixH = vh;
+            GL15.glBindBuffer(GL43.GL_SHADER_STORAGE_BUFFER, pixBuf);
+            GL15.glBufferData(GL43.GL_SHADER_STORAGE_BUFFER, (long)vw * vh * 8L, GL15.GL_DYNAMIC_COPY);
+            GL43.glClearBufferData(GL43.GL_SHADER_STORAGE_BUFFER, GL30.GL_R32UI, GL30.GL_RED_INTEGER, GL11.GL_UNSIGNED_INT, new int[] {-1});
+            GL15.glBindBuffer(GL43.GL_SHADER_STORAGE_BUFFER, 0);
+         }
+         bladeRect(p, RECT);
+         if (RECT[2] == 0 || RECT[3] == 0) {
+            return;
+         }
+         GL20.glUseProgram(rasterProgram);
+         drawUniforms(ru, p, genOx, genOy);
+         GL30.glUniform4i(rasterRectLoc, RECT[0], RECT[1], RECT[2], RECT[3]);
+         GL30.glBindBufferBase(GL43.GL_SHADER_STORAGE_BUFFER, 1, bladeBuf);
+         GL30.glBindBufferBase(GL43.GL_SHADER_STORAGE_BUFFER, 2, cmdBuf);
+         GL30.glBindBufferBase(GL43.GL_SHADER_STORAGE_BUFFER, 4, pixBuf);
+         GL15.glBindBuffer(GL43.GL_DISPATCH_INDIRECT_BUFFER, cmdBuf);
+         GL43.glDispatchComputeIndirect(48L);
+         GL15.glBindBuffer(GL43.GL_DISPATCH_INDIRECT_BUFFER, 0);
+         GL42.glMemoryBarrier(GL43.GL_SHADER_STORAGE_BARRIER_BIT);
+         rasterArea += (long)RECT[2] * RECT[3];
+         if (p.o.devDraw == 3) { // dev: no resolve (the raster alone; the buffer keeps its minima)
+            GL30.glBindBufferBase(GL43.GL_SHADER_STORAGE_BUFFER, 4, 0);
+            GL20.glUseProgram(0);
+            return;
+         }
+         GL20.glUseProgram(resolveProgram);
+         GL30.glUniform4i(resolveRect, RECT[0], RECT[1], RECT[2], RECT[3]);
+         drawState();
+         GL11.glEnable(GL11.GL_SCISSOR_TEST);
+         GL11.glScissor(RECT[0], RECT[1], RECT[2], RECT[3]);
+         GL30.glBindVertexArray(vao);
+         GL11.glDrawArrays(GL11.GL_TRIANGLES, 0, 3);
+         GL11.glDisable(GL11.GL_SCISSOR_TEST);
+         GL42.glMemoryBarrier(GL43.GL_SHADER_STORAGE_BARRIER_BIT);
+         GL30.glBindVertexArray(0);
+         GL30.glBindBufferBase(GL43.GL_SHADER_STORAGE_BUFFER, 1, 0);
+         GL30.glBindBufferBase(GL43.GL_SHADER_STORAGE_BUFFER, 2, 0);
+         GL30.glBindBufferBase(GL43.GL_SHADER_STORAGE_BUFFER, 4, 0);
+         GL20.glUseProgram(0);
+         GL11.glColorMask(true, true, true, true);
+         draws++;
+         squaresDrawn += p.n;
+      }
+
+      private static int meshProgram, meshSegments = -1;
+      private static int[] mu;
+      private static boolean meshFailed;
+
+      /** The mesh shader program for this segment count (GL_NV_mesh_shader), 0 without it. */
+      private static int meshProgram(int segments) {
+         if (meshSegments == segments) {
+            return meshProgram;
+         }
+         if (meshFailed || !org.lwjgl.opengl.GL.getCapabilities().GL_NV_mesh_shader) {
+            if (!meshFailed) {
+               Log.info("grass blades: no GL_NV_mesh_shader: the mesh path draws as drawMode 1");
+            }
+            meshFailed = true;
+            return 0;
+         }
+         if (meshProgram != 0) {
+            GL20.glDeleteProgram(meshProgram);
+         }
+         meshSegments = segments;
+         int ms = Shaders.compile(org.lwjgl.opengl.NVMeshShader.GL_MESH_SHADER_NV, meshShader(segments), "grass blades: mesh shader");
+         int fs = Shaders.compile(GL20.GL_FRAGMENT_SHADER, FRAG, "grass blades: mesh fragment");
+         if (ms == 0 || fs == 0) {
+            meshFailed = true;
+            meshProgram = 0;
+            return 0;
+         }
+         meshProgram = GL20.glCreateProgram();
+         GL20.glAttachShader(meshProgram, ms);
+         GL20.glAttachShader(meshProgram, fs);
+         GL20.glLinkProgram(meshProgram);
+         GL20.glDeleteShader(ms);
+         GL20.glDeleteShader(fs);
+         if (GL20.glGetProgrami(meshProgram, GL20.GL_LINK_STATUS) == 0) {
+            Log.warn("grass blades: mesh shader link failed: " + GL20.glGetProgramInfoLog(meshProgram, 8192));
+            GL20.glDeleteProgram(meshProgram);
+            meshProgram = 0;
+            meshFailed = true;
+            return 0;
+         }
+         mu = Shaders.locations(meshProgram, DU_NAMES);
+         return meshProgram;
+      }
+
       static int perSquare(Opts o) {
          return Math.max(1, Math.min(LANES, Math.round(48F * o.densityPct / 100F)));
       }
@@ -1131,6 +1487,8 @@ public final class GrassBlades {
       }
 
       /** The draw's uniforms; (gx, gy) the origin square the blades were generated against. */
+      static float minHalfW = 0.45F; // px (the layer path draws at 1 / layerDiv: its own pixels)
+
       private static void drawUniforms(int[] u, Params p, int gx, int gy) {
          Opts o = p.o;
          GL20.glUniform4f(u[0], p.map[0], p.map[1], p.map[2], p.map[3]);
@@ -1151,7 +1509,7 @@ public final class GrassBlades {
          GL20.glUniform4f(u[8], ou, ov, gx - p.ox, gy - p.oy);
          GL20.glUniform4f(u[9], o.segments, o.widthPct / 100F, o.view, o.devDraw);
          GL20.glUniform4f(u[10], p.sunX, p.sunY, p.sunZ, o.translucencyPct / 100F);
-         GL20.glUniform4f(u[11], o.aoPct / 100F, o.sheenPct / 100F, 0F, 0F);
+         GL20.glUniform4f(u[11], o.aoPct / 100F, o.sheenPct / 100F, minHalfW, 0F);
          GL20.glUniform1f(u[12], p.ts);
          // the waves' phases from the run's clock in double (no float drift over a long session)
          double wt = p.now;
@@ -1176,6 +1534,103 @@ public final class GrassBlades {
    static float smooth(float e0, float e1, float x) {
       float t = Math.max(0F, Math.min(1F, (x - e0) / (e1 - e0)));
       return t * t * (3F - 2F * t);
+   }
+
+   /**
+    * Visibility feedback (grassBladeFeedback): the generation writes each square's kept / on-screen blade counts into a
+    * persistently mapped buffer (three regions, one a frame); two frames later the render thread reads them without any
+    * sync (a region still holding the CPU's "unknown" mark is skipped) and leaves out for SKIP_FRAMES the squares that had
+    * blades on screen but kept none: hidden by the static scene (a building, a trunk, a car park's baked cars). Squares
+    * that were off screen are never skipped (the camera moves). Render thread only.
+    */
+   static final class Feedback {
+      static final int REGIONS = 3, SKIP_FRAMES = 30;
+      static int buf;
+      static java.nio.IntBuffer mapped;
+      static boolean failed;
+      static int frame, n;
+      static final int[][] LISTS = new int[REGIONS][MAX_SQUARES];
+      static final int[] N = new int[REGIONS], OX = new int[REGIONS], OY = new int[REGIONS];
+      static final int[] SKIP = new int[256 * 256], KEY = new int[256 * 256];
+      static int[] out = new int[MAX_SQUARES];
+      static long skipped, tested;
+
+      static boolean ready() {
+         if (buf != 0) {
+            return true;
+         }
+         if (failed || !org.lwjgl.opengl.GL.getCapabilities().OpenGL44) {
+            failed = true;
+            return false;
+         }
+         buf = GL15.glGenBuffers();
+         GL15.glBindBuffer(GL43.GL_SHADER_STORAGE_BUFFER, buf);
+         int flags = GL30.GL_MAP_WRITE_BIT | GL30.GL_MAP_READ_BIT | org.lwjgl.opengl.GL44.GL_MAP_PERSISTENT_BIT | org.lwjgl.opengl.GL44.GL_MAP_COHERENT_BIT;
+         org.lwjgl.opengl.GL44.glBufferStorage(GL43.GL_SHADER_STORAGE_BUFFER, (long)REGIONS * MAX_SQUARES * 4L, flags);
+         ByteBuffer b = GL30.glMapBufferRange(GL43.GL_SHADER_STORAGE_BUFFER, 0L, (long)REGIONS * MAX_SQUARES * 4L, flags);
+         GL15.glBindBuffer(GL43.GL_SHADER_STORAGE_BUFFER, 0);
+         if (b == null) {
+            failed = true;
+            return false;
+         }
+         mapped = b.order(java.nio.ByteOrder.nativeOrder()).asIntBuffer();
+         for (int i = 0; i < REGIONS * MAX_SQUARES; i++) {
+            mapped.put(i, -1);
+         }
+         return true;
+      }
+
+      /** This frame's squares without the ones skipped (n = how many are left). Reads the region written two frames ago. */
+      static int[] filter(Params p, int count) {
+         frame++;
+         int r = (frame + 1) % REGIONS; // = frame - 2
+         int base = r * MAX_SQUARES;
+         int[] l = LISTS[r];
+         for (int i = 0; i < N[r]; i++) {
+            int c = mapped.get(base + i);
+            if (c == -1) {
+               continue; // not written yet
+            }
+            tested++;
+            if ((c & 0xffff) == 0 && (c >>> 16) > 0) {
+               int s = l[i];
+               int x = OX[r] + (s & 255) - 128, y = OY[r] + (s >> 8 & 255) - 128;
+               int k = (y & 255) << 8 | (x & 255);
+               SKIP[k] = frame + SKIP_FRAMES;
+               KEY[k] = x >> 8 & 0xffff | (y >> 8 & 0xffff) << 16;
+            }
+         }
+         if (out.length < count) {
+            out = new int[count];
+         }
+         int m = 0;
+         for (int i = 0; i < count; i++) {
+            int s = p.squares[i];
+            int x = p.ox + (s & 255) - 128, y = p.oy + (s >> 8 & 255) - 128;
+            int k = (y & 255) << 8 | (x & 255);
+            if (SKIP[k] > frame && KEY[k] == (x >> 8 & 0xffff | (y >> 8 & 0xffff) << 16)) {
+               skipped++;
+               continue;
+            }
+            out[m++] = s;
+         }
+         n = m;
+         return out;
+      }
+
+      /** The region this frame's generation writes: marked unknown, its square list kept for the read two frames later. */
+      static int begin(Params p, int[] list, int count) {
+         int r = frame % REGIONS;
+         int base = r * MAX_SQUARES;
+         for (int i = 0; i < count; i++) {
+            mapped.put(base + i, -1);
+         }
+         System.arraycopy(list, 0, LISTS[r], 0, count);
+         N[r] = count;
+         OX[r] = p.ox;
+         OY[r] = p.oy;
+         return r;
+      }
    }
 
    // ----------------------------------------------------------------------------------- movers and trails (game thread)
@@ -1474,7 +1929,9 @@ public final class GrassBlades {
       "vec3 gbFetchColor(ivec2 cp, uint lane, int sqi) { return texelFetch(uColor, cp, 0).rgb; }",
       "float gbFetchDepth(ivec2 cp, uint lane, int sqi) { return texelFetch(uDepth, cp, 0).r; }",
       "#endif",
+      "bool gbOnScreen;",
       "bool gbMake(uint s, uint lane, int sqi, out vec4 A, out vec4 B, out bool small) {",
+      "   gbOnScreen = false;",
       "   A = vec4(0.0); B = vec4(0.0); small = false;",
       ROOT_CODE,
       "   vec2 pw = vec2(float(X), float(Y)) + f;", // world (for the clumps)
@@ -1509,6 +1966,7 @@ public final class GrassBlades {
       "   vec2 px = vec2((u - uMapA.y) / uMapA.x, (v - uMapA.w) / uMapA.z);",
       "   float m = h * 2.0 / abs(uMapA.z) + 4.0;", // the blade's reach on screen
       "   if (px.x < uVp.x - m || px.x > uVp.x + uVp.z + m || px.y < uVp.y - m || px.y > uVp.y + uVp.w + m) keep = false;",
+      "   gbOnScreen = keep;", // (visibility feedback: a square whose on-screen blades all fail the depth test is hidden by the static scene)
       "   ivec2 ip = ivec2(clamp(px, uVp.xy, uVp.xy + uVp.zw - 1.0));",
       "   ivec2 cp = ivec2((vec2(ip) - uCopy.yz) / uCopy.x);",
       "   vec3 col = vec3(0.0);",
@@ -1561,25 +2019,31 @@ public final class GrassBlades {
       "layout(std430, binding = 0) readonly buffer Squares { uint sq[]; };",
       "struct Blade { vec4 a; vec4 b; };",
       "layout(std430, binding = 1) writeonly buffer Blades { Blade blades[]; };",
-      "layout(std430, binding = 2) buffer Cmd { uint cCount; uint cInstances; uint cFirst; uint cBase; uint c1Count; uint c1Instances; uint c1First; uint c1Base; uint cN0; uint cN1; };",
+      "layout(std430, binding = 2) buffer Cmd { uint cCount; uint cInstances; uint cFirst; uint cBase; uint c1Count; uint c1Instances; uint c1First; uint c1Base; uint cN0; uint cN1; uint cMesh; uint cMeshFirst; uint cRx; uint cRy; uint cRz; };",
       "uniform vec4 uDraw;", // x: 1 = one strip of all blades (degenerate joins, no instancing), y, z: vertices a blade (big, small)
       GEN_FN,
-      "shared uint sCount, sCount1;",
+      "layout(std430, binding = 5) writeonly buffer Feedback { uint fb[]; };",
+      "uniform int uFb;", // the feedback region's first slot (-1: off)
+      "shared uint sCount, sCount1, sOn;",
       "shared uint sBase, sBase1;",
       "void main() {",
       "   uint lane = gl_LocalInvocationID.x;",
       "   if (uLod.z == 1.0) return;",
-      "   if (lane == 0u) { sCount = 0u; sCount1 = 0u; }",
+      "   if (lane == 0u) { sCount = 0u; sCount1 = 0u; sOn = 0u; }",
       "   barrier();",
       "   vec4 A, B; bool small;",
       "   bool keep = gbMake(sq[gl_WorkGroupID.x], lane, int(gl_WorkGroupID.x), A, B, small);",
       "   uint li = 0u;",
       "   if (keep) li = small ? atomicAdd(sCount1, 1u) : atomicAdd(sCount, 1u);",
+      "   if (gbOnScreen && uFb >= 0) atomicAdd(sOn, 1u);",
       "   barrier();",
+      "   if (lane == 0u && uFb >= 0) fb[uFb + int(gl_WorkGroupID.x)] = (sCount + sCount1) | (sOn << 16);",
       "   if (lane == 0u) {",
       "      sBase = sCount > 0u ? atomicAdd(cN0, sCount) : 0u; sBase1 = sCount1 > 0u ? atomicAdd(cN1, sCount1) : 0u;",
       "      if (uDraw.x > 0.5) { if (sCount > 0u) atomicAdd(cCount, sCount * uint(uDraw.y)); if (sCount1 > 0u) atomicAdd(c1Count, sCount1 * uint(uDraw.z)); }",
       "      else { if (sCount > 0u) atomicAdd(cInstances, sCount); if (sCount1 > 0u) atomicAdd(c1Instances, sCount1); }",
+      "      if (sCount > 0u) atomicMax(cMesh, (min(sBase + sCount, " + (MAX_BLADES / 2) + "u) + " + (MESH_BLADES - 1) + "u) / " + MESH_BLADES + "u);", // the mesh path's task count
+      "      if (sCount > 0u) atomicMax(cRx, (min(sBase + sCount, " + (MAX_BLADES / 2) + "u) + 63u) / 64u);", // the software raster's workgroups
       "   }",
       "   barrier();",
       "   uint at = small ? " + (MAX_BLADES / 2) + "u + sBase1 + li : sBase + li;",
@@ -1599,7 +2063,6 @@ public final class GrassBlades {
       "uniform vec4 uShade;", // ao, sheen
       "uniform vec4 uWave;", // Tsushima waves: amount, travelling phase, drift phase
       "uniform float uTs;",
-      "out vec3 vCol;",
       // foliage sway's gust ("sines") and its displacement pzSwDk, the same expressions (Sway.gustExpr / composite)
       "float gbGust(vec2 wp) { return 0.5 + 0.25 * (sin(dot(wp, vec2(0.625, 0.21875)) * 0.78539816 + uGust.x * 0.78539816) + sin(dot(wp, vec2(-0.28125, 0.71875)) * 0.78539816 + uGust.y * 0.78539816)); }",
       "float gbSwayX(float weight, float g, float phase) {",
@@ -1640,7 +2103,7 @@ public final class GrassBlades {
       "   return vec2((u - uMapA.y) / uMapA.x, (v - uMapA.w) / uMapA.z);",
       "}",
       // one vertex of blade (A, B): vertex vid of its strip
-      "void gbEmit(vec4 A, vec4 B, int vid) {",
+      "void gbVertex(vec4 A, vec4 B, int vid, out vec4 P, out vec3 C) {",
       "   vec3 root = vec3(A.xy + uOriginW.zw, 0.0);", // generated against an older origin square (amortised generation)
       "   float h = A.z;",
       "   vec4 col = unpackUnorm4x8(floatBitsToUint(A.w));",
@@ -1682,11 +2145,10 @@ public final class GrassBlades {
       "   float fa = pk.z * 3.14159265;",
       "   float face = mix(0.35, 1.0, abs(cos(fa)));",
       "   float halfW = 0.5 * B.z * pxPerU * face * pow(it, 0.8);",
-      "   if (side != 0.0) halfW = max(halfW, 0.45);",
+      "   if (side != 0.0) halfW = max(halfW, uShade.z);",
       "   vec4 c = gbClip(pos);",
       "   c.xy += nrm * side * halfW / uVp.zw * 2.0;",
-      "   gl_Position = c;",
-      "   if (uShape.w == 1.0) gl_Position = vec4(2.0, 2.0, 2.0, 1.0);",
+      "   P = uShape.w == 1.0 ? vec4(2.0, 2.0, 2.0, 1.0) : c;",
       // shading: the painted root colour, darker toward the root, a little lighter toward the tip, sheen where the gust is
       // strong, translucent against a low sun behind it (the camera looks from +x +y)
       "   vec3 base = col.rgb;",
@@ -1698,7 +2160,7 @@ public final class GrassBlades {
       "   float tr = uSun.w * back * low * t * t;",
       "   vec3 c3 = base * ao * (1.0 + 0.10 * t + sheen + 0.16 * flatK * t) + base * vec3(0.75, 0.62, 0.18) * tr;",
       "   if (uShape.z > 0.5) c3 = mix(vec3(1.0, 0.0, 0.0), vec3(1.0, 1.0, 0.0), t);",
-      "   vCol = c3;",
+      "   C = c3;",
       "}");
 
    static final String VERT = String.join("\n",
@@ -1710,13 +2172,14 @@ public final class GrassBlades {
       "uniform vec4 uVp;",
       "uniform int uBase;",
       "uniform float uStrip;",
+      "out vec3 vCol;",
       DRAW_FN,
       "void main() {",
       "   int vid = gl_VertexID, inst = gl_InstanceID;",
       "   if (uStrip > 0.5) { int V = int(uStrip); inst = vid / V; vid = clamp(vid - inst * V - 1, 0, V - 3); }", // one strip: each blade's first and last vertex doubled (degenerate joins)
       "   if (uShape.w == 2.0) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); vCol = vec3(0.0); return; }",
       "   Blade bl = blades[uBase + inst];",
-      "   gbEmit(bl.a, bl.b, vid);",
+      "   gbVertex(bl.a, bl.b, vid, gl_Position, vCol);",
       "}");
 
    /**
@@ -1730,6 +2193,7 @@ public final class GrassBlades {
       "#define GB_ROOTS 1",
       "uniform usamplerBuffer uSquares;",
       "uniform float uStrip;", // vertices a candidate (its strip + the two degenerate joins)
+      "out vec3 vCol;",
       GEN_FN,
       DRAW_FN,
       "void main() {",
@@ -1741,7 +2205,153 @@ public final class GrassBlades {
       "   uint lane = uint(cand - sqi * uOrigin.z);",
       "   vec4 A, B; bool small;",
       "   if (uShape.w == 2.0 || !gbMake(texelFetch(uSquares, sqi).r, lane, sqi, A, B, small)) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); vCol = vec3(0.0); return; }",
-      "   gbEmit(A, B, vid);",
+      "   gbVertex(A, B, vid, gl_Position, vCol);",
+      "}");
+
+   /**
+    * The mesh shader path (grassBladeDrawMode 3, GL_NV_mesh_shader): the compute generation's blades drawn MESH_BLADES to a
+    * workgroup, each blade's strip as its own vertices and triangles (no degenerate joins, no per-instance cost); the
+    * workgroup count comes from the generation (cMesh).
+    */
+   static String meshShader(int segments) {
+      int v = 2 * segments + 1, t = v - 2;
+      return String.join("\n",
+         "#version 450",
+         "#extension GL_NV_mesh_shader : require",
+         "layout(local_size_x = 32) in;",
+         "layout(triangles, max_vertices = " + (MESH_BLADES * v) + ", max_primitives = " + (MESH_BLADES * t) + ") out;",
+         "struct Blade { vec4 a; vec4 b; };",
+         "layout(std430, binding = 1) readonly buffer Blades { Blade blades[]; };",
+         "layout(std430, binding = 2) readonly buffer Cmd { uint cmd[12]; };",
+         "uniform vec4 uMapA;",
+         "uniform vec4 uMapB;",
+         "uniform vec4 uVp;",
+         "out vec3 vCol[];",
+         DRAW_FN,
+         "void main() {",
+         "   uint first = gl_WorkGroupID.x * " + MESH_BLADES + "u;",
+         "   uint total = min(cmd[8], " + (MAX_BLADES / 2) + "u);",
+         "   uint nb = first < total ? min(" + MESH_BLADES + "u, total - first) : 0u;",
+         "   for (uint i = gl_LocalInvocationID.x; i < nb * " + v + "u; i += 32u) {",
+         "      uint b = i / " + v + "u;",
+         "      Blade bl = blades[first + b];",
+         "      vec4 P; vec3 C;",
+         "      gbVertex(bl.a, bl.b, int(i - b * " + v + "u), P, C);",
+         "      gl_MeshVerticesNV[i].gl_Position = P;",
+         "      vCol[i] = C;",
+         "   }",
+         "   for (uint i = gl_LocalInvocationID.x; i < nb * " + t + "u; i += 32u) {",
+         "      uint b = i / " + t + "u, k = b * " + v + "u + (i - b * " + t + "u);",
+         "      gl_PrimitiveIndicesNV[i * 3u] = k; gl_PrimitiveIndicesNV[i * 3u + 1u] = k + 1u; gl_PrimitiveIndicesNV[i * 3u + 2u] = k + 2u;",
+         "   }",
+         "   if (gl_LocalInvocationID.x == 0u) gl_PrimitiveCountNV = nb * " + t + "u;",
+         "}");
+   }
+
+   /**
+    * The compute software rasteriser (grassBladeDrawMode 4; GL_NV_shader_atomic_int64): one thread per generated blade
+    * walks its strip's triangles over their pixel boxes and keeps the nearest fragment per pixel with a 64-bit atomicMin
+    * of (depth, colour) in a buffer over the blades' screen rectangle (Jarl's 2D grass, 80.lv 2025); RESOLVE_FRAG then
+    * writes the kept fragments through the hardware depth test and resets the buffer.
+    */
+   static final String RASTER = String.join("\n",
+      "#version 450",
+      "#extension GL_ARB_gpu_shader_int64 : require",
+      "#extension GL_NV_shader_atomic_int64 : require",
+      "layout(local_size_x = 64) in;",
+      "struct Blade { vec4 a; vec4 b; };",
+      "layout(std430, binding = 1) readonly buffer Blades { Blade blades[]; };",
+      "layout(std430, binding = 2) readonly buffer Cmd { uint cmd[15]; };",
+      "layout(std430, binding = 4) buffer Pix { uint64_t pix[]; };",
+      "uniform vec4 uMapA;",
+      "uniform vec4 uMapB;",
+      "uniform vec4 uVp;",
+      "uniform ivec4 uRect;", // x0, y0, w, h (window px)
+      DRAW_FN,
+      "vec3 gbWin(vec4 P) { return vec3((P.xy * 0.5 + 0.5) * uVp.zw + uVp.xy, P.z * 0.5 + 0.5); }",
+      "float gbEdge(vec2 a, vec2 b, vec2 c) { return (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x); }",
+      "void gbTri(vec3 a, vec3 b, vec3 c, vec3 ca, vec3 cb, vec3 cc) {",
+      "   float area = gbEdge(a.xy, b.xy, c.xy);",
+      "   if (abs(area) < 1e-6) return;",
+      "   ivec2 lo = max(ivec2(floor(min(a.xy, min(b.xy, c.xy)) - 0.5)), uRect.xy);",
+      "   ivec2 hi = min(ivec2(ceil(max(a.xy, max(b.xy, c.xy)) - 0.5)), uRect.xy + uRect.zw - 1);",
+      "   if (hi.x - lo.x > 64 || hi.y - lo.y > 64) return;", // (a blade triangle is a few pixels)
+      "   for (int y = lo.y; y <= hi.y; y++) for (int x = lo.x; x <= hi.x; x++) {",
+      "      vec2 q = vec2(float(x), float(y)) + 0.5;",
+      "      float w0 = gbEdge(b.xy, c.xy, q) / area, w1 = gbEdge(c.xy, a.xy, q) / area, w2 = 1.0 - w0 - w1;",
+      "      if (w0 < 0.0 || w1 < 0.0 || w2 < 0.0) continue;",
+      "      float z = w0 * a.z + w1 * b.z + w2 * c.z;",
+      "      if (z < 0.0 || z > 1.0) continue;",
+      "      vec3 col = clamp(w0 * ca + w1 * cb + w2 * cc, 0.0, 1.0);",
+      "      uint idx = uint((y - uRect.y) * uRect.z + (x - uRect.x));",
+      "      atomicMin(pix[idx], (uint64_t(floatBitsToUint(z)) << 32) | uint64_t(packUnorm4x8(vec4(col, 1.0))));",
+      "   }",
+      "}",
+      "void main() {",
+      "   uint bi = gl_GlobalInvocationID.x;",
+      "   if (bi >= min(cmd[8], " + (MAX_BLADES / 2) + "u)) return;",
+      "   Blade bl = blades[bi];",
+      "   int segs = int(uShape.x);",
+      "   vec4 P0, P1; vec3 C0, C1;",
+      "   gbVertex(bl.a, bl.b, 0, P0, C0); gbVertex(bl.a, bl.b, 1, P1, C1);",
+      "   vec3 l0 = gbWin(P0), r0 = gbWin(P1);",
+      "   for (int k = 1; k <= segs; k++) {",
+      "      vec4 P2, P3; vec3 C2, C3;",
+      "      gbVertex(bl.a, bl.b, 2 * k, P2, C2);",
+      "      vec3 l1 = gbWin(P2);",
+      "      if (k == segs) { gbTri(l0, r0, l1, C0, C1, C2); break; }",
+      "      gbVertex(bl.a, bl.b, 2 * k + 1, P3, C3);",
+      "      vec3 r1 = gbWin(P3);",
+      "      gbTri(l0, r0, l1, C0, C1, C2);",
+      "      gbTri(r0, r1, l1, C1, C3, C2);",
+      "      l0 = l1; r0 = r1; C0 = C2; C1 = C3;",
+      "   }",
+      "}");
+
+   /** The layer path's composite: the layer's blade texels (alpha 1) blended bilinearly, the nearest one's depth. */
+   static final String LAYER_COMPOSITE = String.join("\n",
+      "#version 430",
+      "uniform sampler2D uLayerC;",
+      "uniform sampler2D uLayerD;",
+      "uniform vec4 uL;", // the layer's lower-left corner in window px (pan included), divisor
+      "uniform vec4 uLd;", // depth shift (pan), last texel x, y
+      "layout(location = 0) out vec4 oColor;",
+      "void main() {",
+      "   vec2 q = (gl_FragCoord.xy - uL.xy) / uL.z - 0.5;",
+      "   ivec2 i = ivec2(floor(q)); vec2 f = q - vec2(i);",
+      "   vec4 acc = vec4(0.0); float d = 1.0;",
+      "   for (int k = 0; k < 4; k++) {",
+      "      ivec2 o = ivec2(k & 1, k >> 1);",
+      "      ivec2 t = clamp(i + o, ivec2(0), ivec2(uLd.yz));",
+      "      vec4 c = texelFetch(uLayerC, t, 0);",
+      "      if (c.a < 0.5) continue;",
+      "      float w = (o.x == 1 ? f.x : 1.0 - f.x) * (o.y == 1 ? f.y : 1.0 - f.y) + 1e-4;",
+      "      acc += vec4(c.rgb * w, w);",
+      "      d = min(d, texelFetch(uLayerD, t, 0).r);",
+      "   }",
+      "   if (acc.w <= 0.0) discard;",
+      "   oColor = vec4(acc.rgb / acc.w, 1.0);",
+      "   gl_FragDepth = d + uLd.x;",
+      "}");
+
+   static final String RESOLVE_VERT = String.join("\n",
+      "#version 450",
+      "void main() { vec2 q = vec2(float((gl_VertexID << 1) & 2), float(gl_VertexID & 2)); gl_Position = vec4(q * 2.0 - 1.0, 0.0, 1.0); }");
+
+   static final String RESOLVE_FRAG = String.join("\n",
+      "#version 450",
+      "#extension GL_ARB_gpu_shader_int64 : require",
+      "layout(std430, binding = 4) buffer Pix { uint64_t pix[]; };",
+      "uniform ivec4 uRect;",
+      "layout(location = 0) out vec4 oColor;",
+      "void main() {",
+      "   ivec2 q = ivec2(gl_FragCoord.xy) - uRect.xy;",
+      "   uint idx = uint(q.y * uRect.z + q.x);",
+      "   uint64_t v = pix[idx];",
+      "   if (v == 0xFFFFFFFFFFFFFFFFUL) discard;",
+      "   pix[idx] = 0xFFFFFFFFFFFFFFFFUL;",
+      "   oColor = unpackUnorm4x8(uint(v & 0xFFFFFFFFUL));",
+      "   gl_FragDepth = uintBitsToFloat(uint(v >> 32));",
       "}");
 
    /**
