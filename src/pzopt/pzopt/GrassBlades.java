@@ -345,15 +345,17 @@ public final class GrassBlades {
       return new int[] {x, y, 0};
    }
 
-   /** The grass of a chunk's 64 ground squares (squareGrass), cached; re-read when the chunk object changes or, two a frame, after 2 s. */
+   /**
+    * The grass of a chunk's 64 ground squares (squareGrass), cached in the chunk's GroundChunk slot (dropped when the chunk
+    * object is reused); re-read, two a frame, after 2 s.
+    */
    private static final class ChunkGrass {
-      Object chunk;
       final byte[] g = new byte[64];
       int frame;
       boolean any;
    }
 
-   private static final java.util.HashMap<Long, ChunkGrass> CHUNKS = new java.util.HashMap<>();
+   private static final int SLOT = GroundChunk.id("grassBlades");
    private static int refreshBudget, gatherFrame;
    static long gatherNs, moversNs, chunkReads;
 
@@ -362,17 +364,13 @@ public final class GrassBlades {
       if (c == null) {
          return null;
       }
-      long key = (long)wx << 32 ^ (wy & 0xffffffffL);
-      ChunkGrass e = CHUNKS.get(key);
-      if (e == null) {
-         if (CHUNKS.size() > 4096) {
-            CHUNKS.clear();
-         }
+      ChunkGrass e = (ChunkGrass)GroundChunk.get(c, SLOT);
+      boolean fresh = e == null;
+      if (fresh) {
          e = new ChunkGrass();
-         CHUNKS.put(key, e);
+         GroundChunk.put(c, SLOT, e);
       }
-      if (e.chunk != c || (gatherFrame - e.frame > 240 && refreshBudget-- > 0)) {
-         e.chunk = c;
+      if (fresh || (gatherFrame - e.frame > 240 && refreshBudget-- > 0)) {
          e.frame = gatherFrame;
          e.any = false;
          for (int i = 0; i < 64; i++) {

@@ -13,8 +13,9 @@ public class GrassBladesTest {
    public static void main(String[] args) throws Exception {
       // knobs
       GrassBlades.Opts o = new GrassBlades.Opts();
-      o.apply("segments:2;density=50,waves:0;tufts:false;drawMode:3;layerDiv:2;layerEvery:4;feedback:true;on:false");
+      o.apply("segments:2;density=50,waves:0;tufts:false;drawMode:3;layerDiv:2;layerEvery:4;feedback:true;genMs:2.5;on:false");
       Check.check(o.segments == 2 && o.densityPct == 50 && o.wavesPct == 0 && !o.tufts && o.drawMode == 3, "knobs parsed");
+      Check.check(o.genMs == 2.5F && o.copy().genMs == 2.5F, "genMs parsed and copied");
       Check.check(o.layerDiv == 2 && o.layerEvery == 4 && o.feedback && o.off, "layer / feedback / off knobs parsed");
       GrassBlades.Opts c = o.copy();
       Check.check(c.segments == 2 && c.layerEvery == 4 && c.feedback && !c.tufts && c.wavesPct == 0, "copy keeps the knobs");
