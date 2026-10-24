@@ -61,13 +61,14 @@ SELECT count(*) AS runs, count(*) FILTER (WHERE valid) AS valid, count(*) FILTER
     L.add(D.stat_panel("Last run", f"SELECT extract(epoch FROM max(started)) * 1000 AS \"last run\" FROM runs WHERE {mine}",
                        unit="dateTimeFromNow",
                        color_mode="none", desc="The newest run of this machine in the database, any time range."), 4, 4)
+    setup = "resolution, opengl, gpu, jvm, launcher, power_profile, cpu_power"
     L.add(D.table_panel("What the newest runs reported", f"""
-SELECT DISTINCT ON (resolution, opengl, gpu, jvm, launcher) resolution, gpu, opengl, jvm, launcher, max(started) OVER
-  (PARTITION BY resolution, opengl, gpu, jvm, launcher) AS "last seen"
-FROM runs WHERE {mine} AND $__timeFilter(started) ORDER BY resolution, opengl, gpu, jvm, launcher""",
-                        desc="Each distinct setup the console reported (desktop resolution, GPU, OpenGL renderer, JVM, launcher). "
-                             "Compare runs only within one row.",
-                        overrides=[D.ov("last seen", unit="dateTimeAsIso", width=160), D.ov("resolution", width=110)]), 14, 4)
+SELECT DISTINCT ON ({setup}) resolution, gpu, opengl, jvm, launcher, {D.POWER_COLS}, max(started) OVER
+  (PARTITION BY {setup}) AS "last seen"
+FROM runs WHERE {mine} AND $__timeFilter(started) ORDER BY {setup}""",
+                        desc="Each distinct setup the console reported (desktop resolution, GPU, OpenGL renderer, JVM, launcher) and the "
+                             "CPU power state run.opts recorded at launch. Compare runs only within one row. " + D.POWER_DESC,
+                        overrides=[D.ov("last seen", unit="dateTimeAsIso", width=160), D.ov("resolution", width=110), *D.power_ovs()]), 14, 4)
 
     # stock vs optimized on this machine: the home page's hero, its desktop filter swapped (a tree without hero() skips it)
     hero = {p.get("title"): p for p in panels_of(D.hero)} if hasattr(D, "hero") else {}

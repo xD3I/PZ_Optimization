@@ -897,6 +897,28 @@ def variant_of(enabled, props, extra):
     return "optimized" + (f" [{extra[:120]}{'...' if len(extra) > 120 else ''}]" if extra else "")
 
 
+def power_state(opts):
+    """run.opts' power_profile= and cpu_power= (run.sh from 2026-10-24: "governor=powersave epp=power boost=0 max_khz=4700000";
+    run-mac.sh: "source= thermal= lowpowermode= powermode="; the in-game benchmark's BenchPower writes the same two fields) as
+    the runs columns. "-" / "unknown" / missing = NULL: runs before the lines show empty."""
+    def val(v):
+        v = (v or "").strip()
+        return None if v in ("", "-", "unknown") else v
+    detail = val(opts.get("cpu_power"))
+    kv = dict(x.split("=", 1) for x in (detail or "").split() if "=" in x)
+    if kv and all(val(v) is None for v in kv.values()):
+        detail = None  # nothing readable on that machine
+    khz = num(val(kv.get("max_khz")))
+    return {
+        "power_profile": val(opts.get("power_profile")),
+        "cpu_power": detail,
+        "cpu_governor": val(kv.get("governor")),
+        "cpu_epp": val(kv.get("epp")),
+        "cpu_boost": {"1": "on", "0": "off"}.get(val(kv.get("boost")), val(kv.get("boost"))),
+        "cpu_max_khz": int(khz) if khz is not None else None,
+    }
+
+
 def run_row(run, s, lat, judge, t_route):
     sc, opts, env = s.get("scenario", {}), s.get("opts", {}), s.get("environment", {})
     props = kv_file(run / "pzopt.properties")
@@ -979,6 +1001,7 @@ def run_row(run, s, lat, judge, t_route):
         "gc_max_ms": gc.get("max_event_ms"),
         "zombies_loaded": int(num(sc["zombies_loaded"])) if num(sc.get("zombies_loaded")) is not None else None,
         "run_s": num(opts.get("run_seconds")),
+        **power_state(opts),
         "scenario": sc,
         "opts": opts,
         "summary": s,

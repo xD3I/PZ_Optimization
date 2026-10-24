@@ -165,7 +165,7 @@
   {
    "type": "table",
    "title": "Runs",
-   "description": "",
+   "description": "power / governor / epp / boost / max GHz: the CPU power state when the run launched (run.opts power_profile= and cpu_power=, from 2026-10-24; empty before). Orange = a power-saving profile or boost off: uncapped CPU-bound numbers are up to ~19 % lower there, so compare runs only within one power state.",
    "datasource": {
     "type": "grafana-postgresql-datasource",
     "uid": "pzopt-pg"
@@ -180,7 +180,7 @@
      "rawQuery": true,
      "editorMode": "code",
      "format": "table",
-     "rawSql": "SELECT run, variant, machine, mode, preset, verdict, fps_mean AS \"fps\", fps_1pct_low AS \"1% low\", p50_ms AS \"p50\", p99_ms AS \"p99\", p99_9_ms AS \"p99.9\", max_ms AS \"max\", over_33ms AS \">33 ms\", jitter_ms AS \"jitter\", gpu_ms_mean AS \"GPU ms\", cpu_pct AS \"CPU %\", busiest_core_pct AS \"busiest core %\", gpu_pct AS \"GPU %\", game_thread_pct AS \"game thread %\", chunk_p99_ms AS \"chunk p99\", gc_events AS \"GC pauses\", total_w AS \"power W\", j_per_frame AS \"J/frame\" FROM runs WHERE run IN (${runs:sqlstring}) ORDER BY started",
+     "rawSql": "SELECT run, variant, machine, power_profile AS power, cpu_governor AS governor, cpu_epp AS epp, cpu_boost AS boost, cpu_max_khz / 1e6 AS \"max GHz\", mode, preset, verdict, fps_mean AS \"fps\", fps_1pct_low AS \"1% low\", p50_ms AS \"p50\", p99_ms AS \"p99\", p99_9_ms AS \"p99.9\", max_ms AS \"max\", over_33ms AS \">33 ms\", jitter_ms AS \"jitter\", gpu_ms_mean AS \"GPU ms\", cpu_pct AS \"CPU %\", busiest_core_pct AS \"busiest core %\", gpu_pct AS \"GPU %\", game_thread_pct AS \"game thread %\", chunk_p99_ms AS \"chunk p99\", gc_events AS \"GC pauses\", total_w AS \"power W\", j_per_frame AS \"J/frame\" FROM runs WHERE run IN (${runs:sqlstring}) ORDER BY started",
      "hide": false
     }
    ],
@@ -487,6 +487,158 @@
        {
         "id": "decimals",
         "value": 2
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "power"
+      },
+      "properties": [
+       {
+        "id": "custom.width",
+        "value": 95
+       },
+       {
+        "id": "custom.cellOptions",
+        "value": {
+         "type": "color-text"
+        }
+       },
+       {
+        "id": "mappings",
+        "value": [
+         {
+          "type": "value",
+          "options": {
+           "power-saver": {
+            "color": "orange",
+            "index": 0
+           },
+           "low-power": {
+            "color": "orange",
+            "index": 1
+           },
+           "quiet": {
+            "color": "orange",
+            "index": 2
+           },
+           "off": {
+            "color": "orange",
+            "index": 3
+           },
+           "balanced": {
+            "color": "text",
+            "index": 4
+           },
+           "performance": {
+            "color": "green",
+            "index": 5
+           },
+           "on": {
+            "color": "text",
+            "index": 6
+           }
+          }
+         }
+        ]
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "boost"
+      },
+      "properties": [
+       {
+        "id": "custom.width",
+        "value": 60
+       },
+       {
+        "id": "custom.cellOptions",
+        "value": {
+         "type": "color-text"
+        }
+       },
+       {
+        "id": "mappings",
+        "value": [
+         {
+          "type": "value",
+          "options": {
+           "power-saver": {
+            "color": "orange",
+            "index": 0
+           },
+           "low-power": {
+            "color": "orange",
+            "index": 1
+           },
+           "quiet": {
+            "color": "orange",
+            "index": 2
+           },
+           "off": {
+            "color": "orange",
+            "index": 3
+           },
+           "balanced": {
+            "color": "text",
+            "index": 4
+           },
+           "performance": {
+            "color": "green",
+            "index": 5
+           },
+           "on": {
+            "color": "text",
+            "index": 6
+           }
+          }
+         }
+        ]
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "governor"
+      },
+      "properties": [
+       {
+        "id": "custom.width",
+        "value": 95
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "epp"
+      },
+      "properties": [
+       {
+        "id": "custom.width",
+        "value": 95
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "max GHz"
+      },
+      "properties": [
+       {
+        "id": "decimals",
+        "value": 2
+       },
+       {
+        "id": "custom.width",
+        "value": 75
        }
       ]
      }

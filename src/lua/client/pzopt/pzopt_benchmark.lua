@@ -1361,15 +1361,21 @@ function PzoptBench.pcLines(d, theirs, w)
     local function lines(parts, r, g, b)
         for _, l in ipairs(wrapParts(parts, "  |  ", UIFont.Small, w)) do table.insert(out, { l, r, g, b }) end
     end
-    lines({ d.sys.cpu or "", d.sys.gpu or "", (d.sys.ram_gb or "?") .. " GB", (d.sys.screen or "") .. " @ " .. (d.sys.refresh_hz or "?") .. " Hz",
-        "cap " .. (d.sys.frame_cap or "?") }, 0.8, 0.8, 0.8)
+    local pc = { d.sys.cpu or "", d.sys.gpu or "", (d.sys.ram_gb or "?") .. " GB", (d.sys.screen or "") .. " @ " .. (d.sys.refresh_hz or "?") .. " Hz",
+        "cap " .. (d.sys.frame_cap or "?") }
+    -- the power profile (BenchPower, reports from 2026-10-24 on): power-saver vs balanced moves CPU-bound scores by up to ~20 %
+    if d.sys.power_profile and d.sys.power_profile ~= "-" then table.insert(pc, "power " .. d.sys.power_profile) end
+    lines(pc, 0.8, 0.8, 0.8)
     lines({ d.sys.os or "", d.sys.java or "", "PZ Optimization " .. (d.sys.pzopt_build or "") }, 0.6, 0.6, 0.6)
     if theirs then
         if theirs.bad then
             lines({ "That is not a benchmark share code." }, 1, 0.85, 0.5)
         else
-            lines({ "Their PC: " .. (theirs.sys.cpu or "?"), theirs.sys.gpu or "?", theirs.sys.screen or "?",
-                "cap " .. (theirs.sys.frame_cap or "?"), "score " .. (theirs.sys["score.A"] or "-") }, 1, 0.85, 0.5)
+            local tp = { "Their PC: " .. (theirs.sys.cpu or "?"), theirs.sys.gpu or "?", theirs.sys.screen or "?",
+                "cap " .. (theirs.sys.frame_cap or "?") }
+            if theirs.sys.power_profile and theirs.sys.power_profile ~= "-" then table.insert(tp, "power " .. theirs.sys.power_profile) end
+            table.insert(tp, "score " .. (theirs.sys["score.A"] or "-"))
+            lines(tp, 1, 0.85, 0.5)
         end
     end
     return out

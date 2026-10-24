@@ -226,6 +226,16 @@ while IFS= read -r a; do
   jvm_opts+=("$a")
 done < <(plutil -extract JVMOptions json -o - "$PZ_APP/Contents/Info.plist" | python3 -c 'import json,sys; print("\n".join(json.load(sys.stdin)))')
 launch_epoch=$(date +%s)
+# the power state the run starts under (2026-10-24, as run.sh and the in-game benchmark's BenchPower): Low Power Mode /
+# High Power Mode from pmset, the providing power source (thermal pressure only the game itself can read: "-")
+pm_g=$(pmset -g 2>/dev/null || true)
+pm_low=$(awk '$1 == "lowpowermode" {print $2}' <<<"$pm_g"); pm_mode=$(awk '$1 == "powermode" {print $2}' <<<"$pm_g")
+pm_src=$(pmset -g batt 2>/dev/null | sed -n "s/.*drawing from '\([A-Za-z]*\).*/\1/p" | tr 'A-Z' 'a-z' | head -1)
+if [[ "$pm_low" == 1 || "$pm_mode" == 1 ]]; then power_profile=low-power
+elif [[ "$pm_mode" == 2 ]]; then power_profile=high-power
+elif [[ -n "$pm_low$pm_mode" ]]; then power_profile=automatic
+else power_profile=unknown; fi
+cpu_power="source=${pm_src:--} thermal=- lowpowermode=${pm_low:--} powermode=${pm_mode:--}"
 echo "launching $mode run ($(basename "$out")); jvm: ${jvm_opts[*]} ${vmargs[*]:-}"
 (
   cd "$PZ_DIR"
@@ -306,6 +316,7 @@ cp "$FLAG_FILE" "$out/pzopt-harness.txt"
   echo "no_dashboard=$(( 1 - dashboard ))"; echo "mangohud_secs="; echo "no_mangohud=1"; echo "lead=dynamic"; echo "route_seconds="
   echo "renderer=apple-gl"; echo "game_env="; echo "record=0"; echo "launcher=direct"; echo "game_options=${game_options[*]:-}"
   echo "mods="; echo "vmargs=${vmargs[*]:-}"; echo "launch_epoch=$launch_epoch"; echo "run_seconds=$((end-start))"; echo "preset=none"
+  echo "power_profile=$power_profile"; echo "cpu_power=$cpu_power"
   echo "flags=${extra_flags[*]:-}"; echo "jvm_opts=${jvm_opts[*]}"; echo "host=$(scutil --get LocalHostName 2>/dev/null) $(sysctl -n machdep.cpu.brand_string) macOS $(sw_vers -productVersion)"
 } > "$out/run.opts"
 echo "run finished in $((end-start))s (crashed=$crashed): $out"

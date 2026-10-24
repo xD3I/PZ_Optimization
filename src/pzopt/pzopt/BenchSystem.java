@@ -8,8 +8,9 @@ import java.util.Map;
 
 /**
  * The machine and settings a benchmark result belongs to (technique 14): CPU, cores, RAM, GPU renderer / vendor / GL
- * version, OS, Java, screen, refresh, game revision, pzopt build, the PZ Optimization settings that differ from the
- * defaults, the game's own display options; {@link #key} hashes what makes two results comparable.
+ * version, OS, Java, screen, refresh, game revision, pzopt build, the power profile and CPU power state
+ * ({@link BenchPower}), the PZ Optimization settings that differ from the defaults, the game's own display options;
+ * {@link #key} hashes what makes two results comparable (the power state is left out of it: shown, compared, not keyed).
  */
 public final class BenchSystem {
    private static volatile String glVendor = "", glRenderer = "", glVersion = "";
@@ -25,6 +26,7 @@ public final class BenchSystem {
          return;
       }
       glCaptured = true;
+      BenchPower.prime(); // Windows / macOS read on a daemon thread, ready by the pass's end
       try {
          glVendor = s(org.lwjgl.opengl.GL11.glGetString(org.lwjgl.opengl.GL11.GL_VENDOR));
          glRenderer = s(org.lwjgl.opengl.GL11.glGetString(org.lwjgl.opengl.GL11.GL_RENDERER));
@@ -84,6 +86,7 @@ public final class BenchSystem {
       m.put("pzopt_build", String.valueOf(BuildInfo.get("commit")));
       m.put("pzopt_enabled", Boolean.toString(Overrides.enabled()));
       m.put("frame_cap", FrameCap.uncappedNow() ? "uncapped" : Integer.toString(FrameCap.lockNow()));
+      m.putAll(BenchPower.fields()); // power_profile, cpu_power: shown and compared, never in key() (results stay comparable)
       StringBuilder b = new StringBuilder();
       for (Map.Entry<String, String> e : Config.nonDefault().entrySet()) {
          if (isMeasurementKey(e.getKey())) {
