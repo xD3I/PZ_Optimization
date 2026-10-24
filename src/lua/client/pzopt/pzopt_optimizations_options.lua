@@ -4368,15 +4368,88 @@ local RECOMMENDED_TIP = "Turns the Optimizations master switch and every categor
 local STOCK_TIP = "Turns the Optimizations master switch off: the game runs its original code everywhere, as if the overrides were not "
     .. "installed. The settings are kept for when you turn it on again; the Profiler and the performance overlay are not affected. "
     .. RESTART_NOTE
+
+-- What Recommended does: the Optimizations master, its category switches and every Optimizations setting at the default
+local function recommendedOptimizations()
+    return (API.set("enabled", "") and 1 or 0) + API.resetKeys(API.catMasters(1)) + API.resetKeys(API.pageKeys(1))
+end
+
+-- "All enhancements" / "All optimizations" (2026-10-24): every switch of a group on, read from the entries, so a new
+-- setting joins by itself. A switch is a tick box (default true / false) or a choice with an off value (API.offValue);
+-- its "on" is what the menu's switch turns it on to: the default when that is not off, the layout's onValues, else the
+-- first choice that is not off. Numbers, colours, curves and choices without an off value stay at the default, and so do
+-- pinned keys (API.set), keys a Java mod patches (mod compatibility keeps them off) and ALL_SKIP.
+local ALL_SKIP = {
+    -- Enhancements: "on" renders the world smaller (upscaler, dynamic resolution), forces HDR on a screen the check
+    -- found none on, hides the people in a car behind the seats (off = the cutaway, on purpose), or sharpens DLSS (taste)
+    upscaler = true, dynRes = true, hdr = true, carOccupantOcclusion = true, dlssSharpen = true,
+    -- remembered places stays as it is (maintainer, 2026-10-24)
+    memoryTint = true,
+    -- Optimizations: on = the game's own 42.21 tree rule; a third of the frame rate on a Mac; baked glass hides zombies;
+    -- hot-save parts written at different moments; measured slower; tearing; Metal present adds input delay; off on
+    -- Windows by design; mod-drawn UI follows the mod compatibility choice
+    driveTreeCutaway = true, macGlTimerQueries = true, windowsInChunkTexture = true, hotsaveStaged = true,
+    losLightPrefetch = true, vsyncAdaptive = true, macPresent = true, limiterSleep = true, uiRetainedMods = true,
+}
+
+local function isExperimental(e)
+    return string.find(string.lower((e.label or "") .. " " .. (e.tip or "")), "experimental", 1, true) ~= nil
+end
+
+-- the value a setting's switch turns it on to, nil = leave it at the default
+local function allOnValue(e)
+    local p, key = perf(), e.key
+    if e.bezier or e.colour or not p:isPzoptOptionKnown(key) then return nil end
+    local def = p:getPzoptOptionDefault(key)
+    if not e.choices then return (def == "true" or def == "false") and "true" or nil end
+    local off = API.offValue(key, e)
+    if not off then return nil end
+    if def ~= off then return def end
+    local on = ((PzoptSettingsLayout or {}).onValues or {})[key]
+    if on then return on end
+    for _, c in ipairs(e.choices) do
+        if tostring(c) ~= off then return tostring(c) end
+    end
+    return nil
+end
+
+-- every switch of a page's sections on (but the experimental ones when `noExperimental`); returns how many changed
+local function allOn(page, noExperimental)
+    local n = (API.set(API.MASTERS[page].key, "true") and 1 or 0)
+    for _, k in ipairs(API.catMasters(page)) do
+        if API.set(k, "true") then n = n + 1 end
+    end
+    for _, sec in ipairs(sectionsOf(page)) do
+        for _, e in ipairs(sec.entries or {}) do
+            if e.key then
+                local on = nil
+                if not ALL_SKIP[e.key] and not (noExperimental and isExperimental(e)) and compatReason(e.key) == "" then
+                    on = allOnValue(e)
+                end
+                if API.set(e.key, on) then n = n + 1 end
+            end
+        end
+    end
+    return n
+end
+
 function API.presets()
     local list = {
         { title = "Recommended (every optimization on)", tip = RECOMMENDED_TIP, apply = function()
-            local n = (API.set("enabled", "") and 1 or 0) + API.resetKeys(API.catMasters(1)) + API.resetKeys(API.pageKeys(1))
+            local n = recommendedOptimizations()
             return n .. (n == 1 and " setting" or " settings") .. " changed: every optimization at the build's default."
         end },
         { title = "Stock game (every optimization off)", tip = STOCK_TIP, apply = function()
             local changed = API.set("enabled", "false")
             return changed and "Optimizations switched off: the next launch is the stock game's code." or "Optimizations were already off."
+        end },
+        { title = "All enhancements", tip = "Every enhancement on, but the experimental ones and remembered places.", apply = function()
+            local n = recommendedOptimizations() + allOn(2, true)
+            return n .. (n == 1 and " setting" or " settings") .. " changed."
+        end },
+        { title = "All optimizations", tip = "Every optimization on, the experimental ones too.", apply = function()
+            local n = allOn(1, false)
+            return n .. (n == 1 and " setting" or " settings") .. " changed."
         end },
     }
     for _, profile in ipairs(PROFILES) do
