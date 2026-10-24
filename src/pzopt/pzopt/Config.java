@@ -1640,6 +1640,33 @@ public final class Config {
    public static final String DEV_GROUND_READBACK = string("devGroundReadback", "pack"); // dev: the ground state's read-backs: pack (a compute pass packs the chunks into a buffer, one copy a batch) | get (glGetTextureSubImage a chunk) | pixels (glReadPixels a chunk) | alternate (pack / get flush by flush, sections ground.rb.*)
    public static final boolean DEV_GROUND_SEAM_STOCK = bool("devGroundSeamStock", false); // dev: the floor variant's chunk-edge seam strips stay stock on every other chunk (before / after in one picture)
    // god rays (pzopt.GodRays, docs/findings-god-rays-2026-09-27.md): light shafts in the haze and the dust of rooms, sun and moon
+   // ---- ground cover (pzopt.GroundCover, pzopt.Glints; 2026-10-24): the variants of groundScatter and glints (GROUND_SCATTER,
+   // GLINTS above). Every variant below is off or at its measured default.
+   public static volatile String GLINT_MODEL; // db23 | db23iso | jamsi | sparkle | explicit (pzopt.GlintGlsl)
+   public static volatile String GLINT_PASS; // where glints are drawn: particles (default since gcv-cost-pass4: 18 us GPU worst case vs 101 for diamonds) | compact | diamonds (a floor diamond per masked square in reach, per-pixel model)
+   public static volatile int GLINT_PCT; // glints: brightness, %
+   public static volatile int GLINT_FLAKES; // glints: facets per square (the density of crystals / aggregate grains)
+   public static volatile int GLINT_ROUGH_PCT; // glints: width of the facets' normal distribution, % of each surface's own
+   public static volatile int GLINT_TWINKLE_PCT; // glints: the angular cell (how long a glint lives as the light moves), % of each surface's own
+   public static volatile boolean GLINT_SUN; // glints: the sun / moon as a light (the iso camera's view vector is fixed: these barely move)
+   public static volatile boolean GLINT_POINT; // glints: torches, headlights and lamps as lights
+   public static volatile int DEV_GLINT_VIEW; // dev: 1 masks (frost blue, snow white, wet cyan), 2 the lights reaching each square, 3 glints x 20
+   public static final int DEV_GLINT_CYCLE = integer("devGlintCycle", 0); // dev: ms; the glint model cycles db23 -> db23iso -> jamsi -> sparkle -> explicit -> off (GPU section ground.glints.<model>)
+   public static final int DEV_GLINT_ALTERNATE = integer("devGlintAlternate", 0); // dev: ms; glints switch on and off every period (GPU section ground.glints / ground.glints.off)
+   public static volatile int GLINT_HDR_PCT; // glints: with HDR output on, the glints once more into the HDR glint target (past the 8-bit white), x this %; 0 = 8-bit only
+   public static final boolean DEV_GLINT_NO_UPLOAD = bool("devGlintNoUpload", false); // dev: glint data uploaded only for the ring's first round (the upload's cost A/B; stale glints)
+   public static final int DEV_GLINT_RING = integer("devGlintRing", 3); // dev: glint data textures in the ring (1 = one texture rewritten each frame, the implicit-sync A/B)
+   public static final String DEV_GLINT_FORCE = string("devGlintForce", "").trim(); // dev: frost | snow | wet: every outdoor floor square in view gets that mask (cost and look rigs)
+   public static volatile String GROUND_COVER_PLACEMENT; // ground cover: jitter (6 x 6 jittered grid a square, hashed thresholds) | bluenoise (a progressive blue-noise 4 x 4 square tile, rank-dithered)
+   public static volatile String GROUND_COVER_ASSETS; // ground cover: mixed (procedural shapes + the game's leaf-clump and litter decals) | procedural | sprites
+   public static volatile boolean GROUND_COVER_FROST; // ground cover: morning frost in the shade (cold clear nights; melts where the sun has shone)
+   public static volatile boolean GROUND_COVER_WIND; // ground cover: in autumn wind a few leaves (<= 32) lift off the covered ground and tumble downwind (the one per-frame part of the cover)
+   public static final int DEV_WIND_LEAVES_KPH = integer("devWindLeavesKph", -1); // dev: the wind (kph) the wind-blown leaves see
+   public static volatile boolean GROUND_COVER_ASYNC; // ground cover: level-0 cover built on a worker (squares gathered on the game thread), prefetched for the loaded chunks; false = built in the bake
+   public static volatile int GROUND_REBAKE_PER_FRAME; // ground cover: chunk levels re-baked a frame at a season / frost step
+   public static volatile int DEV_GROUND_COVER_VIEW; // dev: 1 cover kinds in flat colours
+   public static final int DEV_GROUND_TEMP = integer("devGroundTemp", -999); // dev: the temperature (C) the cover and the frost see
+   public static final boolean DEV_FROST_FORCE = bool("devFrostForce", false); // dev: the frost potential at its maximum whatever the weather
    public static volatile boolean FOLIAGE_SWAY; // grass, bushes and trees sway in the wind while they stay baked in the chunk textures (the chunk composite looks each texel up through the wind's displacement; pzopt.Sway)
    public static volatile int FOLIAGE_SWAY_PCT; // foliage sway: how far the plants bend, %
    public static volatile int FOLIAGE_SWAY_TAPS; // foliage sway: 1 = texels move inside their plant's outline only, 2..4 = + 1..3 upwind probes so a plant's leading edge moves over what is behind it
@@ -2384,6 +2411,24 @@ public final class Config {
       GRASS_BLADE_RADIUS = Math.max(2, Math.min(40, integer("grassBladeRadius", 12)));
       GRASS_BLADE_DENSITY_PCT = Math.max(10, Math.min(400, integer("grassBladeDensityPct", 100)));
       DEV_GROUND_VIEW = integer("devGroundView", 0);
+      // ground cover (pzopt.GroundCover, pzopt.Glints)
+      GLINT_MODEL = string("glintModel", "db23iso").trim().toLowerCase(java.util.Locale.ROOT);
+      GLINT_PASS = string("glintPass", "particles").trim().toLowerCase(java.util.Locale.ROOT);
+      GLINT_PCT = Math.max(0, Math.min(400, integer("glintPct", 100)));
+      GLINT_FLAKES = Math.max(4, Math.min(16384, integer("glintFlakes", 3072)));
+      GLINT_ROUGH_PCT = Math.max(25, Math.min(400, integer("glintRoughPct", 100)));
+      GLINT_TWINKLE_PCT = Math.max(25, Math.min(400, integer("glintTwinklePct", 100)));
+      GLINT_SUN = bool("glintSun", true);
+      GLINT_POINT = bool("glintPoint", true);
+      GLINT_HDR_PCT = Math.max(0, Math.min(400, integer("glintHdrPct", 100)));
+      DEV_GLINT_VIEW = integer("devGlintView", 0);
+      GROUND_COVER_PLACEMENT = string("groundCoverPlacement", "bluenoise").trim().toLowerCase(java.util.Locale.ROOT);
+      GROUND_COVER_ASSETS = string("groundCoverAssets", "mixed").trim().toLowerCase(java.util.Locale.ROOT);
+      GROUND_COVER_FROST = bool("groundCoverFrost", true);
+      GROUND_COVER_ASYNC = bool("groundCoverAsync", true);
+      GROUND_COVER_WIND = bool("groundCoverWind", false);
+      GROUND_REBAKE_PER_FRAME = Math.max(1, Math.min(32, integer("groundRebakePerFrame", 2)));
+      DEV_GROUND_COVER_VIEW = integer("devGroundCoverView", 0);
       FOLIAGE_SWAY = bool("foliageSway", false);
       FOLIAGE_SWAY_PCT = Math.max(0, Math.min(400, integer("foliageSwayPct", 100)));
       FOLIAGE_SWAY_TAPS = Math.max(1, Math.min(4, integer("foliageSwayTaps", 1)));

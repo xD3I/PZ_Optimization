@@ -1931,6 +1931,7 @@ public final class FBORenderCell {
          SpriteRenderer.instance.endProfile(itemsProbe);
       }
 
+      pzopt.Glints.queue(playerIndex, this.perPlayerData[playerIndex].onScreenChunks); // pzopt: glints on frost, snow and wet asphalt, over the floor and under the puddles
       if (PerformanceSettings.puddlesQuality < 2) {
          AbstractPerformanceProfileProbe var29 = puddles.profile();
 
@@ -1978,6 +1979,7 @@ public final class FBORenderCell {
             this.pzoptWaterOnly = false; // pzopt: HDR output
             this.renderPuddles(playerIndex); // pzopt: HDR output
             pzopt.BloodWet.queueGlint(); // pzopt: wet blood, its sun / sky / lamp glints
+            pzopt.Glints.queueHdr(); // pzopt: glints on frost, snow and wet asphalt, past the 8-bit white
             pzopt.HdrGlint.queueOff(); // pzopt: HDR output
          }
       } catch (Throwable var26) {
