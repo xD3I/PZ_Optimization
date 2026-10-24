@@ -2460,6 +2460,7 @@ local ENHANCEMENT_SECTIONS = {
             { key = "groundTracksVehicles", label = "Tracks: from cars", tip = "Cars leave tyre tracks, deeper and smeared where a wheel slips." },
             { key = "groundTracksFeet", label = "Tracks: footprints", tip = "Players, zombies and animals leave footprints; a horde wears a path." },
             { key = "groundTracksBodies", label = "Tracks: bodies", tip = "Bodies on the ground and dragged bodies leave their imprint." },
+            { key = "groundTracksGrass", label = "Tracks: trodden grass", tip = "The tall grass and plants over a path, a rut or a print lie flat and go to straw, then stand up again as the ground recovers." },
             { key = "groundTracksPersist", label = "Tracks: keep them when you leave",
               tip = "Tracks are kept per save in Zomboid/pzopt/ground/ (never inside the save itself) and are still there when you come back. Off: they are forgotten once you leave the area.",
               why = {
@@ -3306,6 +3307,7 @@ local EFFECTS = {
     groundTracksVehicles = {},
     groundTracksFeet = {},
     groundTracksBodies = {},
+    groundTracksGrass = {},
     grassBlades = { gpu = 2, vram = 1 },
     grassBladeRadius = { gpu = 1 },
     grassBladeDensityPct = { gpu = 1 },
