@@ -8634,3 +8634,14 @@ the frame's floors after the chunk composite, as depth-tested floor diamonds at 
 stay clean. The default look (`groundTracksLook=bake`) and the trodden grass go through ground-common's bake hooks
 (`FloorPatch`, the grass-object piece), so the branch's earlier hooks in this class were removed. The `Ripples` hooks (the rut
 water level in the puddle shader, `GroundTracks.puddleUniforms`) are in the pzopt package and need no marker.
+
+### FBORenderCell: ground cover and glints (2026-10-24, branch ground-cover)
+
+Two one-line hooks in the floor pass. Right before the puddles are drawn, `pzopt.Glints.queue(playerIndex, onScreenChunks)`
+queues the frame's glints on frost, snow and wet asphalt: over the floor and its baked ground cover, under the puddles, so a
+puddle covers the glints beneath it. The same call steps and queues the wind-blown leaves (`pzopt.WindLeaves`). When glints
+are off, or nothing on screen can glint, it returns without walking the chunks. Inside the HDR glint-only block, right after
+`pzopt.BloodWet.queueGlint()`, `pzopt.Glints.queueHdr()` draws the same frame's glints a second time into HdrGlint's target,
+so they can go past 8-bit white (`glintHdrPct`); it draws nothing unless the normal glint draw ran that frame and HDR output
+is on. The ground cover itself (`groundScatter`) bakes through ground-common's hooks and needs no line here. Neither hook
+changes stock behaviour with the keys off.
