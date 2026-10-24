@@ -8563,3 +8563,30 @@ press through the PZ OPTIMIZATION search's on-screen keyboard). Three latencies 
   "`"); and while the keyboard is up, `queueCharEvent` / `queueKeyEvent` (Backspace, arrows) go straight to the keyboard's
   entry the way `Core.updateKeyboardAux` hands them over instead of through the render thread and a later frame's keyboard
   swap (2 frames); Enter, Shift, a full or first-key-ignoring entry and non-ASCII characters keep the stock queue.
+
+### Ground and grass, shared part (2026-10-24, worktree ground-common): FBORenderCell, IsoSprite, TextureDraw, ShaderUnit
+
+The hooks the ground features (hex-tiling, ground cover, tracks, grass blades) use inside the chunk-texture bake. Every
+one is a static boolean read while no ground key is on (all are off by default), so the bake is the stock bake then.
+
+- `FBORenderCell.renderFloor(IsoObject)`: between `pzopt.GroundBake.floorBegin` / `floorEnd` a natural floor (level 0,
+  `pzopt.GroundTiles.natural`: grass, dirt, sand, gravel, clay; not farmland, water, roads or built floors) is marked on
+  the drawing thread (a bake unit's recording thread too), so its tile draws take the ground floor variant.
+- `IsoSprite.startTileDepthShader`: the tile-depth program a floor starts goes through `GroundBake.program(id, attached)`:
+  the variant of `tileWithDepth` / `opaqueWithDepth` for a marked floor, else the stock program. The variant is built from
+  the stock program's final source (every other pzopt patch in it) and checked to have every stock uniform at the same
+  location, so the stock `ShaderUniformSetter` values and TileBatch's merged starts apply to it unchanged.
+- `FBORenderCell.pzoptBakeFloors`: after the floor tiles, `GroundBake.floorPasses` (extra draws of a feature, e.g. leaves),
+  deferred to the game thread at its place in the stream on a recording thread (`BakeRecord.DEFER_GROUND`, a new case of
+  `pzoptBakeDeferredDraw`); then snow and blood as before.
+- `FBORenderCell.renderOneLevel`: a level-0 bake queues its chunk's ground classes (`GroundBake.bakeBegin`: 10 x 10 bytes,
+  the chunk and a border of one) into the class map texture ahead of its draws.
+- `FBORenderCell.pzoptRenderInternal`: `pzopt.Ground.frameStart` once a frame per player (the frame's ground switches, the
+  variant compile request, the ground state's stamps and uploads).
+- `TextureDraw` (FBORenderChunkStart): `GroundBake.chunkStart` gives the variant programs the texture's world mapping
+  (`pzgMap`: gl_FragCoord to u = x - y, v = x + y - 6z, Sway's mapping) on the render thread.
+- `ShaderUnit.compile`: `GroundBake.patchShader` outermost but for the dev dump: records the final tile sources and
+  returns the variant source for the `pzopt_grTile` placeholder.
+- `IsoSprite`: new field `pzoptGround`, the sprite's ground class cached by `GroundTiles.of` (0 = not looked up yet).
+- `pzopt.Scene` (harness, no override): `snow=0..100` pins the snow on the ground; `ground_map=N` prints natural ground by
+  material.

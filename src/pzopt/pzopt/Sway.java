@@ -396,6 +396,18 @@ public final class Sway {
       return uniforms;
    }
 
+   /**
+    * Render thread: a variant program compiled from a tile program's final source (GroundBake's natural-ground floors) is
+    * patched exactly when its stock program is: its sway uniforms and the bake's second draw buffer follow.
+    */
+   public static void aliasPatchedTile(String variant, String stock) {
+      Boolean b = PATCHED_TILE.get(stock);
+      if (b != null) {
+         PATCHED_TILE.put(variant, b);
+         PATCHED_PROGRAMS.clear();
+      }
+   }
+
    private static boolean isPatchedShader(Shader shader) {
       String n = shader.getName();
       if (n == null) {
