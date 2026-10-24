@@ -1190,7 +1190,7 @@ public final class GroundState {
       if (failed || !init()) {
          return;
       }
-      GpuSections.begin(Ground.section("ground.state"));
+      GpuSections.markNow(Ground.section("ground.state"), false); // (render thread: issued in the GL stream now; begin/end would queue into the next draw list)
       try {
          pollReadbacks();
          rOx = f.ox;
@@ -1278,7 +1278,7 @@ public final class GroundState {
          GL15.glBindBuffer(GL43.GL_SHADER_STORAGE_BUFFER, 0);
          GL20.glUseProgram(0);
          zombie.core.ShaderHelper.forgetCurrentlyBound();
-         GpuSections.end(Ground.section("ground.state"));
+         GpuSections.markNow(Ground.section("ground.state"), true);
       }
    }
 
@@ -1438,6 +1438,12 @@ public final class GroundState {
       "vec4 pzgStateAt(vec2 world) { return pzgStateDecode(pzgStateRaw(world)); }",
       "#endif",
       "");
+
+   /**
+    * {@link #GLSL} for a GLSL 1.30+ program, with texture() (2026-10-24, the blades' Mac trap): a texture2D token makes
+    * CoreGlsl (macOS GL 4.1 core) inject its wrappers, whose bias overloads Apple refuses in a vertex shader.
+    */
+   public static final String GLSL_130 = GLSL.replace("texture2D(", "texture(");
 
    // ------------------------------------------------------------------------------------------------ persistence
 

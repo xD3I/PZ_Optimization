@@ -91,12 +91,16 @@ public final class GroundBake {
       /** GLSL inserted before main (after the stock declarations and the ground helpers): uniforms, functions. */
       String declarations();
 
-      /** The name of a {@code vec4 f(vec4 texel)} applied to the floor's art texel, or null. */
+      /**
+       * The name of a {@code vec4 f(vec4 texel)} applied to the floor's art texel, or null. Texels are premultiplied (the
+       * game's pages, ImageData.performPreMultipliedAlpha) and floors bake with ONE / ONE_MINUS_SRC_ALPHA: return
+       * premultiplied colour (un-premultiply, work, return rgb * a), or partial-alpha edges come out bright (ground-tiling).
+       */
       default String texel() {
          return null;
       }
 
-      /** The name of a {@code vec4 f(vec4 colour)} applied to the colour the program writes, or null. */
+      /** The name of a {@code vec4 f(vec4 colour)} applied to the colour the program writes (premultiplied too), or null. */
       default String color() {
          return null;
       }
