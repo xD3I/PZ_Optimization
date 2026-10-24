@@ -1848,7 +1848,7 @@ public final class GroundCover {
          "#define texture2D texture",
          GroundState.GLSL,
          "// the ground state (pzopt.GroundState: ruts, prints, compaction) where the cover lies: 0 untouched .. 1 trodden flat",
-         "float crushed() { vec4 st = pzgStateAt(vW); return clamp(st.r * 2.0 + st.g * 1.2, 0.0, 1.0); }",
+         "float crushed() { vec4 st = pzgStateAt(vW); return clamp(max(-st.r, 0.0) * 4.0 + st.g * 1.2, 0.0, 1.0); }", // a rut (h < 0) or worn ground
          "float h21(vec2 p) { uvec2 u = uvec2(ivec2(floor(p))); uint h = u.x * 0x27d4eb2du ^ u.y * 0x165667b1u; h ^= h >> 15u; h *= 0x85ebca6bu; h ^= h >> 13u; return float(h >> 8u) / 16777216.0; }",
          "float vn(vec2 p) { vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);",
          "   return mix(mix(h21(i), h21(i + vec2(1, 0)), f.x), mix(h21(i + vec2(0, 1)), h21(i + vec2(1, 1)), f.x), f.y); }",
