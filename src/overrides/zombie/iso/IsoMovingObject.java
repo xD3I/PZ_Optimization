@@ -122,6 +122,9 @@ implements Mover {
     public long pzoptDeferredSquareFrame; // pzopt: entityUpdateParallel
     public float pzoptRipX, pzoptRipY, pzoptRipT; // pzopt: puddle ripples, where / when the last ring was started (pzopt.Ripples)
     public int pzoptRipFoot; // pzopt: puddle ripples, the foot that stepped last
+    public float pzoptGtX, pzoptGtY; // pzopt: ground tracks, where the last footprint was pressed (pzopt.GroundTracks)
+    public int pzoptGtFoot; // pzopt: ground tracks, the foot that stepped last
+    public boolean pzoptGtDead; // pzopt: ground tracks, the body's imprint was pressed
     // pzopt: postupdateParallel (Louisville 120 plan B). The frame stamp of a movement computed by pzopt.PostupdateBatch, the
     // square its setMovingSquare was latched with, and the fields saved before the task (restored on a hazard).
     public long pzoptMoveFrame; // pzopt: postupdateParallel

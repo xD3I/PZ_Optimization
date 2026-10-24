@@ -112,7 +112,7 @@ void main() {
    int m = (p0.x > 0.0 && p0.y > 0.0 && p0.x < %(S)d.0 && p0.y < %(S)d.0) ? int(texelFetch(mat, ivec2(p0), 0).r) : 0;
    vec3 lightFlat = vec3(1.0) * (0.45 + 0.75 * max(L.z, 0.0) * (sun > 0.0 ? 1.0 : 0.0));
    vec3 c0 = a.rgb * lightFlat;
-   vec3 c = m == 0 ? c0 : gtLook(c0, p0, m, L, sun, wet, snowDepth, sky);
+   vec3 c = m == 0 ? c0 : c0 * gtFactor(p0, m, L, sun, wet, snowDepth, sky);
    if (view == 1) { float h = gtS(p0).x; c = h < 0.0 ? vec3(-h * 4.0) : vec3(h * 12.0, 0.0, 0.0); }
    o = vec4(c, a.a);
 }
