@@ -2461,6 +2461,8 @@ local ENHANCEMENT_SECTIONS = {
             { key = "groundTracksFeet", label = "Tracks: footprints", tip = "Players, zombies and animals leave footprints; a horde wears a path." },
             { key = "groundTracksBodies", label = "Tracks: bodies", tip = "Bodies on the ground and dragged bodies leave their imprint." },
             { key = "groundTracksGrass", label = "Tracks: trodden grass", tip = "The tall grass and plants over a path, a rut or a print lie flat and go to straw, then stand up again as the ground recovers." },
+            { key = "groundTracksRebakesPerSec", label = "Tracks: redraws a second under a crowd", choices = { "0", "6", "12", "24" }, note = { ["12"] = "default", ["0"] = "no limit" },
+              tip = "A horde over many chunks redraws them at most this often a second in all: their tracks show a little later instead of costing frame time." },
             { key = "groundTracksPersist", label = "Tracks: keep them when you leave",
               tip = "Tracks are kept per save in Zomboid/pzopt/ground/ (never inside the save itself) and are still there when you come back. Off: they are forgotten once you leave the area.",
               why = {
@@ -3308,6 +3310,7 @@ local EFFECTS = {
     groundTracksFeet = {},
     groundTracksBodies = {},
     groundTracksGrass = {},
+    groundTracksRebakesPerSec = {},
     grassBlades = { gpu = 2, vram = 1 },
     grassBladeRadius = { gpu = 1 },
     grassBladeDensityPct = { gpu = 1 },

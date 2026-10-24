@@ -1918,6 +1918,7 @@ public final class Config {
    public static volatile boolean GROUND_TRACKS_AO; // groundTracksAo: the cavity term in ruts
    public static volatile int GROUND_TRACKS_STRENGTH_PCT; // groundTracksStrengthPct: how deep everything presses (100)
    public static volatile int GROUND_TRACKS_REBAKE_MS; // groundTracksRebakeMs: a chunk being stamped re-bakes at most this often (bake look)
+   public static volatile int GROUND_TRACKS_REBAKES_PER_SEC; // groundTracksRebakesPerSec: the stamping's chunk re-bakes a second at most (a horde over many chunks stretches the per-chunk interval instead; 0 no cap)
    public static volatile int GROUND_TRACKS_DECAY_MINUTES; // groundTracksDecayMinutes: game minutes between decay passes
    public static volatile boolean GROUND_TRACKS_VEHICLES, GROUND_TRACKS_FEET, GROUND_TRACKS_BODIES; // the stamp sources
    public static volatile boolean GROUND_TRACKS_GRASS; // groundTracksGrass: the game's grass objects (erosion grass, overlays) fade and go to straw where trodden
@@ -2446,6 +2447,7 @@ public final class Config {
       GROUND_TRACKS_AO = bool("groundTracksAo", true);
       GROUND_TRACKS_STRENGTH_PCT = Math.max(0, Math.min(300, integer("groundTracksStrengthPct", 100)));
       GROUND_TRACKS_REBAKE_MS = Math.max(0, integer("groundTracksRebakeMs", 300));
+      GROUND_TRACKS_REBAKES_PER_SEC = Math.max(0, integer("groundTracksRebakesPerSec", 12));
       GROUND_TRACKS_DECAY_MINUTES = Math.max(1, integer("groundTracksDecayMinutes", 30));
       GROUND_TRACKS_VEHICLES = bool("groundTracksVehicles", true);
       GROUND_TRACKS_FEET = bool("groundTracksFeet", true);

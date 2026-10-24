@@ -60,7 +60,7 @@ public final class GroundTracks {
    }
 
    public static String stats() {
-      return "ground tracks: " + (on() ? "on" : "off") + " frames=" + frames + " bakeDraws=" + bakeDraws + " grassObjects=" + GroundBake.overlayObjects + " lightSteps=" + lightSteps
+      return "ground tracks: " + (on() ? "on" : "off") + " frames=" + frames + " bakeDraws=" + bakeDraws + " grassObjects=" + GroundBake.overlayObjects + " lightSteps=" + lightSteps + " rebakeMs=" + Math.max(Config.GROUND_TRACKS_REBAKE_MS, rebakeMsNow) + " (max " + rebakeStretchMax + ")"
          + " game_us/frame=" + (frames == 0 ? 0 : gameNs / 1000L / frames) + (failed ? " (failed)" : "") + " | " + GroundState.stats();
    }
 
@@ -106,7 +106,7 @@ public final class GroundTracks {
 
       @Override
       public long rebakeMs() {
-         return Config.GROUND_TRACKS_REBAKE_MS;
+         return Math.max(Config.GROUND_TRACKS_REBAKE_MS, rebakeMsNow);
       }
    };
 
@@ -326,6 +326,7 @@ public final class GroundTracks {
       src.strengthPct = Config.GROUND_TRACKS_STRENGTH_PCT;
       wetness();
       puddleWet = wet;
+      rebakeCadence(t0);
       if ((frames & 63L) == 7L && RULES.rebakes()) {
          lightStep();
       }
@@ -381,6 +382,43 @@ public final class GroundTracks {
             }
          }
       }
+   }
+
+   private static long rebakeMsNow, rateAtNs, rateAsked = -1L;
+   private static float chunksEst;
+   public static long rebakeStretchMax;
+
+   /**
+    * The re-bake cadence under a horde: every chunk a crowd walks over changes all the time, and each re-bake is a whole
+    * chunk-level bake (~90 us GPU, ~50-70 us of render thread): 700 walkers asked ~63 a second at the 300 ms interval
+    * (gtr-horde2). The chunks being changed are estimated from the asked rate times the interval in force (each one re-bakes
+    * once an interval), and the interval stretched so they share groundTracksRebakesPerSec (a stable point: the estimate
+    * does not depend on the interval it sets). A lone walker or car keeps the 300 ms.
+    */
+   private static void rebakeCadence(long nowNs) {
+      if (rateAsked < 0L) {
+         rateAsked = GroundState.rebakesAsked;
+         rateAtNs = nowNs;
+         return;
+      }
+      long dtNs = nowNs - rateAtNs;
+      if (dtNs < 500_000_000L) {
+         return;
+      }
+      long asked = GroundState.rebakesAsked - rateAsked;
+      rateAsked = GroundState.rebakesAsked;
+      rateAtNs = nowNs;
+      int cap = Config.GROUND_TRACKS_REBAKES_PER_SEC;
+      if (cap <= 0 || "nocap".equals(Ground.variant())) { // (dev variant nocap: the A/B)
+         rebakeMsNow = 0L;
+         return;
+      }
+      float rate = asked * 1e9F / dtNs;
+      long interval = Math.max(Config.GROUND_TRACKS_REBAKE_MS, rebakeMsNow);
+      float chunks = rate * interval / 1000F;
+      chunksEst = chunksEst == 0F ? chunks : 0.6F * chunksEst + 0.4F * chunks;
+      rebakeMsNow = Math.min(3000L, (long)(chunksEst * 1000F / cap));
+      rebakeStretchMax = Math.max(rebakeStretchMax, rebakeMsNow);
    }
 
    /** The ground's wetness (0..1): rain wets it within the hour, it dries over hours (slower in the cold). */
@@ -529,6 +567,12 @@ public final class GroundTracks {
          // night: the moon is the key light (its phase's brightness; a night's floor is mostly moonlight where nothing else lights it)
          sun = Sky.moon;
          share = 0.45F * (float)Sky.moonBrightness * (1F - 0.85F * cloud);
+      }
+      if (ReliefAux.sunBake() && !"doublerelief".equals(Ground.variant())) { // (dev variant doublerelief: the old double)
+         // Relief bakes the key light's relief into the same texture from its colour after this pass (the cut's darkening
+         // reads as the dip): relit here too, every rut wall would be lit twice. Relief's pass keeps the key light; the
+         // tracks keep their colour, cavity and water.
+         share = 0F;
       }
       b.lx = (float)sun[0];
       b.ly = (float)sun[1];
