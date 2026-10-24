@@ -221,6 +221,7 @@ public final class FBORenderCell {
       int playerIndex = IsoCamera.frameState.playerIndex;
       pzopt.EntityShadow.frameStart(playerIndex); // pzopt: entity shadows, the frame's light and probe bricks (its compute first in the frame: the pipeline has drained at the swap)
       pzopt.Ripples.frameStart(playerIndex); // pzopt: rain rings / car wakes, last frame's compute passes first in this frame
+      pzopt.GroundCover.frame(); // pzopt: ground cover, the season / frost step and its staggered re-bakes before this frame's bakes
       if (pzopt.CharDraw.enabled()) {
          pzopt.CharDraw.walk(IsoWorld.instance.getCell().getObjectList(), this); // pzopt: charDrawPrep, the object walk on a worker from here
       }
@@ -1928,6 +1929,7 @@ public final class FBORenderCell {
          SpriteRenderer.instance.endProfile(itemsProbe);
       }
 
+      pzopt.Glints.queue(playerIndex, this.perPlayerData[playerIndex].onScreenChunks); // pzopt: glints on frost, snow and wet asphalt, over the floor and under the puddles
       if (PerformanceSettings.puddlesQuality < 2) {
          AbstractPerformanceProfileProbe var29 = puddles.profile();
 
@@ -2701,6 +2703,7 @@ public final class FBORenderCell {
    void pzoptBakeSnow(IsoChunk c, int level) { // pzopt
       GameProfiler profiler = GameProfiler.getInstance(); // pzopt
       ProfileArea var59; // pzopt
+               pzopt.GroundCover.bake(c, level, IsoCamera.frameState.playerIndex); // pzopt: ground cover, leaves / flowers / litter / frost over the floor tiles, under the snow and the blood
                var59 = profiler.profile("Snow");
 
                try {

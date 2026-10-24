@@ -1,0 +1,735 @@
+package pzopt;
+
+import java.nio.FloatBuffer;
+import java.util.ArrayList;
+import org.joml.Matrix4f;
+import org.lwjgl.BufferUtils;
+import org.lwjgl.opengl.GL11;
+import org.lwjgl.opengl.GL13;
+import org.lwjgl.opengl.GL14;
+import org.lwjgl.opengl.GL20;
+import org.lwjgl.opengl.GL30;
+import org.lwjgl.opengl.GL31;
+import org.lwjgl.opengl.GL32;
+import zombie.characters.IsoGameCharacter;
+import zombie.core.Core;
+import zombie.core.SpriteRenderer;
+import zombie.core.opengl.GLStateRenderThread;
+import zombie.core.textures.Texture;
+import zombie.core.textures.TextureDraw;
+import zombie.iso.IsoCamera;
+import zombie.iso.IsoCell;
+import zombie.iso.IsoChunk;
+import zombie.iso.IsoDepthHelper;
+import zombie.iso.IsoGridSquare;
+import zombie.iso.IsoLightSource;
+import zombie.iso.IsoWorld;
+import zombie.iso.LightingJNI;
+import zombie.iso.weather.ClimateManager;
+
+/**
+ * Glints on frost, snow and wet asphalt (ground cover, 2026-10-24; key {@code glints}, the "Ground and grass" subcategory).
+ *
+ * <p>Ice crystals and the wet grains of asphalt are tiny mirrors: each one flashes when it happens to reflect a light into
+ * the eye. Under PZ's orthographic camera the view vector is the same for every pixel, so the sun's glints hardly move
+ * (only the slow sun turns them over); they come alive under point lights, whose half vector changes over the ground as the
+ * light moves: a torch swept over a frosty lawn, headlights on a wet road, a street lamp over snow.
+ *
+ * <p>Per frame (game thread, {@link #queue}): the masked squares on screen (frost from {@code GroundCover}, snow from the
+ * game's snow grid, wet road from the puddles' wetness), the key light (sun by day, moon by night: {@code pzopt.Sky}) and the
+ * point lights near the view (handheld torches, headlights, active lamps: the list the native lighting gets), each square
+ * tagged with the lights that reach it. No masked square or no light: nothing is queued, the pass costs exactly 0.
+ *
+ * <p>Render thread ({@code glintPass=diamonds}): one instanced draw of the squares' floor diamonds, depth-tested (LEQUAL)
+ * against the floor's depth (IsoDepthHelper, as the chunk textures hold it), so anything standing on the floor hides the
+ * glints behind it; additive. The fragment evaluates the glint NDF of {@code glintModel} (pzopt.GlintGlsl) for each light
+ * and kind. Drawn after the composite and the players, before the puddles (puddle water is smooth: no grains glint under it).
+ */
+public final class Glints {
+   private Glints() {
+   }
+
+   static final String[] MODELS = {"db23", "db23iso", "jamsi", "sparkle", "explicit"};
+   static final int MAX_LIGHTS = 8;
+   static final int TEXELS = 4, MAX = 16384;
+   static final float METRIC_Z = 2.4494897F; // squares of height per level (sqrt 6: the view vector's 30 degrees)
+   static final int K_FROST = 0, K_SNOW = 1, K_WET = 2;
+
+   private static volatile boolean failed = CoreGl.legacyMac();
+   public static long frames, framesQueued, instances, maxInstances, maskRebuilds, draws;
+
+   public static boolean on() {
+      return Config.GLINTS_KEY && Overrides.enabled() && !failed && Core.getInstance() != null;
+   }
+
+   public static String stats() {
+      return "glints: frames=" + frames + " queued=" + framesQueued + " instances=" + instances + " max=" + maxInstances + " maskRebuilds=" + maskRebuilds
+            + " draws=" + draws + " model=" + model() + (failed ? " (failed)" : "");
+   }
+
+   /** The model in force (devGlintCycle steps through them, then "off"). */
+   static int model() {
+      if (Config.DEV_GLINT_CYCLE > 0) {
+         long step = System.currentTimeMillis() / Config.DEV_GLINT_CYCLE;
+         int i = (int)(step % (MODELS.length + 1));
+         return i == MODELS.length ? -1 : i;
+      }
+      if (Config.DEV_GLINT_ALTERNATE > 0 && (System.currentTimeMillis() / Config.DEV_GLINT_ALTERNATE & 1L) == 1L) {
+         return -1;
+      }
+      String m = Config.GLINT_MODEL;
+      for (int i = 0; i < MODELS.length; i++) {
+         if (MODELS[i].equals(m)) {
+            return i;
+         }
+      }
+      return 1;
+   }
+
+   static String section(int model) {
+      return model < 0 ? "ground.glints.off" : "ground.glints." + MODELS[model];
+   }
+
+   // ------------------------------------------------------------------------------------------------ the masks
+
+   /**
+    * One chunk level's masks: per square the dominant kind (frost, snow, wet) and its strength, whether it is outdoors and
+    * how much sun reaches it. Rebuilt every {@code REFRESH} frames (staggered by chunk) and when the chunk changes.
+    */
+   static final class LevelMask {
+      long bits; // squares with a mask
+      final byte[] kind = new byte[64];
+      final byte[] strength = new byte[64]; // 0..255
+      final byte[] sun = new byte[64]; // 0..255: the square's sun visibility (frost's shade term)
+      int builtFrame = Integer.MIN_VALUE;
+      int level;
+   }
+
+   static final class ChunkMasks {
+      final LevelMask[] levels = new LevelMask[64]; // by level + 32
+      int wx = Integer.MIN_VALUE, wy;
+      int seenFrame;
+   }
+
+   private static final java.util.IdentityHashMap<IsoChunk, ChunkMasks> masks = new java.util.IdentityHashMap<>();
+   static final int REFRESH = 30;
+
+   static LevelMask mask(IsoChunk c, int level, int frameNo, float wetGround, boolean snowAny) {
+      ChunkMasks cm = masks.get(c);
+      if (cm == null || cm.wx != c.wx || cm.wy != c.wy) {
+         cm = new ChunkMasks();
+         cm.wx = c.wx;
+         cm.wy = c.wy;
+         masks.put(c, cm);
+      }
+      cm.seenFrame = frameNo;
+      int li = level + 32;
+      if (li < 0 || li >= 64) {
+         return null;
+      }
+      LevelMask m = cm.levels[li];
+      if (m == null) {
+         m = cm.levels[li] = new LevelMask();
+         m.level = level;
+      }
+      int stagger = (c.wx * 7 + c.wy * 13) & 31;
+      if (m.builtFrame != Integer.MIN_VALUE && frameNo - m.builtFrame < REFRESH + stagger) {
+         return m;
+      }
+      m.builtFrame = frameNo;
+      maskRebuilds++;
+      build(c, level, m, wetGround, snowAny);
+      return m;
+   }
+
+   private static void build(IsoChunk c, int level, LevelMask m, float wetGround, boolean snowAny) {
+      m.bits = 0L;
+      String force = Config.DEV_GLINT_FORCE;
+      int forceKind = "frost".equals(force) ? K_FROST : "snow".equals(force) ? K_SNOW : "wet".equals(force) ? K_WET : -1;
+      zombie.iso.fboRenderChunk.FBORenderSnow snow = snowAny ? zombie.iso.fboRenderChunk.FBORenderSnow.getInstance() : null;
+      for (int i = 0; i < 64; i++) {
+         IsoGridSquare sq = c.getGridSquare(i & 7, i >> 3, level);
+         if (sq == null || sq.getFloor() == null || !sq.isOutside()) {
+            continue;
+         }
+         int kind = -1;
+         float s = 0F;
+         float sunVis = GroundCover.sunVisibility(sq);
+         if (forceKind >= 0) {
+            kind = forceKind;
+            s = 1F;
+         } else if (snow != null && snow.gridSquareIsSnow(sq.x, sq.y, sq.z)) {
+            kind = K_SNOW;
+            s = 1F;
+         } else {
+            float frost = GroundCover.frost(sq, sunVis);
+            if (frost > 0.05F) {
+               kind = K_FROST;
+               s = frost;
+            } else if (wetGround > 0.05F && GroundCover.isRoad(sq)) {
+               kind = K_WET;
+               s = Math.min(1F, wetGround * 1.5F);
+            }
+         }
+         if (kind < 0) {
+            continue;
+         }
+         m.bits |= 1L << i;
+         m.kind[i] = (byte)kind;
+         m.strength[i] = (byte)Math.round(Math.min(1F, s) * 255F);
+         m.sun[i] = (byte)Math.round(Math.max(0F, Math.min(1F, sunVis)) * 255F);
+      }
+   }
+
+   /** Chunks not seen for a while leave the cache (pooled IsoChunks are re-keyed by wx / wy anyway). */
+   private static void sweep(int frameNo) {
+      if ((frameNo & 255) != 0) {
+         return;
+      }
+      masks.values().removeIf(cm -> frameNo - cm.seenFrame > 600);
+   }
+
+   // ------------------------------------------------------------------------------------------------ lights
+
+   /** One frame's lights, relative to the frame origin: point lights then the key light (sun / moon). */
+   static final class Lights {
+      int n;
+      final float[] p = new float[MAX_LIGHTS * 4]; // x, y, z (squares, z in squares), radius
+      final float[] d = new float[MAX_LIGHTS * 4]; // dir x, y, cone cos (-2 = all round), strength
+      final float[] c = new float[MAX_LIGHTS * 4]; // r, g, b, -
+      final float[] sun = new float[4]; // direction (x east, y south, z up), strength (0 = no key light)
+      final float[] sunC = new float[4];
+   }
+
+   private static final float[] candD = new float[2048];
+   private static final IsoLightSource[] candL = new IsoLightSource[2048];
+
+   static void gatherLights(Lights L, float ox, float oy, float cx, float cy, float view) {
+      L.n = 0;
+      L.sun[3] = 0F;
+      if (Config.GLINT_SUN) {
+         ClimateManager cm = ClimateManager.getInstance();
+         Sky.update(-1F);
+         float day = cm != null ? Math.max(0F, Math.min(1F, cm.getDayLightStrength())) : 1F;
+         float cloud = cm != null ? Math.max(0F, Math.min(1F, cm.getCloudIntensity())) : 0F;
+         float clear = 1F - 0.85F * cloud;
+         if (Sky.sun[2] > 0.0 && day > 0.05F) {
+            L.sun[0] = (float)Sky.sun[0];
+            L.sun[1] = (float)Sky.sun[1];
+            L.sun[2] = (float)Sky.sun[2];
+            L.sun[3] = day * clear;
+            L.sunC[0] = 1.0F;
+            L.sunC[1] = 0.97F;
+            L.sunC[2] = 0.9F;
+         } else if (Sky.moon[2] > 0.05) {
+            L.sun[0] = (float)Sky.moon[0];
+            L.sun[1] = (float)Sky.moon[1];
+            L.sun[2] = (float)Sky.moon[2];
+            L.sun[3] = (float)(Sky.moonBrightness * 0.25) * clear;
+            L.sunC[0] = 0.75F;
+            L.sunC[1] = 0.82F;
+            L.sunC[2] = 1.0F;
+         }
+      }
+      if (!Config.GLINT_POINT) {
+         return;
+      }
+      ArrayList<IsoGameCharacter.TorchInfo> torches = LightingJNI.pzoptTorches();
+      for (int i = 0; torches != null && i < torches.size() && L.n < MAX_LIGHTS; i++) {
+         IsoGameCharacter.TorchInfo t = torches.get(i);
+         float tx = TorchSource.x(t), ty = TorchSource.y(t);
+         if (t.id == 0 || Math.abs(tx - cx) > view + t.dist || Math.abs(ty - cy) > view + t.dist) {
+            continue;
+         }
+         float len = (float)Math.sqrt(t.angleX * t.angleX + t.angleY * t.angleY);
+         if (len < 1e-4F) {
+            continue;
+         }
+         boolean car = t.id >= 4096 || t.focusing > 0;
+         int k = L.n * 4;
+         L.p[k] = tx - ox;
+         L.p[k + 1] = ty - oy;
+         L.p[k + 2] = (t.z + (car ? PixelLight.CAR_H : TorchSource.height(t, PixelLight.TORCH_H))) * METRIC_Z;
+         L.p[k + 3] = Math.max(1F, TorchSource.reach(t, Math.max(1F, t.dist)));
+         L.d[k] = t.angleX / len;
+         L.d[k + 1] = t.angleY / len;
+         L.d[k + 2] = t.cone ? t.dot : -2F;
+         L.d[k + 3] = t.strength;
+         L.c[k] = t.r;
+         L.c[k + 1] = t.g;
+         L.c[k + 2] = t.b;
+         L.c[k + 3] = car ? 2F : 1F;
+         L.n++;
+      }
+      IsoCell cell = IsoWorld.instance.currentCell;
+      java.util.Stack<IsoLightSource> list = cell.getLamppostPositions();
+      int nc = 0;
+      for (int i = 0; i < list.size() && nc < candL.length; i++) {
+         IsoLightSource l = list.get(i);
+         if (!l.active || l.radius <= 0) {
+            continue;
+         }
+         float dx = l.x + 0.5F - cx, dy = l.y + 0.5F - cy;
+         float r = Math.min(l.radius, 20);
+         if (Math.abs(dx) > view + r || Math.abs(dy) > view + r) {
+            continue;
+         }
+         candD[nc] = dx * dx + dy * dy;
+         candL[nc++] = l;
+      }
+      while (L.n < MAX_LIGHTS && nc > 0) {
+         int best = 0;
+         for (int i = 1; i < nc; i++) {
+            if (candD[i] < candD[best]) {
+               best = i;
+            }
+         }
+         IsoLightSource l = candL[best];
+         candD[best] = candD[--nc];
+         candL[best] = candL[nc];
+         int k = L.n * 4;
+         L.p[k] = l.x + 0.5F - ox;
+         L.p[k + 1] = l.y + 0.5F - oy;
+         L.p[k + 2] = (l.z + 0.9F) * METRIC_Z; // a lamp's bulb near the top of its level (street lamps, wall lamps)
+         L.p[k + 3] = Math.min(l.radius, 20);
+         L.d[k] = 0F;
+         L.d[k + 1] = 0F;
+         L.d[k + 2] = -2F;
+         L.d[k + 3] = 1F;
+         L.c[k] = Math.min(1F, Math.max(0F, l.r * 2F));
+         L.c[k + 1] = Math.min(1F, Math.max(0F, l.g * 2F));
+         L.c[k + 2] = Math.min(1F, Math.max(0F, l.b * 2F));
+         L.c[k + 3] = 0F;
+         L.n++;
+      }
+      for (int i = 0; i < nc; i++) {
+         candL[i] = null;
+      }
+   }
+
+   // ------------------------------------------------------------------------------------------------ the frame
+
+   static final class Frame {
+      final float[] data = new float[MAX * TEXELS * 4];
+      int n;
+      final Lights lights = new Lights();
+      int model;
+      float zoom, jx, jy;
+      int ts;
+      int stamp;
+   }
+
+   static final class Pass extends TextureDraw.GenericDrawer {
+      Frame frame;
+
+      @Override
+      public void render() {
+         Gpu.draw(this);
+      }
+   }
+
+   private static final Frame[] FRAMES = {new Frame(), new Frame(), new Frame(), new Frame()};
+   private static final Pass[] PASSES = new Pass[8];
+   private static int frameIndex, passIndex, stampCounter;
+
+   /**
+    * Game thread, FBORenderCell after the players / items and before the puddles: this frame's masked squares in a light's
+    * reach, queued as one draw. Nothing queued when there are none.
+    */
+   public static void queue(int playerIndex, java.util.List<IsoChunk> chunks) {
+      if (!on() || chunks == null) {
+         return;
+      }
+      try {
+         build(playerIndex, chunks);
+      } catch (RuntimeException e) {
+         failed = true;
+         Log.warn("glints: frame build failed, glints off: " + e);
+      }
+   }
+
+   private static void build(int playerIndex, java.util.List<IsoChunk> chunks) {
+      frames++;
+      int frameNo = IsoWorld.instance.getFrameNo();
+      sweep(frameNo);
+      int model = model();
+      if (model < 0) {
+         GpuSections.begin(section(-1));
+         GpuSections.end(section(-1));
+         return;
+      }
+      zombie.iso.PlayerCamera camera = IsoCamera.cameras[playerIndex];
+      float zoom = camera.zoom;
+      int ts = Core.tileScale;
+      float cx = IsoCamera.frameState.camCharacterX, cy = IsoCamera.frameState.camCharacterY;
+      float camZ = IsoCamera.frameState.camCharacterZ;
+      float view = (camera.offscreenWidth + 2F * camera.offscreenHeight) * zoom / (64F * ts) + 4F;
+      // the frame origin: a multiple of 64 squares (the shader's world positions stay small)
+      int ox = (int)Math.floor(cx / 64F) * 64, oy = (int)Math.floor(cy / 64F) * 64;
+      Frame f = FRAMES[frameIndex++ & 3];
+      Lights L = f.lights;
+      gatherLights(L, ox, oy, cx, cy, view);
+      if (L.n == 0 && L.sun[3] <= 0F && Config.DEV_GLINT_VIEW != 1) {
+         return; // no light: no glint anywhere
+      }
+      float wet = zombie.iso.IsoPuddles.getInstance().getWetGroundFinalValue();
+      boolean snowAny = IsoWorld.instance.currentCell.getSnowTarget() > 0;
+      int camCX = zombie.core.math.PZMath.fastfloor(cx / 8F), camCY = zombie.core.math.PZMath.fastfloor(cy / 8F);
+      float K = BloodDecals.K;
+      f.n = 0;
+      float[] d = f.data;
+      for (int ci = 0; ci < chunks.size() && f.n < MAX; ci++) {
+         IsoChunk c = chunks.get(ci);
+         zombie.iso.fboRenderChunk.FBORenderLevels levels = c.getRenderLevels(playerIndex);
+         for (int level = c.minLevel; level <= c.maxLevel && f.n < MAX; level++) {
+            if (camZ < 0F && level > zombie.core.math.PZMath.fastfloor(camZ) || !levels.isOnScreen(level)) {
+               continue;
+            }
+            LevelMask m = mask(c, level, frameNo, wet, snowAny);
+            if (m == null || m.bits == 0L) {
+               continue;
+            }
+            zombie.iso.fboRenderChunk.FBORenderCutaways.ChunkLevelData cut = c.getCutawayDataForLevel(level);
+            if (cut == null) {
+               continue;
+            }
+            byte[] flags = cut.squareFlags[playerIndex];
+            float chunkDepth = IsoDepthHelper.getChunkDepthData(camCX, camCY, c.wx, c.wy, level).depthStart;
+            long bits = m.bits;
+            while (bits != 0L && f.n < MAX) {
+               int s = Long.numberOfTrailingZeros(bits);
+               bits &= bits - 1L;
+               if ((flags[s] & 1) == 0) {
+                  continue;
+               }
+               int x = c.wx * 8 + (s & 7), y = c.wy * 8 + (s >> 3);
+               // which lights reach the square (its centre within reach + half a diagonal)
+               int lb = 0;
+               float px = x + 0.5F - ox, py = y + 0.5F - oy, pz = level * METRIC_Z;
+               for (int li = 0; li < L.n; li++) {
+                  int k = li * 4;
+                  float dx = px - L.p[k], dy = py - L.p[k + 1];
+                  float r = L.p[k + 3] + 0.75F;
+                  if (dx * dx + dy * dy > r * r || Math.abs(pz - L.p[k + 2]) > METRIC_Z * 1.5F) {
+                     continue;
+                  }
+                  if (L.d[k + 2] > -1.5F) { // a cone: the square's centre inside it (a square's half-width of slack)
+                     float len = (float)Math.sqrt(dx * dx + dy * dy);
+                     if (len > 0.75F && (dx * L.d[k] + dy * L.d[k + 1]) / len < L.d[k + 2] - 0.75F / len) {
+                        continue;
+                     }
+                  }
+                  lb |= 1 << li;
+               }
+               int sunv = m.sun[s] & 255;
+               boolean sun = L.sun[3] > 0F && sunv > 8;
+               if (lb == 0 && !sun && Config.DEV_GLINT_VIEW != 1) {
+                  continue;
+               }
+               IsoGridSquare sq = c.getGridSquare(s & 7, s >> 3, level);
+               float lum = 1F;
+               if (sq != null) {
+                  int l0 = sq.getVertLight(0, playerIndex), l2 = sq.getVertLight(2, playerIndex);
+                  lum = Math.min(1F, 0.5F * (luma(l0) + luma(l2)) * 2.5F);
+               }
+               int o = f.n * TEXELS * 4;
+               // the floor diamond's north corner in absolute screen pixels (IsoUtils.XToScreen / YToScreen at tile scale ts)
+               d[o] = (x - y) * (32F * ts);
+               d[o + 1] = (x + y) * (16F * ts) - level * (96F * ts);
+               d[o + 2] = chunkDepth + IsoDepthHelper.calculateDepth(x, y, level);
+               d[o + 3] = level;
+               d[o + 4] = x - ox;
+               d[o + 5] = y - oy;
+               // grid space s = (x - y) 32, t = (x + y) 16, wrapped every 4096 units (128 / 256 squares: cells of every
+               // level line up across the wrap, the random pattern just restarts)
+               d[o + 6] = (float)Math.floorMod((x - y) * 32, 4096);
+               d[o + 7] = (float)Math.floorMod((x + y) * 16, 4096);
+               d[o + 8] = m.kind[s];
+               d[o + 9] = (m.strength[s] & 255) / 255F;
+               d[o + 10] = sunv / 255F;
+               d[o + 11] = lum;
+               d[o + 12] = lb;
+               d[o + 13] = level & 255;
+               d[o + 14] = 0F;
+               d[o + 15] = 0F;
+               f.n++;
+            }
+         }
+      }
+      instances += f.n;
+      maxInstances = Math.max(maxInstances, f.n);
+      if (f.n == 0) {
+         return;
+      }
+      framesQueued++;
+      f.model = model;
+      f.zoom = zoom;
+      f.ts = ts;
+      f.jx = camera.fixJigglyModelsX * zoom;
+      f.jy = camera.fixJigglyModelsY * zoom;
+      f.stamp = ++stampCounter;
+      Pass p = PASSES[passIndex++ & 7];
+      if (p == null) {
+         p = PASSES[(passIndex - 1) & 7] = new Pass();
+      }
+      p.frame = f;
+      String sec = section(model);
+      GpuSections.begin(sec);
+      SpriteRenderer.instance.drawGeneric(p);
+      GpuSections.end(sec);
+   }
+
+   static float luma(int abgr) {
+      float r = (abgr & 255) / 255F, g = (abgr >> 8 & 255) / 255F, b = (abgr >> 16 & 255) / 255F;
+      return 0.2126F * r + 0.7152F * g + 0.0722F * b;
+   }
+
+   // ------------------------------------------------------------------------------------------------ render thread
+
+   static final String VERT = String.join("\n",
+         "#version 330",
+         "uniform sampler2D uData;",
+         "uniform mat4 uMVP;",
+         "uniform vec4 uJ;    // jiggle x, y, K per unit x + y, bias",
+         "uniform float uTs;",
+         "out vec2 vG;",
+         "out vec3 vP;",
+         "flat out vec4 vM;   // kind, strength, sun visibility, light gate",
+         "flat out ivec2 vB;  // light bits, level",
+         "void main() {",
+         "   int i = gl_InstanceID;",
+         "   vec4 a = texelFetch(uData, ivec2(i * 4, 0), 0);",
+         "   vec4 b = texelFetch(uData, ivec2(i * 4 + 1, 0), 0);",
+         "   vec4 c = texelFetch(uData, ivec2(i * 4 + 2, 0), 0);",
+         "   vec4 e = texelFetch(uData, ivec2(i * 4 + 3, 0), 0);",
+         "   int v = gl_VertexID;",
+         "   vec2 o = v == 0 ? vec2(0.0) : v == 1 ? vec2(1.0, 0.0) : v == 2 ? vec2(1.0) : vec2(0.0, 1.0);",
+         "   vec2 scr = a.xy + vec2((o.x - o.y) * 32.0 * uTs, (o.x + o.y) * 16.0 * uTs);",
+         "   gl_Position = uMVP * vec4(scr + uJ.xy, 0.0, 1.0);",
+         "   float depth = a.z - (o.x + o.y) * uJ.z - uJ.w;",
+         "   gl_Position.z = (depth * 2.0 - 1.0) * gl_Position.w;",
+         "   vG = b.zw + vec2((o.x - o.y) * 32.0, (o.x + o.y) * 16.0);",
+         "   vP = vec3(b.xy + o, a.w * 2.4494897);",
+         "   vM = c;",
+         "   vB = ivec2(int(e.x + 0.5), int(e.y + 0.5));",
+         "}");
+
+   /** The fragment shader of one model (MODEL 0..4, as MODELS). */
+   static String frag(int model) {
+      return String.join("\n",
+         "#version 330",
+         "#define MODEL " + model,
+         GlintGlsl.LIB,
+         "uniform vec4 uLp[" + MAX_LIGHTS + "];",
+         "uniform vec4 uLd[" + MAX_LIGHTS + "];",
+         "uniform vec4 uLc[" + MAX_LIGHTS + "];",
+         "uniform vec4 uSun;   // direction, strength",
+         "uniform vec4 uSunC;",
+         "uniform vec4 uKind[3]; // per kind: facets per grid unit^2, NDF width, angular cell, F0",
+         "uniform vec4 uView;  // footprint (grid units per pixel), brightness, dev view, -",
+         "in vec2 vG;",
+         "in vec3 vP;",
+         "flat in vec4 vM;",
+         "flat in ivec2 vB;",
+         "out vec4 fragColor;",
+         "const vec3 V = vec3(0.61237244, 0.61237244, 0.5);",
+         "float ndf(vec2 g, vec2 m, vec4 k, int salt) {",
+         "#if MODEL == 0",
+         "   return pzgDb23(g, dFdx(g), dFdy(g), k.x, m, k.y, k.z, salt);",
+         "#elif MODEL == 1",
+         "   return pzgDb23Iso(g, uView.x, k.x, m, k.y, k.z, salt);",
+         "#elif MODEL == 2",
+         "   return pzgJamsi(g, uView.x, vP.z * 64.0, k.x, m, k.y, k.z);",
+         "#elif MODEL == 3",
+         "   return pzgSparkle(g, uView.x, m, k.y, k.z);",
+         "#else",
+         "   return pzgExplicit(g, uView.x, k.x, m, k.y, k.z);",
+         "#endif",
+         "}",
+         "vec3 glint(vec3 L, vec3 E, vec2 g, vec4 k, int salt) {",
+         "   if (L.z <= 0.0) return vec3(0.0);",
+         "   vec3 H = normalize(L + V);",
+         "   vec2 m = H.xy / H.z;",
+         "   float D = ndf(g, m, k, salt);",
+         "   if (D <= 0.0) return vec3(0.0);",
+         "   float c2 = H.z * H.z;",
+         "   float F = k.w + (1.0 - k.w) * pow(1.0 - clamp(dot(L, H), 0.0, 1.0), 5.0);",
+         "   return E * (F * D / (c2 * c2) / (4.0 * V.z));",
+         "}",
+         "void main() {",
+         "   int kind = int(vM.x + 0.5);",
+         "   vec4 k = uKind[kind];",
+         "   if (uView.z == 1.0) {",
+         "      vec3 col = kind == 0 ? vec3(0.1, 0.25, 0.6) : kind == 1 ? vec3(0.5) : vec3(0.0, 0.4, 0.4);",
+         "      fragColor = vec4(col * vM.y * 0.5, 0.0);",
+         "      return;",
+         "   }",
+         "   vec3 sum = vec3(0.0);",
+         "   int salt = vB.y * 3 + kind;",
+         "   if (uSun.w > 0.0) sum += glint(uSun.xyz, uSunC.rgb * (uSun.w * vM.z), vG, k, salt);",
+         "   int bits = vB.x;",
+         "   for (int i = 0; i < " + MAX_LIGHTS + "; i++) {",
+         "      if ((bits & (1 << i)) == 0) continue;",
+         "      vec3 d = uLp[i].xyz - vP;",
+         "      float r = length(d);",
+         "      vec3 L = d / max(r, 1e-4);",
+         "      float hr = length(d.xy);",
+         "      float att = clamp(1.0 - hr / uLp[i].w, 0.0, 1.0);",
+         "      if (uLd[i].z > -1.5) {",
+         "         float cs = hr > 1e-3 ? dot(-d.xy / hr, uLd[i].xy) : 1.0;",
+         "         att *= smoothstep(uLd[i].z - 0.04, uLd[i].z + 0.04, cs);",
+         "      }",
+         "      if (att <= 0.0) continue;",
+         "      sum += glint(L, uLc[i].rgb * (uLd[i].w * att * vM.w * 1.6), vG, k, salt);",
+         "   }",
+         "   sum *= vM.y * uView.y;",
+         "   if (uView.z == 2.0) { int nb = 0; for (int i = 0; i < " + MAX_LIGHTS + "; i++) nb += (bits >> i) & 1; sum += vec3(0.0, 0.08, 0.0) * float(nb); }",
+         "   if (uView.z == 3.0) sum *= 20.0;",
+         "   fragColor = vec4(sum, 0.0);",
+         "}");
+   }
+
+   static final class Gpu {
+      private static final int[] programs = new int[MODELS.length];
+      private static final int[][] locs = new int[MODELS.length][];
+      private static int tex, vao, lastStamp = -1;
+      private static FloatBuffer upload;
+      private static final FloatBuffer mat = BufferUtils.createFloatBuffer(16);
+      private static final FloatBuffer v8 = BufferUtils.createFloatBuffer(MAX_LIGHTS * 4);
+      private static final FloatBuffer v3 = BufferUtils.createFloatBuffer(12);
+      private static final Matrix4f mvp = new Matrix4f();
+      static final String[] NAMES = {"uData", "uMVP", "uJ", "uTs", "uLp", "uLd", "uLc", "uSun", "uSunC", "uKind", "uView"};
+
+      /** Render thread, at world entry (shaderWarmup) or on the first draw: every model's program. */
+      static void warm() {
+         if (!Config.GLINTS_KEY || !Overrides.enabled()) {
+            return;
+         }
+         for (int i = 0; i < MODELS.length; i++) {
+            program(i);
+         }
+      }
+
+      static int program(int model) {
+         if (programs[model] != 0) {
+            return programs[model];
+         }
+         int p = Shaders.program("glints " + MODELS[model], VERT, frag(model));
+         if (p == 0) {
+            programs[model] = -1;
+            Log.warn("glints: the " + MODELS[model] + " program did not build");
+            return -1;
+         }
+         programs[model] = p;
+         int[] l = new int[NAMES.length];
+         for (int i = 0; i < NAMES.length; i++) {
+            l[i] = GL20.glGetUniformLocation(p, NAMES[i]);
+         }
+         locs[model] = l;
+         Log.info("glints: " + MODELS[model] + " program " + p);
+         return p;
+      }
+
+      static void draw(Pass pass) {
+         Frame f = pass.frame;
+         if (f == null || f.n == 0) {
+            return;
+         }
+         try {
+            int prog = program(f.model);
+            if (prog <= 0) {
+               return;
+            }
+            int[] l = locs[f.model];
+            if (tex == 0) {
+               tex = GL11.glGenTextures();
+               GL13.glActiveTexture(GL13.GL_TEXTURE1);
+               GL11.glBindTexture(GL11.GL_TEXTURE_2D, tex);
+               GL11.glTexImage2D(GL11.GL_TEXTURE_2D, 0, GL30.GL_RGBA32F, MAX * TEXELS, 1, 0, GL11.GL_RGBA, GL11.GL_FLOAT, (FloatBuffer)null);
+               GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MIN_FILTER, GL11.GL_NEAREST);
+               GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MAG_FILTER, GL11.GL_NEAREST);
+               vao = GL30.glGenVertexArrays();
+            }
+            GL13.glActiveTexture(GL13.GL_TEXTURE1);
+            GL11.glBindTexture(GL11.GL_TEXTURE_2D, tex);
+            if (lastStamp != f.stamp) {
+               int floats = f.n * TEXELS * 4;
+               if (upload == null) {
+                  upload = BufferUtils.createFloatBuffer(MAX * TEXELS * 4);
+               }
+               upload.clear();
+               upload.put(f.data, 0, floats).flip();
+               GL11.glTexSubImage2D(GL11.GL_TEXTURE_2D, 0, 0, 0, f.n * TEXELS, 1, GL11.GL_RGBA, GL11.GL_FLOAT, upload);
+               lastStamp = f.stamp;
+            }
+            zombie.core.ShaderHelper.glUseProgramObjectARB(prog);
+            GL20.glUniform1i(l[0], 1);
+            int pi = SpriteRenderer.instance.getRenderingPlayerIndex();
+            zombie.iso.PlayerCamera cam = SpriteRenderer.instance.getRenderingPlayerCamera(pi);
+            mvp.setOrtho(cam.getOffX(), cam.getOffX() + cam.offscreenWidth, cam.getOffY() + cam.offscreenHeight, cam.getOffY(), -1.0F, 1.0F);
+            mat.clear();
+            mvp.get(mat);
+            GL20.glUniformMatrix4fv(l[1], false, mat);
+            GL20.glUniform4f(l[2], f.jx, f.jy, BloodDecals.K, BloodDecals.K * Config.BLOOD_APPEND_BIAS_PCT / 100F + 1.0E-4F);
+            GL20.glUniform1f(l[3], f.ts);
+            Lights L = f.lights;
+            v8.clear();
+            v8.put(L.p).flip();
+            GL20.glUniform4fv(l[4], v8);
+            v8.clear();
+            v8.put(L.d).flip();
+            GL20.glUniform4fv(l[5], v8);
+            v8.clear();
+            v8.put(L.c).flip();
+            GL20.glUniform4fv(l[6], v8);
+            GL20.glUniform4f(l[7], L.sun[0], L.sun[1], L.sun[2], L.sun[3]);
+            GL20.glUniform4f(l[8], L.sunC[0], L.sunC[1], L.sunC[2], 0F);
+            v3.clear();
+            kindParams(v3);
+            v3.flip();
+            GL20.glUniform4fv(l[9], v3);
+            GL20.glUniform4f(l[10], f.zoom / f.ts, Config.GLINT_PCT / 100F, Config.DEV_GLINT_VIEW, 0F);
+            GL11.glEnable(GL11.GL_BLEND);
+            GL14.glBlendFuncSeparate(GL11.GL_ONE, GL11.GL_ONE, GL11.GL_ZERO, GL11.GL_ONE);
+            GL11.glEnable(GL11.GL_DEPTH_TEST);
+            GL11.glDepthFunc(GL11.GL_LEQUAL);
+            GL11.glDepthMask(false);
+            GL11.glEnable(GL32.GL_DEPTH_CLAMP);
+            GL30.glBindVertexArray(vao);
+            GL31.glDrawArraysInstanced(GL11.GL_TRIANGLE_FAN, 0, 4, f.n);
+            GL30.glBindVertexArray(0);
+            GL11.glDisable(GL32.GL_DEPTH_CLAMP);
+            draws++;
+         } catch (Throwable t) {
+            failed = true;
+            Log.warn("glints: draw failed, glints off: " + t);
+         } finally {
+            zombie.core.ShaderHelper.glUseProgramObjectARB(0);
+            GL13.glActiveTexture(GL13.GL_TEXTURE1);
+            GL11.glBindTexture(GL11.GL_TEXTURE_2D, 0);
+            GL13.glActiveTexture(GL13.GL_TEXTURE0);
+            GL11.glBindTexture(GL11.GL_TEXTURE_2D, 0);
+            Texture.lastTextureID = -1;
+            GL11.glDepthMask(true);
+            GL11.glBlendFunc(GL11.GL_SRC_ALPHA, GL11.GL_ONE_MINUS_SRC_ALPHA);
+            GLStateRenderThread.restore();
+            zombie.core.ShaderHelper.forgetCurrentlyBound();
+            SpriteRenderer.ringBuffer.restoreVbos = true;
+            SpriteRenderer.ringBuffer.restoreBoundTextures = true;
+         }
+      }
+   }
+
+   /**
+    * Per kind (frost, snow, wet): facets per grid unit^2 (glintFlakes per square: a square is 1024 grid units^2), the
+    * Beckmann width of their normals, the angular cell, F0. Frost: thin plates in every orientation (wide), ice's F0; snow:
+    * a denser, rounder grain; wet asphalt: water over aggregate, the facets near the surface's normal.
+    */
+   static void kindParams(FloatBuffer out) {
+      float rho = Config.GLINT_FLAKES / 1024F;
+      float rough = Config.GLINT_ROUGH_PCT / 100F, tw = Config.GLINT_TWINKLE_PCT / 100F;
+      out.put(rho).put(0.45F * rough).put(0.035F * tw).put(0.018F);
+      out.put(rho * 1.6F).put(0.55F * rough).put(0.03F * tw).put(0.018F);
+      out.put(rho * 0.6F).put(0.22F * rough).put(0.025F * tw).put(0.02F);
+   }
+}

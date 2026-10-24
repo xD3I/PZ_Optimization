@@ -1132,6 +1132,7 @@ public final class Harness {
                 + "\nripples=" + Ripples.stats()
                 + "\nbake_counters=" + zombie.iso.fboRenderChunk.FBORenderCell.pzoptBakeCounters()
                 + "\nsway=" + Sway.stats()
+                + "\nground_cover=" + GroundCover.stats() + "\nglints=" + Glints.stats()
                 + (ChunkAo.enabled() ? "\nao_latency=" + ChunkAo.latency() : "") // pzopt: chunk AO first-AO latency
                 + "\ncore_placement=" + CorePlacement.describe()
                 + "\ngpu_pstate=" + GpuPstate.describe()

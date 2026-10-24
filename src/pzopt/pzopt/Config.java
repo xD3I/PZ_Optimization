@@ -1609,6 +1609,31 @@ public final class Config {
    public static final int DEV_CLOUD_SKIP = integer("devCloudSkip", 0); // dev (cost split): 1 = no kept-term tap (a constant share), 2 = no detail tap (no erosion), 4 = the kept term bound once a frame (wrong picture: the cost of per-draw binds); bits
    public static final int DEV_CLOUD_ALTERNATE = integer("devCloudAlternate", 0); // dev: ms; cloud shadows switch on and off every period (the frames' GPU time split by it)
    // god rays (pzopt.GodRays, docs/findings-god-rays-2026-09-27.md): light shafts in the haze and the dust of rooms, sun and moon
+   // ---- ground cover (pzopt.GroundCover, pzopt.Glints; agent ground-cover, 2026-10-24). groundScatter, groundScatterDensityPct and
+   // glints themselves are ground-common's keys (the "Ground and grass" subcategory); until that branch is merged GLINTS_KEY reads
+   // the same "glints" key. Every variant below is off or at its measured default.
+   public static volatile boolean GLINTS_KEY; // glints on frost, snow and wet asphalt (interim read of ground-common's key)
+   public static volatile String GLINT_MODEL; // db23 | db23iso | jamsi | sparkle | explicit (pzopt.GlintGlsl)
+   public static volatile String GLINT_PASS; // where glints are drawn: diamonds (a floor diamond per masked square in reach, per-pixel model) | particles (the glinting flakes alone as instanced pixel quads)
+   public static volatile int GLINT_PCT; // glints: brightness, %
+   public static volatile int GLINT_FLAKES; // glints: facets per square (the density of crystals / aggregate grains)
+   public static volatile int GLINT_ROUGH_PCT; // glints: width of the facets' normal distribution, % of each surface's own
+   public static volatile int GLINT_TWINKLE_PCT; // glints: the angular cell (how long a glint lives as the light moves), % of each surface's own
+   public static volatile boolean GLINT_SUN; // glints: the sun / moon as a light (the iso camera's view vector is fixed: these barely move)
+   public static volatile boolean GLINT_POINT; // glints: torches, headlights and lamps as lights
+   public static volatile int DEV_GLINT_VIEW; // dev: 1 masks (frost blue, snow white, wet cyan), 2 the lights reaching each square, 3 glints x 20
+   public static final int DEV_GLINT_CYCLE = integer("devGlintCycle", 0); // dev: ms; the glint model cycles db23 -> db23iso -> jamsi -> sparkle -> explicit -> off (GPU section ground.glints.<model>)
+   public static final int DEV_GLINT_ALTERNATE = integer("devGlintAlternate", 0); // dev: ms; glints switch on and off every period (GPU section ground.glints / ground.glints.off)
+   public static final String DEV_GLINT_FORCE = string("devGlintForce", "").trim(); // dev: frost | snow | wet: every outdoor floor square in view gets that mask (cost and look rigs)
+   public static volatile boolean GROUND_SCATTER_KEY; // seasonal ground cover baked with the floor (interim read of ground-common's key "groundScatter")
+   public static volatile int GROUND_SCATTER_DENSITY_PCT; // ground cover: density, % (interim read of ground-common's "groundScatterDensityPct")
+   public static volatile String GROUND_COVER_PLACEMENT; // ground cover: jitter (6 x 6 jittered grid a square, hashed thresholds) | bluenoise (a progressive blue-noise 4 x 4 square tile, rank-dithered)
+   public static volatile String GROUND_COVER_ASSETS; // ground cover: mixed (procedural shapes + the game's leaf-clump and litter decals) | procedural | sprites
+   public static volatile boolean GROUND_COVER_FROST; // ground cover: morning frost in the shade (cold clear nights; melts where the sun has shone)
+   public static volatile int GROUND_REBAKE_PER_FRAME; // ground cover: chunk levels re-baked a frame at a season / frost step
+   public static volatile int DEV_GROUND_COVER_VIEW; // dev: 1 cover kinds in flat colours
+   public static final int DEV_GROUND_TEMP = integer("devGroundTemp", -999); // dev: the temperature (C) the cover and the frost see
+   public static final boolean DEV_FROST_FORCE = bool("devFrostForce", false); // dev: the frost potential at its maximum whatever the weather
    public static volatile boolean FOLIAGE_SWAY; // grass, bushes and trees sway in the wind while they stay baked in the chunk textures (the chunk composite looks each texel up through the wind's displacement; pzopt.Sway)
    public static volatile int FOLIAGE_SWAY_PCT; // foliage sway: how far the plants bend, %
    public static volatile int FOLIAGE_SWAY_TAPS; // foliage sway: 1 = texels move inside their plant's outline only, 2..4 = + 1..3 upwind probes so a plant's leading edge moves over what is behind it
@@ -2289,6 +2314,24 @@ public final class Config {
       CLOUD_OPACITY_PCT = Math.max(0, Math.min(100, integer("cloudOpacityPct", 85)));
       CLOUD_SPEED_PCT = integer("cloudSpeedPct", 100);
       CLOUD_SCALE_PCT = Math.max(25, Math.min(400, integer("cloudScalePct", 100)));
+      // ground cover (pzopt.GroundCover, pzopt.Glints)
+      GLINTS_KEY = bool("glints", false);
+      GLINT_MODEL = string("glintModel", "db23iso").trim().toLowerCase(java.util.Locale.ROOT);
+      GLINT_PASS = string("glintPass", "diamonds").trim().toLowerCase(java.util.Locale.ROOT);
+      GLINT_PCT = Math.max(0, Math.min(400, integer("glintPct", 100)));
+      GLINT_FLAKES = Math.max(4, Math.min(1024, integer("glintFlakes", 80)));
+      GLINT_ROUGH_PCT = Math.max(25, Math.min(400, integer("glintRoughPct", 100)));
+      GLINT_TWINKLE_PCT = Math.max(25, Math.min(400, integer("glintTwinklePct", 100)));
+      GLINT_SUN = bool("glintSun", true);
+      GLINT_POINT = bool("glintPoint", true);
+      DEV_GLINT_VIEW = integer("devGlintView", 0);
+      GROUND_SCATTER_KEY = bool("groundScatter", false);
+      GROUND_SCATTER_DENSITY_PCT = Math.max(0, Math.min(400, integer("groundScatterDensityPct", 100)));
+      GROUND_COVER_PLACEMENT = string("groundCoverPlacement", "bluenoise").trim().toLowerCase(java.util.Locale.ROOT);
+      GROUND_COVER_ASSETS = string("groundCoverAssets", "mixed").trim().toLowerCase(java.util.Locale.ROOT);
+      GROUND_COVER_FROST = bool("groundCoverFrost", true);
+      GROUND_REBAKE_PER_FRAME = Math.max(1, Math.min(32, integer("groundRebakePerFrame", 2)));
+      DEV_GROUND_COVER_VIEW = integer("devGroundCoverView", 0);
       FOLIAGE_SWAY = bool("foliageSway", false);
       FOLIAGE_SWAY_PCT = Math.max(0, Math.min(400, integer("foliageSwayPct", 100)));
       FOLIAGE_SWAY_TAPS = Math.max(1, Math.min(4, integer("foliageSwayTaps", 1)));
