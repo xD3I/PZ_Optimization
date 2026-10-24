@@ -2427,14 +2427,14 @@ local ENHANCEMENT_SECTIONS = {
             { key = "glints", label = "Glints on frost, snow and wet asphalt",
               tip = "Frost, snow and wet roads sparkle: tiny flakes catch the sun, a torch, headlights or a street lamp, and the sparkle moves with the light (Deliot and Belcour 2023). Only where a frost, snow or wet surface and a light meet.",
               why = {
-                  gpu = "One pass over the pixels where frost, snow or a wet road meets a light: about 5 to 15 us a frame where it shows, nothing elsewhere.",
+                  gpu = "Only the flakes that catch a light are drawn, as tiny points: at most ~0.02 ms a frame on the desktop at 5K with every outdoor square frosty in full sun, nothing at all without frost, snow or a wet road in a light.",
               } },
             { key = "glintPass", label = "Glints: how they are drawn",
               choices = { "particles", "compact", "diamonds" },
               note = { particles = "the glinting flakes alone, as tiny points (default)", compact = "the same flakes, listed on the GPU first (needs OpenGL 4.3)", diamonds = "every frosty square in a light, pixel by pixel" },
               tip = "Particles: each frosty, snowy or wet square holds a counted number of tiny ice facets; only the ones that mirror the light into your eye are drawn, as points that stay put on the ground while the camera moves. Compact: the same flakes, sorted out by a compute pass first. Diamonds: the light is worked out for every pixel of the square (the Deliot and Belcour model), the most detailed and the most expensive.",
               why = {
-                  gpu = "Measured on the desktop at 5K with every outdoor square frosty in full sun: particles and compact ~0.065 ms a frame, diamonds ~0.10 ms. Nothing at all without frost, snow or a wet road in a light.",
+                  gpu = "Measured on the desktop at 5K with every outdoor square frosty in full sun: particles ~0.018 ms of GPU a frame, compact ~0.019 ms, diamonds ~0.10 ms. Nothing at all without frost, snow or a wet road in a light.",
               } },
             { key = "glintPct", label = "Glints: brightness (%)",
               choices = { "50", "100", "150", "200" }, note = { ["100"] = "default" },

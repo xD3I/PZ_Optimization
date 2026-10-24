@@ -1635,7 +1635,7 @@ public final class Config {
    // ---- ground cover (pzopt.GroundCover, pzopt.Glints; 2026-10-24): the variants of groundScatter and glints (GROUND_SCATTER,
    // GLINTS above). Every variant below is off or at its measured default.
    public static volatile String GLINT_MODEL; // db23 | db23iso | jamsi | sparkle | explicit (pzopt.GlintGlsl)
-   public static volatile String GLINT_PASS; // where glints are drawn: diamonds (a floor diamond per masked square in reach, per-pixel model) | particles (the glinting flakes alone as instanced pixel quads)
+   public static volatile String GLINT_PASS; // where glints are drawn: particles (default since gcv-cost-pass4: 18 us GPU worst case vs 101 for diamonds) | compact | diamonds (a floor diamond per masked square in reach, per-pixel model)
    public static volatile int GLINT_PCT; // glints: brightness, %
    public static volatile int GLINT_FLAKES; // glints: facets per square (the density of crystals / aggregate grains)
    public static volatile int GLINT_ROUGH_PCT; // glints: width of the facets' normal distribution, % of each surface's own
@@ -2354,7 +2354,7 @@ public final class Config {
       DEV_GROUND_VIEW = integer("devGroundView", 0);
       // ground cover (pzopt.GroundCover, pzopt.Glints)
       GLINT_MODEL = string("glintModel", "db23iso").trim().toLowerCase(java.util.Locale.ROOT);
-      GLINT_PASS = string("glintPass", "diamonds").trim().toLowerCase(java.util.Locale.ROOT);
+      GLINT_PASS = string("glintPass", "particles").trim().toLowerCase(java.util.Locale.ROOT);
       GLINT_PCT = Math.max(0, Math.min(400, integer("glintPct", 100)));
       GLINT_FLAKES = Math.max(4, Math.min(16384, integer("glintFlakes", 3072)));
       GLINT_ROUGH_PCT = Math.max(25, Math.min(400, integer("glintRoughPct", 100)));
