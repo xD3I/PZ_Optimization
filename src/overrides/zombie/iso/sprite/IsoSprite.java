@@ -1387,15 +1387,15 @@ public final class IsoSprite {
             shader = SceneShaderStore.opaqueDepthShader;
          }
 
-         int pzoptProgram = pzopt.GroundBake.FLOOR_ON ? pzopt.GroundBake.program(shader.getID(), obj != null && this != obj.sprite) : shader.getID(); // pzopt: ground and grass, a natural floor's variant (same uniform locations)
-         if (pzopt.TileBatch.start(pzoptProgram, zDepthBlendZ, zDepthBlendToZ)) { // pzopt: tileVertexDepth, the depth pair goes with the tile's vertices; consecutive tiles share one draw
+         if (pzopt.GroundBake.FLOOR_ON) shader = pzopt.GroundBake.shader(shader, this, obj != null && this != obj.sprite); // pzopt: ground and grass, a natural floor's variant (its own uniform locations below)
+         if (pzopt.TileBatch.start(shader.getID(), zDepthBlendZ, zDepthBlendToZ)) { // pzopt: tileVertexDepth, the depth pair goes with the tile's vertices; consecutive tiles share one draw
             return; // pzopt
          } // pzopt
          ShaderUniformSetter uniforms = ShaderUniformSetter.uniform1f(shader, "zDepth", frontDepthZ);
          uniforms.setNext(ShaderUniformSetter.uniform1i(shader, "drawPixels", drawPixels ? 1 : 0))
             .setNext(ShaderUniformSetter.uniform1f(shader, "zDepthBlendZ", zDepthBlendZ))
             .setNext(ShaderUniformSetter.uniform1f(shader, "zDepthBlendToZ", zDepthBlendToZ));
-         IndieGL.StartShader(pzoptProgram, uniforms); // pzopt: ground and grass
+         IndieGL.StartShader(shader.getID(), uniforms);
       }
    }
 
