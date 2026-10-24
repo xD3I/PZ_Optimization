@@ -123,9 +123,16 @@ public final class GroundBake {
       /** Game thread, once a frame. */
       boolean active();
 
-      /** Game thread, inside the bake of chunk {@code c}'s level {@code level}, after its floor tiles. */
+      /** Game thread, inside the bake of chunk {@code c}'s level {@code level}, after its floor tiles (or its snow, by phase). */
       void draw(IsoChunk c, int level, int playerIndex);
+
+      /** {@link #PHASE_FLOORS}: after the floor tiles, before the snow; {@link #PHASE_AFTER_SNOW}: after the snow, before the blood. */
+      default int phase() {
+         return PHASE_FLOORS;
+      }
    }
+
+   public static final int PHASE_FLOORS = 0, PHASE_AFTER_SNOW = 1;
 
    private static final CopyOnWriteArrayList<FloorPatch> PATCHES = new CopyOnWriteArrayList<>();
    private static final CopyOnWriteArrayList<FloorPass> PASSES = new CopyOnWriteArrayList<>();
@@ -165,6 +172,8 @@ public final class GroundBake {
    public static volatile boolean FLOOR_ON;
    /** A floor pass draws this frame. */
    public static volatile boolean PASS_ON;
+   /** An after-snow floor pass draws this frame. */
+   public static volatile boolean PASS_AFTER_SNOW_ON;
    /** The class map is updated at bakes this frame. */
    public static volatile boolean CLASS_ON;
    private static int frameNo, classWantedFrame = -100;
@@ -172,6 +181,7 @@ public final class GroundBake {
    private static String passSignature = "";
    private static final ArrayList<FloorPatch> ACTIVE = new ArrayList<>();
    private static final ArrayList<FloorPass> ACTIVE_PASSES = new ArrayList<>();
+   private static final ArrayList<FloorPass> ACTIVE_AFTER_SNOW = new ArrayList<>();
    private static boolean shownSignature;
 
    static boolean supported() {
@@ -182,8 +192,8 @@ public final class GroundBake {
    static void frameStart(int playerIndex) {
       frameNo++;
       if (PATCHES.isEmpty() && PASSES.isEmpty() && classWantedFrame < frameNo - 2 && Config.DEV_GROUND_VIEW == 0) {
-         if (FLOOR_ON || PASS_ON || CLASS_ON) {
-            FLOOR_ON = PASS_ON = CLASS_ON = false;
+         if (FLOOR_ON || PASS_ON || PASS_AFTER_SNOW_ON || CLASS_ON) {
+            FLOOR_ON = PASS_ON = PASS_AFTER_SNOW_ON = CLASS_ON = false;
          }
          return;
       }
@@ -238,6 +248,7 @@ public final class GroundBake {
       }
       FLOOR_ON = floorOn && signature.equals(s);
       ACTIVE_PASSES.clear();
+      ACTIVE_AFTER_SNOW.clear();
       StringBuilder ps = new StringBuilder();
       if (supported()) {
          for (FloorPass p : PASSES) {
@@ -248,7 +259,7 @@ public final class GroundBake {
                on = false;
             }
             if (on) {
-               ACTIVE_PASSES.add(p);
+               (p.phase() == PHASE_AFTER_SNOW ? ACTIVE_AFTER_SNOW : ACTIVE_PASSES).add(p);
                ps.append(ps.length() == 0 ? "" : "+").append(p.id());
             }
          }
@@ -259,7 +270,8 @@ public final class GroundBake {
          passSignature = pss;
       }
       PASS_ON = !ACTIVE_PASSES.isEmpty();
-      CLASS_ON = supported() && (FLOOR_ON || PASS_ON || classWantedFrame >= frameNo - 2);
+      PASS_AFTER_SNOW_ON = !ACTIVE_AFTER_SNOW.isEmpty();
+      CLASS_ON = supported() && (FLOOR_ON || PASS_ON || PASS_AFTER_SNOW_ON || classWantedFrame >= frameNo - 2);
    }
 
    // ------------------------------------------------------------------------------------------------ the floor draw (game / recording threads)
@@ -320,15 +332,25 @@ public final class GroundBake {
 
    /** FBORenderCell.pzoptBakeFloors after the floor tiles (game thread, or deferred to the splice). */
    public static void floorPasses(IsoChunk c, int level, int playerIndex) {
-      if (!PASS_ON) {
-         return;
+      if (PASS_ON) {
+         run(ACTIVE_PASSES, c, level, playerIndex);
       }
-      for (int i = 0; i < ACTIVE_PASSES.size(); i++) {
+   }
+
+   /** FBORenderCell.pzoptBakeSnow's end (game thread, in the bake stream, in place or deferred): the after-snow passes. */
+   public static void afterSnowPasses(IsoChunk c, int level, int playerIndex) {
+      if (PASS_AFTER_SNOW_ON) {
+         run(ACTIVE_AFTER_SNOW, c, level, playerIndex);
+      }
+   }
+
+   private static void run(ArrayList<FloorPass> list, IsoChunk c, int level, int playerIndex) {
+      for (int i = 0; i < list.size(); i++) {
          try {
-            ACTIVE_PASSES.get(i).draw(c, level, playerIndex);
+            list.get(i).draw(c, level, playerIndex);
          } catch (Throwable t) {
-            Log.warn("ground: floor pass " + ACTIVE_PASSES.get(i).id() + " failed and is off: " + t);
-            PASSES.remove(ACTIVE_PASSES.get(i));
+            Log.warn("ground: floor pass " + list.get(i).id() + " failed and is off: " + t);
+            PASSES.remove(list.get(i));
          }
       }
    }
@@ -604,7 +626,6 @@ public final class GroundBake {
       "uniform vec4 pzgMap;", // u = x - y = fragX * x + y, v = x + y - 6z = fragY * z + w (GroundBake.mapping)
       "uniform vec4 pzgBake;", // x: the level, y: dev view, z, w: 0
       GroundState.GLSL,
-      GroundState.GLSL_AGE,
       GLSL_CLASS,
       "vec3 pzgW;",
       "ivec2 pzgSq;",
@@ -645,6 +666,12 @@ public final class GroundBake {
       "      : m == 8 ? vec3(0.8, 0.4, 0.2) : m == 9 ? vec3(0.3, 0.15, 0.05) : vec3(1.0, 0.0, 1.0);",
       "   if ((pzgClass & 32) != 0) t *= 0.6;",
       "   return vec4(mix(c.rgb, t * c.a, 0.7), c.a);",
+      "#elif PZG_VIEW == 3",
+      // the ground state: ruts blue, berms red, wear green, freshness lifts it, the 8-square chunk grid of the window faint
+      "   vec4 st = pzgStateAt(pzgW.xy);",
+      "   vec3 t = vec3(clamp(st.x * 12.0, 0.0, 1.0), st.y, clamp(-st.x * 6.0, 0.0, 1.0)) + 0.25 * st.z;",
+      "   float k = clamp(max(abs(st.x) * 8.0, max(st.y, st.z)), 0.0, 1.0);",
+      "   return vec4(mix(c.rgb, t * c.a, 0.85 * k), c.a);",
       "#else",
       "   return c;",
       "#endif",

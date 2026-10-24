@@ -1622,13 +1622,14 @@ public final class Config {
    public static volatile boolean GRASS_BLADES; // grass near the player drawn as real blades (clumps, wind waves, trampling)
    public static volatile int GRASS_BLADE_RADIUS; // grass blades: squares round the player
    public static volatile int GRASS_BLADE_DENSITY_PCT; // grass blades: how many, %
-   public static volatile int DEV_GROUND_VIEW; // dev: ground views (GroundBake: 1 = the bake's world position as a checker, 2 = the class map)
+   public static volatile int DEV_GROUND_VIEW; // dev: ground views (GroundBake: 1 = the bake's world position as a checker, 2 = the class map, 3 = the ground state: ruts blue, berms red, wear green)
    public static final int DEV_GROUND_ALTERNATE = integer("devGroundAlternate", 0); // dev: ms; the ground keys in devGroundAlternateKeys switch off and on every period (within-run A/B: harness/ground/ab.py), or devGroundCycle steps
    public static final String DEV_GROUND_ALTERNATE_KEYS = string("devGroundAlternateKeys", "all"); // dev: comma list of ground keys the alternation switches ("all" = every ground switch)
    public static final String DEV_GROUND_CYCLE = string("devGroundCycle", ""); // dev: comma list of variant names stepped every devGroundAlternate ms (pzopt.Ground.cycle(); a feature reads its own names)
    public static final boolean DEV_GROUND_ALTERNATE_REBAKE = bool("devGroundAlternateRebake", true); // dev: each switch of a bake-time ground key re-bakes the natural ground on screen (so both halves show their picture)
    public static final boolean DEV_GROUND_STATE_TEST = bool("devGroundStateTest", false); // dev: GroundState stamps a test pattern round the player (rig for the upload / persistence path)
    public static final int DEV_GROUND_WALKERS = integer("devGroundWalkers", 0); // dev: GroundState stamps N synthetic walkers circling the player every frame (stamping cost rig)
+   public static final int DEV_GROUND_STATE_HZ = integer("devGroundStateHz", 30); // dev: GroundState's stamp batches a second (0: every frame); the GPU pass has a fixed cost per dispatch
    // god rays (pzopt.GodRays, docs/findings-god-rays-2026-09-27.md): light shafts in the haze and the dust of rooms, sun and moon
    // ---- ground cover (pzopt.GroundCover, pzopt.Glints; 2026-10-24): the variants of groundScatter and glints (GROUND_SCATTER,
    // GLINTS above). Every variant below is off or at its measured default.
