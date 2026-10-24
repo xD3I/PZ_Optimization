@@ -64,7 +64,7 @@ public final class GroundCover {
    }
 
    private static volatile boolean failed = CoreGl.legacyMac();
-   public static long bakes, bakesSkipped, builds, instancesDrawn, rebakesIssued, buildNs, hoodNs, cornersNs;
+   public static long bakes, bakesSkipped, builds, instancesDrawn, rebakesIssued, buildNs, hoodNs, cornersNs, buildMinNs = Long.MAX_VALUE, buildLateNs, buildLate;
 
    public static boolean on() {
       return Ground.on(Ground.K_SCATTER) && Overrides.enabled() && !failed;
@@ -93,7 +93,17 @@ public final class GroundCover {
 
    static {
       register(); // loaded by Ground.FEATURES the first frame a ground key is on
+      // tracks crush the cover: a chunk whose ground state changed re-bakes (the shader reads the state: prints in the frost,
+      // leaves pressed into the ruts)
+      GroundState.addListener((wx, wy) -> {
+         if (on() && Ground.on(Ground.K_TRACKS)) {
+            GroundBake.rebakeChunk(wx, wy, "cover tracks", true);
+            GroundCover.tracksRebakes++;
+         }
+      });
    }
+
+   public static long tracksRebakes;
 
    /** World entry (NoLoadingScreen): the floor pass joins ground-common's bake. */
    public static void register() {
@@ -127,8 +137,8 @@ public final class GroundCover {
    }
 
    public static String stats() {
-      return "ground cover: bakes=" + bakes + " skipped=" + bakesSkipped + " builds=" + builds + " build_us=" + (builds > 0 ? buildNs / 1000 / builds : 0) + " (hood " + (builds > 0 ? hoodNs / 1000 / builds : 0) + " corners " + (builds > 0 ? cornersNs / 1000 / builds : 0) + ")"
-            + " instances=" + instancesDrawn + " rebakes=" + rebakesIssued + " step=" + step + " frostStep=" + frostStep + " month=" + season.month
+      return "ground cover: bakes=" + bakes + " skipped=" + bakesSkipped + " builds=" + builds + " build_us=" + (builds > 0 ? buildNs / 1000 / builds : 0) + " (hood " + (builds > 0 ? hoodNs / 1000 / builds : 0) + " corners " + (builds > 0 ? cornersNs / 1000 / builds : 0) + ") build_min_us=" + (builds > 0 ? buildMinNs / 1000 : 0) + " build_late_us=" + (buildLate > 0 ? buildLateNs / 1000 / buildLate : 0)
+            + " instances=" + instancesDrawn + " rebakes=" + rebakesIssued + " tracksRebakes=" + tracksRebakes + " step=" + step + " frostStep=" + frostStep + " month=" + season.month
             + String.format(java.util.Locale.ROOT, " fall=%.2f flowers=%.2f frost=%.2f tmin=%.1f", season.leafFall, season.flowers, season.frost, season.tMin)
             + (failed ? " (failed)" : "");
    }
@@ -243,9 +253,11 @@ public final class GroundCover {
       s.driftX = (float)Math.cos(ang);
       s.driftY = (float)Math.sin(ang);
       Sky.update(-1F);
-      s.sunX = (float)Sky.sun[0];
-      s.sunY = (float)Sky.sun[1];
-      s.sunZ = (float)Sky.sun[2];
+      // the key light: the sun, or at night the moon (its shade decides where the moonlit frost glints)
+      boolean moon = Sky.sun[2] <= 0.02 && Sky.moon[2] > 0.05;
+      s.sunX = (float)(moon ? Sky.moon[0] : Sky.sun[0]);
+      s.sunY = (float)(moon ? Sky.moon[1] : Sky.sun[1]);
+      s.sunZ = (float)(moon ? Sky.moon[2] : Sky.sun[2]);
       float dawn = 6.0F, dusk = 19.0F;
       if (cm.getSeason() != null) {
          dawn = cm.getSeason().getDawn();
@@ -875,8 +887,14 @@ public final class GroundCover {
       if (lc.key != k || lc.fkey != fk || lc.skey != sk) {
          long t0 = System.nanoTime();
          build(c, level, lc);
-         buildNs += System.nanoTime() - t0;
+         long dt = System.nanoTime() - t0;
+         buildNs += dt;
          builds++;
+         buildMinNs = Math.min(buildMinNs, dt);
+         if (builds > 40) { // past the JIT's warm-up
+            buildLateNs += dt;
+            buildLate++;
+         }
          lc.key = k;
          lc.fkey = fk;
          lc.skey = sk;
@@ -1493,6 +1511,10 @@ public final class GroundCover {
          "flat in vec4 vFrost;",
          "flat in ivec2 vType;",
          "out vec4 fragColor;",
+         "#define texture2D texture",
+         GroundState.GLSL,
+         "// the ground state (pzopt.GroundState: ruts, prints, compaction) where the cover lies: 0 untouched .. 1 trodden flat",
+         "float crushed() { vec4 st = pzgStateAt(vW); return clamp(st.r * 2.0 + st.g * 1.2, 0.0, 1.0); }",
          "float h21(vec2 p) { uvec2 u = uvec2(ivec2(floor(p))); uint h = u.x * 0x27d4eb2du ^ u.y * 0x165667b1u; h ^= h >> 15u; h *= 0x85ebca6bu; h ^= h >> 13u; return float(h >> 8u) / 16777216.0; }",
          "float vn(vec2 p) { vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);",
          "   return mix(mix(h21(i), h21(i + vec2(1, 0)), f.x), mix(h21(i + vec2(0, 1)), h21(i + vec2(1, 1)), f.x), f.y); }",
@@ -1518,7 +1540,7 @@ public final class GroundCover {
          "      float streak = vn(vec2(dot(vW, dir) * 38.0, dot(vW, vec2(-dir.y, dir.x)) * 7.0));",
          "      float grain = vn(vW * 52.0 + 7.3);",
          "      float tex = 0.5 + 0.5 * smoothstep(0.3, 0.85, streak * 0.6 + grain * 0.4);",
-         "      a = clamp(cover * tex * 0.62, 0.0, 0.7);",
+         "      a = clamp(cover * tex * 0.62, 0.0, 0.7) * (1.0 - 0.85 * crushed()); // prints and ruts through the frost",
          "      col = mix(vec3(0.80, 0.85, 0.91), vec3(0.94, 0.96, 0.99), grain);",
          "      if (a < 0.01) discard;",
          "      fragColor = vec4(col * vLight.rgb * a, a);",
@@ -1563,6 +1585,7 @@ public final class GroundCover {
          "      col *= 0.8 + 0.35 * smoothstep(0.5, -0.6, p.y);",
          "   }",
          "   if (a <= 0.01) discard;",
+         "   if (type <= 1) col *= 1.0 - 0.5 * crushed(); // leaves and petals pressed into a rut go dark",
          "   if (uView.x == 1.0) col = type == 0 ? vec3(1, 0.5, 0) : type == 1 ? vec3(1, 0, 1) : type == 4 ? vec3(0, 1, 0) : vec3(0, 0.6, 1);",
          "   fragColor = vec4(col * vLight.rgb * a, a);",
          "}");
@@ -1637,6 +1660,8 @@ public final class GroundCover {
             GL11.glTexSubImage2D(GL11.GL_TEXTURE_2D, 0, 0, 0, texels, 1, GL11.GL_RGBA, GL11.GL_FLOAT, upload);
             GL20.glUseProgram(program);
             GL20.glUniform1i(uData, 1);
+            GroundState.bindTexture();
+            GroundState.applyUniforms(program);
             GL20.glUniform1i(uDiffuse, 0);
             mvp.set(Core.getInstance().projectionMatrixStack.peek()).mul(Core.getInstance().modelViewMatrixStack.peek());
             mat.clear();
