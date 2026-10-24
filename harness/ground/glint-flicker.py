@@ -17,10 +17,14 @@ Per run (<run>/capture, pzopt.FrameCapture: gray or RGBA, a 1:1 crop; capture wi
     previous and the next frame by more than 4/255 (a patch that flashes for one frame);
   * mass toggles: frames where more than a quarter of the sparks of the previous frame die at once.
 
-Usage: glint-flicker.py --test RUN [--before RUN] [--control RUN] [--context "..."] [--json out] [--no-jev]
+Usage: glint-flicker.py --test RUN [--before RUN] [--control RUN] [--reference NAME=RUN] [--scene "..."] [--context "..."]
+                        [--json out] [--no-jev]
   --test     the build under test (glints on)
   --before   the same scene on the build that showed the flicker (optional)
   --control  the same scene with the glints off (the background of particles, flashes, motion)
+  --reference NAME=RUN (repeatable) the same scene and build with one setting changed (e.g. glintTwinklePct): its numbers
+             go to Jev as `reference_NAME` beside `test`, the change described in --context
+  --scene    what the captures show (default: the horde scene of the report; the wet-night drive needs its own)
 Exit 0 = Jev says `test` does not flicker.
 """
 import argparse
@@ -199,6 +203,9 @@ def main():
     ap.add_argument("--test", required=True)
     ap.add_argument("--before")
     ap.add_argument("--control")
+    ap.add_argument("--reference", action="append", default=[], help="NAME=RUN, repeatable")
+    ap.add_argument("--scene", default="a player shoots a horde of zombies on a snowy pier in winter, snow falling, early morning, "
+                    "the camera follows the player")
     ap.add_argument("--context", default="")
     ap.add_argument("--json")
     ap.add_argument("--no-jev", action="store_true")
@@ -211,14 +218,17 @@ def main():
     ap.add_argument("--roi", help="x0:y0:x1:y1 of the capture (target mode: leave out the water's own glitter)")
     a = ap.parse_args()
     runs = {"test": a.test, "before": a.before, "control": a.control}
+    for r in a.reference:
+        name, _, run = r.partition("=")
+        runs["reference_" + name] = run
     if a.target:
         roi = tuple(int(v) for v in a.roi.split(":")) if a.roi else None
         res = {k: analyse_target(v, roi, a.skip) for k, v in runs.items() if v}
     else:
         res = {k: analyse(v, a.spark, a.floor, a.block, a.thresh, a.skip) for k, v in runs.items() if v}
     if "control" in res:
-        for k in ("test", "before"):
-            if k in res:
+        for k in res:
+            if k != "control":
                 c = res["control"]
                 res[k]["excess_spark_toggles_per_frame_over_control"] = round(res[k]["spark_toggles_per_frame"] - c["spark_toggles_per_frame"], 1)
                 res[k]["excess_blinking_blocks_per_10s_over_control"] = round(res[k]["blinking_blocks_per_10s"] - c["blinking_blocks_per_10s"], 1)
@@ -240,8 +250,7 @@ def main():
                      "consecutive frames. " + a.context)
         state = {
             "setup": setup_target if a.target else "Frame-exact captures (every presented frame read back in game, a 1:1 crop of the screen centre) of the same "
-                     "scene: a player shoots a horde of zombies on a snowy pier in winter, snow falling, early morning, the "
-                     "camera follows the player. Glints are 1-3 pixel sparkles on snow / frost / wet ground; a correct glint is "
+                     "scene: " + a.scene + ". Glints are 1-3 pixel sparkles on snow / frost / wet ground; a correct glint is "
                      "anchored to the ground and stays on from frame to frame while its light and the view hold (it may fade or "
                      "move with the camera), a flickering one switches on and off frame by frame. Frames are aligned for the "
                      "camera's motion. A spark is a pixel 40/255 brighter than its 7x7 surroundings; toggles = sparks that "
@@ -268,6 +277,11 @@ def main():
                                "no_flicker": "`test` is at the `control` background and there is no flickering `before`: not reproduced",
                                "inconclusive": "too few sparks or frames, or contradicting numbers"}),
         }
+        if a.reference:
+            questions["residual_is_twinkle"] = noul("Compare `test` with the `reference_*` runs (same scene and build, one "
+                                                    "setting changed, see the setup): is what `test` still shows above "
+                                                    "`control` the glints' intended behaviour as that setting describes it, "
+                                                    "rather than a flicker of its own?")
         if a.before:
             questions["before_flickers"] = noul("Does `before` show that objectionable glint flicker?")
         log = []
