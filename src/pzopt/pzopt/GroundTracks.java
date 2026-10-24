@@ -100,7 +100,8 @@ public final class GroundTracks {
 
       @Override
       public boolean rebakes() {
-         return "bake".equals(Config.GROUND_TRACKS_LOOK) && !"stamp".equals(Ground.variant()); // (devGroundCycle stamp: the stamping alone)
+         String l = look();
+         return "bake".equals(l) || "patch".equals(l); // (composite: drawn each frame, nothing to re-bake) // (devGroundCycle stamp: the stamping alone)
       }
 
       @Override
@@ -118,7 +119,7 @@ public final class GroundTracks {
 
       @Override
       public boolean active() {
-         return on() && "bake".equals(Config.GROUND_TRACKS_LOOK) && !"stamp".equals(Ground.variant());
+         return on() && "bake".equals(look());
       }
 
       @Override
@@ -132,7 +133,66 @@ public final class GroundTracks {
       }
    };
 
+   /**
+    * The look's way in: bake (a draw over each chunk texture's floors and snow, {@link #PASS}), patch (the floor tile program's
+    * colour hook, {@link #PATCH}: no extra draw, but under the snow), composite (over the picture each frame), stamp (none:
+    * the stamping alone). devGroundCycle variants of these names override the key in-run.
+    */
+   static String look() {
+      String v = Ground.variant();
+      if ("stamp".equals(v) || "patch".equals(v) || "bake".equals(v) || "composite".equals(v)) {
+         return v;
+      }
+      return Config.GROUND_TRACKS_LOOK;
+   }
+
+   /** The light, the weather and the sky of the frame for the patch's uniforms (game thread writes, render thread reads). */
+   private static volatile float[] patchUniforms = new float[11];
+
+   /** The look in the floor tile program (the patch variant): the same factor, multiplied into every natural floor piece. */
+   static final GroundBake.FloorPatch PATCH = new GroundBake.FloorPatch() {
+      @Override
+      public String id() {
+         return "tracks";
+      }
+
+      @Override
+      public boolean active() {
+         return on() && "patch".equals(look());
+      }
+
+      @Override
+      public String declarations() {
+         String h = header(Ground.variant());
+         h = h.substring(h.indexOf('\n') + 1); // (the floor program has its own #version)
+         return h + "uniform vec4 gtPLight;\nuniform vec4 gtPWeather;\nuniform vec3 gtPSky;\n" + GroundTracksGlsl.LOOK + "\n" + String.join("\n",
+            "vec4 gtS(vec2 p) { return pzgStateAt(p); }",
+            "vec4 gtPatchColor(vec4 c) {",
+            "   int m = pzgMaterial();", // GroundTiles: 1 grass .. 4 gravel, 8 clay, 9 dark dirt; snow is drawn after the floors
+            "   m = (m == 8 || m == 9) ? 2 : m;",
+            "   if (m < 1 || m > 4 || c.a <= 0.0) return c;",
+            "   vec3 f = gtFactor(pzgW.xy, m, gtPLight.xyz, gtPLight.w, gtPWeather.x, gtPWeather.y, gtPSky);",
+            "   return vec4(min(c.rgb * f, vec3(c.a)), c.a);",
+            "}",
+            "");
+      }
+
+      @Override
+      public String color() {
+         return "gtPatchColor";
+      }
+
+      @Override
+      public void bakeStart(int program, zombie.iso.fboRenderChunk.FBORenderChunk rc) {
+         float[] u = patchUniforms;
+         GL20.glUniform4f(GL20.glGetUniformLocation(program, "gtPLight"), u[0], u[1], u[2], u[3]);
+         GL20.glUniform4f(GL20.glGetUniformLocation(program, "gtPWeather"), u[4], u[5], 0F, 0F);
+         GL20.glUniform3f(GL20.glGetUniformLocation(program, "gtPSky"), u[6], u[7], u[8]);
+      }
+   };
+
    static {
+      GroundBake.register(PATCH);
       GroundBake.register(PASS);
       Ground.onFrame(GroundTracks::frameStart);
    }
@@ -231,6 +291,9 @@ public final class GroundTracks {
          Log.info("ground tracks rig: anchor " + rigX + "," + rigY);
       }
       double t = (now - rigT0) / 1000.0;
+      if (Config.DEV_GROUND_TRACKS_RIG_SECONDS > 0 && t > Config.DEV_GROUND_TRACKS_RIG_SECONDS) {
+         return; // (devGroundTracksRigSeconds: the scene stops, the decay goes on: the recovery rig)
+      }
       // the car: an S from 9 squares west to 9 east, 3 squares north of the player, 4 squares a second, its rear sliding
       // through the bend (slip 0.7 there); 4 wheels, track 1.5, wheelbase 2.6
       double s = Math.min(t * 4.0, 20.0);
@@ -381,12 +444,24 @@ public final class GroundTracks {
     * no relight at all).
     */
    static String header() {
-      String v = Ground.variant();
+      return header(Ground.variant());
+   }
+
+   /** The bake program's defines for dev variant {@code v} (null: the keys alone; tests link every variant). */
+   static String header(String v) {
       boolean pom = Config.GROUND_TRACKS_POM && !"nopom".equals(v) && !"flat".equals(v) && !"colour".equals(v);
       int shadow = "noshadow".equals(v) || "flat".equals(v) || "colour".equals(v) ? 0 : Config.GROUND_TRACKS_SHADOW_STEPS;
       boolean ao = Config.GROUND_TRACKS_AO && !"noao".equals(v) && !"colour".equals(v);
       return "#version 430\n#define GT_TPS " + TPS + ".0\n#define GT_TN " + TN + "\n#define GT_POM " + (pom ? 1 : 0) + "\n#define GT_SHADOW " + shadow
          + "\n#define GT_AO " + (ao ? 1 : 0) + "\n#define GT_RELIGHT " + ("colour".equals(v) ? 0 : 1) + "\n";
+   }
+
+   static String bakeVert(String h) {
+      return h + GroundTracksGlsl.BAKE_VERT;
+   }
+
+   static String bakeFrag(String h) {
+      return h + GroundTracksGlsl.BAKE_FRAG.replace("// (gt_look.glsl follows)", GroundTracksGlsl.LOOK);
    }
 
    private static final java.util.HashMap<String, int[]> PROGRAMS = new java.util.HashMap<>();
@@ -401,8 +476,7 @@ public final class GroundTracks {
       bakeHeader = h;
       int[] cached = PROGRAMS.get(h);
       if (cached == null) {
-         String frag = h + GroundTracksGlsl.BAKE_FRAG.replace("// (gt_look.glsl follows)", GroundTracksGlsl.LOOK);
-         int p = link(h + GroundTracksGlsl.BAKE_VERT, frag, "ground tracks bake");
+         int p = link(bakeVert(h), bakeFrag(h), "ground tracks bake");
          cached = new int[] {p};
          PROGRAMS.put(h, cached);
          if (p != 0) {
@@ -507,6 +581,243 @@ public final class GroundTracks {
          SpriteRenderer.ringBuffer.restoreBoundTextures = true;
          GL11.glDepthMask(true);
          GpuSections.markNow("ground.bake", true);
+      }
+   }
+
+   // ------------------------------------------------------------------------------------------------ the composite look
+
+   /**
+    * The composite variant (groundTracksLook=composite): the same factor drawn over the picture every frame, right after the
+    * chunk composite, on the level-0 floor diamond of every live chunk on screen. The diamond's depth is the floor's own
+    * (IsoDepthHelper's depth is linear in x + y at z 0: PixelLight.DEPTH_PER_XY), a hair toward the camera, against the
+    * scene depth with the hardware test: whatever stands on the ground (baked trees, furniture, fences) is in front and keeps
+    * its colour, no depth read in the shader. No re-bake when a track changes (stamps show the frame they land).
+    */
+   public static void afterComposite(int playerIndex) {
+      if (!on() || !"composite".equals(look()) || playerIndex != 0) {
+         return;
+      }
+      int wx0 = GroundState.windowX(), wy0 = GroundState.windowY();
+      if (wx0 == Integer.MIN_VALUE) {
+         return;
+      }
+      Comp f = Comp.alloc();
+      Core core = Core.getInstance();
+      f.zoom = core.getZoom(playerIndex);
+      f.ts = Core.tileScale;
+      f.screenW = IsoCamera.getScreenWidth(playerIndex);
+      f.screenH = IsoCamera.getScreenHeight(playerIndex);
+      f.offX = IsoCamera.getOffX();
+      f.offY = IsoCamera.getOffY();
+      int ox = (int)Math.floor(IsoCamera.frameState.camCharacterX), oy = (int)Math.floor(IsoCamera.frameState.camCharacterY);
+      f.ox = ox;
+      f.oy = oy;
+      f.d0 = zombie.iso.IsoDepthHelper.getSquareDepthData(ox, oy, ox, oy, 0.0F).depthStart;
+      Bake lb = f.light;
+      light(lb);
+      lb.wet = wet;
+      lb.snowDepth = snowDepth();
+      // the screen in (x - y, x + y) relative to the origin, for the cull (zoomed screen px over the tile size, a chunk's margin)
+      double a32 = 32.0 * f.ts, a16 = 16.0 * f.ts;
+      double aMin = (f.offX) / a32 - (ox - oy), aMax = (f.offX + f.screenW * f.zoom) / a32 - (ox - oy);
+      double bMin = (f.offY) / a16 - (ox + oy), bMax = (f.offY + f.screenH * f.zoom) / a16 - (ox + oy);
+      long now = System.currentTimeMillis();
+      f.n = 0;
+      for (int cy = wy0; cy < wy0 + GroundState.SLOTS; cy++) {
+         for (int cx = wx0; cx < wx0 + GroundState.SLOTS; cx++) {
+            if (!GroundState.isLive(cx, cy) || f.n >= Comp.MAX) {
+               continue;
+            }
+            double x = cx * CS - ox, y = cy * CS - oy;
+            // the diamond's A = x - y spans [x - y - 8, x - y + 8], B = x + y spans [x + y, x + y + 16]
+            if (x - y + CS < aMin - 1 || x - y - CS > aMax + 1 || x + y + 2 * CS < bMin - 1 || x + y > bMax + 7) {
+               continue;
+            }
+            byte[] mats = GroundState.surfaces(cx, cy, now);
+            int k = f.n++;
+            int[] m = f.mat[k];
+            java.util.Arrays.fill(m, 0);
+            boolean any = false;
+            for (int i = 0; i < 64; i++) {
+               m[i >> 3] |= (mats[i] & 15) << ((i & 7) * 4);
+               any |= mats[i] != 0;
+            }
+            if (!any) {
+               f.n--;
+               continue;
+            }
+            f.cx[k] = (float)x;
+            f.cy[k] = (float)y;
+            f.uvX[k] = ((cx * CS * TPS) & (TN - 1)) / (float)TN;
+            f.uvY[k] = ((cy * CS * TPS) & (TN - 1)) / (float)TN;
+         }
+      }
+      if (f.n == 0) {
+         f.release();
+         return;
+      }
+      compFrames++;
+      compChunks += f.n;
+      SpriteRenderer.instance.drawGeneric(f);
+   }
+
+   static long compFrames, compChunks;
+
+   static final class Comp extends TextureDraw.GenericDrawer {
+      static final int MAX = 64;
+      private static final ArrayList<Comp> cpool = new ArrayList<>();
+      final Bake light = new Bake();
+      final float[] cx = new float[MAX], cy = new float[MAX], uvX = new float[MAX], uvY = new float[MAX];
+      final int[][] mat = new int[MAX][8];
+      int n, ts, ox, oy, screenW, screenH;
+      float zoom, offX, offY, d0;
+
+      static Comp alloc() {
+         synchronized (cpool) {
+            return cpool.isEmpty() ? new Comp() : cpool.remove(cpool.size() - 1);
+         }
+      }
+
+      void release() {
+         synchronized (cpool) {
+            if (cpool.size() < 4) {
+               cpool.add(this);
+            }
+         }
+      }
+
+      @Override
+      public void render() {
+         GroundTracks.renderComposite(this);
+      }
+
+      @Override
+      public void postRender() {
+         release();
+      }
+   }
+
+   static final String COMP_VERT = String.join("\n",
+      "uniform vec4 uMapA;", // x - y = uMapA.x * px + uMapA.y, x + y = uMapA.z * py + uMapA.w (window px, relative to the origin square)
+      "uniform vec4 uVp;", // viewport x, y, w, h
+      "uniform vec4 uC;", // the chunk's corner relative to the origin (x, y), the origin's floor depth, the depth per unit of x + y
+      "uniform float uBias;", // squares of x + y toward the camera
+      "out vec2 vP;",
+      "void main() {",
+      "   int c = gl_VertexID;",
+      "   vec2 p = vec2((c == 1 || c == 3) ? 8.0 : 0.0, (c >= 2) ? 8.0 : 0.0);",
+      "   vec2 w = uC.xy + p;",
+      "   float A = w.x - w.y, B = w.x + w.y;",
+      "   vec2 px = vec2((A - uMapA.y) / uMapA.x, (B - uMapA.w) / uMapA.z);",
+      "   vec2 ndc = (px - uVp.xy) / uVp.zw * 2.0 - 1.0;",
+      "   float d = uC.z - (B + uBias) * uC.w;",
+      "   gl_Position = vec4(ndc, 2.0 * d - 1.0, 1.0);",
+      "   vP = p;",
+      "}",
+      "");
+
+   private static final java.util.HashMap<String, int[]> COMP_PROGRAMS = new java.util.HashMap<>();
+   private static int compProg;
+   private static int cMapA, cVp, cC, cBias, cState, cUv, cMat, cLight, cWeather, cSky;
+   private static int compFbo = -1, compFboLast = Integer.MIN_VALUE, compAge;
+   private static final int[] VPI = new int[4];
+
+   private static boolean initComposite() {
+      String h = header();
+      int[] cached = COMP_PROGRAMS.get(h);
+      if (cached == null) {
+         int p = link(h + COMP_VERT, bakeFrag(h), "ground tracks composite");
+         cached = new int[] {p};
+         COMP_PROGRAMS.put(h, cached);
+         if (p != 0) {
+            Log.info("ground tracks: composite program for " + h.replace("\n", " ").replace("#define ", ""));
+         }
+      }
+      compProg = cached[0];
+      if (compProg == 0) {
+         return false;
+      }
+      cMapA = GL20.glGetUniformLocation(compProg, "uMapA");
+      cVp = GL20.glGetUniformLocation(compProg, "uVp");
+      cC = GL20.glGetUniformLocation(compProg, "uC");
+      cBias = GL20.glGetUniformLocation(compProg, "uBias");
+      cState = GL20.glGetUniformLocation(compProg, "uState");
+      cUv = GL20.glGetUniformLocation(compProg, "uUv");
+      cMat = GL20.glGetUniformLocation(compProg, "uMat");
+      cLight = GL20.glGetUniformLocation(compProg, "uLight");
+      cWeather = GL20.glGetUniformLocation(compProg, "uWeather");
+      cSky = GL20.glGetUniformLocation(compProg, "uSky");
+      if (vao == 0) {
+         vao = GL30.glGenVertexArrays();
+      }
+      return true;
+   }
+
+   static void renderComposite(Comp f) {
+      if (failed || GroundState.texture() == 0 || !initComposite()) {
+         return;
+      }
+      GpuSections.markNow("ground.comp", false);
+      try {
+         // the viewport of the world framebuffer: asked once per framebuffer (and every 120 frames), never per frame
+         int last = zombie.core.textures.TextureFBO.lastID;
+         if (compFbo < 0 || last != compFboLast || ++compAge > 120) {
+            GL11.glGetIntegerv(GL11.GL_VIEWPORT, VPI);
+            compFbo = 1;
+            compFboLast = last;
+            compAge = 0;
+         }
+         double vx = VPI[0], vy = VPI[1], vw = Math.max(1, VPI[2]), vh = Math.max(1, VPI[3]);
+         double sxPerPx = f.screenW / vw, syPerPx = f.screenH / vh;
+         double a32 = 32.0 * f.ts, a16 = 16.0 * f.ts;
+         float kA = (float)(sxPerPx * f.zoom / a32);
+         float cA = (float)(((-vx * sxPerPx) * f.zoom + f.offX) / a32 - (f.ox - f.oy));
+         float kB = (float)(-syPerPx * f.zoom / a16);
+         float cB = (float)((((vy + vh) * syPerPx) * f.zoom + f.offY) / a16 - (f.ox + f.oy));
+         GL20.glUseProgram(compProg);
+         GL20.glUniform4f(cMapA, kA, cA, kB, cB);
+         GL20.glUniform4f(cVp, (float)vx, (float)vy, (float)vw, (float)vh);
+         GL20.glUniform1f(cBias, Config.DEV_GROUND_TRACKS_COMP_BIAS_PCT / 100F);
+         GL13.glActiveTexture(GL13.GL_TEXTURE3);
+         GL11.glBindTexture(GL11.GL_TEXTURE_2D, GroundState.texture());
+         GL20.glUniform1i(cState, 3);
+         Bake l = f.light;
+         GL20.glUniform4f(cLight, l.lx, l.ly, l.lz, l.share);
+         GL20.glUniform4f(cWeather, l.wet, l.snowDepth, Config.DEV_GROUND_TRACKS_VIEW, 0F);
+         GL20.glUniform3f(cSky, l.skyR, l.skyG, l.skyB);
+         GL11.glEnable(GL11.GL_DEPTH_TEST);
+         GL11.glDepthFunc(GL11.GL_LEQUAL);
+         GL11.glDepthMask(false);
+         GL11.glDisable(GL11.GL_STENCIL_TEST);
+         GL11.glDisable(GL11.GL_SCISSOR_TEST);
+         GL11.glEnable(GL11.GL_BLEND);
+         GL14.glBlendFuncSeparate(GL11.GL_DST_COLOR, GL11.GL_SRC_COLOR, GL11.GL_ZERO, GL11.GL_ONE);
+         GL11.glColorMask(true, true, true, false);
+         GL30.glBindVertexArray(vao);
+         for (int i = 0; i < f.n; i++) {
+            GL20.glUniform4f(cC, f.cx[i], f.cy[i], f.d0, (float)PixelLight.DEPTH_PER_XY);
+            GL20.glUniform4f(cUv, f.uvX[i], f.uvY[i], TPS / (float)TN, 0F);
+            INTS.clear();
+            INTS.put(f.mat[i], 0, 8).flip();
+            GL20.glUniform4iv(cMat, INTS);
+            GL11.glDrawArrays(GL11.GL_TRIANGLE_STRIP, 0, 4);
+         }
+         GL30.glBindVertexArray(0);
+      } catch (Throwable t) {
+         failed = true;
+         Log.warn("ground tracks: composite failed, off: " + t);
+      } finally {
+         GL11.glColorMask(true, true, true, true);
+         GL20.glUseProgram(0);
+         GL13.glActiveTexture(GL13.GL_TEXTURE3);
+         GL11.glBindTexture(GL11.GL_TEXTURE_2D, 0);
+         GL13.glActiveTexture(GL13.GL_TEXTURE0);
+         Texture.lastTextureID = -1;
+         GLStateRenderThread.restore();
+         zombie.core.ShaderHelper.forgetCurrentlyBound();
+         SpriteRenderer.ringBuffer.restoreVbos = true;
+         SpriteRenderer.ringBuffer.restoreBoundTextures = true;
+         GpuSections.markNow("ground.comp", true);
       }
    }
 }

@@ -1919,6 +1919,8 @@ public final class Config {
    public static volatile int DEV_GROUND_TRACKS_VIEW; // devGroundTracksView: 1 the height field drawn as colour (blue ruts, red berms)
    public static volatile int DEV_GROUND_TRACKS_TIME_SCALE; // devGroundTracksTimeScale: the decay runs this many times faster than the game clock (the recovery in seconds)
    public static volatile int DEV_GROUND_TRACKS_WET_PCT; // devGroundTracksWetPct: the ground's wetness pinned (0..100; -1 = from the rain)
+   public static volatile int DEV_GROUND_TRACKS_COMP_BIAS_PCT; // devGroundTracksCompBiasPct: the composite look's diamond, hundredths of a square of x + y toward the camera (the depth test against the floor)
+   public static volatile int DEV_GROUND_TRACKS_RIG_SECONDS; // devGroundTracksRigSeconds: the look rig stamps for this many seconds, then stops (0: all the run)
    public static volatile int DEV_GROUND_TRACKS_RIG; // devGroundTracksRig: 1 a scripted scene round the player (a car pass with a skid, three walkers, a body, a drag), the look rig
    public static volatile boolean DEV_GROUND_TRACKS_LOG; // devGroundTracksLog: a stats line every 600 frames
    public static final int DEV_RAIN_SCALE_PCT = integer("devRainScalePct", 40); // dev: a raindrop's ring against a footstep's (% in space; time sqrt of it); read at launch
@@ -2443,6 +2445,8 @@ public final class Config {
       GROUND_TRACKS_FEET = bool("groundTracksFeet", true);
       GROUND_TRACKS_BODIES = bool("groundTracksBodies", true);
       DEV_GROUND_TRACKS_VIEW = integer("devGroundTracksView", 0);
+      DEV_GROUND_TRACKS_COMP_BIAS_PCT = integer("devGroundTracksCompBiasPct", 5);
+      DEV_GROUND_TRACKS_RIG_SECONDS = integer("devGroundTracksRigSeconds", 0);
       DEV_GROUND_TRACKS_LOG = bool("devGroundTracksLog", false);
       DEV_GROUND_TRACKS_RIG = integer("devGroundTracksRig", 0);
       DEV_GROUND_TRACKS_TIME_SCALE = Math.max(1, integer("devGroundTracksTimeScale", 1));

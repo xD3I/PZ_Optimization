@@ -60,11 +60,21 @@ vec3 gtTint(vec3 B, vec3 t, float amount, float value) {
 const vec3 GT_BASE[6] = vec3[6](vec3(0.5), vec3(0.31, 0.36, 0.115), vec3(0.36, 0.25, 0.085), vec3(0.785, 0.70, 0.53), vec3(0.31, 0.23, 0.08),
    vec3(0.94, 0.97, 0.98));
 
+bool gtQuiet(vec4 s) {
+   return abs(s.x) < 0.002 && s.y < 0.01 && s.z < 0.01;
+}
+
 vec3 gtFactor(vec2 p0, int mat, vec3 L, float sun, float wet, float snowDepth, vec3 sky) {
+#if GT_POM
+   // untouched ground (most of a live chunk): three reads along the view ray's reach instead of the march
+   if (gtQuiet(gtS(p0)) && gtQuiet(gtS(p0 - GT_K * 0.13)) && gtQuiet(gtS(p0 - GT_K * 0.32))) {
+      return vec3(1.0);
+   }
+#endif
    float h;
    vec2 p = gtHit(p0, h);
    vec4 s = gtS(p);
-   if (abs(s.x) < 0.002 && s.y < 0.01 && s.z < 0.01) {
+   if (gtQuiet(s)) {
       return vec3(1.0);
    }
    float e = 1.0 / GT_TPS;
