@@ -167,6 +167,7 @@ public final class GroundTracks {
 
    /** The light, the weather and the sky of the frame for the patch's uniforms (game thread writes, render thread reads). */
    private static volatile float[] patchUniforms = new float[11];
+   private static final Bake PATCH_LIGHT = new Bake(); // (game thread scratch for light())
 
    /** The look in the floor tile program (the patch variant): the same factor, multiplied into every natural floor piece. */
    static final GroundBake.FloorPatch PATCH = new GroundBake.FloorPatch() {
@@ -260,6 +261,12 @@ public final class GroundTracks {
       src.strengthPct = Config.GROUND_TRACKS_STRENGTH_PCT;
       wetness();
       puddleWet = wet;
+      if (PATCH.active() && (frames & 15L) == 1L) {
+         // the patch's light, weather and sky (a fresh array: the render thread reads the last one whole)
+         Bake lb = PATCH_LIGHT;
+         light(lb);
+         patchUniforms = new float[] {lb.lx, lb.ly, lb.lz, lb.share, wet, snowDepth(), lb.skyR, lb.skyG, lb.skyB, 0F, 0F};
+      }
       zombie.characters.IsoPlayer pl = zombie.characters.IsoPlayer.players[playerIndex];
       if (Config.DEV_GROUND_TRACKS_RIG > 0 && pl != null) {
          rig(pl);
