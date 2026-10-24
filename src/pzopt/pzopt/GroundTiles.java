@@ -281,6 +281,11 @@ public final class GroundTiles {
    }
 
    /** The class map's byte of a code: material (4 bits), base (bit 4), blend (bit 5), overlay (bit 6), excluded (bit 7). */
+   /** The class map's second byte: the tone (low 4 bits), 16 erosion, 32 farm (GLSL pzgToneAt / pzgToneByteAt). */
+   public static int toneByte(int code) {
+      return ((code >> 4) & 15) | ((code & F_EROSION) != 0 ? 16 : 0) | ((code & F_FARM) != 0 ? 32 : 0);
+   }
+
    public static int mapByte(int code) {
       return (code & 15) | ((code & F_BASE) != 0 ? 16 : 0) | ((code & F_BLEND) != 0 ? 32 : 0) | ((code & F_OVERLAY) != 0 ? 64 : 0)
          | ((code & F_EXCLUDED) != 0 ? 128 : 0);

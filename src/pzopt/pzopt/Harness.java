@@ -717,6 +717,10 @@ public final class Harness {
                if (!HarnessFlags.get("place_tile", "").isBlank()) {
                   placeTiles(HarnessFlags.get("place_tile", "")); // dev: tiles added to the bench save copy (glassTilesPerFrame rig)
                }
+               if (!HarnessFlags.get("ground_field", "").isBlank()) {
+                  // dev: bare natural ground round the start (ground without the grid verdicts)
+                  GroundFieldRig.apply(zombie.iso.IsoWorld.instance.currentCell, (int)x, (int)y, HarnessFlags.get("ground_field", ""));
+               }
                if (!HarnessFlags.get("gate", "").isBlank()) {
                   float[] spot = GateRig.setup(p, HarnessFlags.get("gate", "")); // dev: a double gate across a chunk border, toggled (the stale gate AO report)
                   if (spot != null) {
