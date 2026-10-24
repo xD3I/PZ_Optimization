@@ -226,10 +226,12 @@ public final class GroundTilingPatch implements GroundBake.FloorPatch {
             float red = max(fe.x, fe.y) > 0.49 ? 1.0 : 0.0, blue = max(fw.x, fw.y) > 0.49 ? 1.0 : 0.0;
             return vec4(mix(t.rgb, vec3(red, 0.0, blue), max(red, blue) * 0.8), t.a);
          }
-         vec4 c = mode > 0 ? gtSample(px, wLocal, float(layer), mode) : (kind == 0 || pzGtBlend.x <= 0.0 ? t : gtFetch(px, ivec2(0), float(layer)));
+         // the game's pages hold premultiplied colour and the bake blends (ONE, ONE_MINUS_SRC_ALPHA): the stock texel is
+         // un-premultiplied here, the exemplar holds straight colour, and the result goes back premultiplied by its alpha
+         vec4 c = mode > 0 ? gtSample(px, wLocal, float(layer), mode) : (kind == 0 || pzGtBlend.x <= 0.0 ? vec4(t.rgb / max(t.a, 1e-4), t.a) : gtFetch(px, ivec2(0), float(layer)));
          float grassy = ((pzGtBakeI.w >> layer) & 1) != 0 ? 1.0 : 0.0;
          vec3 rgb = gtMacro(c.rgb, wLocal, grassy);
-         if (kind == 0) return vec4(rgb, t.a);
+         if (kind == 0) return vec4(rgb * t.a, t.a);
          // an edge piece of material B over the square's base A: B's art, B's coverage from the square's geometry and the heights
          float a = t.a;
          if (pzGtBlend.x > 0.0) {
@@ -237,7 +239,7 @@ public final class GroundTilingPatch implements GroundBake.FloorPatch {
             float hA = la < 0 ? 0.5 : (mode > 0 ? gtSample(px, wLocal, float(la), mode).a : gtFetch(px, ivec2(0), float(la)).a);
             a = gtOverlayAlpha(kind, t.a, c.a, hA, wLocal);
          }
-         return vec4(rgb, a);
+         return vec4(rgb * a, a);
       }
       """.formatted(GroundTileArt.SPR_MAX);
 
