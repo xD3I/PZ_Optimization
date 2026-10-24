@@ -149,6 +149,13 @@ public final class Glints {
       int coverStamp, wetBucket; // what the mask was built from: the chunk level's ground cover (frost, sun), the wet ground
       boolean snow;
       String force = "";
+      // per frame state kept across frames: the squares' light bits (valid while lightKey matches) and light (LUM_MS)
+      final byte[] lbits = new byte[64];
+      int lightKey;
+      boolean lightKeyOk;
+      final byte[] lum = new byte[64];
+      long lumValid, lumMs = Long.MIN_VALUE / 2;
+      int lumPlayer = -1;
       /** per masked square, its data block's frame-independent part (the frame adds its chunk depth, origin, light bits) */
       final float[] block = new float[64 * TEXELS * 4];
    }
@@ -161,7 +168,7 @@ public final class Glints {
 
    /** The masks ride on their chunk (GroundChunk slot: dropped when the game reuses the chunk). */
    static final int SLOT = GroundChunk.id("glint masks");
-   static final int REFRESH_MS = 400, SAFETY_MS = 5000; // + a chunk stagger of up to 250 ms (milliseconds: at 800 fps 30 frames was 40 ms)
+   static final int REFRESH_MS = 400, SAFETY_MS = 5000, LUM_MS = 100; // + a chunk stagger of up to 250 ms (milliseconds: at 800 fps 30 frames was 40 ms)
 
    static ChunkMasks masks(IsoChunk c, long now) {
       ChunkMasks cm = (ChunkMasks)GroundChunk.get(c, SLOT);
@@ -211,6 +218,8 @@ public final class Glints {
 
    private static void build(IsoChunk c, int level, LevelMask m, float wetGround, boolean snowAny) {
       m.bits = 0L;
+      m.lightKeyOk = false;
+      m.lumValid = 0L;
       String force = Config.DEV_GLINT_FORCE;
       int forceKind = "frost".equals(force) ? K_FROST : "snow".equals(force) ? K_SNOW : "wet".equals(force) ? K_WET : -1;
       zombie.iso.fboRenderChunk.FBORenderSnow snow = snowAny ? zombie.iso.fboRenderChunk.FBORenderSnow.getInstance() : null;
@@ -268,6 +277,7 @@ public final class Glints {
       final float[] c = new float[MAX_LIGHTS * 4]; // r, g, b, -
       final float[] sun = new float[4]; // direction (x east, y south, z up), strength (0 = no key light)
       final float[] sunC = new float[4];
+      final int[] key = new int[MAX_LIGHTS]; // each light's quantised position, reach and cone (unchanged = same squares)
    }
 
    private static long skyMs = Long.MIN_VALUE / 2, lampScanMs = Long.MIN_VALUE / 2;
@@ -529,6 +539,16 @@ public final class Glints {
       Lights L = f.lights;
       long tl = System.nanoTime();
       gatherLights(L, ox, oy, cx, cy, view);
+      for (int i = 0; i < L.n; i++) { // quantised to 1/64 square, absolute (the origin moves)
+         int k = i * 4;
+         int h = Math.round((L.p[k] + ox) * 64F);
+         h = h * 31 + Math.round((L.p[k + 1] + oy) * 64F);
+         h = h * 31 + Math.round(L.p[k + 2] * 64F);
+         h = h * 31 + Math.round(L.p[k + 3] * 64F);
+         h = h * 31 + Math.round(L.d[k] * 256F);
+         h = h * 31 + Math.round(L.d[k + 1] * 256F);
+         L.key[i] = h * 31 + Math.round(L.d[k + 2] * 256F);
+      }
       lightsNs += System.nanoTime() - tl;
       if (L.n > 0) {
          lightFrames++;
@@ -552,6 +572,7 @@ public final class Glints {
       f.n = 0;
       float[] d = f.data;
       long now = System.currentTimeMillis();
+      String variant = Ground.variant(); // dev cycle "qfull": light bits and square light worked out every frame (the cache's A/B)
       for (int ci = 0; ci < chunks.size() && f.n < MAX; ci++) {
          IsoChunk c = chunks.get(ci);
          zombie.iso.fboRenderChunk.FBORenderLevels levels = c.getRenderLevels(playerIndex);
@@ -591,31 +612,39 @@ public final class Glints {
             }
             float[] blk = m.block;
             long bits = m.bits;
-            while (bits != 0L && f.n < MAX) {
+            // per square light bits are kept while the lights reaching this chunk level stay put (lamps, a parked car);
+            // the squares' light (the darkness gate) is re-read every LUM_MS (gcv-cost-wetnight: 160 us a frame for 2840
+            // squares when both were worked out every frame)
+            int lk = cb;
+            for (int rest = cb; rest != 0; rest &= rest - 1) {
+               int li = Integer.numberOfTrailingZeros(rest);
+               lk = lk * 31 + li * 1000003 + L.key[li];
+            }
+            boolean lightsSame = !"qfull".equals(variant) && m.lightKeyOk && m.lightKey == lk;
+            int lstag = ((c.wx * 5 + c.wy * 11) & 15) * 6;
+            if (m.lumPlayer != playerIndex || now - m.lumMs > LUM_MS + lstag || now < m.lumMs || "qfull".equals(variant)) {
+               m.lumMs = now;
+               m.lumPlayer = playerIndex;
+               m.lumValid = 0L;
+            }
+            boolean complete = true;
+            while (bits != 0L) {
+               if (f.n >= MAX) {
+                  complete = false;
+                  break;
+               }
                int s = Long.numberOfTrailingZeros(bits);
                bits &= bits - 1L;
+               int x = c.wx * 8 + (s & 7), y = c.wy * 8 + (s >> 3);
+               int lb;
+               if (lightsSame) {
+                  lb = m.lbits[s] & 255;
+               } else {
+                  lb = squareLights(L, cb, x + 0.5F - ox, y + 0.5F - oy);
+                  m.lbits[s] = (byte)lb;
+               }
                if ((flags[s] & 1) == 0) {
                   continue;
-               }
-               int x = c.wx * 8 + (s & 7), y = c.wy * 8 + (s >> 3);
-               // which lights reach the square (its centre within reach + half a diagonal)
-               int lb = 0;
-               float px = x + 0.5F - ox, py = y + 0.5F - oy;
-               for (int rest = cb; rest != 0; rest &= rest - 1) {
-                  int li = Integer.numberOfTrailingZeros(rest);
-                  int k = li * 4;
-                  float dx = px - L.p[k], dy = py - L.p[k + 1];
-                  float r = L.p[k + 3] + 0.75F;
-                  if (dx * dx + dy * dy > r * r) {
-                     continue;
-                  }
-                  if (L.d[k + 2] > -1.5F) { // a cone: the square's centre inside it (a square's half-width of slack)
-                     float len = (float)Math.sqrt(dx * dx + dy * dy);
-                     if (len > 0.75F && (dx * L.d[k] + dy * L.d[k + 1]) / len < L.d[k + 2] - 0.75F / len) {
-                        continue;
-                     }
-                  }
-                  lb |= 1 << li;
                }
                boolean sun = sunOn && (m.sun[s] & 255) > 8;
                if (lb != 0) {
@@ -628,12 +657,20 @@ public final class Glints {
                   continue;
                }
                // the square's light gates the point lights only (an unseen square shows none): read it only for them
-               float lum = 1F;
+               int lum255 = 255;
                if (lb != 0) {
-                  IsoGridSquare sq = c.getGridSquare(s & 7, s >> 3, level);
-                  if (sq != null) {
-                     int l0 = sq.getVertLight(0, playerIndex), l2 = sq.getVertLight(2, playerIndex);
-                     lum = Math.min(1F, 0.5F * (luma(l0) + luma(l2)) * 2.5F);
+                  if ((m.lumValid & 1L << s) != 0L) {
+                     lum255 = m.lum[s] & 255;
+                  } else {
+                     float lum = 1F;
+                     IsoGridSquare sq = c.getGridSquare(s & 7, s >> 3, level);
+                     if (sq != null) {
+                        int l0 = sq.getVertLight(0, playerIndex), l2 = sq.getVertLight(2, playerIndex);
+                        lum = Math.min(1F, 0.5F * (luma(l0) + luma(l2)) * 2.5F);
+                     }
+                     lum255 = Math.round(lum * 255F);
+                     m.lum[s] = (byte)lum255;
+                     m.lumValid |= 1L << s;
                   }
                }
                int o = f.n * TEXELS * 4;
@@ -642,8 +679,13 @@ public final class Glints {
                d[o + 3] += lb << 10;
                d[o + 4] = x - ox;
                d[o + 5] = y - oy;
-               d[o + 7] += Math.round(lum * 255F) << 8;
+               d[o + 7] += lum255 << 8;
                f.n++;
+            }
+            m.lightKey = lk;
+            m.lightKeyOk = complete || lightsSame && m.lightKeyOk;
+            if (!complete) {
+               m.lightKeyOk = false;
             }
          }
       }
@@ -674,6 +716,28 @@ public final class Glints {
       GpuSections.begin(sec);
       SpriteRenderer.instance.drawGeneric(p);
       GpuSections.end(sec);
+   }
+
+   /** Which of the chunk level's lights (cb) reach a square's centre (px, py, frame-origin squares): reach + half a diagonal. */
+   static int squareLights(Lights L, int cb, float px, float py) {
+      int lb = 0;
+      for (int rest = cb; rest != 0; rest &= rest - 1) {
+         int li = Integer.numberOfTrailingZeros(rest);
+         int k = li * 4;
+         float dx = px - L.p[k], dy = py - L.p[k + 1];
+         float r = L.p[k + 3] + 0.75F;
+         if (dx * dx + dy * dy > r * r) {
+            continue;
+         }
+         if (L.d[k + 2] > -1.5F) { // a cone: the square's centre inside it (a square's half-width of slack)
+            float len = (float)Math.sqrt(dx * dx + dy * dy);
+            if (len > 0.75F && (dx * L.d[k] + dy * L.d[k + 1]) / len < L.d[k + 2] - 0.75F / len) {
+               continue;
+            }
+         }
+         lb |= 1 << li;
+      }
+      return lb;
    }
 
    static float luma(int abgr) {
