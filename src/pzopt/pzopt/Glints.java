@@ -263,6 +263,34 @@ public final class Glints {
    private static final float[] candD = new float[2048];
    private static final IsoLightSource[] candL = new IsoLightSource[2048];
 
+   private static final float WEAK = 0.3F; // a vehicle's taillights / brake lights (strength 0.2)
+
+   private static void addTorch(Lights L, IsoGameCharacter.TorchInfo t, float ox, float oy, float cx, float cy, float view) {
+      float tx = TorchSource.x(t), ty = TorchSource.y(t);
+      if (t.id == 0 || Math.abs(tx - cx) > view + t.dist || Math.abs(ty - cy) > view + t.dist) {
+         return;
+      }
+      float len = (float)Math.sqrt(t.angleX * t.angleX + t.angleY * t.angleY);
+      if (len < 1e-4F) {
+         return;
+      }
+      boolean car = t.id >= 4096 || t.focusing > 0;
+      int k = L.n * 4;
+      L.p[k] = tx - ox;
+      L.p[k + 1] = ty - oy;
+      L.p[k + 2] = (t.z + (car ? PixelLight.CAR_H : TorchSource.height(t, PixelLight.TORCH_H))) * METRIC_Z;
+      L.p[k + 3] = Math.max(1F, TorchSource.reach(t, Math.max(1F, t.dist)));
+      L.d[k] = t.angleX / len;
+      L.d[k + 1] = t.angleY / len;
+      L.d[k + 2] = t.cone ? t.dot : -2F;
+      L.d[k + 3] = t.strength;
+      L.c[k] = t.r;
+      L.c[k + 1] = t.g;
+      L.c[k + 2] = t.b;
+      L.c[k + 3] = car ? 2F : 1F;
+      L.n++;
+   }
+
    static void gatherLights(Lights L, float ox, float oy, float cx, float cy, float view) {
       L.n = 0;
       L.sun[3] = 0F;
@@ -298,31 +326,12 @@ public final class Glints {
          return;
       }
       ArrayList<IsoGameCharacter.TorchInfo> torches = LightingJNI.pzoptTorches();
+      // the torches and headlights first, the weak ones (taillights, brake lights) after the lamps: eight slots
       for (int i = 0; torches != null && i < torches.size() && L.n < MAX_LIGHTS; i++) {
          IsoGameCharacter.TorchInfo t = torches.get(i);
-         float tx = TorchSource.x(t), ty = TorchSource.y(t);
-         if (t.id == 0 || Math.abs(tx - cx) > view + t.dist || Math.abs(ty - cy) > view + t.dist) {
-            continue;
+         if (t.strength >= WEAK) {
+            addTorch(L, t, ox, oy, cx, cy, view);
          }
-         float len = (float)Math.sqrt(t.angleX * t.angleX + t.angleY * t.angleY);
-         if (len < 1e-4F) {
-            continue;
-         }
-         boolean car = t.id >= 4096 || t.focusing > 0;
-         int k = L.n * 4;
-         L.p[k] = tx - ox;
-         L.p[k + 1] = ty - oy;
-         L.p[k + 2] = (t.z + (car ? PixelLight.CAR_H : TorchSource.height(t, PixelLight.TORCH_H))) * METRIC_Z;
-         L.p[k + 3] = Math.max(1F, TorchSource.reach(t, Math.max(1F, t.dist)));
-         L.d[k] = t.angleX / len;
-         L.d[k + 1] = t.angleY / len;
-         L.d[k + 2] = t.cone ? t.dot : -2F;
-         L.d[k + 3] = t.strength;
-         L.c[k] = t.r;
-         L.c[k + 1] = t.g;
-         L.c[k + 2] = t.b;
-         L.c[k + 3] = car ? 2F : 1F;
-         L.n++;
       }
       // the cell's lamps near the view, rescanned 4 times a second or after a 4-square camera move (the list holds the cell's every lamp)
       IsoCell cell = IsoWorld.instance.currentCell;
@@ -392,6 +401,12 @@ public final class Glints {
       }
       for (int i = 0; i < nc; i++) {
          candL[i] = null;
+      }
+      for (int i = 0; torches != null && i < torches.size() && L.n < MAX_LIGHTS; i++) {
+         IsoGameCharacter.TorchInfo t = torches.get(i);
+         if (t.strength < WEAK) {
+            addTorch(L, t, ox, oy, cx, cy, view);
+         }
       }
    }
 
