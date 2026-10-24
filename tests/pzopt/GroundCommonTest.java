@@ -55,7 +55,13 @@ public class GroundCommonTest {
       Check.check((GroundTiles.classify("blends_natural_01_87", null) & GroundTiles.F_FARM) != 0, "dug soil is farmland");
       Check.check(GroundTiles.material(GroundTiles.classify("floors_exterior_natural_01_13", null)) == GroundTiles.GRAVEL, "old gravel");
       Check.check(GroundTiles.material(GroundTiles.classify("blends_street_01_53", null)) == GroundTiles.GRAVEL, "street gravel");
-      Check.check(GroundTiles.classify("blends_street_01_0", null) == 0, "road is not ground");
+      int road = GroundTiles.classify("blends_street_01_0", null);
+      Check.check(GroundTiles.material(road) == GroundTiles.NONE && !GroundTiles.natural(road) && GroundTiles.paved(road) == 1, "road is not ground, but road");
+      Check.check(GroundTiles.paved(GroundTiles.classify("blends_street_01_70", null)) == 2, "street sidewalk row");
+      Check.check(GroundTiles.paved(GroundTiles.classify("floors_exterior_street_01_16", null)) == 2, "pavement");
+      Check.check(GroundTiles.paved(GroundTiles.classify("blends_street_01_53", null)) == 0, "street gravel is not paved");
+      Check.check(GroundTiles.paved(GroundTiles.classify("floors_interior_tilesandwood_01_0", null)) == 0, "a built floor is not paved");
+      Check.check((GroundTiles.toneByte(road) & 64) != 0 && GroundTiles.mapByte(road) == 0, "the class map: road in the tone byte, no material");
       Check.check((GroundTiles.classify("blends_natural_02_3", null) & GroundTiles.F_EXCLUDED) != 0, "water and shore excluded");
       Check.check((GroundTiles.classify("vegetation_farming_01_3", null) & GroundTiles.F_EXCLUDED) != 0, "farm sheets excluded");
       Check.check(GroundTiles.classify("floors_interior_tilesandwood_01_0", null) == 0, "built floors are not ground");

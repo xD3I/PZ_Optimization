@@ -282,6 +282,7 @@ PzoptOptionClasses = {
     devGradeTrace = { "pzopt.Grade" },
     devGroundAlternate = { "pzopt.Ground" },
     devGroundAlternateKeys = { "pzopt.Ground" },
+    devGroundClassAlways = { "pzopt.GroundBake" },
     devGroundCycle = { "pzopt.Ground" },
     devGroundNoop = { "pzopt.Ground", "pzopt.GroundBake" },
     devGroundReadback = { "pzopt.GroundState" },
