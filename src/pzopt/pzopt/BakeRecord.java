@@ -29,7 +29,7 @@ import zombie.iso.sprite.IsoSprite;
  */
 public final class BakeRecord {
    public static final int DEFER_FLOOR = 0, DEFER_OBJECT = 1, DEFER_CORPSES = 2, DEFER_ITEMS = 3, DEFER_SNOW = 4, DEFER_BLOOD = 5,
-      DEFER_TREES_BEGIN = 6, DEFER_TREES_END = 7;
+      DEFER_TREES_BEGIN = 6, DEFER_TREES_END = 7, DEFER_GROUND = 8;
 
    private BakeRecord() {
    }

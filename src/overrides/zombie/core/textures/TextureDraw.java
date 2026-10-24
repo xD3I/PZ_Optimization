@@ -812,6 +812,7 @@ public final class TextureDraw {
             if (pzopt.DrawStats.ON) pzopt.DrawStats.bakeStart(); // pzopt: instrumented runs, draw-call census
             FBORenderChunkManager.instance.renderThreadChunkStart(this.a, this.b == 1);
             pzopt.Sway.chunkStart(this.b == 1); // pzopt: foliage sway, this texture's sway attributes (cleared with the bake)
+            pzopt.GroundBake.chunkStart(); // pzopt: ground and grass, the floor variant's world mapping for this texture
             break;
          case glDoStartFrameNoZoom:
             Core.getInstance().DoStartFrameNoZoom(this.a, this.b, this.f1, this.c, false, false, false);
