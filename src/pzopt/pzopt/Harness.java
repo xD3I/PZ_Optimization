@@ -763,6 +763,11 @@ public final class Harness {
                if (!HarnessFlags.get("pin_zombies", "").isBlank()) {
                   pinZombiesAt(p, HarnessFlags.get("pin_zombies", "")); // dev: idle zombies held on given squares (bus shelter glass)
                }
+               if (!HarnessFlags.get("campfire", "").isBlank()) {
+                  campfiresAt(HarnessFlags.get("campfire", ""), Integer.parseInt(HarnessFlags.get("campfire_r", "8").trim())); // dev: static-light shadow rig
+               }
+               burnPinned = Integer.parseInt(HarnessFlags.get("burn_pinned", "0").trim()); // dev: static-light shadow rig (a burning zombie)
+               burnWalk = "true".equalsIgnoreCase(HarnessFlags.get("burn_walk", "false").trim()); // with burn_pinned: the burning ones walk
                if (!HarnessFlags.get("outline_zombies", "").isBlank()) {
                   outlineZombiesAt(p, x, y, routeZ, turnAngle, Integer.parseInt(HarnessFlags.get("outline_zombies", "0").trim())); // dev: melee aim outline rig
                }
@@ -1937,6 +1942,20 @@ public final class Harness {
       for (int i = 0; i < pinned.size(); i++) {
          zombie.characters.IsoZombie z = pinned.get(i);
          float[] at = pinnedAt.get(i);
+         if (i < burnPinned && !z.isDead() && !z.isOnFire()) {
+            // burn_pinned=N (2026-10-25, sunShadowStaticLights): the first N pinned zombies burn (the character's own fire light,
+            // IsoGameCharacter.onFireLightSource); no fire damage and no spread so they burn the whole run
+            z.setFireKillRate(0F);
+            z.setFireSpreadProbability(0);
+            z.SetOnFire();
+            if (burnWalk) {
+               z.setUseless(false); // burn_walk=true: the burning one walks (to the player), the shadows round it follow it
+            }
+            Log.info("harness: burn_pinned: zombie " + i + " at " + (int)at[0] + "," + (int)at[1] + " set on fire" + (burnWalk ? ", released" : ""));
+         }
+         if (i < burnPinned && burnWalk) {
+            continue;
+         }
          z.setX(at[0]);
          z.setY(at[1]);
          z.setLastX(at[0]);
@@ -1957,6 +1976,34 @@ public final class Harness {
    }
 
    private static long pinLogNs;
+   private static int burnPinned;
+   private static boolean burnWalk;
+
+   /**
+    * campfire=x,y[,z][/...] (2026-10-25, the static-light shadow rig): a lit campfire on each square as the game's camping
+    * code lights one (SCampfireGlobalObject: the camping_01_6 tile and a permanent IsoFire that does not spread), its light
+    * radius campfire_r (default 8; the game's exterior campfire reaches 2..10 with its fuel).
+    */
+   private static void campfiresAt(String spec, int radius) {
+      zombie.iso.IsoCell cell = zombie.iso.IsoWorld.instance.currentCell;
+      for (String part : spec.split("/")) {
+         String[] xyz = part.trim().split(",");
+         if (xyz.length < 2) continue;
+         int x = Integer.parseInt(xyz[0].trim()), y = Integer.parseInt(xyz[1].trim()), z = xyz.length > 2 ? Integer.parseInt(xyz[2].trim()) : 0;
+         zombie.iso.IsoGridSquare sq = cell.getGridSquare(x, y, z);
+         if (sq == null) {
+            Log.info("harness: campfire: no square at " + x + "," + y + "," + z);
+            continue;
+         }
+         sq.addTileObject("camping_01_6");
+         zombie.iso.objects.IsoFire fire = new zombie.iso.objects.IsoFire(cell, sq);
+         fire.lightRadius = radius;
+         fire.AttachAnim("Fire", "01", zombie.iso.objects.IsoFire.NUM_FRAMES_FIRE, zombie.iso.objects.IsoFireManager.FIRE_ANIM_DELAY, zombie.core.Core.tileScale,
+            -zombie.core.Core.tileScale, true, 0, false, 0.7F, zombie.iso.objects.IsoFireManager.FIRE_TINT_MOD);
+         sq.AddTileObject(fire);
+         Log.info("harness: campfire: lit at " + x + "," + y + "," + z + " radius " + radius);
+      }
+   }
    private static final java.util.ArrayList<zombie.characters.IsoZombie> outlined = new java.util.ArrayList<>();
 
    /**

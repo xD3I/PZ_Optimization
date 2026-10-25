@@ -809,7 +809,7 @@ public final class Scene {
          zombie.iso.IsoPuddles.getInstance().getPuddlesFloat(2).setAdminValue(puddleMud);
          Log.info("harness: puddle mud pinned to " + puddleMud);
       }
-      if ("on".equals(lights)) {
+      if ("on".equals(lights) || "lamps".equals(lights)) {
          lightsOn();
       }
       int plant = Integer.parseInt(HarnessFlags.get("plant_trees", "0").trim());
@@ -851,7 +851,7 @@ public final class Scene {
     *  past it), then every light switch within 50 tiles (levels 0-3) switched on, electricity check ignored. */
    private static void lightsOn() {
       IsoPlayer p = IsoPlayer.getInstance();
-      lightsOnAround((int)p.getX(), (int)p.getY());
+      lightsOnAround((int)p.getX(), (int)p.getY(), "lamps".equals(lights));
    }
 
    /**
@@ -947,11 +947,20 @@ public final class Scene {
    }
 
    static boolean lightsFlag() {
-      return "on".equals(lights);
+      return "on".equals(lights) || "lamps".equals(lights);
    }
 
    /** The same around a spot (explore=restaurant: the restaurant, loaded once the walk gets near it). */
    static void lightsOnAround(int px, int py) {
+      lightsOnAround(px, py, false);
+   }
+
+   /**
+    * lampsOnly (lights=lamps, 2026-10-25, the static-light shadow rig): the lamps / wall lights / street lamps (switches
+    * with their own light, not lightRoom) on and every room's ceiling light (lightRoom switches) off, so a lamp is the
+    * only light of its room.
+    */
+   static void lightsOnAround(int px, int py, boolean lampsOnly) {
       try {
          zombie.iso.IsoWorld.instance.setHydroPowerOn(true);
          zombie.SandboxOptions so = zombie.SandboxOptions.instance;
@@ -960,7 +969,7 @@ public final class Scene {
             so.elecShutModifier.setValue(shut);
          }
          zombie.iso.IsoCell cell = zombie.iso.IsoWorld.instance.currentCell;
-         int on = 0;
+         int on = 0, off = 0;
          for (int z = 0; z < 4; z++) {
             for (int y = py - 50; y <= py + 50; y++) {
                for (int x = px - 50; x <= px + 50; x++) {
@@ -969,9 +978,16 @@ public final class Scene {
                      continue;
                   }
                   for (int i = 0; i < sq.getObjects().size(); i++) {
-                     if (sq.getObjects().get(i) instanceof zombie.iso.objects.IsoLightSwitch ls && !ls.isActivated()) {
-                        ls.setActive(true, false, true);
-                        on++;
+                     if (sq.getObjects().get(i) instanceof zombie.iso.objects.IsoLightSwitch ls) {
+                        if (lampsOnly && ls.lightRoom) {
+                           if (ls.isActivated()) {
+                              ls.setActive(false, false, true);
+                              off++;
+                           }
+                        } else if (!ls.isActivated()) {
+                           ls.setActive(true, false, true);
+                           on++;
+                        }
                      }
                   }
                }
@@ -979,7 +995,7 @@ public final class Scene {
          }
          Log.info("harness: lights=on: hydro power on, ElecShutModifier " + so.getElecShutModifier() + " (world age "
                + (int)zombie.iso.IsoWorld.instance.getWorldAgeDays() + " days), grid power " + zombie.SandboxOptions.instance.doesPowerGridExist()
-               + ", " + on + " light switches switched on within 50 tiles of " + px + "," + py);
+               + ", " + on + " light switches switched on" + (lampsOnly ? " (lamps only, " + off + " room lights off)" : "") + " within 50 tiles of " + px + "," + py);
       } catch (Exception e) {
          Log.warn("harness: lights on failed: " + e);
       }

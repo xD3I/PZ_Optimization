@@ -63,7 +63,6 @@ public final class CapsuleShadow {
    private static final int MAX = 1024;
    private static final int MAX_LIGHTS = 8; // the frame's lights: torches / headlights first (TORCH_SLOTS at most), then static lights (sunShadowStaticLights)
    private static final int TORCH_SLOTS = 4;
-   private static final float POINT_LAMP_SIZE = 0.3F; // a static lamp's size (squares): the penumbra's growth with the distance
    private static final float CEIL_LAMP_SIZE = 1.0F; // a room's ceiling light (sunShadowRoomLights): an area light (the native lights the whole room from it), a wide penumbra
    private static final float[] LIGHT_SCORE = new float[MAX_LIGHTS];
    private static final float[] STATIC_ORDER = new float[96];
@@ -75,10 +74,17 @@ public final class CapsuleShadow {
    private static final java.util.IdentityHashMap<Object, Boolean> ROOMS_SEEN = new java.util.IdentityHashMap<>(); // gatherStatic: rooms listed this frame
    private static final float[] STATIC_SHARE = new float[MAX_LIGHTS];
    private static final float[] STATIC_LIM = new float[MAX_LIGHTS];
+   private static final char[] STATIC_WHY = new char[MAX_LIGHTS]; // dev log: StaticLightShadow.why per light
+   private static final int[] STATIC_CODE = new int[MAX_LIGHTS]; // dev log: reach()'s answer per light (-2 not asked)
    private static final int[] STATIC_PICK = new int[2];
+   private static final zombie.iso.IsoLightSource[] BURN_LIGHT = new zombie.iso.IsoLightSource[16]; // the frame's burning characters' lights
+   private static final IsoGameCharacter[] BURN_CHR = new IsoGameCharacter[16];
    private static long staticLightFrames;
    private static long staticPicks;
+   private static long staticVehicleLights; // lightbar world lights left out (gatherStatic)
    private static long devStaticN;
+   private static boolean devStaticFrame;
+   private static zombie.iso.IsoLightSource pickOwnFire; // the caster being appended: its own fire light (a burning character), never its shadow's light // devStaticLightLog: this frame's casters log their static-light shares / reach (staticPick)
    private static final int MAX_PAIRS = 2048;
    private static long lightPairs;
    private static final float METRIC_Z = 2.4494897F; // squares of height per level
@@ -106,7 +112,7 @@ public final class CapsuleShadow {
 
    static String stats() {
       return "capsule shadows: frames=" + frames + " (with lights " + lightFrames + ", caster x light quads " + lightPairs + ") characters=" + characters + " vehicles=" + vehicles + " animals=" + animals + " atlas=" + atlas + " mesh draws=" + meshDraws + " lamp views drawn=" + lampDraws + " read=" + lampLooks + " (end points on the game thread "
-         + computedHere + ") wall collects=" + wallCollects + " (squares " + WALL_CACHE.size() + ", last " + wallLast + ") draws=" + drawn + (failed ? " FAILED" : "") + " | static light frames=" + staticLightFrames + " caster picks=" + staticPicks + " " + StaticLightShadow.stats() + " | " + ShadowAtlas.stats();
+         + computedHere + ") wall collects=" + wallCollects + " (squares " + WALL_CACHE.size() + ", last " + wallLast + ") draws=" + drawn + (failed ? " FAILED" : "") + " | static light frames=" + staticLightFrames + " caster picks=" + staticPicks + " lightbar lights left out=" + staticVehicleLights + " " + StaticLightShadow.stats() + " | " + ShadowAtlas.stats();
    }
 
    /** The end points of BONES (relative to the character, metric) into out; false when the skeleton lacks one. Any thread. */
@@ -803,7 +809,7 @@ public final class CapsuleShadow {
     * sunShadowStaticLights: the static lights that are on (IsoCell's lamp list: street lamps, lamps, wall lights, fires) near
     * the camera into slots n.. (nearest pool first: the one the camera stands in leads), each a point light (kind 3, no
     * cone) at its fixture's height; with sunShadowRoomLights the rooms' ceiling lights that are on too, ranked with them
-    * (kind 4: each lit room's fixture point(s) under the ceiling, StaticLightShadow.roomPoints). Which casters each one
+    * (kind 5: each lit room's fixture point(s) under the ceiling, StaticLightShadow.roomPoints). Which casters each one
     * shades is decided per caster (append: staticPick).
     */
    private static int gatherStatic(Frame f, int n) {
@@ -813,12 +819,30 @@ public final class CapsuleShadow {
       }
       java.util.Stack<zombie.iso.IsoLightSource> list = cell.getLamppostPositions();
       float cx = IsoCamera.frameState.camCharacterX, cy = IsoCamera.frameState.camCharacterY;
+      // the burning characters' own lights (IsoGameCharacter.onFireLightSource): the game moves one a whole square at a time
+      // (a new light on each square change), the shadows take the character's own position so they turn smoothly as it walks
+      int nb = 0;
+      java.util.ArrayList<IsoGameCharacter> burning = zombie.iso.objects.IsoFireManager.CharactersOnFire_Stack;
+      for (int i = 0; i < burning.size() && nb < BURN_LIGHT.length; i++) {
+         IsoGameCharacter chr = burning.get(i);
+         if (chr != null && chr.onFireLightSource != null) {
+            BURN_LIGHT[nb] = chr.onFireLightSource;
+            BURN_CHR[nb++] = chr;
+         }
+      }
       float view = (f.screenW + 2.0F * f.screenH) * f.zoom / (64.0F * f.ts) + 4.0F;
       int nc = 0;
       for (int i = 0; i < list.size(); i++) {
          zombie.iso.IsoLightSource l = list.get(i);
          if (!StaticLightShadow.usable(l)) {
             continue;
+         }
+         if (StaticLightShadow.fire(l) && StaticLightShadow.lightbarColour(l.r, l.g, l.b)) {
+            IsoGridSquare lsq = cell.getGridSquare(l.x, l.y, l.z);
+            if (lsq != null && lsq.isVehicleIntersecting()) {
+               staticVehicleLights++;
+               continue; // an emergency lightbar's world light: the car's own flashing light, not a static one
+            }
          }
          float r = Math.min(l.radius, 20);
          float dx = l.x + 0.5F - cx, dy = l.y + 0.5F - cy;
@@ -894,7 +918,7 @@ public final class CapsuleShadow {
          f.lSrc[n] = l;
          f.lRoom[n] = rl;
          if (rl != null) {
-            // a room's ceiling light (kind 4): its fixture point just under the ceiling, a flat share (StaticLightShadow.roomShare)
+            // a room's ceiling light (kind 5): its fixture point just under the ceiling, a flat share (StaticLightShadow.roomShare)
             f.lA[k] = STATIC_PT[best * 3] - f.ox;
             f.lA[k + 1] = STATIC_PT[best * 3 + 1] - f.oy;
             f.lA[k + 2] = rl.z * METRIC_Z + StaticLightShadow.CEIL_H;
@@ -902,12 +926,19 @@ public final class CapsuleShadow {
             f.lB[k + 3] = StaticLightShadow.ROOM_SHARE;
             f.lK[n] = StaticLightShadow.ROOM_KIND;
          } else {
-            f.lA[k] = l.x + 0.5F - f.ox;
-            f.lA[k + 1] = l.y + 0.5F - f.oy;
-            f.lA[k + 2] = l.z * METRIC_Z + StaticLightShadow.height(l);
+            IsoGameCharacter burner = null;
+            for (int b = 0; b < nb && burner == null; b++) {
+               if (BURN_LIGHT[b] == l) {
+                  burner = BURN_CHR[b];
+               }
+            }
+            // a burning character's light: at the character (its square holds the light: the own-fire guard in reach() keeps it)
+            f.lA[k] = (burner != null ? burner.getX() : l.x + 0.5F) - f.ox;
+            f.lA[k + 1] = (burner != null ? burner.getY() : l.y + 0.5F) - f.oy;
+            f.lA[k + 2] = l.z * METRIC_Z + (burner != null ? StaticLightShadow.BURN_H : StaticLightShadow.height(l));
             f.lA[k + 3] = Math.max(1.0F, Math.min(l.radius, 20));
             f.lB[k + 3] = StaticLightShadow.strength(l.r, l.g, l.b);
-            f.lK[n] = StaticLightShadow.KIND;
+            f.lK[n] = StaticLightShadow.fire(l) ? StaticLightShadow.KIND_FIRE : StaticLightShadow.KIND;
          }
          STATIC_ORDER[best] = STATIC_ORDER[--nc];
          STATIC_CAND[best] = STATIC_CAND[nc];
@@ -917,7 +948,11 @@ public final class CapsuleShadow {
       }
       java.util.Arrays.fill(STATIC_CAND, 0, STATIC_CAND.length, null);
       java.util.Arrays.fill(STATIC_ROOM, 0, STATIC_ROOM.length, null);
+      java.util.Arrays.fill(BURN_LIGHT, 0, nb, null);
+      java.util.Arrays.fill(BURN_CHR, 0, nb, null);
+      devStaticFrame = false;
       if (Config.DEV_STATIC_LIGHT_LOG > 0 && ++devStaticN % Config.DEV_STATIC_LIGHT_LOG == 0) {
+         devStaticFrame = true; // staticPick logs this frame's casters too
          StringBuilder sb = new StringBuilder("capsule shadows: dev static lights (camera " + (int)cx + "," + (int)cy + ", candidates in view " + list.size() + " listed, " + roomsOn + " room lights on in view of "
             + cell.roomLights.size() + ", torches " + f.nt + "):");
          for (int l = f.nt; l < n; l++) {
@@ -928,8 +963,8 @@ public final class CapsuleShadow {
                   rl == null ? "?" : StaticLightShadow.describe(rl)));
                continue;
             }
-            sb.append(String.format(java.util.Locale.ROOT, " [%d,%d,%d r %d rgb %.2f,%.2f,%.2f h %.2f %s]", src.x, src.y, src.z, src.radius, src.r, src.g, src.b, StaticLightShadow.height(src),
-               StaticLightShadow.describe(src)));
+            sb.append(String.format(java.util.Locale.ROOT, " [%d,%d,%d r %d rgb %.2f,%.2f,%.2f kind %.0f at %.2f,%.2f h %.2f %s]", src.x, src.y, src.z, src.radius, src.r, src.g, src.b, f.lK[l],
+               f.lA[l * 4] + f.ox, f.lA[l * 4 + 1] + f.oy, f.lA[l * 4 + 2] - src.z * METRIC_Z, StaticLightShadow.describe(src)));
          }
          sb.append(" | ").append(StaticLightShadow.stats()).append(" picks ").append(staticPicks).append(" | loaded lights on:");
          int shown = 0;
@@ -1009,7 +1044,7 @@ public final class CapsuleShadow {
 
    /**
     * sunShadowStaticLights: the caster just appended keeps the (at most two) static lights that light it most, among those
-    * that reach it as the game's lamp model has it (StaticLightShadow.reach: and how far past it its shadow may go, f.llim), into f.lsel (frame slots, -1 none).
+    * that reach it as the game's lamp model has it (StaticLightShadow.reach: and the wall plane its shadow stops at, f.llim), into f.lsel (frame slots, -1 none).
     */
    private static void staticPick(Frame f, int c, float mx, float my, float r, float cz) {
       f.lsel[c * 2] = -1;
@@ -1029,27 +1064,49 @@ public final class CapsuleShadow {
          float sh = dl > reach + r ? 0F
             : rl != null ? StaticLightShadow.roomShare(Math.max(0F, dl - r), reach) * (1F - 0.05F * dl / reach) // (the nearer fixture first on a tie)
             : StaticLightShadow.share(Math.max(0F, dl - r), reach, f.lB[l * 4 + 3]);
+         STATIC_CODE[i] = -2; // dev log: not asked (too faint)
+         STATIC_WHY[i] = '-';
+         zombie.iso.IsoLightSource src = f.lSrc[l];
+         if (sh > 0.02F && src != null && src == pickOwnFire) {
+            sh = 0F; // the caster's own fire (a burning character): never its own shadow, whichever square its capsules' middle is on
+            STATIC_WHY[i] = 'O';
+         }
          if (sh > 0.02F) {
-            float lim = rl != null ? StaticLightShadow.roomReach(cell, rl, f.lA[l * 4] + f.ox, f.lA[l * 4 + 1] + f.oy, reach, sx, sy, sz)
-               : StaticLightShadow.reach(cell, f.lSrc[l], sx, sy, sz);
-            if (lim < 0F) {
+            float px = f.lA[l * 4] + f.ox, py = f.lA[l * 4 + 1] + f.oy;
+            int code = rl != null ? StaticLightShadow.roomReach(cell, rl, px, py, reach, sx, sy, sz) : StaticLightShadow.reach(cell, src, sx, sy, sz);
+            STATIC_WHY[i] = StaticLightShadow.why;
+            STATIC_CODE[i] = code;
+            if (code == StaticLightShadow.NONE) {
                sh = 0F;
+            } else {
+               // the wall plane the code is relative to: the light's square (a room light's: its point's, as roomReach keys it)
+               STATIC_LIM[i] = rl != null ? StaticLightShadow.planeW(code, (int)Math.floor(px), (int)Math.floor(py), f.ox, f.oy) : StaticLightShadow.planeW(code, src.x, src.y, f.ox, f.oy); // the wall plane the shadow stops at (the pair's w)
             }
-            STATIC_LIM[i] = lim;
          }
          STATIC_SHARE[i] = sh;
          any |= sh > 0.02F;
       }
-      if (!any) {
-         return;
-      }
-      StaticLightShadow.pickTwo(STATIC_SHARE, ns, STATIC_PICK);
-      for (int j = 0; j < 2; j++) {
-         if (STATIC_PICK[j] >= 0) {
-            f.lsel[c * 2 + j] = (byte)(f.nt + STATIC_PICK[j]);
-            f.llim[c * 2 + j] = STATIC_LIM[STATIC_PICK[j]];
-            staticPicks++;
+      if (any) {
+         StaticLightShadow.pickTwo(STATIC_SHARE, ns, STATIC_PICK);
+         for (int j = 0; j < 2; j++) {
+            if (STATIC_PICK[j] >= 0) {
+               f.lsel[c * 2 + j] = (byte)(f.nt + STATIC_PICK[j]);
+               f.llim[c * 2 + j] = STATIC_LIM[STATIC_PICK[j]];
+               staticPicks++;
+            }
          }
+      }
+      if (devStaticFrame && c < 16) {
+         StringBuilder sb = new StringBuilder(String.format(java.util.Locale.ROOT, "capsule shadows: dev static caster %d sq %d,%d,%d room %b picks %d,%d:", c, sx, sy, sz,
+            cell.getGridSquare(sx, sy, sz) != null && cell.getGridSquare(sx, sy, sz).getRoom() != null, f.lsel[c * 2], f.lsel[c * 2 + 1]));
+         for (int i = 0; i < ns; i++) {
+            zombie.iso.IsoLightSource src = f.lSrc[f.nt + i];
+            float dx = mx - f.lA[(f.nt + i) * 4], dy = my - f.lA[(f.nt + i) * 4 + 1];
+            float lim = STATIC_CODE[i] <= 0 ? (STATIC_CODE[i] == 0 ? -1F : -2F) : StaticLightShadow.planeDistance(STATIC_LIM[i], f.lA[(f.nt + i) * 4], f.lA[(f.nt + i) * 4 + 1], mx, my);
+            sb.append(String.format(java.util.Locale.ROOT, " [%s d %.1f share %.2f lim %.2f w %.0f %c]", src != null ? src.x + "," + src.y + "," + src.z : "room", (float)Math.sqrt(dx * dx + dy * dy), STATIC_SHARE[i],
+               lim, STATIC_CODE[i] > 0 ? STATIC_LIM[i] : 0F, STATIC_WHY[i])); // lim: the wall's distance from the light along the ray (1e4 none), -1 = the light does not reach it (StaticLightShadow.reach), -2 = too faint to ask
+         }
+         Log.info(sb.toString());
       }
    }
 
@@ -1083,6 +1140,7 @@ public final class CapsuleShadow {
       if (f == null || f.n >= MAX || chr == null || !Config.SUN_SHADOW_CHARACTERS) {
          return;
       }
+      pickOwnFire = chr.onFireLightSource; // staticPick: a burning character never takes its own fire's shadow
       boolean animal = chr.isAnimal();
       if (animal && !Config.SUN_SHADOW_ANIMALS) {
          return;
@@ -1297,6 +1355,7 @@ public final class CapsuleShadow {
       if (f == null || f.n >= MAX || chr == null || !Config.SUN_SHADOW_CHARACTERS || !Config.SUN_SHADOW_ATLAS) {
          return;
       }
+      pickOwnFire = chr.onFireLightSource; // staticPick: a burning character never takes its own fire's shadow
       IsoGridSquare sq = chr.getCurrentSquare();
       if (sq == null) {
          return;
@@ -1331,6 +1390,7 @@ public final class CapsuleShadow {
       if (f == null || f.n >= MAX || v == null || !Config.SUN_SHADOW_VEHICLES || v.getScript() == null) {
          return;
       }
+      pickOwnFire = null;
       IsoGridSquare sq = v.getCurrentSquare();
       if (sq == null) {
          return;
@@ -1731,7 +1791,7 @@ public final class CapsuleShadow {
       final zombie.iso.IsoLightSource[] lSrc = new zombie.iso.IsoLightSource[MAX_LIGHTS]; // a static light's source (game thread)
       final zombie.iso.IsoRoomLight[] lRoom = new zombie.iso.IsoRoomLight[MAX_LIGHTS]; // or its room light (sunShadowRoomLights; lSrc null)
       final byte[] lsel = new byte[MAX * 2]; // per caster: its static lights (frame slots, strongest first, -1 none)
-      final float[] llim = new float[MAX * 2]; // and how far from each its shadow may reach (the first wall past the caster)
+      final float[] llim = new float[MAX * 2]; // and the wall plane each one's shadow stops at (StaticLightShadow.planeW: the first wall past the caster)
       float lightStrength;
       float zoom;
       float ts;
@@ -1876,7 +1936,7 @@ public final class CapsuleShadow {
                this.pairData[n * 4] = c;
                this.pairData[n * 4 + 1] = l;
                this.pairData[n * 4 + 2] = view;
-               this.pairData[n * 4 + 3] = oq < f.nt ? StaticLightShadow.OPEN : f.llim[c * 2 + oq - f.nt]; // the shadow's end (a static light's: the first wall past the caster)
+               this.pairData[n * 4 + 3] = oq < f.nt ? StaticLightShadow.OPEN_W : f.llim[c * 2 + oq - f.nt]; // the shadow's end (a static light's: the first wall past the caster)
                n++;
             }
          }
@@ -2538,7 +2598,7 @@ public final class CapsuleShadow {
       "uniform vec4 vp;",
       "uniform vec4 lA[" + MAX_LIGHTS + "];", // x, y (relative to the origin square), z (metric), reach
       "uniform vec4 lB[" + MAX_LIGHTS + "];", // direction x, y, cone cosine (-2: none), strength
-      "uniform float lK[" + MAX_LIGHTS + "];", // 1 a handheld torch, 2 a vehicle light, 3 a static point light, 4 a room's ceiling light
+      "uniform float lK[" + MAX_LIGHTS + "];", // 1 a handheld torch, 2 a vehicle light, 3 a static point light, 4 a fire, 5 a room's ceiling light
       "uniform int nl;",
       "uniform float spread;",
       "uniform sampler2D Pairs;", // instance -> (caster, light, its lamp view or -1, the shadow's end: distance from the light)
@@ -2550,6 +2610,16 @@ public final class CapsuleShadow {
       "vec2 toPx(vec3 p) {",
       "   float A = p.x - p.y, B = p.x + p.y - 6.0 * p.z / 2.4494897;",
       "   return vec2((A - mapA.y) / mapA.x, (B - mapA.w) / mapA.z);",
+      "}",
+      // sunShadowStaticLights: the distance from the light at L along dir to the wall plane w (StaticLightShadow.planeW), reach
+      // when there is none on the way (StaticLightShadow.planeDistance)
+      "float wallDist(vec2 L, vec2 dir, float w, float reach) {",
+      "   float a = abs(w);",
+      "   if (a > 5000.0) return reach;",
+      "   float ax = floor(a / 1000.0);",
+      "   float comp = ax < 1.5 ? dir.x : dir.y;",
+      "   if (comp * w <= 0.0) return reach;",
+      "   return max(0.0, ((a - ax * 1000.0 - 500.0) - (ax < 1.5 ? L.x : L.y)) / comp);",
       "}",
       "void main() {",
       "   vec4 pair = texelFetch(Pairs, ivec2(gl_InstanceID, 0), 0);",
@@ -2576,7 +2646,7 @@ public final class CapsuleShadow {
       "      float dh = length(dir);",
       "      dir = dh > 1e-3 ? dir / dh : vec2(1.0, 0.0);",
       "      float t = p.z < L.z - 0.05 ? (L.z - facts.x) / (L.z - p.z) : 1e3;", // the ray from the lamp through p hits the floor at L + (p - L) t
-      "      float far = min(min(dh * t, reach), max(lim, dh)) + rr + 0.3;",
+      "      float far = min(min(dh * t, reach), max(wallDist(L.xy, dir, lim, reach), dh)) + rr + 0.3;", // a static light's shadow ends at its wall plane (sunShadowStaticLights)
       "      sp[e * 2] = toPx(p);",
       "      sp[e * 2 + 1] = toPx(vec3(L.xy + dir * far, facts.x));",
       "      pd[e * 2] = rr + 0.3;",
@@ -2672,13 +2742,21 @@ public final class CapsuleShadow {
       "   return length(p - a - ba * h);",
       "}",
       // PixelLight's fitted torch intensity (the share of the pixel's light the lamp gives in the dark)
+      // sunShadowStaticLights: how far past the wall plane w (StaticLightShadow.planeW) the point lies on the shadow's side
+      // (StaticLightShadow.beyond; -1e4 no plane): the floor behind the wall takes none of the shadow, the wall's face all of it
+      "float wallBeyond(vec2 p, float w) {",
+      "   float a = abs(w);",
+      "   if (a > 5000.0) return -1e4;",
+      "   float ax = floor(a / 1000.0);",
+      "   return sign(w) * ((ax < 1.5 ? p.x : p.y) - (a - ax * 1000.0 - 500.0));",
+      "}",
       "float torch(vec2 p, vec4 a, vec4 b, float kind) {",
       "   vec2 v = p - a.xy;",
       "   float d = length(v);",
       "   float x = clamp(1.0 - d / a.w, 0.0, 1.0);",
       // a static point light (sunShadowStaticLights): a quadratic fade of the native's lamp field, saturating (StaticLightShadow.share)
       // a room's ceiling light (sunShadowRoomLights): the room is lit evenly, the share flat, fading out at the point's reach (StaticLightShadow.roomShare)
-      "   if (kind > 3.5) return b.w * min(1.0, x * " + StaticLightShadow.ROOM_FADE + ");",
+      "   if (kind > 4.5) return b.w * min(1.0, x * " + StaticLightShadow.ROOM_FADE + ");",
       "   if (kind > 2.5) return min(1.0, " + StaticLightShadow.GAIN + " * b.w * x * x);",
       "   bool car = kind > 1.5;",
       "   float fall = car ? x * sqrt(x) * (0.93 + 0.07 * x) : x * (0.85 + 0.15 * x);",
@@ -2703,7 +2781,7 @@ public final class CapsuleShadow {
       "   float tmax = length(tl);",
       "   vec3 rd = tl / tmax;",
       "   vec3 ro = P + rd * 0.03;",
-      "   float lampSize = lK[light] > 3.5 ? " + CEIL_LAMP_SIZE + " : lK[light] > 2.5 ? " + POINT_LAMP_SIZE + " : lK[light] > 1.5 ? 0.25 : 0.12;", // a static lamp's globe is bigger than a torch's lens, a ceiling light bigger still
+      "   float lampSize = lK[light] > 4.5 ? " + CEIL_LAMP_SIZE + " : lK[light] > 3.5 ? " + StaticLightShadow.FIRE_SIZE + " : lK[light] > 2.5 ? " + StaticLightShadow.LAMP_SIZE + " : lK[light] > 1.5 ? 0.25 : 0.12;", // a static lamp's globe is bigger than a torch's lens, a fire's flames bigger still, a ceiling light biggest
       "   float k = tmax / lampSize;", // the lamp's size: penumbra grows with the caster's distance from the receiver
       "   vec4 ba0 = texelFetch(Data, ivec2(1, inst), 0);",
       "   vec4 bb0 = texelFetch(Data, ivec2(2, inst), 0);",
@@ -2741,7 +2819,7 @@ public final class CapsuleShadow {
       // the quad's far end and sides fade out (a shadow wider than the quad ends softly, not on a straight edge)
       "   float edge = smoothstep(0.0, 0.1, qc.y) * smoothstep(1.0, 0.9, qc.y) * smoothstep(1.0, 0.85, qc.x);",
       // a static light's shadow ends at the first wall past the caster (sunShadowStaticLights: its light is not behind it)
-      "   edge *= 1.0 - smoothstep(lim - 0.08, lim + 0.08, length(P.xy - la.xy));",
+      "   edge *= 1.0 - smoothstep(0.04, 0.12, wallBeyond(P.xy, lim));",
       "   vis = mix(1.0, vis, edge);",
       "   float m = 1.0 - mapC.w * share * alpha * (1.0 - vis);",
       "   if (mapC.z > 0.5) m = mix(0.5, 1.0, vis);",

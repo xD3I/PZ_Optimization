@@ -43,12 +43,28 @@ public class StaticLightShadowTest {
       StaticLightShadow.pickTwo(new float[] {0.2F, 0.7F, 0.9F}, 3, out);
       check(out[0] == 2 && out[1] == 1, "order kept when the strongest comes last: " + out[0] + "," + out[1]);
 
-      // the line-test cache's value: none / open / a limit to 1/16 square
-      check(StaticLightShadow.decode(StaticLightShadow.encode(StaticLightShadow.NONE)) < 0F, "none round trip");
-      check(StaticLightShadow.decode(StaticLightShadow.encode(StaticLightShadow.OPEN)) == StaticLightShadow.OPEN, "open round trip");
-      check(Math.abs(StaticLightShadow.decode(StaticLightShadow.encode(7.3F)) - 7.3F) < 0.07F, "limit round trip");
-      check(StaticLightShadow.decode(StaticLightShadow.encode(0F)) == 0F, "a zero limit is not none");
-      check(StaticLightShadow.decode(123L << 16 | StaticLightShadow.encode(5F)) == 5F, "the frame bits stay out of the value");
+      // the wall plane a static light's shadow stops at: x = c / y = c on a square edge, the side the shadow runs to
+      int lx = 100, ly = 200, ox = 90, oy = 190; // the light's square, the frame's origin square
+      int east = StaticLightShadow.planeCode(0, 3, true); // x = 103, the shadow running east
+      float w = StaticLightShadow.planeW(east, lx, ly, ox, oy);
+      check(StaticLightShadow.beyond(w, 103.5F - ox, 200.5F - oy) > 0.4F, "east of x = 103: beyond");
+      check(StaticLightShadow.beyond(w, 102.9F - ox, 250F - oy) < 0F, "west of it: before, whatever the y (the wall face keeps its shadow along the wall)");
+      check(Math.abs(StaticLightShadow.beyond(w, 103F - ox, 0F)) < 1e-4F, "on the plane: 0");
+      int north = StaticLightShadow.planeCode(1, -2, false); // y = 198, the shadow running north (to smaller y)
+      float wn = StaticLightShadow.planeW(north, lx, ly, ox, oy);
+      check(StaticLightShadow.beyond(wn, 0F, 197.5F - oy) > 0.4F && StaticLightShadow.beyond(wn, 0F, 198.5F - oy) < 0F, "north plane: beyond = smaller y");
+      check(StaticLightShadow.planeW(StaticLightShadow.OPEN, lx, ly, ox, oy) == StaticLightShadow.OPEN_W && StaticLightShadow.beyond(StaticLightShadow.OPEN_W, 0F, 0F) < -1e3F, "open: no plane");
+      check(StaticLightShadow.planeCode(0, -64, false) > 0 && StaticLightShadow.planeCode(1, 63, true) < 0x7FFF, "codes stay inside the cache's 16 bits, never NONE or OPEN");
+      // the plane's distance along the ray from the light's centre: a wall 3 squares east, the caster due east / 45 degrees
+      float lcx = lx + 0.5F - ox, lcy = ly + 0.5F - oy;
+      check(Math.abs(StaticLightShadow.planeDistance(w, lcx, lcy, lcx + 2F, lcy) - 2.5F) < 1e-4F, "due east: 2.5 to x = 103");
+      check(Math.abs(StaticLightShadow.planeDistance(w, lcx, lcy, lcx + 1F, lcy + 1F) - 2.5F * (float)Math.sqrt(2)) < 1e-3F, "45 degrees: longer");
+      check(StaticLightShadow.planeDistance(w, lcx, lcy, lcx - 1F, lcy) == StaticLightShadow.OPEN_W, "away from it: never");
+      // edgePlane: a step east crosses x = max(px, nx); a diagonal step takes the edge the ray crosses last
+      check(StaticLightShadow.edgePlane(104, 200, 105, 200, 102.5F, 200.5F, 1F, 0F, lx, ly) == StaticLightShadow.planeCode(0, 5, true), "a step east");
+      check(StaticLightShadow.edgePlane(101, 200, 101, 199, 101.5F, 201.5F, 0F, -1F, lx, ly) == StaticLightShadow.planeCode(1, 0, false), "a step north: y = 200, running north");
+      float vx = 0.8F, vy = 0.6F; // from (100.5, 200.5): crosses x = 102 at t 1.875, y = 201 at t 0.83 -> the step (101,200) -> (102,201) crosses x last
+      check(StaticLightShadow.edgePlane(101, 200, 102, 201, 100.5F, 200.5F, vx, vy, lx, ly) == StaticLightShadow.planeCode(0, 2, true), "a diagonal step: the later crossing");
 
       // room ceiling lights (sunShadowRoomLights): the fixture points of a room rectangle
       float[] pts = new float[StaticLightShadow.ROOM_POINTS * 3];
@@ -89,14 +105,30 @@ public class StaticLightShadowTest {
          prev = sr;
       }
       // a room point's line answers are kept apart from a lamp's on the same square (key bit), and the light's kind
-      check(StaticLightShadow.ROOM_KIND > 3.5F && StaticLightShadow.KIND < 3.5F && StaticLightShadow.KIND > 2.5F, "kinds 3 and 4 apart");
+      check(StaticLightShadow.ROOM_KIND > 4.5F && StaticLightShadow.KIND_FIRE > 3.5F && StaticLightShadow.KIND_FIRE < 4.5F && StaticLightShadow.KIND < 3.5F && StaticLightShadow.KIND > 2.5F, "kinds 3, 4 and 5 apart");
       check(StaticLightShadow.CEIL_H < 2.4494897F && StaticLightShadow.CEIL_H > StaticLightShadow.LAMP_H, "the fixture under the ceiling, above a lamp");
 
+      // fires: a light with no switch and no building (a campfire, a burning square, a burning character) is a fire, kind 4,
+      // drawn with the flames' wider source; a lamp's kind and size stay
+      zombie.iso.IsoLightSource campfire = new zombie.iso.IsoLightSource(10, 10, 0, 0.61F, 0.175F, 0F, 8);
+      check(StaticLightShadow.fire(campfire), "a light with no switch and no building is a fire");
+      check(StaticLightShadow.height(campfire) == StaticLightShadow.FIRE_H, "a fire's height");
+      check(StaticLightShadow.BURN_H > StaticLightShadow.FIRE_H, "a burning character's flames sit higher than a campfire's");
+      check(StaticLightShadow.FIRE_SIZE > StaticLightShadow.LAMP_SIZE, "a fire's source is wider than a lamp's");
+      check(StaticLightShadow.KIND_FIRE > 3.5F && StaticLightShadow.KIND > 2.5F && StaticLightShadow.KIND < 3.5F, "kinds 3 / 4 as the shader splits them");
+      // reach() of a fire on the caster's own square (a burning character's light): none, and why says so
+      check(StaticLightShadow.reach(null, campfire, 10, 10, 0) == StaticLightShadow.NONE && StaticLightShadow.why == 'o', "a fire does not shade the caster on its square");
+      check(StaticLightShadow.reach(null, campfire, 10, 10, 1) == StaticLightShadow.NONE && StaticLightShadow.why == 'z', "nor one on another level");
+      // a lightbar's red / blue world lights by their colour (the vehicle on the square decides in game); a fire is not one
+      check(StaticLightShadow.lightbarColour(0F, 0F, 1F) && StaticLightShadow.lightbarColour(1F, 0F, 0F), "lightbar blue / red");
+      check(!StaticLightShadow.lightbarColour(0.61F, 0.175F, 0F) && !StaticLightShadow.lightbarColour(1F, 0.31F, 0.08F), "a fire, a street lamp: not a lightbar");
       String[] src = CapsuleShadow.lightProgramSources();
-      check(src[1].contains("kind > 3.5") && src[1].contains("lK[light] > 3.5"), "the ceiling light's flat share and lamp size in the fragment stage");
+      check(src[1].contains("kind > 4.5") && src[1].contains("lK[light] > 4.5"), "the ceiling light's flat share and lamp size in the fragment stage");
+      check(src[1].contains("lK[light] > 3.5 ? " + StaticLightShadow.FIRE_SIZE), "the fire's source size in the fragment program");
       check(src[0].contains("uniform vec4 lA[8];") && src[1].contains("uniform float lK[8];"), "eight light slots in both stages");
       check(src[1].contains("kind > 2.5"), "the point-light falloff in torch()");
       check(src[0].contains("lim = pair.w") && src[1].contains("flat in float lim"), "the shadow's end goes from the pair to the fragment");
+      check(src[0].contains("float wallDist(") && src[1].contains("wallBeyond(P.xy, lim)"), "the wall plane cuts the quad and the fragment");
       Path checker = Path.of("/tmp/glslcheck");
       if (Files.isExecutable(checker)) {
          Path v = Files.writeString(Path.of(System.getProperty("java.io.tmpdir"), "pzcs_light.vert"), src[0]);
