@@ -459,8 +459,7 @@ final class RainRipples {
       } finally {
          GL42.glBindImageTexture(0, 0, 0, false, 0, GL15.GL_READ_ONLY, GL30.GL_RG16F);
          GL42.glBindImageTexture(1, 0, 0, false, 0, GL15.GL_READ_ONLY, GL30.GL_RG16F);
-         GL20.glUseProgram(0);
-         ShaderHelper.forgetCurrentlyBound();
+         DefaultProgram.restore(); // (frame start, before the cutaway mask: the default program, not 0)
          GpuSections.markNow("ripples.rain", true);
       }
    }

@@ -87,11 +87,52 @@ public final class StencilProbe extends TextureDraw.GenericDrawer {
          + ", values " + top);
    }
 
+   private static java.io.Writer perFrame;
+   private static final ByteBuffer ROW = MemoryUtil.memAlloc(8192);
+
+   /** Every call: the bit-128 count along a row and a column through the probe point (pzopt-stencil.out, 2026-10-25). */
+   private int lineRead(int fbo) {
+      int[] vp = new int[4];
+      GL11.glGetIntegerv(GL11.GL_VIEWPORT, vp);
+      int rw = Math.min(1600, vp[2]);
+      int rx = Math.max(vp[0], Math.min(vp[0] + vp[2] - rw, this.x - rw / 2));
+      int ch = Math.min(900, vp[3]);
+      int cy = Math.max(vp[1], Math.min(vp[1] + vp[3] - ch, this.y - ch / 2));
+      int ry = Math.max(vp[1], Math.min(vp[1] + vp[3] - 1, this.y));
+      int cx = Math.max(vp[0], Math.min(vp[0] + vp[2] - 1, this.x));
+      ROW.clear();
+      GL11.glReadPixels(rx, ry, rw, 1, GL11.GL_STENCIL_INDEX, GL11.GL_UNSIGNED_BYTE, ROW);
+      int row = 0;
+      for (int i = 0; i < rw; i++) if ((ROW.get(i) & 128) != 0) row++;
+      ROW.clear();
+      GL11.glReadPixels(cx, cy, 1, ch, GL11.GL_STENCIL_INDEX, GL11.GL_UNSIGNED_BYTE, ROW);
+      int col = 0;
+      for (int i = 0; i < ch; i++) if ((ROW.get(i) & 128) != 0) col++;
+      try {
+         if (perFrame == null) {
+            perFrame = new java.io.BufferedWriter(new java.io.FileWriter(new java.io.File(zombie.ZomboidFileSystem.instance.getCacheDir(), "pzopt-stencil.out")));
+            perFrame.write("# epoch_ms point row128 col128 fbo stencilTest writemask viewport\n");
+         }
+         perFrame.write(System.currentTimeMillis() + " " + this.point + " " + row + " " + col + " " + fbo + " " + (GL11.glIsEnabled(GL11.GL_STENCIL_TEST) ? 1 : 0)
+            + " " + GL11.glGetInteger(GL11.GL_STENCIL_WRITEMASK) + " " + vp[2] + "x" + vp[3]
+            + " depth=" + (GL11.glIsEnabled(GL11.GL_DEPTH_TEST) ? 1 : 0) + "/" + GL11.glGetInteger(GL11.GL_DEPTH_FUNC)
+            + " alpha=" + (GL11.glIsEnabled(GL11.GL_ALPHA_TEST) ? 1 : 0) + "/" + GL11.glGetInteger(GL11.GL_ALPHA_TEST_FUNC) + "/" + GL11.glGetFloat(GL11.GL_ALPHA_TEST_REF)
+            + " scissor=" + (GL11.glIsEnabled(GL11.GL_SCISSOR_TEST) ? 1 : 0) + " blend=" + (GL11.glIsEnabled(GL11.GL_BLEND) ? 1 : 0)
+            + " program=" + GL11.glGetInteger(org.lwjgl.opengl.GL20.GL_CURRENT_PROGRAM) + " sfunc=" + GL11.glGetInteger(GL11.GL_STENCIL_FUNC)
+            + "/" + GL11.glGetInteger(GL11.GL_STENCIL_REF) + " sop=" + GL11.glGetInteger(GL11.GL_STENCIL_PASS_DEPTH_PASS)
+            + " depthClamp=" + (GL11.glIsEnabled(0x864F) ? 1 : 0) + "\n");
+         if (this.point.startsWith("c")) perFrame.flush();
+      } catch (java.io.IOException e) {
+         // dev only
+      }
+      return row | col << 16;
+   }
+
    @Override
    public void render() {
       this.fullRead();
-      int v = 0;
       int fbo = GL11.glGetInteger(GL30.GL_FRAMEBUFFER_BINDING);
+      int v = this.lineRead(fbo);
       String state = " depthTest=" + GL11.glIsEnabled(GL11.GL_DEPTH_TEST) + " depthFunc=" + GL11.glGetInteger(GL11.GL_DEPTH_FUNC)
          + " alphaTest=" + GL11.glIsEnabled(GL11.GL_ALPHA_TEST) + " stencilTest=" + GL11.glIsEnabled(GL11.GL_STENCIL_TEST)
          + " program=" + GL11.glGetInteger(org.lwjgl.opengl.GL20.GL_CURRENT_PROGRAM) + " depthClear=" + GL11.glGetFloat(GL11.GL_DEPTH_CLEAR_VALUE);

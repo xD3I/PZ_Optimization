@@ -736,8 +736,7 @@ final class Wakes {
          for (int i = 0; i < 3; i++) {
             GL30.glBindBufferBase(GL43.GL_SHADER_STORAGE_BUFFER, i, 0);
          }
-         GL20.glUseProgram(0);
-         ShaderHelper.forgetCurrentlyBound();
+         DefaultProgram.restore(); // (frame start, before the cutaway mask: the default program, not 0)
          GpuSections.markNow("ripples.wake", true);
       }
    }

@@ -2538,6 +2538,8 @@ local ENHANCEMENT_SECTIONS = {
               why = {
                   gpu = "The blade pass costs in proportion to the blades drawn.",
               } },
+            { key = "grassBladeTorchShadows", label = "Grass blades: cast torch shadows",
+              tip = "With \"Per-pixel lighting: torch shadows\" on, each blade near you also casts its own shadow into your torch's beam. Off (the default), the blades cast none, so the beam on a lawn stays clean; they still sit in the shadows of fences, walls and furniture. Does nothing while torch shadows are off." },
         },
     },
     {

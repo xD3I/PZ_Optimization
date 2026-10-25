@@ -971,6 +971,7 @@ PzoptOptionClasses = {
     stateMachineNoIter = { "StateMachine" },
     stateParamMemo = { "IsoZombie", "State" },
     statsNoBox = { "Stats" },
+    stencilMaskProgram = { "pzopt.DefaultProgram" },
     sunAzimuthDeg = { "pzopt.SunShadow" },
     sunComputeBudget = { "pzopt.ChunkAo" },
     sunMaxElevationDeg = { "pzopt.SunShadow" },

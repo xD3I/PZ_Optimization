@@ -1431,6 +1431,7 @@ public final class Config {
    public static final boolean DLSS_JITTER = bool("dlssJitter", true); // dlss: draw the world with the Halton sub-pixel jitter DLSS accumulates from (false = no jitter, an A/B)
    public static final float DLSS_JITTER_SIGN = integer("dlssJitterSign", 1) < 0 ? -1.0F : 1.0F; // dlss: the sign the viewport offset is reported to NGX with (1 or -1, an A/B of the convention)
    public static final float DLSS_MV_SIGN = integer("dlssMvSign", 1) < 0 ? -1.0F : 1.0F; // dlss: the sign of the motion vectors (1 = current to previous position, NGX's convention; -1 the other way)
+   public static final boolean STENCIL_MASK_PROGRAM = bool("stencilMaskProgram", true); // the game's default program bound right before IsoCell.drawStencilMask (pzopt.DefaultProgram): a raw-GL pass before it lost the tree cutaway mask (tree flicker 2026-10-25); A/B key
    public static final boolean DEV_STENCIL_PROBE = bool("devStencilProbe", false); // dev: the stencil at the cutaway centre at named points of the frame, logged every 2 s (pzopt.StencilProbe; stalls)
    public static final boolean DEV_REACH_CHECK = bool("devReachCheck", false); // dev: stock tree cutaway, plus occlusion queries round the inside passes of every see-through tree treeCutawayReach would keep baked (reachViolations must stay 0)
    public static final boolean EDGE_TEST_FAST = bool("edgeTestFast", true); // IsoMovingObject.separate asks pzopt.EdgeFast instead of 42.21's lambda-based IsoGridSquare.isBlockedTo (same result)
@@ -1627,6 +1628,7 @@ public final class Config {
    public static volatile boolean GRASS_BLADES; // grass near the player drawn as real blades (clumps, wind waves, trampling)
    public static volatile int GRASS_BLADE_RADIUS; // grass blades: squares round the player
    public static volatile int GRASS_BLADE_DENSITY_PCT; // grass blades: how many, %
+   public static volatile boolean GRASS_BLADE_TORCH_SHADOWS; // grass blades: the blades cast torch shadows with pplShadows (off: the shadow mask is marched before the blades write their depth)
    public static volatile int DEV_GROUND_VIEW; // dev: ground views (GroundBake: 1 = the bake's world position as a checker, 2 = the class map, 3 = the ground state: ruts blue, berms red, wear green)
    public static final int DEV_GROUND_ALTERNATE = integer("devGroundAlternate", 0); // dev: ms; the ground keys in devGroundAlternateKeys switch off and on every period (within-run A/B: harness/ground/ab.py), or devGroundCycle steps
    public static final String DEV_GROUND_ALTERNATE_KEYS = string("devGroundAlternateKeys", "all"); // dev: comma list of ground keys the alternation switches ("all" = every ground switch)
@@ -2421,6 +2423,7 @@ public final class Config {
       GRASS_BLADES = bool("grassBlades", false);
       GRASS_BLADE_RADIUS = Math.max(2, Math.min(40, integer("grassBladeRadius", 12)));
       GRASS_BLADE_DENSITY_PCT = Math.max(10, Math.min(400, integer("grassBladeDensityPct", 100)));
+      GRASS_BLADE_TORCH_SHADOWS = bool("grassBladeTorchShadows", false);
       DEV_GROUND_VIEW = integer("devGroundView", 0);
       // ground cover (pzopt.GroundCover, pzopt.Glints)
       GLINT_MODEL = string("glintModel", "db23iso").trim().toLowerCase(java.util.Locale.ROOT);
