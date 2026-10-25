@@ -423,6 +423,7 @@ PzoptOptionClasses = {
     devSsrTiming = { "pzopt.Ssr" },
     devSsrTrace = { "pzopt.Ssr" },
     devSsrView = { "pzopt.Ssr" },
+    devStaticLightLog = { "pzopt.CapsuleShadow" },
     devStencilProbe = { "FBORenderCell", "FBORenderTrees", "pzopt.StencilProbe" },
     devStepOldUnit = { "pzopt.CloudShadow" },
     devSunAlternate = { "pzopt.CapsuleShadow" },
