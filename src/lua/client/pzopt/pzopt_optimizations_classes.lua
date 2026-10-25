@@ -1072,6 +1072,7 @@ PzoptOptionClasses = {
     torchSourceBodyPct = { "pzopt.PixelLight" },
     torchSourceFast = { "pzopt.TorchSource" },
     torchSourceSelfShadow = { "pzopt.PixelLight" },
+    translucentGridsPerFrame = { "FBORenderCell" },
     translucentLightsPerFrame = { "FBORenderCell" },
     translucentOrderCache = { "pzopt.TranslucentOrder" },
     translucentTilesInChunkTexture = { "FBORenderCell" },

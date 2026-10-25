@@ -27,7 +27,7 @@ public class CategoryMastersTest {
          "gcHeap", "luaGcNoop", "gcMode", "gcHeapFixed", "gcPreTouch", "gcPauseMs", "gcG1Tuned", "gcSlack", "gcSlackQueue",
          // tuning of a gated switch (inert once it is off)
          "macGlTimerQueries", "chunkGridFollowView", "treeRebakeLingerMs", "treeCutawayReachPx", "treeBakeMaxChunksPerSec",
-         "treeBakeDirect", "glassTilesPerFrame", "floorDecalsPerFrame", "translucentLightsPerFrame", "bakeFrameBudget",
+         "treeBakeDirect", "glassTilesPerFrame", "floorDecalsPerFrame", "translucentGridsPerFrame", "translucentLightsPerFrame", "bakeFrameBudget",
          "rebakeMaxFrames", "zoomEase", "zoomRebakeBudget", "zoomPlaceholder", "zoomFrameMs", "bloodSettleSec", "bloodAppendPlants",
          "bloodAppendVegetation", "persistentVboFrameSync", "lightingFlush", "lightingRebakeBudget", "lightingRebakeMaxFrames",
          "lightingStrongDelta", "lightingStrongBudget", "lightingStrongFrameMs", "lightingGlobalDeltaPct", "fogScalePct",

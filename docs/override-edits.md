@@ -280,6 +280,37 @@ objects, chunks by lighting counter, translucent squares). Every fix is marked
    Video: `docs/media/manhole-puddle-flicker-before-vs-fix.mp4` (`harness/stitch-manhole.sh`). Cost: the per-frame translucent pass draws ~200
    more tiles a frame on the wet spin route (420-480 vs 200-280; nothing baked
    would be ~3,000); uncapped spin 352 vs 377 fps over four noisy pairs.
+   Since 2026-10-25 the helper also keeps Translucent tiles that are a piece of a
+   multi-square sprite grid (`IsoSpriteGrid` wider or deeper than one square) per
+   frame while `pzopt.Config.TRANSLUCENT_GRIDS_PER_FRAME` (`translucentGridsPerFrame`,
+   default on) is set. Discord bug report "Broken textures for picnic tables"
+   (fresh save, no other mods; a second player: large metal shelves, some rugs):
+   baked, the ground showed through the picnic tables `camping_01_8..11` (2 x 2
+   squares, Muldraugh 5977-5978,5425-5428) in wedges along the seams between the
+   pieces, the tabletop and the benches alike. Stock draws these tiles in the
+   per-frame translucent pass (`glDepthFunc(GL_LEQUAL)`, no depth writes) and is
+   clean at the same camera. Not the cause: the order inside the bake (drawing a
+   level's baked Translucent tiles after all its other objects, in the stock
+   translucent pass's square order, changed nothing) and the tile's depth box
+   (`tileDepthFix=on` changed nothing). Shots at the report spot (`--flag
+   start=5981,5431 --flag zoom=1 --shot-at 1`, default options): released
+   behaviour and `translucentGridsPerFrame=false` show the wedges on all three
+   tables, `translucentTilesInChunkTexture=false`, stock and the fix none (runs
+   `picnic-*`, `picnic-v2-on` / `-off`). The other reported furniture, placed beside
+   the tables (`--flag place_tile=`): the large metal shelf
+   (`furniture_shelving_01_24..27`, depthFlags 2) shows ground flecks through its
+   back piece baked and matches stock with the fix (runs `grid-on` / `-off` /
+   `-stock`); of the rugs the animal hides (`rugs_animals_*`, 3 x 3 grids) and the shag
+   rug (`floors_rugs_02_0..7`) are Translucent, the other fabric rugs (`floors_rugs_01_*`)
+   have depthFlags 0. The shag rug's tiles are single squares, so this key leaves them
+   baked, and baked a neighbour cuts the fringe in a straight line (runs `shag-on` /
+   `-perframe` / `-stock`; per frame and stock are clean): still open. A Holstein hide under a table: baked, the hide drew over the table's legs
+   and bench in the same wedges (4,325 px off stock in the crop); with the fix 211 px,
+   the swaying plants (runs `hide-on` / `-off` / `-stock`). Cost (runs `gridcost-*`,
+   uncapped, GPU-bound at 100 %, the spot with four tables, the shelf and two hides on
+   screen, alternating on / off pairs): the per-frame pass draws 100 instead of 56
+   Translucent tiles; 1113.7 / 1111.4 vs 1120.1 / 1108.5 fps, p99 2.1 ms on both
+   sides, i.e. ~1.4 us a frame against a 9 us spread between two runs of the same side.
 5. **Dev counters** (only with `instrument=true`): `renderTranslucent(IsoObject)`
    and `renderTranslucent(IsoGridSquare)` count what the per-frame pass draws
    by kind (window, door, tree, Translucent-flagged tile with a per-tileset

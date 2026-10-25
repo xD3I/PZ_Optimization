@@ -34,7 +34,7 @@ PzoptSettingsLayout = {
             { id = "world", master = "catWorldEnabled", title = "World drawing", blurb = "What the chunk pictures hold and how many are drawn in a frame.",
               subs = {
                 { title = "What bakes", keys = { "treesInChunkTexture", "treeBakeDirect", "treeBakePass", "treeAppend",
-                    "windowsInChunkTexture", "translucentTilesInChunkTexture", "glassTilesPerFrame", "floorDecalsPerFrame", "translucentLightsPerFrame",
+                    "windowsInChunkTexture", "translucentTilesInChunkTexture", "glassTilesPerFrame", "floorDecalsPerFrame", "translucentGridsPerFrame", "translucentLightsPerFrame",
                     "curtainDepthNudgePct", "windSpriteSway" } },
                 { title = "Bake budgets", keys = { "bakeScheduler", "bakeFrameBudget", "bakeBudgetAdaptive", "bakeBudgetGpu", "occlusionGrantedOnly",
                     "bakeNoSync", "bakeMipLevels", "renderChunkTopUp", "bakeBudget", "rebakeBudget", "rebakeMaxFrames" } },

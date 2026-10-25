@@ -3722,8 +3722,16 @@ public final class FBORenderCell {
     * tiles stay per frame with glassTilesPerFrame (pzopt.GlassTiles): baked, the pane writes its depth and hides the
     * characters standing behind it, which stock draws first and blends the pane over (2026-10-01). Tiles lying on the floor
     * stay per frame with floorDecalsPerFrame (pzopt.FloorDecals): baked, a manhole cover sat under the puddle pass, which
-    * z-fought with it in bands; stock draws it after the puddles (2026-10-05).
+    * z-fought with it in bands; stock draws it after the puddles (2026-10-05). Pieces of a multi-square sprite grid stay per
+    * frame with translucentGridsPerFrame: baked, the ground showed through picnic tables (camping_01_8..11, 2 x 2 squares),
+    * large metal shelves and rugs in wedges along the seams between their pieces; stock draws them in the translucent pass
+    * with LEQUAL and no depth writes (Discord "Broken textures for picnic tables", 2026-10-25).
     */
+   private static boolean pzoptMultiSquareGrid(IsoSprite sprite) {
+      zombie.iso.sprite.IsoSpriteGrid grid = sprite.getSpriteGrid();
+      return grid != null && grid.getWidth() * grid.getHeight() > 1;
+   }
+
    private static boolean pzoptPerFrameTranslucentTile(IsoObject object) {
       IsoSprite sprite = object.getSprite();
       if (pzopt.Mirrors.perFrame(sprite)) { // pzopt: mirrors, a mirror tile draws per frame (its glass gets the reflection over it)
@@ -3740,6 +3748,9 @@ public final class FBORenderCell {
       }
       if (pzopt.Config.FLOOR_DECALS_PER_FRAME && pzopt.FloorDecals.underPuddles(object, sprite)) {
          return true; // floorDecalsPerFrame: a baked manhole cover z-fought with the puddle drawn over it (2026-10-05)
+      }
+      if (pzopt.Config.TRANSLUCENT_GRIDS_PER_FRAME && pzoptMultiSquareGrid(sprite)) {
+         return true; // translucentGridsPerFrame: baked, the ground showed through a picnic table's seams (2026-10-25)
       }
       return pzopt.Config.TRANSLUCENT_LIGHTS_PER_FRAME && sprite.getProperties().has(IsoFlagType.HasLightOnSprite);
    }
