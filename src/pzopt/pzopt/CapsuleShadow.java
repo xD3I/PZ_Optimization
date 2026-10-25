@@ -61,8 +61,18 @@ public final class CapsuleShadow {
    private static final int WALLS = 4;
    private static final int TEXELS = WALL0 + WALLS;
    private static final int MAX = 1024;
-   private static final int MAX_LIGHTS = 4;
+   private static final int MAX_LIGHTS = 8; // the frame's lights: torches / headlights first (TORCH_SLOTS at most), then static lights (sunShadowStaticLights)
+   private static final int TORCH_SLOTS = 4;
+   private static final float POINT_LAMP_SIZE = 0.3F; // a static lamp's size (squares): the penumbra's growth with the distance
    private static final float[] LIGHT_SCORE = new float[MAX_LIGHTS];
+   private static final float[] STATIC_ORDER = new float[64];
+   private static final zombie.iso.IsoLightSource[] STATIC_CAND = new zombie.iso.IsoLightSource[64];
+   private static final float[] STATIC_SHARE = new float[MAX_LIGHTS];
+   private static final float[] STATIC_LIM = new float[MAX_LIGHTS];
+   private static final int[] STATIC_PICK = new int[2];
+   private static long staticLightFrames;
+   private static long staticPicks;
+   private static long devStaticN;
    private static final int MAX_PAIRS = 2048;
    private static long lightPairs;
    private static final float METRIC_Z = 2.4494897F; // squares of height per level
@@ -90,7 +100,7 @@ public final class CapsuleShadow {
 
    static String stats() {
       return "capsule shadows: frames=" + frames + " (with lights " + lightFrames + ", caster x light quads " + lightPairs + ") characters=" + characters + " vehicles=" + vehicles + " animals=" + animals + " atlas=" + atlas + " mesh draws=" + meshDraws + " lamp views drawn=" + lampDraws + " read=" + lampLooks + " (end points on the game thread "
-         + computedHere + ") wall collects=" + wallCollects + " (squares " + WALL_CACHE.size() + ", last " + wallLast + ") draws=" + drawn + (failed ? " FAILED" : "") + " | " + ShadowAtlas.stats();
+         + computedHere + ") wall collects=" + wallCollects + " (squares " + WALL_CACHE.size() + ", last " + wallLast + ") draws=" + drawn + (failed ? " FAILED" : "") + " | static light frames=" + staticLightFrames + " caster picks=" + staticPicks + " " + StaticLightShadow.stats() + " | " + ShadowAtlas.stats();
    }
 
    /** The end points of BONES (relative to the character, metric) into out; false when the skeleton lacks one. Any thread. */
@@ -193,7 +203,9 @@ public final class CapsuleShadow {
       float day = cm == null ? 0F : Math.max(0F, Math.min(1F, cm.getDayLightStrength()));
       // a torch's shadow matters in the dark only: none above 90 % daylight (the bench pistol's weapon light is always on)
       f.lightStrength = Math.max(0F, Math.min(1F, (0.9F - day) / 0.6F)) * Math.max(0, Config.SUN_SHADOW_TORCH_PCT) / 100F;
-      f.nl = Config.SUN_SHADOW_TORCHES && f.lightStrength > 0.02F ? gatherLights(f) : 0;
+      StaticLightShadow.beginFrame();
+      f.nt = 0;
+      f.nl = (Config.SUN_SHADOW_TORCHES || Config.SUN_SHADOW_STATIC_LIGHTS) && f.lightStrength > 0.02F ? gatherLights(f) : 0;
       lightsActive = f.nl > 0;
       if (!f.sunOn && f.nl == 0) {
          return;
@@ -420,13 +432,18 @@ public final class CapsuleShadow {
       LampViews lv = null;
       int j = 0;
       float px = chr.getX(), py = chr.getY(), pz = chr.getZ() * METRIC_Z;
-      for (int l = 0; l < f.nl && j < 2; l++) {
+      int ci = f.n - 1;
+      for (int oq = 0; oq < f.nt + 2 && j < 2; oq++) { // the torches / headlights in their order, then the caster's static lights (staticPick)
+         int l = oq < f.nt ? oq : f.lsel[ci * 2 + oq - f.nt];
+         if (l < 0 || l >= f.nl) {
+            continue;
+         }
          float lx = f.lA[l * 4], ly = f.lA[l * 4 + 1], lz = f.lA[l * 4 + 2], reach = f.lA[l * 4 + 3];
          float vx = mx - lx, vy = my - ly;
          float dl = (float)Math.sqrt(vx * vx + vy * vy);
          float d3 = (float)Math.sqrt(dl * dl + (mz - lz) * (mz - lz));
-         boolean car = f.lK[l] > 1.5F;
-         if (dl > reach + r || !car && dl < 0.7F || d3 < half * 1.25F) {
+         boolean car = f.lK[l] > 1.5F && f.lK[l] < 2.5F;
+         if (dl > reach + r || f.lK[l] < 1.5F && dl < 0.7F || d3 < half * 1.25F) {
             continue; // out of reach, its holder, or the lamp inside the caster's sphere (the capsules there)
          }
          float cone = f.lB[l * 4 + 2];
@@ -688,8 +705,24 @@ public final class CapsuleShadow {
 
    private static float stockScale = 1F;
 
-   /** The torches and headlights near the camera (LightingJNI's list for the frame), strongest reach first, MAX_LIGHTS at most. */
+   /**
+    * The frame's lights: the torches and headlights (sunShadowTorches, TORCH_SLOTS at most), then the static lights
+    * (sunShadowStaticLights) in the slots left.
+    */
    private static int gatherLights(Frame f) {
+      int n = Config.SUN_SHADOW_TORCHES ? gatherTorches(f) : 0;
+      f.nt = n;
+      if (Config.SUN_SHADOW_STATIC_LIGHTS) {
+         n = gatherStatic(f, n);
+         if (n > f.nt) {
+            staticLightFrames++;
+         }
+      }
+      return n;
+   }
+
+   /** The torches and headlights near the camera (LightingJNI's list for the frame), strongest reach first, TORCH_SLOTS at most. */
+   private static int gatherTorches(Frame f) {
       ArrayList<IsoGameCharacter.TorchInfo> torches = LightingJNI.pzoptTorches();
       if (torches == null || torches.isEmpty()) {
          return 0;
@@ -699,7 +732,7 @@ public final class CapsuleShadow {
       float view = (f.screenW + 2.0F * f.screenH) * f.zoom / (64.0F * f.ts) + 4.0F;
       int n = 0;
       float[] score = LIGHT_SCORE;
-      for (int i = 0; i < torches.size(); i++) { // the MAX_LIGHTS strongest (strength x reach): a car's tail lights listed first took the torch's slot
+      for (int i = 0; i < torches.size(); i++) { // the TORCH_SLOTS strongest (strength x reach): a car's tail lights listed first took the torch's slot
          IsoGameCharacter.TorchInfo t = torches.get(i);
          float tx = TorchSource.x(t), ty = TorchSource.y(t); // torchSource: the drawn item's lens (else the native's position)
          if (t.id == 0 || t.strength <= 0.05F || Math.abs(tx - cx) > view + t.dist || Math.abs(ty - cy) > view + t.dist) {
@@ -734,16 +767,16 @@ public final class CapsuleShadow {
          while (at > 0 && score[at - 1] < sc) {
             at--;
          }
-         if (at >= MAX_LIGHTS) {
+         if (at >= TORCH_SLOTS) {
             continue;
          }
-         for (int j = Math.min(n, MAX_LIGHTS - 1); j > at; j--) { // shift the weaker ones down
+         for (int j = Math.min(n, TORCH_SLOTS - 1); j > at; j--) { // shift the weaker ones down
             System.arraycopy(f.lA, (j - 1) * 4, f.lA, j * 4, 4);
             System.arraycopy(f.lB, (j - 1) * 4, f.lB, j * 4, 4);
             f.lK[j] = f.lK[j - 1];
             score[j] = score[j - 1];
          }
-         n = Math.min(n + 1, MAX_LIGHTS);
+         n = Math.min(n + 1, TORCH_SLOTS);
          score[at] = sc;
          int k = at * 4;
          f.lA[k] = tx - f.ox;
@@ -755,8 +788,123 @@ public final class CapsuleShadow {
          f.lB[k + 2] = t.cone ? t.dot : -2.0F;
          f.lB[k + 3] = t.strength;
          f.lK[at] = car ? 2F : 1F;
+         f.lSrc[at] = null;
       }
       return n;
+   }
+
+   /**
+    * sunShadowStaticLights: the static lights that are on (IsoCell's lamp list: street lamps, lamps, wall lights, fires) near
+    * the camera into slots n.. (nearest pool first: the one the camera stands in leads), each a point light (kind 3, no
+    * cone) at its fixture's height. Which casters each one shades is decided per caster (append: staticPick).
+    */
+   private static int gatherStatic(Frame f, int n) {
+      zombie.iso.IsoCell cell = zombie.iso.IsoWorld.instance == null ? null : zombie.iso.IsoWorld.instance.currentCell;
+      if (cell == null || n >= MAX_LIGHTS) {
+         return n;
+      }
+      java.util.Stack<zombie.iso.IsoLightSource> list = cell.getLamppostPositions();
+      float cx = IsoCamera.frameState.camCharacterX, cy = IsoCamera.frameState.camCharacterY;
+      float view = (f.screenW + 2.0F * f.screenH) * f.zoom / (64.0F * f.ts) + 4.0F;
+      int nc = 0;
+      for (int i = 0; i < list.size() && nc < STATIC_CAND.length; i++) {
+         zombie.iso.IsoLightSource l = list.get(i);
+         if (!StaticLightShadow.usable(l)) {
+            continue;
+         }
+         float r = Math.min(l.radius, 20);
+         float dx = l.x + 0.5F - cx, dy = l.y + 0.5F - cy;
+         if (Math.abs(dx) > view + r || Math.abs(dy) > view + r) {
+            continue;
+         }
+         STATIC_ORDER[nc] = StaticLightShadow.order(dx, dy, r);
+         STATIC_CAND[nc++] = l;
+      }
+      while (n < MAX_LIGHTS && nc > 0) { // nearest pool first (a selection over a handful)
+         int best = 0;
+         for (int i = 1; i < nc; i++) {
+            if (STATIC_ORDER[i] < STATIC_ORDER[best]) {
+               best = i;
+            }
+         }
+         zombie.iso.IsoLightSource l = STATIC_CAND[best];
+         STATIC_ORDER[best] = STATIC_ORDER[--nc];
+         STATIC_CAND[best] = STATIC_CAND[nc];
+         int k = n * 4;
+         f.lA[k] = l.x + 0.5F - f.ox;
+         f.lA[k + 1] = l.y + 0.5F - f.oy;
+         f.lA[k + 2] = l.z * METRIC_Z + StaticLightShadow.height(l);
+         f.lA[k + 3] = Math.max(1.0F, Math.min(l.radius, 20));
+         f.lB[k] = 0F;
+         f.lB[k + 1] = 0F;
+         f.lB[k + 2] = -2.0F; // no cone
+         f.lB[k + 3] = StaticLightShadow.strength(l.r, l.g, l.b);
+         f.lK[n] = StaticLightShadow.KIND;
+         f.lSrc[n] = l;
+         n++;
+      }
+      java.util.Arrays.fill(STATIC_CAND, 0, STATIC_CAND.length, null);
+      if (Config.DEV_STATIC_LIGHT_LOG > 0 && ++devStaticN % Config.DEV_STATIC_LIGHT_LOG == 0) {
+         StringBuilder sb = new StringBuilder("capsule shadows: dev static lights (camera " + (int)cx + "," + (int)cy + ", candidates in view " + list.size() + " listed, torches " + f.nt + "):");
+         for (int l = f.nt; l < n; l++) {
+            zombie.iso.IsoLightSource src = f.lSrc[l];
+            sb.append(String.format(java.util.Locale.ROOT, " [%d,%d,%d r %d rgb %.2f,%.2f,%.2f h %.2f %s]", src.x, src.y, src.z, src.radius, src.r, src.g, src.b, StaticLightShadow.height(src),
+               StaticLightShadow.describe(src)));
+         }
+         sb.append(" | ").append(StaticLightShadow.stats()).append(" picks ").append(staticPicks).append(" | loaded lights on:");
+         int shown = 0;
+         for (int i = 0; i < list.size() && shown < 24; i++) { // where to stand (the rigs): every usable light within 60 squares
+            zombie.iso.IsoLightSource src = list.get(i);
+            if (StaticLightShadow.usable(src) && Math.abs(src.x - cx) < 60 && Math.abs(src.y - cy) < 60) {
+               sb.append(String.format(java.util.Locale.ROOT, " %d,%d,%d r%d %s;", src.x, src.y, src.z, src.radius, StaticLightShadow.describe(src)));
+               shown++;
+            }
+         }
+         Log.info(sb.toString());
+      }
+      return n;
+   }
+
+   /**
+    * sunShadowStaticLights: the caster just appended keeps the (at most two) static lights that light it most, among those
+    * that reach it as the game's lamp model has it (StaticLightShadow.reach: and how far past it its shadow may go, f.llim), into f.lsel (frame slots, -1 none).
+    */
+   private static void staticPick(Frame f, int c, float mx, float my, float r, float cz) {
+      f.lsel[c * 2] = -1;
+      f.lsel[c * 2 + 1] = -1;
+      int ns = f.nl - f.nt;
+      if (ns <= 0) {
+         return;
+      }
+      zombie.iso.IsoCell cell = zombie.iso.IsoWorld.instance.currentCell;
+      int sx = (int)Math.floor(mx + f.ox), sy = (int)Math.floor(my + f.oy), sz = (int)Math.floor(cz / METRIC_Z + 0.01F);
+      boolean any = false;
+      for (int i = 0; i < ns; i++) {
+         int l = f.nt + i;
+         float dx = mx - f.lA[l * 4], dy = my - f.lA[l * 4 + 1];
+         float dl = (float)Math.sqrt(dx * dx + dy * dy), reach = f.lA[l * 4 + 3];
+         float sh = dl > reach + r ? 0F : StaticLightShadow.share(Math.max(0F, dl - r), reach, f.lB[l * 4 + 3]);
+         if (sh > 0.02F) {
+            float lim = StaticLightShadow.reach(cell, f.lSrc[l], sx, sy, sz);
+            if (lim < 0F) {
+               sh = 0F;
+            }
+            STATIC_LIM[i] = lim;
+         }
+         STATIC_SHARE[i] = sh;
+         any |= sh > 0.02F;
+      }
+      if (!any) {
+         return;
+      }
+      StaticLightShadow.pickTwo(STATIC_SHARE, ns, STATIC_PICK);
+      for (int j = 0; j < 2; j++) {
+         if (STATIC_PICK[j] >= 0) {
+            f.lsel[c * 2 + j] = (byte)(f.nt + STATIC_PICK[j]);
+            f.llim[c * 2 + j] = STATIC_LIM[STATIC_PICK[j]];
+            staticPicks++;
+         }
+      }
    }
 
    /** The sun share through the grid and the clouds at an object outdoors: renderPrepParallel's answer, or computed here. */
@@ -1164,6 +1312,7 @@ public final class CapsuleShadow {
          d[o + 7] = 0F;
       }
       walls(f, base + WALL0 * 4, mx, my, cz, sun > 0F ? 1F + 0.5F * Math.max(ex, ey) : 0F);
+      staticPick(f, f.n, (ax + bx) * 0.5F, (ay + by) * 0.5F, rb + 0.02F, cz);
       f.n++;
    }
 
@@ -1431,7 +1580,11 @@ public final class CapsuleShadow {
       int nl; // lights
       final float[] lA = new float[MAX_LIGHTS * 4]; // x, y (relative to the origin square), z (metric, the lamp's height), reach
       final float[] lB = new float[MAX_LIGHTS * 4]; // direction x, y, cone cosine (-2: none), strength
-      final float[] lK = new float[MAX_LIGHTS]; // 1 a handheld torch, 2 a vehicle light
+      final float[] lK = new float[MAX_LIGHTS]; // 1 a handheld torch, 2 a vehicle light, 3 a static point light (StaticLightShadow)
+      int nt; // the torches / headlights among the lights (slots 0..nt-1); the static lights follow
+      final zombie.iso.IsoLightSource[] lSrc = new zombie.iso.IsoLightSource[MAX_LIGHTS]; // a static light's source (game thread)
+      final byte[] lsel = new byte[MAX * 2]; // per caster: its static lights (frame slots, strongest first, -1 none)
+      final float[] llim = new float[MAX * 2]; // and how far from each its shadow may reach (the first wall past the caster)
       float lightStrength;
       float zoom;
       float ts;
@@ -1537,12 +1690,16 @@ public final class CapsuleShadow {
             int base = c * TEXELS * 4;
             float mx = (d[base + 4] + d[base + 8]) * 0.5F, my = (d[base + 5] + d[base + 9]) * 0.5F, r = d[base + 7];
             boolean vehicle = d[base + 13] > 0.5F && d[base + 13] < 1.5F;
-            for (int l = 0; l < f.nl && n < MAX_PAIRS; l++) {
+            for (int oq = 0; oq < f.nt + 2 && n < MAX_PAIRS; oq++) { // the torches / headlights, then the caster's static lights (staticPick)
+               int l = oq < f.nt ? oq : f.lsel[c * 2 + oq - f.nt];
+               if (l < 0 || l >= f.nl) {
+                  continue;
+               }
                float lx = f.lA[l * 4], ly = f.lA[l * 4 + 1], reach = f.lA[l * 4 + 3];
                float vx = mx - lx, vy = my - ly;
                float dl = (float)Math.sqrt(vx * vx + vy * vy);
-               boolean car = f.lK[l] > 1.5F;
-               if (dl > reach + r || !car && dl < 0.7F || car && vehicle && dl < 3.5F) {
+               boolean car = f.lK[l] > 1.5F && f.lK[l] < 2.5F;
+               if (dl > reach + r || f.lK[l] < 1.5F && dl < 0.7F || car && vehicle && dl < 3.5F) {
                   continue;
                }
                float cone = f.lB[l * 4 + 2];
@@ -1572,7 +1729,7 @@ public final class CapsuleShadow {
                this.pairData[n * 4] = c;
                this.pairData[n * 4 + 1] = l;
                this.pairData[n * 4 + 2] = view;
-               this.pairData[n * 4 + 3] = 0F;
+               this.pairData[n * 4 + 3] = oq < f.nt ? StaticLightShadow.OPEN : f.llim[c * 2 + oq - f.nt]; // the shadow's end (a static light's: the first wall past the caster)
                n++;
             }
          }
@@ -2232,13 +2389,14 @@ public final class CapsuleShadow {
       "uniform sampler2D Data;",
       "uniform vec4 mapA;",
       "uniform vec4 vp;",
-      "uniform vec4 lA[4];", // x, y (relative to the origin square), z (metric), reach
-      "uniform vec4 lB[4];", // direction x, y, cone cosine (-2: none), strength
-      "uniform float lK[4];", // 1 a handheld torch, 2 a vehicle light
+      "uniform vec4 lA[" + MAX_LIGHTS + "];", // x, y (relative to the origin square), z (metric), reach
+      "uniform vec4 lB[" + MAX_LIGHTS + "];", // direction x, y, cone cosine (-2: none), strength
+      "uniform float lK[" + MAX_LIGHTS + "];", // 1 a handheld torch, 2 a vehicle light, 3 a static point light
       "uniform int nl;",
       "uniform float spread;",
-      "uniform sampler2D Pairs;", // instance -> (caster, light, its lamp view or -1)
+      "uniform sampler2D Pairs;", // instance -> (caster, light, its lamp view or -1, the shadow's end: distance from the light)
       "flat out int inst;",
+      "flat out float lim;",
       "flat out int light;",
       "flat out int view;",
       "out vec2 qc;", // the quad's own coordinates (0..1: from the lamp side on, across)
@@ -2247,7 +2405,8 @@ public final class CapsuleShadow {
       "   return vec2((A - mapA.y) / mapA.x, (B - mapA.w) / mapA.z);",
       "}",
       "void main() {",
-      "   vec3 pair = texelFetch(Pairs, ivec2(gl_InstanceID, 0), 0).xyz;",
+      "   vec4 pair = texelFetch(Pairs, ivec2(gl_InstanceID, 0), 0);",
+      "   lim = pair.w;",
       "   int c = int(pair.x + 0.5);",
       "   int l = int(pair.y + 0.5);",
       "   inst = c;",
@@ -2259,7 +2418,7 @@ public final class CapsuleShadow {
       "   vec3 L = lA[l].xyz;",
       "   vec3 mid = 0.5 * (a.xyz + b.xyz);",
       "   float dl = length(mid.xy - L.xy);",
-      "   bool skip = dl > lA[l].w + a.w || (lK[l] < 1.5 && dl < 0.7) || (lK[l] > 1.5 && facts.y > 0.5 && facts.y < 1.5 && dl < 3.5);",
+      "   bool skip = dl > lA[l].w + a.w || (lK[l] < 1.5 && dl < 0.7) || (lK[l] > 1.5 && lK[l] < 2.5 && facts.y > 0.5 && facts.y < 1.5 && dl < 3.5);",
       "   vec2 sp[4];",
       "   float pd[4];", // each corner's pad (squares): the far ones widen with the shadow's cone
       "   float reach = lA[l].w;",
@@ -2270,7 +2429,7 @@ public final class CapsuleShadow {
       "      float dh = length(dir);",
       "      dir = dh > 1e-3 ? dir / dh : vec2(1.0, 0.0);",
       "      float t = p.z < L.z - 0.05 ? (L.z - facts.x) / (L.z - p.z) : 1e3;", // the ray from the lamp through p hits the floor at L + (p - L) t
-      "      float far = min(dh * t, reach) + rr + 0.3;",
+      "      float far = min(min(dh * t, reach), max(lim, dh)) + rr + 0.3;",
       "      sp[e * 2] = toPx(p);",
       "      sp[e * 2 + 1] = toPx(vec3(L.xy + dir * far, facts.x));",
       "      pd[e * 2] = rr + 0.3;",
@@ -2299,15 +2458,16 @@ public final class CapsuleShadow {
       "uniform sampler2D Data;",
       "uniform vec4 mapA;",
       "uniform vec4 mapC;", // x + y + 2z = mapC.x * depth + mapC.y; dev view; strength (x the darkness)
-      "uniform vec4 lA[4];",
-      "uniform vec4 lB[4];",
-      "uniform float lK[4];",
+      "uniform vec4 lA[" + MAX_LIGHTS + "];",
+      "uniform vec4 lB[" + MAX_LIGHTS + "];",
+      "uniform float lK[" + MAX_LIGHTS + "];",
       "uniform vec4 atlas;", // on, tiles a row, tile size, 1 / atlas size
       "uniform sampler2D Atlas;",
       "uniform sampler2DShadow AtlasCmp;",
       "flat in int inst;",
       "flat in int light;",
       "flat in int view;",
+      "flat in float lim;",
       "in vec2 qc;",
       "out vec4 fragColor;",
       "#include capsule",
@@ -2368,8 +2528,10 @@ public final class CapsuleShadow {
       "float torch(vec2 p, vec4 a, vec4 b, float kind) {",
       "   vec2 v = p - a.xy;",
       "   float d = length(v);",
-      "   bool car = kind > 1.5;",
       "   float x = clamp(1.0 - d / a.w, 0.0, 1.0);",
+      // a static point light (sunShadowStaticLights): a quadratic fade of the native's lamp field, saturating (StaticLightShadow.share)
+      "   if (kind > 2.5) return min(1.0, " + StaticLightShadow.GAIN + " * b.w * x * x);",
+      "   bool car = kind > 1.5;",
       "   float fall = car ? x * sqrt(x) * (0.93 + 0.07 * x) : x * (0.85 + 0.15 * x);",
       "   float ang = 1.0;",
       "   if (b.z > -1.5 && d > 1e-3) {",
@@ -2392,7 +2554,8 @@ public final class CapsuleShadow {
       "   float tmax = length(tl);",
       "   vec3 rd = tl / tmax;",
       "   vec3 ro = P + rd * 0.03;",
-      "   float k = tmax / (lK[light] > 1.5 ? 0.25 : 0.12);", // the lamp's size: penumbra grows with the caster's distance from the receiver
+      "   float lampSize = lK[light] > 2.5 ? " + POINT_LAMP_SIZE + " : lK[light] > 1.5 ? 0.25 : 0.12;", // a static lamp's globe is bigger than a torch's lens
+      "   float k = tmax / lampSize;", // the lamp's size: penumbra grows with the caster's distance from the receiver
       "   vec4 ba0 = texelFetch(Data, ivec2(1, inst), 0);",
       "   vec4 bb0 = texelFetch(Data, ivec2(2, inst), 0);",
       // the caster's own pixel takes none of its own lamp shadow (as in SIL_FRAG): the pass runs after the moving objects
@@ -2405,7 +2568,7 @@ public final class CapsuleShadow {
       "   float alpha = texelFetch(Data, ivec2(3, inst), 0).w;",
       "   float vis = 1.0;",
       "   if (view >= 0 && atlas.x > 0.5) {",
-      "      vis = lampVis(P, inst, view, lK[light] > 1.5 ? 0.25 : 0.12);",
+      "      vis = lampVis(P, inst, view, lampSize);",
       // sunShadowLampMeshNearPct / FarPct: past a square or so from the caster the lamp view's shadow (one perspective tile:
       // a low headlight's shadow of the legs stretched into thin sharp strands, "torn", Discord 2026-10-04) fades into the
       // capsules' soft shadow, whose penumbra widens with the distance as a lamp's does; the shape stays where it is seen
@@ -2428,12 +2591,19 @@ public final class CapsuleShadow {
       "   }",
       // the quad's far end and sides fade out (a shadow wider than the quad ends softly, not on a straight edge)
       "   float edge = smoothstep(0.0, 0.1, qc.y) * smoothstep(1.0, 0.9, qc.y) * smoothstep(1.0, 0.85, qc.x);",
+      // a static light's shadow ends at the first wall past the caster (sunShadowStaticLights: its light is not behind it)
+      "   edge *= 1.0 - smoothstep(lim - 0.08, lim + 0.08, length(P.xy - la.xy));",
       "   vis = mix(1.0, vis, edge);",
       "   float m = 1.0 - mapC.w * share * alpha * (1.0 - vis);",
       "   if (mapC.z > 0.5) m = mix(0.5, 1.0, vis);",
       "   if (m > 0.996) discard;",
       "   fragColor = vec4(vec3(m), 1.0);",
       "}");
+
+   /** Tests (CapsuleShadowShaderTest): the casters x lights program's vertex and fragment sources as linked. */
+   static String[] lightProgramSources() {
+      return new String[] {LIGHT_VERT, withCapsule(LIGHT_FRAG)};
+   }
 
    /** The shared GLSL goes in where a source says "#include capsule". */
    private static String withCapsule(String src) {

@@ -1498,6 +1498,7 @@ public final class Config {
    public static volatile boolean SUN_SHADOW_CHARACTERS; // sunShadows: characters outdoors cast the shadow of their body (ten bone capsules) onto the scene, per frame (pzopt.CapsuleShadow)
    public static volatile boolean SUN_SHADOW_VEHICLES; // sunShadows: vehicles outdoors cast a sun shadow (two body capsules and the cabin) onto the scene, per frame
    public static volatile boolean SUN_SHADOW_TORCHES; // sunShadows: characters and vehicles also cast soft shadows from the torches and headlights in reach, at any hour (pzopt.CapsuleShadow)
+   public static volatile boolean SUN_SHADOW_STATIC_LIGHTS; // sunShadows: characters, animals and vehicles also cast soft shadows from the static lights that are on (street lamps, lamps, wall lights, fires) in the dark, the two that light each caster most (pzopt.StaticLightShadow)
    public static final int SUN_SHADOW_TORCH_PCT = integer("sunShadowTorchPct", 85); // how much of a torch's light a character's shadow takes away in the dark, %
    public static final boolean SUN_SHADOW_ATLAS = bool("sunShadowAtlas", true); // sunShadows, characters: zombies drawn as atlas sprites (no model) cast one upright capsule's shadow
    public static final boolean SUN_SHADOW_SILHOUETTE = bool("sunShadowSilhouette", true); // sunShadows, characters / animals / vehicles: the shadow takes the caster's drawn shape (limbs, hair, weapons, bags, an animal's legs, a car's body): after the moving objects are drawn, each caster's sun ray is marched through the scene depth inside its bounding capsule (pzopt.CapsuleShadow); where the penumbra grows wider than a limb the capsule model takes over; off: the capsules alone, drawn before the characters (2026-09-25)
@@ -1587,6 +1588,7 @@ public final class Config {
    public static final int DEV_DETAIL_TOGGLE_PERIOD = integer("devDetailTogglePeriod", 0); // dev: ms; the detailed shadows (sunShadowMeshes, sunShadowTreeCards, the stock blob's fade, softness 25) and the 09-26 release's (capsules, crown ovals, the blob, softness 100) take turns every period, logged with the epoch (the Workshop card's clip)
    public static final int DEV_SHADOW_TIP_TOGGLE_PERIOD = integer("devShadowTipTogglePeriod", 0); // dev: ms; the characters' sun shadow quads end at the old place (the bounding capsule's axis end: the head's shadow cut flat under a low sun) and at the fixed one (its top) every other period, logged with the epoch (the 2026-10-02 before / after clip)
    public static final int DEV_FAR_SHADE_LOG = integer("devFarShadeLog", 0); // dev: the first N hits of the characters' / vehicles' far shade march (SunShadow.march past 9 squares) into the console
+   public static final int DEV_STATIC_LIGHT_LOG = integer("devStaticLightLog", 0); // dev: every Nth frame, the capsule shadow pass's static lights (sunShadowStaticLights: square, radius, colour, height, what lights it) and its line-test counters into the console
    public static final int DEV_CASTER_TRACE = integer("devCasterTrace", 0); // dev: every Nth frame, the local player's sun caster facts (position, facing, sun share, what the shade march hit, its atlas tile) into the console (the 2026-10-02 lost-shadow report)
    public static final int DEV_SUN_TOGGLE_PERIOD = integer("devSunTogglePeriod", 0); // dev: ms; sun shadows flip on / off every period (each switch bakes the chunk pictures again), logged with the epoch (the Workshop card's clip)
    // The real sky (pzopt.Sky, pzopt.CloudShadow; docs/findings-sky-2026-09-26.md), 2026-09-26
@@ -2381,6 +2383,7 @@ public final class Config {
       SUN_SHADOW_CHARACTERS = bool("sunShadowCharacters", true);
       SUN_SHADOW_VEHICLES = bool("sunShadowVehicles", true);
       SUN_SHADOW_TORCHES = bool("sunShadowTorches", true);
+      SUN_SHADOW_STATIC_LIGHTS = bool("sunShadowStaticLights", true);
       SUN_SHADOW_TREE_CARDS = bool("sunShadowTreeCards", true);
       SUN_SHADOW_MESHES = bool("sunShadowMeshes", true);
       SUN_SHADOW_WALL_CUT = bool("sunShadowWallCut", true);
