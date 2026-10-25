@@ -1627,6 +1627,7 @@ public final class Config {
    public static volatile boolean GRASS_BLADES; // grass near the player drawn as real blades (clumps, wind waves, trampling)
    public static volatile int GRASS_BLADE_RADIUS; // grass blades: squares round the player
    public static volatile int GRASS_BLADE_DENSITY_PCT; // grass blades: how many, %
+   public static volatile boolean GRASS_BLADE_TORCH_SHADOWS; // grass blades: the blades cast torch shadows with pplShadows (off: the shadow mask is marched before the blades write their depth)
    public static volatile int DEV_GROUND_VIEW; // dev: ground views (GroundBake: 1 = the bake's world position as a checker, 2 = the class map, 3 = the ground state: ruts blue, berms red, wear green)
    public static final int DEV_GROUND_ALTERNATE = integer("devGroundAlternate", 0); // dev: ms; the ground keys in devGroundAlternateKeys switch off and on every period (within-run A/B: harness/ground/ab.py), or devGroundCycle steps
    public static final String DEV_GROUND_ALTERNATE_KEYS = string("devGroundAlternateKeys", "all"); // dev: comma list of ground keys the alternation switches ("all" = every ground switch)
@@ -1732,6 +1733,8 @@ public final class Config {
    public static final int GRASS_BLADE_FEET_PCT = integer("grassBladeFeetPct", 100); // grass blades: blades just in front of a character's feet are drawn in front of the model (characters stand in the grass), % of the depth push
    public static final boolean GRASS_BLADE_TUFTS = bool("grassBladeTufts", true); // grass blades: an erosion grass tuft standing on a grass square grows taller blades round its foot, in its own colours
    public static final int GRASS_BLADE_WAVES_PCT = integer("grassBladeWavesPct", 100); // grass blades: Ghost of Tsushima's rolling wind waves over foliage sway's gusts (bend + sheen travelling downwind), %
+   public static final boolean GRASS_BLADE_ANTIALIAS = bool("grassBladeAntialias", true); // grass blades: anti-aliased edges, the blade's pixel coverage blended over the ground: where the ground moves by fractions of a pixel (zoom 0.75, filtered) a thin blade fades between pixels instead of popping whole pixels on and off (a third fewer one-frame blinks on the torch-lit lawn while walking there; no change where the ground moves by whole pixels; ~3 us GPU, 2026-10-25)
+   public static final boolean GRASS_BLADE_JIGGLE = bool("grassBladeJiggle", true); // grass blades: the blades move with the ground layer by the camera's jiggle fix (fixJigglyModels, new every frame while the camera moves): by whole pixels where the chunk textures are point sampled (every zoom up to 1:1 but 0.75: the ground moves by ceil(fix - 0.5) px, measured), by the fraction elsewhere; without it the blades slid up to a pixel against the ground and their own root colour every frame while walking, the flicker over a torch-lit lawn (2026-10-25)
    public static final boolean GRASS_BLADE_DEPTH_CHECK = bool("grassBladeDepthCheck", true); // grass blades: no blade where the root is covered in the scene (a post, a trunk, a bench) or the ground is not drawn
    public static final int DEV_GRASS_VIEW = integer("devGrassView", 0); // dev: grass blades drawn in a flat debug colour (1)
    public static final int DEV_GRASS_ALTERNATE = integer("devGrassAlternate", 0); // dev: ms; grass blades switch between the A knobs and the B set (devGrassAltB, empty = off) every period (GPU section grass.gbA / .gbB)
@@ -2421,6 +2424,7 @@ public final class Config {
       GRASS_BLADES = bool("grassBlades", false);
       GRASS_BLADE_RADIUS = Math.max(2, Math.min(40, integer("grassBladeRadius", 12)));
       GRASS_BLADE_DENSITY_PCT = Math.max(10, Math.min(400, integer("grassBladeDensityPct", 100)));
+      GRASS_BLADE_TORCH_SHADOWS = bool("grassBladeTorchShadows", false);
       DEV_GROUND_VIEW = integer("devGroundView", 0);
       // ground cover (pzopt.GroundCover, pzopt.Glints)
       GLINT_MODEL = string("glintModel", "db23iso").trim().toLowerCase(java.util.Locale.ROOT);

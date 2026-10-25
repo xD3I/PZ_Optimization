@@ -6,6 +6,7 @@ import org.lwjgl.BufferUtils;
 import org.lwjgl.opengl.GL11;
 import org.lwjgl.opengl.GL12;
 import org.lwjgl.opengl.GL13;
+import org.lwjgl.opengl.GL14;
 import org.lwjgl.opengl.GL15;
 import org.lwjgl.opengl.GL20;
 import org.lwjgl.opengl.GL30;
@@ -68,6 +69,12 @@ public final class GrassBlades {
       int translucencyPct = 100;
       int aoPct = 100;
       boolean depthCheck = true;
+      boolean jiggle = true; // the camera's jiggle fix applied to the mapping (grassBladeJiggle)
+      boolean aa = true; // anti-aliased blade edges (grassBladeAntialias)
+      float jiggleScale = 1F; // dev: the jiggle fix scaled (1 = the ground layer's own shift)
+      boolean jiggleSnap = true; // dev: the whole-pixel shift where the ground is point sampled (false: the camera's fraction everywhere)
+      float aaPx = 1F; // dev: the edge filter's width in px (box filter; 1 = one pixel)
+      boolean partialTest = true; // dev: false = a partial square keeps every blade (no root-colour grass test)
       boolean tufts = true;
       int wavesPct = 100;
       boolean trails = true, cut = true, push = true, wear = true;
@@ -86,6 +93,8 @@ public final class GrassBlades {
       int devGen; // dev (rig): generation bisection 1 = empty, 2 = after the clumps, 3 = nothing kept
       int devDraw; // dev (rig): 1 = vertex shader runs, nothing rasterised; 2 = empty vertex shader
       int devStop; // dev (rig): 1 = uploads only, 2 = + generation, 0 = all
+      boolean wind = true; // dev: false = the blades ignore the wind (no sway, no waves)
+      int rootFilter; // the root colour: 0 the root pixel, 1 a 3 x 3 box round it, 2 (dev) one flat colour
 
       Opts copy() {
          Opts o = new Opts();
@@ -100,6 +109,12 @@ public final class GrassBlades {
          o.translucencyPct = translucencyPct;
          o.aoPct = aoPct;
          o.depthCheck = depthCheck;
+         o.jiggle = jiggle;
+         o.aa = aa;
+         o.aaPx = aaPx;
+         o.jiggleScale = jiggleScale;
+         o.jiggleSnap = jiggleSnap;
+         o.partialTest = partialTest;
          o.tufts = tufts;
          o.wavesPct = wavesPct;
          o.trails = trails;
@@ -122,6 +137,8 @@ public final class GrassBlades {
          o.devStop = devStop;
          o.devGen = devGen;
          o.devDraw = devDraw;
+         o.rootFilter = rootFilter;
+         o.wind = wind;
          return o;
       }
 
@@ -150,6 +167,12 @@ public final class GrassBlades {
                   case "translucency" -> translucencyPct = Integer.parseInt(v);
                   case "ao" -> aoPct = Integer.parseInt(v);
                   case "depthCheck" -> depthCheck = Boolean.parseBoolean(v);
+                  case "jiggle" -> jiggle = Boolean.parseBoolean(v);
+                  case "aa" -> aa = Boolean.parseBoolean(v);
+                  case "aaPx" -> aaPx = Float.parseFloat(v);
+                  case "jiggleScale" -> jiggleScale = Float.parseFloat(v);
+                  case "jiggleSnap" -> jiggleSnap = Boolean.parseBoolean(v);
+                  case "partialTest" -> partialTest = Boolean.parseBoolean(v);
                   case "tufts" -> tufts = Boolean.parseBoolean(v);
                   case "waves" -> wavesPct = Integer.parseInt(v);
                   case "trails" -> trails = Boolean.parseBoolean(v);
@@ -172,6 +195,8 @@ public final class GrassBlades {
                   case "devStop" -> devStop = Integer.parseInt(v);
                   case "devGen" -> devGen = Integer.parseInt(v);
                   case "devDraw" -> devDraw = Integer.parseInt(v);
+                  case "wind" -> wind = Boolean.parseBoolean(v);
+                  case "rootFilter" -> rootFilter = Integer.parseInt(v);
                   default -> Log.warn("grass blades: unknown alternation knob " + k);
                }
             } catch (RuntimeException e) {
@@ -210,6 +235,8 @@ public final class GrassBlades {
       o.translucencyPct = Config.GRASS_BLADE_TRANSLUCENCY_PCT;
       o.aoPct = Config.GRASS_BLADE_AO_PCT;
       o.depthCheck = Config.GRASS_BLADE_DEPTH_CHECK;
+      o.jiggle = Config.GRASS_BLADE_JIGGLE;
+      o.aa = Config.GRASS_BLADE_ANTIALIAS;
       o.tufts = Config.GRASS_BLADE_TUFTS;
       o.wavesPct = Config.GRASS_BLADE_WAVES_PCT;
       o.trails = Config.GRASS_BLADE_TRAILS;
@@ -400,6 +427,20 @@ public final class GrassBlades {
    }
 
    /** Game thread, FBORenderCell right after the chunk composite (and AO), before pixelLight's pass and the characters. */
+   /**
+    * Whether the chunk textures are drawn point sampled at this zoom (FBORenderChunk.renderInWorldMainThread: mag filter nearest but
+    * at zoom 0.75, min filter trilinear with mip maps unless high-res textures; FBORenderLevels.getTextureScale): then the ground
+    * moves by whole pixels.
+    */
+   static boolean groundPointSampled(float zoom) {
+      zombie.iso.fboRenderChunk.FBORenderDebugOptions d = zombie.debug.DebugOptions.instance.fboRenderChunk;
+      int scale = d.highResChunkTextures.getValue() && zoom < 0.75F ? 2 : 1;
+      if (scale * zoom <= 1.0001F) {
+         return zoom != 0.75F;
+      }
+      return !(d.mipMaps.getValue() && scale == 1);
+   }
+
    public static void afterComposite(int playerIndex) {
       boolean on = Ground.on(Ground.K_BLADES) && Overrides.enabled() && !Gpu.failed && !CoreGl.legacyMac();
       if (on != lastOn) {
@@ -410,6 +451,7 @@ public final class GrassBlades {
       if (!on) {
          return;
       }
+      PixelLight.beforeGrassBlades(); // grassBladeTorchShadows off: the torch shadow mask marched before the blades write their depth
       long t0 = System.nanoTime();
       Opts o = optsA();
       if (Config.DEV_GRASS_ALTERNATE > 0) {
@@ -440,6 +482,30 @@ public final class GrassBlades {
       Frame f = FRAMES[frameIndex++ & 3];
       f.o = o;
       f.view.capture(playerIndex);
+      // grassBladeJiggle: the game draws every chunk texture moved by the camera's jiggle fix (FBORenderChunk: fixJigglyModelsX /
+      // Y screen px, in [0, 1) while the camera moves; fixJigglyModelsSquareX + Y off its chunkDepth), new every frame; the
+      // blades' mapping (Ssr.View) has no such term. Where the chunk textures are point sampled (nearest: every zoom up to 1:1
+      // but 0.75) the ground does not move by the fraction: each pixel shows the texel under its centre, so the picture moves by
+      // whole pixels, ceil(fix - 0.5) (measured, run gb165-jlog: 98.8 % / 99.1 % of frame pairs in x / y; a continuous shift
+      // matched 43 % / 77 %). The blades take the same whole-pixel shift there and the fraction elsewhere; without it they slid up
+      // to a pixel against the ground and their own root colour every frame while walking and flickered over the whole lawn
+      if (o.jiggle && !zombie.debug.DebugOptions.instance.fboRenderChunk.combinedFbo.getValue()) {
+         zombie.iso.PlayerCamera cam = IsoCamera.cameras[playerIndex];
+         float sx = cam.fixJigglyModelsX, sy = cam.fixJigglyModelsY;
+         if (o.jiggleSnap && groundPointSampled(zoom)) {
+            sx = (float)Math.ceil(sx - 0.5F);
+            sy = (float)Math.ceil(sy - 0.5F);
+         }
+         // screen px -> squares (PlayerCamera.calculateFixForJigglyModels)
+         float jx = sx * zoom * o.jiggleScale, jy = sy * zoom * o.jiggleScale, k = 64F * Core.tileScale;
+         f.jx = (jx + 2F * jy) / k;
+         f.jy = (jx - 2F * jy) / -k;
+         f.jd = cam.fixJigglyModelsSquareX + cam.fixJigglyModelsSquareY; // the depth moves by the whole fraction (chunkDepth)
+      } else {
+         f.jx = 0F;
+         f.jy = 0F;
+         f.jd = 0F;
+      }
       int ox = f.view.ox, oy = f.view.oy;
       float cx = IsoCamera.frameState.camCharacterX, cy = IsoCamera.frameState.camCharacterY;
       int r = o.radius;
@@ -679,6 +745,7 @@ public final class GrassBlades {
       int[] squares = new int[1024];
       int n;
       float cx, cy, zoom, sunX, sunY, sunZ;
+      float jx, jy, jd; // the ground layer's shift in squares this frame (grassBladeJiggle: x, y on screen, d in depth); 0 with it off
       final float[] stamps = new float[Movers.MAX_STAMPS * 4];
       int nStamps;
       final float[] push = new float[Sway.MAX_PUSH * 4];
@@ -750,7 +817,7 @@ public final class GrassBlades {
          long t0 = System.nanoTime();
          if (gl43) {
             genProgram = Shaders.compute(GEN, "grass blades: generation");
-            drawProgram = Shaders.link(VERT, FRAG, "grass blades: draw");
+            drawProgram = Shaders.link(VERT, FRAG_AA, "grass blades: draw");
             if (genProgram == 0 || drawProgram == 0) {
                failed = true;
                return false;
@@ -790,7 +857,7 @@ public final class GrassBlades {
          if (inlineFailed) {
             return false;
          }
-         inlineProgram = Shaders.link(INLINE_VERT, FRAG.replace("#version 430", "#version 410"), "grass blades: vertex-only draw");
+         inlineProgram = Shaders.link(INLINE_VERT, FRAG_AA.replace("#version 430", "#version 410"), "grass blades: vertex-only draw");
          copyProgram = Shaders.link(ROOT_VERT, ROOT_FRAG, "grass blades: root pass");
          if (inlineProgram == 0 || copyProgram == 0) {
             inlineFailed = true;
@@ -905,6 +972,10 @@ public final class GrassBlades {
          p.targetFbo = worldFbo;
          System.arraycopy(VP, 0, p.vp, 0, 4);
          f.view.mapping(VP, p.map);
+         // the jiggle fix (see afterComposite): the ground layer moved by (jx, jy) squares, its depth too (PixelLight.mapping)
+         p.map[1] -= f.jx - f.jy;
+         p.map[3] -= f.jx + f.jy;
+         p.map[5] -= f.jd;
          p.squares = f.squares;
          p.n = f.n;
          p.ox = f.view.ox;
@@ -1087,6 +1158,7 @@ public final class GrassBlades {
          GL15.glBindBuffer(GL40.GL_DRAW_INDIRECT_BUFFER, cmdBuf);
          GL20.glUniform1i(du[13], 0);
          GL20.glUniform1f(du[14], strip ? vBig : 0F);
+         aaBlend(o);
          GL40.glDrawArraysIndirect(GL11.GL_TRIANGLE_STRIP, 0L);
          if (o.lodPx > 0) {
             GL20.glUniform4f(du[9], lodSegs, o.widthPct / 100F, o.view, o.devDraw);
@@ -1094,6 +1166,7 @@ public final class GrassBlades {
             GL20.glUniform1f(du[14], strip ? vSmall : 0F);
             GL40.glDrawArraysIndirect(GL11.GL_TRIANGLE_STRIP, 16L);
          }
+         GL11.glDisable(GL11.GL_BLEND);
          GL15.glBindBuffer(GL40.GL_DRAW_INDIRECT_BUFFER, 0);
          GL30.glBindBufferBase(GL43.GL_SHADER_STORAGE_BUFFER, 1, 0);
          GL30.glBindVertexArray(0);
@@ -1163,7 +1236,9 @@ public final class GrassBlades {
          int V = 2 * o.segments + 3;
          GL20.glUniform1i(inlineSquaresLoc, 3);
          GL20.glUniform1f(idu[14], V);
+         aaBlend(o);
          GL11.glDrawArrays(GL11.GL_TRIANGLE_STRIP, 0, n * perSquare * V);
+         GL11.glDisable(GL11.GL_BLEND);
          GL30.glBindVertexArray(0);
          GL13.glActiveTexture(GL13.GL_TEXTURE3);
          GL11.glBindTexture(GL31.GL_TEXTURE_BUFFER, 0);
@@ -1322,9 +1397,11 @@ public final class GrassBlades {
             vp[2] = rw * div;
             vp[3] = rh * div;
             minHalfW = 0.45F * div;
+            noAa = true;
             GL20.glUseProgram(drawProgram);
             drawUniforms(du, p, genOx, genOy);
             minHalfW = 0.45F;
+            noAa = false;
             vp[0] = s0;
             vp[1] = s1;
             vp[2] = s2;
@@ -1493,10 +1570,10 @@ public final class GrassBlades {
          GL20.glUniform4f(u[3], p.map[4], p.map[5], 0F, 0F);
          GL20.glUniform4f(u[4], p.vp[0], p.vp[1], p.vp[2], p.vp[3]);
          GL30.glUniform4i(u[5], p.ox, p.oy, perSquare(o), o.clumps ? 1 : 0);
-         GL20.glUniform4f(u[6], o.heightPct / 100F * zoomFade, o.widthPct / 100F, o.tufts ? 1F : 0F, 0F);
+         GL20.glUniform4f(u[6], o.heightPct / 100F * zoomFade, o.widthPct / 100F, o.tufts ? 1F : 0F, o.partialTest ? 0F : 1F);
          GL20.glUniform4f(u[7], p.cx, p.cy, o.radius, Math.max(1.5F, o.radius * 0.3F));
          GL20.glUniform1f(u[8], depthOk ? 1F : 0F);
-         GL20.glUniform4f(u[12], o.lodPx, o.lodSegments, o.devGen, 0F);
+         GL20.glUniform4f(u[12], o.lodPx, o.lodSegments, o.devGen, o.rootFilter);
          GL20.glUniform4f(u[14], div, cox, coy, 0F);
          GL13.glActiveTexture(GL13.GL_TEXTURE2);
          GL11.glBindTexture(GL11.GL_TEXTURE_2D, trails ? Trails.tex : 0);
@@ -1522,13 +1599,14 @@ public final class GrassBlades {
 
       /** The draw's uniforms; (gx, gy) the origin square the blades were generated against. */
       static float minHalfW = 0.45F; // px (the layer path draws at 1 / layerDiv: its own pixels)
+      static boolean noAa; // the layer path: no blending there, so no anti-aliased edges
 
       private static void drawUniforms(int[] u, Params p, int gx, int gy) {
          Opts o = p.o;
          GL20.glUniform4f(u[0], p.map[0], p.map[1], p.map[2], p.map[3]);
          GL20.glUniform4f(u[1], p.map[4], p.map[5], 0F, 0F);
          GL20.glUniform4f(u[2], p.vp[0], p.vp[1], p.vp[2], p.vp[3]);
-         if (p.windOn) {
+         if (p.windOn && o.wind) {
             GL20.glUniform4f(u[3], p.amp, p.lean, p.dirX, p.osc);
             GL20.glUniform4f(u[4], p.ph[0], p.ph[1], p.ph[2], p.ph[3]);
             GL20.glUniform4f(u[5], p.gustU, p.gustV, 0F, 0F);
@@ -1547,11 +1625,23 @@ public final class GrassBlades {
          GL20.glUniform4f(u[8], ou, ov, gx - p.ox, gy - p.oy);
          GL20.glUniform4f(u[9], o.segments, o.widthPct / 100F, o.view, o.devDraw);
          GL20.glUniform4f(u[10], p.sunX, p.sunY, p.sunZ, o.translucencyPct / 100F);
-         GL20.glUniform4f(u[11], o.aoPct / 100F, o.sheenPct / 100F, minHalfW, 0F);
+         GL20.glUniform4f(u[11], o.aoPct / 100F, o.sheenPct / 100F, minHalfW, o.aa && !noAa && o.drawMode <= 2 ? o.aaPx : 0F); // the mesh (3) and raster (4) paths draw without blending
          GL20.glUniform1f(u[12], p.ts);
          // the waves' phases from the run's clock in double (no float drift over a long session)
          double wt = p.now;
-         GL20.glUniform4f(u[15], p.windOn ? o.wavesPct / 100F : 0F, (float)(wt * WAVE_SPEED % (2.0 * Math.PI)), (float)(wt * 0.21 % (2.0 * Math.PI)), 0F);
+         GL20.glUniform4f(u[15], p.windOn && o.wind ? o.wavesPct / 100F : 0F, (float)(wt * WAVE_SPEED % (2.0 * Math.PI)), (float)(wt * 0.21 % (2.0 * Math.PI)), 0F);
+      }
+
+      /**
+       * grassBladeAntialias: the blades' edges carry their pixel coverage in alpha (FRAG_AA), blended over what is below; a
+       * blade under a pixel wide moving by a fraction of a pixel (the wind, the camera's jiggle fix) fades between pixels
+       * instead of jumping whole pixels on and off (the flicker over the lawn while walking, 2026-10-25)
+       */
+      private static void aaBlend(Opts o) {
+         if (o.aa) {
+            GL11.glEnable(GL11.GL_BLEND);
+            GL14.glBlendFuncSeparate(GL11.GL_SRC_ALPHA, GL11.GL_ONE_MINUS_SRC_ALPHA, GL11.GL_ZERO, GL11.GL_ONE);
+         }
       }
 
       private static void drawState() {
@@ -1945,7 +2035,15 @@ public final class GrassBlades {
       "vec3 gbFetchColor(ivec2 cp, uint lane, int sqi) { return texelFetch(uColor, ivec2(int(lane), sqi), 0).rgb; }",
       "float gbFetchDepth(ivec2 cp, uint lane, int sqi) { return texelFetch(uDepth, ivec2(int(lane), sqi), 0).r; }",
       "#else",
-      "vec3 gbFetchColor(ivec2 cp, uint lane, int sqi) { return texelFetch(uColor, cp, 0).rgb; }",
+      "vec3 gbFetchColor(ivec2 cp, uint lane, int sqi) {",
+      "   if (uLod.w == 2.0) return vec3(0.22, 0.36, 0.12);",
+      "   if (uLod.w == 1.0) {",
+      "      ivec2 hi = textureSize(uColor, 0) - 1; vec3 s = vec3(0.0);",
+      "      for (int j = -1; j <= 1; j++) for (int i = -1; i <= 1; i++) s += texelFetch(uColor, clamp(cp + ivec2(i, j), ivec2(0), hi), 0).rgb;",
+      "      return s / 9.0;",
+      "   }",
+      "   return texelFetch(uColor, cp, 0).rgb;",
+      "}",
       "float gbFetchDepth(ivec2 cp, uint lane, int sqi) { return texelFetch(uDepth, cp, 0).r; }",
       "#endif",
       "bool gbOnScreen;",
@@ -1997,7 +2095,7 @@ public final class GrassBlades {
       "         float wr = p.x + p.y;",
       "         if (w > wr + (tuft ? 1.5 : 0.35) || w < wr - 1.5) keep = false;", // covered (a post, a trunk, a bench) or no ground drawn there
       "      }",
-      "      if (partial && !tuft && !(col.g > col.b * 1.08 && col.g > col.r * 0.85)) keep = false;", // an overlay square: only over grass
+      "      if (partial && !tuft && uParams.w < 0.5 && !(col.g > col.b * 1.08 && col.g > col.r * 0.85)) keep = false;", // an overlay square: only over grass
       "   }",
       "   float phase = gbH01(seed ^ 0x3333u);",
       "   float stiff = 0.7 + 0.3 * gbH01(seed ^ 0x4444u);",
@@ -2113,7 +2211,8 @@ public final class GrassBlades {
       "   return x;",
       "}",
       // world (squares; z: height in squares, 3 to a level) -> clip
-      "float gbNear = 0.0;", // the feet push: depth toward the camera (w units) for a blade standing just in front of a character
+      "float gbNear = 0.0;",
+      "vec2 gbAA = vec2(0.0, -1.0);", // grassBladeAntialias: (signed px across the strip, the blade's half width in px; < 0: off) // the feet push: depth toward the camera (w units) for a blade standing just in front of a character
       "vec4 gbClip(vec3 q) {",
       "   float u = q.x - q.y, v = q.x + q.y - 2.0 * q.z, w = q.x + q.y + q.z * (2.0 / 3.0) + 0.03 + gbNear;",
       "   vec2 px = vec2((u - uMapA.y) / uMapA.x, (v - uMapA.w) / uMapA.z);",
@@ -2177,8 +2276,11 @@ public final class GrassBlades {
       "   float face = mix(0.35, 1.0, abs(cos(fa)));",
       "   float halfW = 0.5 * B.z * pxPerU * face * pow(it, 0.8);",
       "   if (side != 0.0) halfW = max(halfW, uShade.z);",
+      // anti-aliased edges (uShade.w px): the strip widened, the fragment covers the true width's share of its pixel
+      "   float halfG = side != 0.0 ? halfW + uShade.w : 0.0;",
+      "   gbAA = vec2(side * halfG, uShade.w > 0.0 ? halfW : -1.0);",
       "   vec4 c = gbClip(pos);",
-      "   c.xy += nrm * side * halfW / uVp.zw * 2.0;",
+      "   c.xy += nrm * side * halfG / uVp.zw * 2.0;",
       "   P = uShape.w == 1.0 ? vec4(2.0, 2.0, 2.0, 1.0) : c;",
       // shading: the painted root colour, darker toward the root, a little lighter toward the tip, sheen where the gust is
       // strong, translucent against a low sun behind it (the camera looks from +x +y)
@@ -2204,13 +2306,15 @@ public final class GrassBlades {
       "uniform int uBase;",
       "uniform float uStrip;",
       "out vec3 vCol;",
+      "out vec2 vAA;",
       DRAW_FN,
       "void main() {",
       "   int vid = gl_VertexID, inst = gl_InstanceID;",
       "   if (uStrip > 0.5) { int V = int(uStrip); inst = vid / V; vid = clamp(vid - inst * V - 1, 0, V - 3); }", // one strip: each blade's first and last vertex doubled (degenerate joins)
-      "   if (uShape.w == 2.0) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); vCol = vec3(0.0); return; }",
+      "   if (uShape.w == 2.0) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); vCol = vec3(0.0); vAA = vec2(0.0, -1.0); return; }",
       "   Blade bl = blades[uBase + inst];",
       "   gbVertex(bl.a, bl.b, vid, gl_Position, vCol);",
+      "   vAA = gbAA;",
       "}");
 
    /**
@@ -2225,6 +2329,7 @@ public final class GrassBlades {
       "uniform usamplerBuffer uSquares;",
       "uniform float uStrip;", // vertices a candidate (its strip + the two degenerate joins)
       "out vec3 vCol;",
+      "out vec2 vAA;",
       GEN_FN,
       DRAW_FN,
       "void main() {",
@@ -2235,8 +2340,9 @@ public final class GrassBlades {
       "   int sqi = cand / uOrigin.z;",
       "   uint lane = uint(cand - sqi * uOrigin.z);",
       "   vec4 A, B; bool small;",
-      "   if (uShape.w == 2.0 || !gbMake(texelFetch(uSquares, sqi).r, lane, sqi, A, B, small)) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); vCol = vec3(0.0); return; }",
+      "   if (uShape.w == 2.0 || !gbMake(texelFetch(uSquares, sqi).r, lane, sqi, A, B, small)) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); vCol = vec3(0.0); vAA = vec2(0.0, -1.0); return; }",
       "   gbVertex(A, B, vid, gl_Position, vCol);",
+      "   vAA = gbAA;",
       "}");
 
    /**
@@ -2430,6 +2536,27 @@ public final class GrassBlades {
       "in vec3 vCol;",
       "layout(location = 0) out vec4 oColor;",
       "void main() { oColor = vec4(vCol, 1.0); }");
+
+   /**
+    * The strip draws' fragment (grassBladeAntialias): alpha = the share of the pixel the blade's true width covers (a 1 px box
+    * against the interval [-half, half] across the blade); the widened strip's empty margin is discarded (no depth written).
+    */
+   static final String FRAG_AA = String.join("\n",
+      "#version 430",
+      "in vec3 vCol;",
+      "in vec2 vAA;",
+      "uniform vec4 uShade;", // w: the edge filter's width in px (shared with the vertex stage)
+      "layout(location = 0) out vec4 oColor;",
+      "void main() {",
+      "   float a = 1.0;",
+      "   if (vAA.y >= 0.0) {",
+      "      float x = abs(vAA.x);",
+      "      float fw = max(uShade.w, 0.25);",
+      "      a = clamp((min(x + 0.5 * fw, vAA.y) - max(x - 0.5 * fw, -vAA.y)) / fw, 0.0, 1.0);",
+      "      if (a < 0.1) discard;",
+      "   }",
+      "   oColor = vec4(vCol, a);",
+      "}");
 
    // ----------------------------------------------------------------------------------------------- GL helpers
 

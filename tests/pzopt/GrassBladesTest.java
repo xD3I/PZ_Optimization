@@ -53,7 +53,7 @@ public class GrassBladesTest {
 
       // no texture2D token in the Mac's programs: CoreGlsl would add pz_texture2D wrappers with bias overloads, which Apple
       // refuses in a vertex shader (gb-mac-20261024-191837)
-      for (String src : new String[] {GrassBlades.INLINE_VERT, GrassBlades.ROOT_VERT, GrassBlades.ROOT_FRAG, GrassBlades.FRAG}) {
+      for (String src : new String[] {GrassBlades.INLINE_VERT, GrassBlades.ROOT_VERT, GrassBlades.ROOT_FRAG, GrassBlades.FRAG, GrassBlades.FRAG_AA}) {
          Check.check(!src.contains("texture2D"), "no texture2D in a GL 4.1 program");
       }
 
@@ -64,9 +64,9 @@ public class GrassBladesTest {
          return;
       }
       Path mesa = Path.of("/usr/share/glvnd/egl_vendor.d/50_mesa.json");
-      String frag410 = GrassBlades.FRAG.replace("#version 430", "#version 410");
+      String frag410 = GrassBlades.FRAG_AA.replace("#version 430", "#version 410");
       String[][] programs = {
-         {"draw (compute path)", GrassBlades.VERT, GrassBlades.FRAG},
+         {"draw (compute path)", GrassBlades.VERT, GrassBlades.FRAG_AA},
          {"vertex-only draw", GrassBlades.INLINE_VERT, frag410},
          {"root pass", GrassBlades.ROOT_VERT, GrassBlades.ROOT_FRAG},
          {"layer composite", GrassBlades.RESOLVE_VERT.replace("#version 450", "#version 430"), GrassBlades.LAYER_COMPOSITE},

@@ -517,6 +517,20 @@ public final class PixelLight {
       }
    }
 
+   private static boolean shadowQueuedEarly; // game thread: this frame's shadow pass went ahead of the grass blades
+
+   /**
+    * Game thread, GrassBlades.afterComposite before the blades are queued: with grassBladeTorchShadows off the torch shadow
+    * mask is marched in the scene depth before the blades write theirs, so blades cast no torch shadow (they still take the
+    * shadow of fences and walls through their root colour). Pass mode keeps the old order (its pass lights the blades too).
+    */
+   static void beforeGrassBlades() {
+      if (!Config.GRASS_BLADE_TORCH_SHADOWS && ACTIVE && shadowLight >= 0 && pendingPass == null) {
+         SpriteRenderer.instance.drawGeneric(SHADOW_PASS);
+         shadowQueuedEarly = true;
+      }
+   }
+
    /** Game thread, right after FBORenderChunkManager.endFrame(): the pass (pass mode) and the dev dumps of the static world. */
    public static void afterComposite(int playerIndex) {
       if (!Config.DEV_PPL_DUMP_AT.isEmpty()) {
@@ -529,9 +543,10 @@ public final class PixelLight {
       if (Config.DEV_PPL_TIMING) {
          SpriteRenderer.instance.drawGeneric(COMPOSITE_END);
       }
-      if (ACTIVE && shadowLight >= 0) {
+      if (ACTIVE && shadowLight >= 0 && !shadowQueuedEarly) {
          SpriteRenderer.instance.drawGeneric(SHADOW_PASS); // the next frame's composite reads it (reprojected)
       }
+      shadowQueuedEarly = false;
       if (pendingLitDump != null) {
          Dump d = new Dump();
          d.tag = pendingLitDump + "-lit";
