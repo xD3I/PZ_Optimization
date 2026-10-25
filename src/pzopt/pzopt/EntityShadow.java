@@ -2197,8 +2197,7 @@ public final class EntityShadow {
          org.lwjgl.opengl.GL42.glMemoryBarrier(org.lwjgl.opengl.GL42.GL_TEXTURE_FETCH_BARRIER_BIT | org.lwjgl.opengl.GL43.GL_SHADER_STORAGE_BARRIER_BIT);
          org.lwjgl.opengl.GL42.glBindImageTexture(0, 0, 0, true, 0, org.lwjgl.opengl.GL15.GL_WRITE_ONLY, org.lwjgl.opengl.GL30.GL_R8);
          org.lwjgl.opengl.GL15.glBindBuffer(org.lwjgl.opengl.GL43.GL_SHADER_STORAGE_BUFFER, 0);
-         GL20.glUseProgram(0);
-         zombie.core.ShaderHelper.forgetCurrentlyBound();
+         DefaultProgram.restore(); // the default program, not 0 (sprites drawn after it inherit the bound program)
          dynDispatches++;
          dynJobsRun += count;
       }
@@ -2323,8 +2322,7 @@ public final class EntityShadow {
          org.lwjgl.opengl.GL42.glMemoryBarrier(org.lwjgl.opengl.GL42.GL_TEXTURE_FETCH_BARRIER_BIT | org.lwjgl.opengl.GL43.GL_SHADER_STORAGE_BARRIER_BIT | org.lwjgl.opengl.GL42.GL_BUFFER_UPDATE_BARRIER_BIT);
          org.lwjgl.opengl.GL42.glBindImageTexture(0, 0, 0, true, 0, org.lwjgl.opengl.GL15.GL_WRITE_ONLY, org.lwjgl.opengl.GL30.GL_R8);
          org.lwjgl.opengl.GL15.glBindBuffer(org.lwjgl.opengl.GL43.GL_SHADER_STORAGE_BUFFER, 0);
-         GL20.glUseProgram(0);
-         zombie.core.ShaderHelper.forgetCurrentlyBound();
+         DefaultProgram.restore(); // the default program, not 0 (sprites drawn after it inherit the bound program)
          dispatches++;
          jobsRun += count;
       }

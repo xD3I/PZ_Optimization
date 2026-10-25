@@ -294,6 +294,8 @@ public final class FBORenderCell {
          }
       }
 
+      if (pzopt.Config.DEV_STENCIL_PROBE) this.pzoptStencilProbe("a0-beforeMask"); // pzopt: devStencilProbe
+      pzopt.DefaultProgram.beforeStencilMask(); // pzopt: stencilMaskProgram, the mask quad draws with the game's default program whatever ran before it
       this.cell.drawStencilMask();
       if (pzopt.Config.DEV_STENCIL_PROBE) this.pzoptStencilProbe("a-afterMask"); // pzopt: devStencilProbe
       long lastPlayerWindowPeekingRoomId = this.cell.playerWindowPeekingRoomId[playerIndex];

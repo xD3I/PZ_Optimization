@@ -410,6 +410,7 @@ public final class GrassBlades {
       if (!on) {
          return;
       }
+      PixelLight.beforeGrassBlades(); // grassBladeTorchShadows off: the torch shadow mask marched before the blades write their depth
       long t0 = System.nanoTime();
       Opts o = optsA();
       if (Config.DEV_GRASS_ALTERNATE > 0) {

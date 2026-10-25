@@ -1572,6 +1572,7 @@ public final class GroundState {
             }
             GL15.glBindBuffer(GL21.GL_PIXEL_UNPACK_BUFFER, 0);
             GL11.glBindTexture(GL11.GL_TEXTURE_2D, 0);
+            zombie.core.textures.Texture.lastTextureID = -1; // (the sprite renderer's bind cache: unit 0 holds nothing it knows now)
             uploads += f.nLoad;
          }
          Rules r = f.rules;
@@ -1627,8 +1628,7 @@ public final class GroundState {
             GL30.glBindBufferBase(GL43.GL_SHADER_STORAGE_BUFFER, i, 0);
          }
          GL15.glBindBuffer(GL43.GL_SHADER_STORAGE_BUFFER, 0);
-         GL20.glUseProgram(0);
-         zombie.core.ShaderHelper.forgetCurrentlyBound();
+         DefaultProgram.restore(); // the game's default program, not 0: the sprite batches after it (the cutaway mask) draw with what is bound
          GpuSections.markNow(Ground.section("ground.state"), true);
       }
    }
@@ -1682,11 +1682,10 @@ public final class GroundState {
             GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, zombie.core.textures.TextureFBO.lastID); // (the game binds GL_FRAMEBUFFER: read = draw)
          }
          if (mode == RB_PACK) {
-            GL20.glUseProgram(0);
             GL42.glBindImageTexture(0, 0, 0, false, 0, GL15.GL_READ_ONLY, GL11.GL_RGBA8);
             GL30.glBindBufferBase(GL43.GL_SHADER_STORAGE_BUFFER, 1, 0);
             GL30.glBindBufferBase(GL43.GL_SHADER_STORAGE_BUFFER, 2, 0);
-            zombie.core.ShaderHelper.forgetCurrentlyBound();
+            DefaultProgram.restore();
          }
          GpuSections.markNow(sec, true);
       }
