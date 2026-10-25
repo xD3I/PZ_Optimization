@@ -3,6 +3,7 @@ package pzopt;
 import zombie.iso.IsoCell;
 import zombie.iso.IsoGridSquare;
 import zombie.iso.IsoLightSource;
+import zombie.iso.IsoRoomLight;
 import zombie.iso.LosUtil;
 import zombie.iso.objects.IsoLightSwitch;
 
@@ -15,6 +16,9 @@ import zombie.iso.objects.IsoLightSwitch;
  * a clear line from the light's square (LosUtil.lineClear: walls and closed doors block, windows let it through).
  * The shadow's strength is the light's share at the receiver (share(): a quadratic fade of the native's linear lamp
  * field, saturating): dark and short under the lamp, long and faint towards the edge of its pool.
+ * With sunShadowRoomLights the rooms' ceiling lights too (IsoCell.roomLights, kept apart from the lamp list: one IsoRoomLight a
+ * room rectangle, lit evenly by the native): each rectangle an area light at one point under the ceiling (roomPoints: two or
+ * three along a hallway), a flat share over the room (roomShare), a wide penumbra; it shades only casters in its own room.
  */
 final class StaticLightShadow {
    /** The light kind in CapsuleShadow's lK: a point light of the static world (1 a torch, 2 a vehicle light). */
@@ -112,6 +116,117 @@ final class StaticLightShadow {
       return l != null && l.active && l.radius > 0 && l.life == -1 && !(l.localToBuilding != null && l.switches.isEmpty());
    }
 
+   // ---- room ceiling lights (sunShadowRoomLights) ----
+
+   /** The light kind in CapsuleShadow's lK: a room's ceiling light (an area light: no cone, a flat share, a big lamp size). */
+   static final float ROOM_KIND = 4F;
+   /** A ceiling light's height above its level's floor, squares: the fixture just under the ceiling (a level is 2.449). */
+   static final float CEIL_H = 2.3F;
+   /** The share of the pixel's light a ceiling light's shadow takes away inside its pool (the room is lit evenly: a fill light, softer than a lamp's 1; 0.7 left the shadows on the walls too dark, ceil-probe3). */
+   static final float ROOM_SHARE = 0.55F;
+   /** The share fades out over the last 1 / ROOM_FADE of the point's reach. */
+   static final float ROOM_FADE = 3F;
+   /** At most this many points along a room's long side (a hallway's fixtures). */
+   static final int ROOM_POINTS = 3;
+
+   /** roomPoints for a one-rectangle room. */
+   static int roomPoints(int x, int y, int w, int h, float[] out) {
+      return roomPoints(new int[] {x, y, w, h}, 1, out);
+   }
+
+   /**
+    * A room's ceiling fixtures (the game lights each of its RoomDef rectangles evenly, one IsoRoomLight a rectangle, all
+    * switched together; the rectangles are only a decomposition of the room's floor, so the fixtures follow the room, not
+    * them): one at the room's area centroid, or, along a long thin room (a hallway, a long shop), k evenly spaced over the
+    * long side of its bounding box, k = the long side over 1.5 x the short one (at least 4 squares a cell), at most
+    * ROOM_POINTS; each point then moved into the room (half a square in from its walls: an L-shaped room's centroid can
+    * lie outside it). {@code rects}: x, y, w, h per rectangle, n of them. Into out[3 i ..]: x, y (world, square units) and
+    * the point's reach (its cell's half diagonal + 2 squares: full share over the cell, faded out past the walls). Returns
+    * k. Pure.
+    */
+   static int roomPoints(int[] rects, int n, float[] out) {
+      int x0 = Integer.MAX_VALUE, y0 = Integer.MAX_VALUE, x1 = Integer.MIN_VALUE, y1 = Integer.MIN_VALUE;
+      double ax = 0.0, ay = 0.0, area = 0.0;
+      for (int i = 0; i < n; i++) {
+         int x = rects[i * 4], y = rects[i * 4 + 1], w = Math.max(1, rects[i * 4 + 2]), h = Math.max(1, rects[i * 4 + 3]);
+         x0 = Math.min(x0, x);
+         y0 = Math.min(y0, y);
+         x1 = Math.max(x1, x + w);
+         y1 = Math.max(y1, y + h);
+         ax += (double)w * h * (x + 0.5 * w);
+         ay += (double)w * h * (y + 0.5 * h);
+         area += (double)w * h;
+      }
+      if (n <= 0) {
+         return 0;
+      }
+      float gx = (float)(ax / area), gy = (float)(ay / area);
+      int w = x1 - x0, h = y1 - y0;
+      int lng = Math.max(w, h), sht = Math.min(w, h);
+      int k = Math.max(1, Math.min(ROOM_POINTS, Math.round(lng / Math.max(1.5F * sht, 4F))));
+      float cw = w >= h ? (float)w / k : w, ch = w >= h ? h : (float)h / k;
+      float reach = Math.min(14F, 0.5F * (float)Math.sqrt(cw * cw + ch * ch) + 2F);
+      for (int i = 0; i < k; i++) {
+         float px = k == 1 ? gx : w >= h ? x0 + cw * (i + 0.5F) : gx;
+         float py = k == 1 ? gy : w >= h ? gy : y0 + ch * (i + 0.5F);
+         // into the room: the nearest point of its rectangles, each half a square in from its edges
+         float bx = px, by = py, bd = Float.MAX_VALUE;
+         for (int j = 0; j < n; j++) {
+            float rx = rects[j * 4], ry = rects[j * 4 + 1], rw = Math.max(1, rects[j * 4 + 2]), rh = Math.max(1, rects[j * 4 + 3]);
+            float qx = Math.max(rx + Math.min(0.5F, rw * 0.5F), Math.min(rx + rw - Math.min(0.5F, rw * 0.5F), px));
+            float qy = Math.max(ry + Math.min(0.5F, rh * 0.5F), Math.min(ry + rh - Math.min(0.5F, rh * 0.5F), py));
+            float d = (qx - px) * (qx - px) + (qy - py) * (qy - py);
+            if (d < bd) {
+               bd = d;
+               bx = qx;
+               by = qy;
+            }
+         }
+         out[i * 3] = bx;
+         out[i * 3 + 1] = by;
+         out[i * 3 + 2] = reach;
+      }
+      return k;
+   }
+
+   /** A ceiling light's share of a pixel d squares from its point (the shader's torch(), kind 4): flat, fading at the reach. */
+   static float roomShare(float d, float reach) {
+      if (reach <= 0F || d >= reach) {
+         return 0F;
+      }
+      return ROOM_SHARE * Math.min(1F, (1F - Math.max(0F, d) / reach) * ROOM_FADE);
+   }
+
+   /** Is the room light on as the native has it (LightingJNI's room light pass: the switch, and power: grid or a powered switch)? */
+   static boolean roomOn(IsoRoomLight l) {
+      return l != null && l.id != 0 && l.activeJni && l.room != null && l.room.def != null;
+   }
+
+   /**
+    * reach() for a room's ceiling light point (px, py: world) on square (x, y, z): only a caster inside its own room (same
+    * building, same level) and with a clear line from the point's square; then how far its shadow goes before the first wall,
+    * closed door or room boundary past the caster (the room's own walls: wallPast). Game thread, cached as reach().
+    */
+   static float roomReach(IsoCell cell, IsoRoomLight l, float px, float py, float radius, int x, int y, int z) {
+      if (l.z != z) {
+         return NONE;
+      }
+      IsoGridSquare sq = cell.getGridSquare(x, y, z);
+      if (sq == null || sq.getRoom() != l.room) {
+         return NONE;
+      }
+      return line(cell, (int)Math.floor(px), (int)Math.floor(py), px, py, x, y, z, radius, 2L);
+   }
+
+   /** dev: a room light (its room's name and rectangle). */
+   static String describe(IsoRoomLight l) {
+      if (l.room == null || l.room.def == null) {
+         return "room:?";
+      }
+      zombie.iso.RoomDef d = l.room.def;
+      return "room:" + d.name + " " + d.getX() + "," + d.getY() + "-" + d.getX2() + "," + d.getY2() + " (" + d.rects.size() + " rects)";
+   }
+
    // the light -> caster square answers: open addressing, the key packs both squares, the value the frame it was asked and
    // the answer (bit 0)
    private static final int SLOTS = 8192;
@@ -161,12 +276,21 @@ final class StaticLightShadow {
             return NONE; // a street lamp shades who stands outdoors (indoors the room's own light rules: max of the lights)
          }
       }
-      int dx = x - l.x, dy = y - l.y;
+      return line(cell, l.x, l.y, l.x + 0.5F, l.y + 0.5F, x, y, z, Math.min(l.radius, 20), (long)(l.z - z & 1));
+   }
+
+   /**
+    * The cached part of reach() / roomReach(): a clear line from the light's square (lx, ly) to the caster's (x, y) on the
+    * caster's level, then the first wall past the caster within {@code radius} along the ray from the light's point (px, py)
+    * (wallPast). {@code flags} go into the key (bit 0: a street lamp's head a level up; bit 1: a room light's point).
+    */
+   private static float line(IsoCell cell, int lx, int ly, float px, float py, int x, int y, int z, float radius, long flags) {
+      int dx = x - lx, dy = y - ly;
       if (Math.abs(dx) > 120 || Math.abs(dy) > 120) {
          return NONE;
       }
-      long key = ((long)(l.x & 0xFFFF)) | ((long)(l.y & 0xFFFF) << 16) | ((long)((dx + 128) & 0xFF) << 32) | ((long)((dy + 128) & 0xFF) << 40)
-         | ((long)((z + 64) & 0x7F) << 48) | ((long)(l.z - z & 1) << 55) | (1L << 62);
+      long key = ((long)(lx & 0xFFFF)) | ((long)(ly & 0xFFFF) << 16) | ((long)((dx + 128) & 0xFF) << 32) | ((long)((dy + 128) & 0xFF) << 40)
+         | ((long)((z + 64) & 0x7F) << 48) | ((flags & 3L) << 55) | (1L << 62);
       int h = (int)((key * 0x9E3779B97F4A7C15L) >>> 51) & (SLOTS - 1);
       int free = -1;
       for (int p = 0; p < 8; p++) {
@@ -191,9 +315,9 @@ final class StaticLightShadow {
       asked++;
       losTests++;
       float r = NONE;
-      LosUtil.TestResults t = l.x == x && l.y == y ? LosUtil.TestResults.Clear : LosUtil.lineClear(cell, l.x, l.y, z, x, y, z, false); // on the caster's level (a head tile's level has no floor to walk)
+      LosUtil.TestResults t = lx == x && ly == y ? LosUtil.TestResults.Clear : LosUtil.lineClear(cell, lx, ly, z, x, y, z, false); // on the caster's level (a head tile's level has no floor to walk)
       if (t != LosUtil.TestResults.Blocked && t != LosUtil.TestResults.ClearThroughClosedDoor) {
-         r = wallPast(cell, l.x + 0.5F, l.y + 0.5F, x, y, z, Math.min(l.radius, 20));
+         r = wallPast(cell, px, py, x, y, z, radius);
       }
       if (free < 0) {
          free = h; // the probe run is full: take its first slot

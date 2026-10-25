@@ -64,9 +64,15 @@ public final class CapsuleShadow {
    private static final int MAX_LIGHTS = 8; // the frame's lights: torches / headlights first (TORCH_SLOTS at most), then static lights (sunShadowStaticLights)
    private static final int TORCH_SLOTS = 4;
    private static final float POINT_LAMP_SIZE = 0.3F; // a static lamp's size (squares): the penumbra's growth with the distance
+   private static final float CEIL_LAMP_SIZE = 1.0F; // a room's ceiling light (sunShadowRoomLights): an area light (the native lights the whole room from it), a wide penumbra
    private static final float[] LIGHT_SCORE = new float[MAX_LIGHTS];
-   private static final float[] STATIC_ORDER = new float[64];
-   private static final zombie.iso.IsoLightSource[] STATIC_CAND = new zombie.iso.IsoLightSource[64];
+   private static final float[] STATIC_ORDER = new float[96];
+   private static final zombie.iso.IsoLightSource[] STATIC_CAND = new zombie.iso.IsoLightSource[96];
+   private static final zombie.iso.IsoRoomLight[] STATIC_ROOM = new zombie.iso.IsoRoomLight[96]; // a candidate room light point (STATIC_CAND null)
+   private static final float[] STATIC_PT = new float[96 * 3]; // its point: x, y, reach
+   private static final float[] ROOM_PTS = new float[StaticLightShadow.ROOM_POINTS * 3];
+   private static final int[] ROOM_RECTS = new int[32 * 4]; // a room's rectangles (x, y, w, h)
+   private static final java.util.IdentityHashMap<Object, Boolean> ROOMS_SEEN = new java.util.IdentityHashMap<>(); // gatherStatic: rooms listed this frame
    private static final float[] STATIC_SHARE = new float[MAX_LIGHTS];
    private static final float[] STATIC_LIM = new float[MAX_LIGHTS];
    private static final int[] STATIC_PICK = new int[2];
@@ -796,7 +802,9 @@ public final class CapsuleShadow {
    /**
     * sunShadowStaticLights: the static lights that are on (IsoCell's lamp list: street lamps, lamps, wall lights, fires) near
     * the camera into slots n.. (nearest pool first: the one the camera stands in leads), each a point light (kind 3, no
-    * cone) at its fixture's height. Which casters each one shades is decided per caster (append: staticPick).
+    * cone) at its fixture's height; with sunShadowRoomLights the rooms' ceiling lights that are on too, ranked with them
+    * (kind 4: each lit room's fixture point(s) under the ceiling, StaticLightShadow.roomPoints). Which casters each one
+    * shades is decided per caster (append: staticPick).
     */
    private static int gatherStatic(Frame f, int n) {
       zombie.iso.IsoCell cell = zombie.iso.IsoWorld.instance == null ? null : zombie.iso.IsoWorld.instance.currentCell;
@@ -807,7 +815,7 @@ public final class CapsuleShadow {
       float cx = IsoCamera.frameState.camCharacterX, cy = IsoCamera.frameState.camCharacterY;
       float view = (f.screenW + 2.0F * f.screenH) * f.zoom / (64.0F * f.ts) + 4.0F;
       int nc = 0;
-      for (int i = 0; i < list.size() && nc < STATIC_CAND.length; i++) {
+      for (int i = 0; i < list.size(); i++) {
          zombie.iso.IsoLightSource l = list.get(i);
          if (!StaticLightShadow.usable(l)) {
             continue;
@@ -817,8 +825,58 @@ public final class CapsuleShadow {
          if (Math.abs(dx) > view + r || Math.abs(dy) > view + r) {
             continue;
          }
-         STATIC_ORDER[nc] = StaticLightShadow.order(dx, dy, r);
-         STATIC_CAND[nc++] = l;
+         int at = staticSlot(nc, StaticLightShadow.order(dx, dy, r));
+         if (at >= 0) {
+            STATIC_ROOM[at] = null;
+            STATIC_CAND[at] = l;
+            nc = Math.max(nc, at + 1);
+         }
+      }
+      int roomsOn = 0;
+      if (Config.SUN_SHADOW_ROOM_LIGHTS) {
+         // sunShadowRoomLights: the ceiling lights that are on, each room rectangle's fixture point(s) (StaticLightShadow.roomPoints)
+         java.util.ArrayList<zombie.iso.IsoRoomLight> rooms = cell.roomLights;
+         int camZ = (int)Math.floor(IsoCamera.frameState.camCharacterZ);
+         ROOMS_SEEN.clear();
+         for (int i = 0; i < rooms.size(); i++) {
+            zombie.iso.IsoRoomLight rl = rooms.get(i);
+            if (!StaticLightShadow.roomOn(rl) || rl.x - cx > view || cx - (rl.x + rl.width) > view || rl.y - cy > view || cy - (rl.y + rl.height) > view
+               || ROOMS_SEEN.put(rl.room, Boolean.TRUE) != null) {
+               continue; // off, out of view, or its room listed already (one light a rectangle, switched together)
+            }
+            roomsOn++;
+            java.util.ArrayList<zombie.iso.RoomDef.RoomRect> rr = rl.room.def.rects;
+            int nr = Math.min(rr.size(), ROOM_RECTS.length / 4);
+            for (int j = 0; j < nr; j++) {
+               zombie.iso.RoomDef.RoomRect q = rr.get(j);
+               ROOM_RECTS[j * 4] = q.x;
+               ROOM_RECTS[j * 4 + 1] = q.y;
+               ROOM_RECTS[j * 4 + 2] = q.w;
+               ROOM_RECTS[j * 4 + 3] = q.h;
+            }
+            if (nr == 0) {
+               ROOM_RECTS[0] = rl.x;
+               ROOM_RECTS[1] = rl.y;
+               ROOM_RECTS[2] = rl.width;
+               ROOM_RECTS[3] = rl.height;
+               nr = 1;
+            }
+            int k = StaticLightShadow.roomPoints(ROOM_RECTS, nr, ROOM_PTS);
+            float zPen = 8F * Math.abs(rl.z - camZ); // the camera's floor first (a room on another floor shades only who stands there)
+            for (int p = 0; p < k; p++) {
+               float px = ROOM_PTS[p * 3], py = ROOM_PTS[p * 3 + 1], r = ROOM_PTS[p * 3 + 2];
+               int at = staticSlot(nc, StaticLightShadow.order(px - cx, py - cy, r) + zPen);
+               if (at >= 0) {
+                  STATIC_PT[at * 3] = px;
+                  STATIC_PT[at * 3 + 1] = py;
+                  STATIC_PT[at * 3 + 2] = r;
+                  STATIC_ROOM[at] = rl;
+                  STATIC_CAND[at] = null;
+                  nc = Math.max(nc, at + 1);
+               }
+            }
+         }
+         ROOMS_SEEN.clear();
       }
       while (n < MAX_LIGHTS && nc > 0) { // nearest pool first (a selection over a handful)
          int best = 0;
@@ -828,26 +886,48 @@ public final class CapsuleShadow {
             }
          }
          zombie.iso.IsoLightSource l = STATIC_CAND[best];
-         STATIC_ORDER[best] = STATIC_ORDER[--nc];
-         STATIC_CAND[best] = STATIC_CAND[nc];
+         zombie.iso.IsoRoomLight rl = STATIC_ROOM[best];
          int k = n * 4;
-         f.lA[k] = l.x + 0.5F - f.ox;
-         f.lA[k + 1] = l.y + 0.5F - f.oy;
-         f.lA[k + 2] = l.z * METRIC_Z + StaticLightShadow.height(l);
-         f.lA[k + 3] = Math.max(1.0F, Math.min(l.radius, 20));
          f.lB[k] = 0F;
          f.lB[k + 1] = 0F;
          f.lB[k + 2] = -2.0F; // no cone
-         f.lB[k + 3] = StaticLightShadow.strength(l.r, l.g, l.b);
-         f.lK[n] = StaticLightShadow.KIND;
          f.lSrc[n] = l;
+         f.lRoom[n] = rl;
+         if (rl != null) {
+            // a room's ceiling light (kind 4): its fixture point just under the ceiling, a flat share (StaticLightShadow.roomShare)
+            f.lA[k] = STATIC_PT[best * 3] - f.ox;
+            f.lA[k + 1] = STATIC_PT[best * 3 + 1] - f.oy;
+            f.lA[k + 2] = rl.z * METRIC_Z + StaticLightShadow.CEIL_H;
+            f.lA[k + 3] = STATIC_PT[best * 3 + 2];
+            f.lB[k + 3] = StaticLightShadow.ROOM_SHARE;
+            f.lK[n] = StaticLightShadow.ROOM_KIND;
+         } else {
+            f.lA[k] = l.x + 0.5F - f.ox;
+            f.lA[k + 1] = l.y + 0.5F - f.oy;
+            f.lA[k + 2] = l.z * METRIC_Z + StaticLightShadow.height(l);
+            f.lA[k + 3] = Math.max(1.0F, Math.min(l.radius, 20));
+            f.lB[k + 3] = StaticLightShadow.strength(l.r, l.g, l.b);
+            f.lK[n] = StaticLightShadow.KIND;
+         }
+         STATIC_ORDER[best] = STATIC_ORDER[--nc];
+         STATIC_CAND[best] = STATIC_CAND[nc];
+         STATIC_ROOM[best] = STATIC_ROOM[nc];
+         System.arraycopy(STATIC_PT, nc * 3, STATIC_PT, best * 3, 3);
          n++;
       }
       java.util.Arrays.fill(STATIC_CAND, 0, STATIC_CAND.length, null);
+      java.util.Arrays.fill(STATIC_ROOM, 0, STATIC_ROOM.length, null);
       if (Config.DEV_STATIC_LIGHT_LOG > 0 && ++devStaticN % Config.DEV_STATIC_LIGHT_LOG == 0) {
-         StringBuilder sb = new StringBuilder("capsule shadows: dev static lights (camera " + (int)cx + "," + (int)cy + ", candidates in view " + list.size() + " listed, torches " + f.nt + "):");
+         StringBuilder sb = new StringBuilder("capsule shadows: dev static lights (camera " + (int)cx + "," + (int)cy + ", candidates in view " + list.size() + " listed, " + roomsOn + " room lights on in view of "
+            + cell.roomLights.size() + ", torches " + f.nt + "):");
          for (int l = f.nt; l < n; l++) {
             zombie.iso.IsoLightSource src = f.lSrc[l];
+            if (src == null) {
+               zombie.iso.IsoRoomLight rl = f.lRoom[l];
+               sb.append(String.format(java.util.Locale.ROOT, " [%.1f,%.1f,%d r %.1f %s]", f.lA[l * 4] + f.ox, f.lA[l * 4 + 1] + f.oy, rl == null ? -1 : rl.z, f.lA[l * 4 + 3],
+                  rl == null ? "?" : StaticLightShadow.describe(rl)));
+               continue;
+            }
             sb.append(String.format(java.util.Locale.ROOT, " [%d,%d,%d r %d rgb %.2f,%.2f,%.2f h %.2f %s]", src.x, src.y, src.z, src.radius, src.r, src.g, src.b, StaticLightShadow.height(src),
                StaticLightShadow.describe(src)));
          }
@@ -860,9 +940,71 @@ public final class CapsuleShadow {
                shown++;
             }
          }
+         if (devStaticN == Config.DEV_STATIC_LIGHT_LOG) {
+            // the first time: the rooms round the camera on its floor (where to pin the rig's zombies), a letter a room, '.' none,
+            // '*' a lit room's fixture point; rows north to south, columns west to east
+            int camZ = (int)Math.floor(IsoCamera.frameState.camCharacterZ), x0 = (int)cx - 8, y0 = (int)cy - 8;
+            java.util.ArrayList<Object> seen = new java.util.ArrayList<>();
+            StringBuilder g = new StringBuilder("capsule shadows: dev rooms round " + x0 + "," + y0 + " (17 x 17, z " + camZ + "):");
+            for (int y = y0; y <= y0 + 16; y++) {
+               g.append("\n  ").append(y).append(' ');
+               for (int x = x0; x <= x0 + 16; x++) {
+                  zombie.iso.IsoGridSquare q = cell.getGridSquare(x, y, camZ);
+                  zombie.iso.areas.IsoRoom rm = q == null ? null : q.getRoom();
+                  boolean fix = false;
+                  for (int l = f.nt; l < n; l++) {
+                     fix |= f.lRoom[l] != null && f.lRoom[l].z == camZ && (int)Math.floor(f.lA[l * 4] + f.ox) == x && (int)Math.floor(f.lA[l * 4 + 1] + f.oy) == y;
+                  }
+                  if (rm != null && !seen.contains(rm)) {
+                     seen.add(rm);
+                  }
+                  g.append(fix ? '*' : rm == null ? '.' : (char)('A' + seen.indexOf(rm) % 26));
+               }
+            }
+            g.append("\n  rooms:");
+            for (int i = 0; i < seen.size(); i++) {
+               zombie.iso.areas.IsoRoom rm = (zombie.iso.areas.IsoRoom)seen.get(i);
+               boolean lit = !rm.roomLights.isEmpty() && StaticLightShadow.roomOn(rm.roomLights.get(0));
+               g.append(' ').append((char)('A' + i % 26)).append('=').append(rm.def == null ? "?" : rm.def.name).append(lit ? "(lit)" : "");
+            }
+            Log.info(g.toString());
+         }
+         if (Config.SUN_SHADOW_ROOM_LIGHTS) {
+            sb.append(" | lit rooms on the camera's floor:");
+            shown = 0;
+            int camZ = (int)Math.floor(IsoCamera.frameState.camCharacterZ);
+            for (int i = 0; i < cell.roomLights.size() && shown < 16; i++) { // where to stand (the rigs)
+               zombie.iso.IsoRoomLight rl = cell.roomLights.get(i);
+               if (StaticLightShadow.roomOn(rl) && rl.z == camZ && rl.room.roomLights.indexOf(rl) == 0 && Math.abs(rl.x - cx) < 30 && Math.abs(rl.y - cy) < 30) {
+                  sb.append(' ').append(StaticLightShadow.describe(rl)).append(';');
+                  shown++;
+               }
+            }
+         }
          Log.info(sb.toString());
       }
       return n;
+   }
+
+   /**
+    * gatherStatic: where a candidate of this order goes among the nc listed (a new one while there is room, else the place of
+    * the farthest one when it is nearer, else -1); its order is written there.
+    */
+   private static int staticSlot(int nc, float order) {
+      int at = nc;
+      if (nc >= STATIC_ORDER.length) {
+         at = 0;
+         for (int i = 1; i < nc; i++) {
+            if (STATIC_ORDER[i] > STATIC_ORDER[at]) {
+               at = i;
+            }
+         }
+         if (STATIC_ORDER[at] <= order) {
+            return -1;
+         }
+      }
+      STATIC_ORDER[at] = order;
+      return at;
    }
 
    /**
@@ -883,9 +1025,13 @@ public final class CapsuleShadow {
          int l = f.nt + i;
          float dx = mx - f.lA[l * 4], dy = my - f.lA[l * 4 + 1];
          float dl = (float)Math.sqrt(dx * dx + dy * dy), reach = f.lA[l * 4 + 3];
-         float sh = dl > reach + r ? 0F : StaticLightShadow.share(Math.max(0F, dl - r), reach, f.lB[l * 4 + 3]);
+         zombie.iso.IsoRoomLight rl = f.lRoom[l];
+         float sh = dl > reach + r ? 0F
+            : rl != null ? StaticLightShadow.roomShare(Math.max(0F, dl - r), reach) * (1F - 0.05F * dl / reach) // (the nearer fixture first on a tie)
+            : StaticLightShadow.share(Math.max(0F, dl - r), reach, f.lB[l * 4 + 3]);
          if (sh > 0.02F) {
-            float lim = StaticLightShadow.reach(cell, f.lSrc[l], sx, sy, sz);
+            float lim = rl != null ? StaticLightShadow.roomReach(cell, rl, f.lA[l * 4] + f.ox, f.lA[l * 4 + 1] + f.oy, reach, sx, sy, sz)
+               : StaticLightShadow.reach(cell, f.lSrc[l], sx, sy, sz);
             if (lim < 0F) {
                sh = 0F;
             }
@@ -1583,6 +1729,7 @@ public final class CapsuleShadow {
       final float[] lK = new float[MAX_LIGHTS]; // 1 a handheld torch, 2 a vehicle light, 3 a static point light (StaticLightShadow)
       int nt; // the torches / headlights among the lights (slots 0..nt-1); the static lights follow
       final zombie.iso.IsoLightSource[] lSrc = new zombie.iso.IsoLightSource[MAX_LIGHTS]; // a static light's source (game thread)
+      final zombie.iso.IsoRoomLight[] lRoom = new zombie.iso.IsoRoomLight[MAX_LIGHTS]; // or its room light (sunShadowRoomLights; lSrc null)
       final byte[] lsel = new byte[MAX * 2]; // per caster: its static lights (frame slots, strongest first, -1 none)
       final float[] llim = new float[MAX * 2]; // and how far from each its shadow may reach (the first wall past the caster)
       float lightStrength;
@@ -2391,7 +2538,7 @@ public final class CapsuleShadow {
       "uniform vec4 vp;",
       "uniform vec4 lA[" + MAX_LIGHTS + "];", // x, y (relative to the origin square), z (metric), reach
       "uniform vec4 lB[" + MAX_LIGHTS + "];", // direction x, y, cone cosine (-2: none), strength
-      "uniform float lK[" + MAX_LIGHTS + "];", // 1 a handheld torch, 2 a vehicle light, 3 a static point light
+      "uniform float lK[" + MAX_LIGHTS + "];", // 1 a handheld torch, 2 a vehicle light, 3 a static point light, 4 a room's ceiling light
       "uniform int nl;",
       "uniform float spread;",
       "uniform sampler2D Pairs;", // instance -> (caster, light, its lamp view or -1, the shadow's end: distance from the light)
@@ -2530,6 +2677,8 @@ public final class CapsuleShadow {
       "   float d = length(v);",
       "   float x = clamp(1.0 - d / a.w, 0.0, 1.0);",
       // a static point light (sunShadowStaticLights): a quadratic fade of the native's lamp field, saturating (StaticLightShadow.share)
+      // a room's ceiling light (sunShadowRoomLights): the room is lit evenly, the share flat, fading out at the point's reach (StaticLightShadow.roomShare)
+      "   if (kind > 3.5) return b.w * min(1.0, x * " + StaticLightShadow.ROOM_FADE + ");",
       "   if (kind > 2.5) return min(1.0, " + StaticLightShadow.GAIN + " * b.w * x * x);",
       "   bool car = kind > 1.5;",
       "   float fall = car ? x * sqrt(x) * (0.93 + 0.07 * x) : x * (0.85 + 0.15 * x);",
@@ -2554,7 +2703,7 @@ public final class CapsuleShadow {
       "   float tmax = length(tl);",
       "   vec3 rd = tl / tmax;",
       "   vec3 ro = P + rd * 0.03;",
-      "   float lampSize = lK[light] > 2.5 ? " + POINT_LAMP_SIZE + " : lK[light] > 1.5 ? 0.25 : 0.12;", // a static lamp's globe is bigger than a torch's lens
+      "   float lampSize = lK[light] > 3.5 ? " + CEIL_LAMP_SIZE + " : lK[light] > 2.5 ? " + POINT_LAMP_SIZE + " : lK[light] > 1.5 ? 0.25 : 0.12;", // a static lamp's globe is bigger than a torch's lens, a ceiling light bigger still
       "   float k = tmax / lampSize;", // the lamp's size: penumbra grows with the caster's distance from the receiver
       "   vec4 ba0 = texelFetch(Data, ivec2(1, inst), 0);",
       "   vec4 bb0 = texelFetch(Data, ivec2(2, inst), 0);",
