@@ -112,7 +112,7 @@ public final class Scene {
    private static int snow = -1; // snow=0..100: the snow on the ground pinned (IsoCell snow target, the sandbox's snow-on-ground switch on; ground and grass scenes, 2026-10-24)
    private static float puddleMud = -1F; // puddle_mud=V: the puddles' mud pinned (0 = clear puddles, as in a shower's first minutes; rain raises it to muddy)
    private static float puddles = -1F; // puddles=V: wet ground and puddle size pinned to V (0..1) through the puddles' admin overrides (HDR glint scenes) // headlights=on: the player's vehicle keeps its headlights on (HDR night drives)
-   private static String lights = ""; // lights=on: grid power on and every light switch within 50 tiles on (HDR scenes)
+   private static String lights = ""; // lights=on: grid power on and every light switch within 50 tiles on (HDR scenes); lights=nogrid: the switches on, the grid off (a generator's house only)
    private static boolean visible;
    private static float thunderSecs = 6f;
    private static float population = -1f;
@@ -811,6 +811,12 @@ public final class Scene {
       }
       if ("on".equals(lights) || "lamps".equals(lights)) {
          lightsOn();
+      } else if ("nogrid".equals(lights)) {
+         lightsNoGrid(IsoPlayer.getInstance());
+      }
+      String gen = HarnessFlags.get("generator", "").trim();
+      if (!gen.isEmpty()) {
+         placeGenerator(gen, Integer.parseInt(HarnessFlags.get("generator_range", "0").trim()));
       }
       int plant = Integer.parseInt(HarnessFlags.get("plant_trees", "0").trim());
       if (plant > 0) {
@@ -998,6 +1004,68 @@ public final class Scene {
                + ", " + on + " light switches switched on" + (lampsOnly ? " (lamps only, " + off + " room lights off)" : "") + " within 50 tiles of " + px + "," + py);
       } catch (Exception e) {
          Log.warn("harness: lights on failed: " + e);
+      }
+   }
+
+   /**
+    * lights=nogrid (2026-10-25, the ceiling-light shadows on a generator): the power grid off (hydro power off, the sandbox's
+    * ElecShutModifier -1: hasGridPower() false everywhere, street lamps included) and every light switch within 50 tiles
+    * switched on all the same: only what a generator powers lights.
+    */
+   private static void lightsNoGrid(IsoPlayer p) {
+      try {
+         zombie.iso.IsoWorld.instance.setHydroPowerOn(false);
+         zombie.SandboxOptions.instance.elecShutModifier.setValue(-1);
+         zombie.iso.IsoCell cell = zombie.iso.IsoWorld.instance.currentCell;
+         int px = (int)p.getX(), py = (int)p.getY(), on = 0;
+         for (int z = 0; z < 4; z++) {
+            for (int y = py - 50; y <= py + 50; y++) {
+               for (int x = px - 50; x <= px + 50; x++) {
+                  zombie.iso.IsoGridSquare sq = cell.getGridSquare(x, y, z);
+                  for (int i = 0; sq != null && i < sq.getObjects().size(); i++) {
+                     if (sq.getObjects().get(i) instanceof zombie.iso.objects.IsoLightSwitch ls && !ls.isActivated()) {
+                        ls.setActive(true, false, true);
+                        on++;
+                     }
+                  }
+               }
+            }
+         }
+         Log.info("harness: lights=nogrid: hydro power off, ElecShutModifier -1, grid power " + zombie.SandboxOptions.instance.doesPowerGridExist() + ", "
+               + on + " light switches switched on within 50 tiles of " + px + "," + py);
+      } catch (Exception e) {
+         Log.warn("harness: lights=nogrid failed: " + e);
+      }
+   }
+
+   /**
+    * generator=X,Y[,Z] (2026-10-25): a generator (Base.Generator) placed on that square, full of fuel, condition 100, connected
+    * and running, so the squares in its range have electricity; generator_range=N sets the sandbox's GeneratorTileRange first
+    * (default 20: a house next door is powered too).
+    */
+   private static void placeGenerator(String spec, int range) {
+      try {
+         String[] a = spec.split(",");
+         int x = Integer.parseInt(a[0].trim()), y = Integer.parseInt(a[1].trim()), z = a.length > 2 ? Integer.parseInt(a[2].trim()) : 0;
+         if (range > 0) {
+            zombie.SandboxOptions.instance.generatorTileRange.setValue(range);
+         }
+         zombie.iso.IsoGridSquare sq = zombie.iso.IsoWorld.instance.currentCell.getGridSquare(x, y, z);
+         if (sq == null) {
+            Log.warn("harness: generator: square " + spec + " not loaded");
+            return;
+         }
+         InventoryItem item = zombie.inventory.InventoryItemFactory.CreateItem("Base.Generator");
+         zombie.iso.objects.IsoGenerator g = new zombie.iso.objects.IsoGenerator(item, zombie.iso.IsoWorld.instance.currentCell, sq);
+         g.setConnected(true);
+         g.setFuel(g.getMaxFuel());
+         g.setCondition(100);
+         g.setActivated(true);
+         Log.info("harness: generator at " + x + "," + y + "," + z + " running=" + g.isActivated() + " fuel " + g.getFuelPercentage() + " %, range "
+               + zombie.SandboxOptions.instance.generatorTileRange.getValue() + " tiles, exterior " + sq.has(zombie.iso.SpriteDetails.IsoFlagType.exterior)
+               + ", electricity here " + sq.haveElectricity());
+      } catch (Exception e) {
+         Log.warn("harness: generator failed: " + e);
       }
    }
 

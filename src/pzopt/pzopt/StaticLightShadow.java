@@ -244,6 +244,48 @@ final class StaticLightShadow {
       return line(cell, (int)Math.floor(px), (int)Math.floor(py), px, py, x, y, z, radius, 2L);
    }
 
+   /**
+    * dev (devStaticLightLog, once): the rooms within 250 squares that roomPoints splits into two or more fixtures (hallways,
+    * long shops), nearest first, at most 24: where to stand for the several-fixtures check. From the world's building
+    * definitions (IsoMetaGrid), loaded or not.
+    */
+   static String devLongRooms(float cx, float cy) {
+      java.util.ArrayList<zombie.iso.BuildingDef> bs = new java.util.ArrayList<>();
+      zombie.iso.IsoWorld.instance.getMetaGrid().getBuildingsIntersecting((int)cx - 250, (int)cy - 250, 500, 500, bs);
+      java.util.ArrayList<float[]> found = new java.util.ArrayList<>();
+      java.util.ArrayList<String> names = new java.util.ArrayList<>();
+      float[] pts = new float[ROOM_POINTS * 3];
+      for (zombie.iso.BuildingDef b : bs) {
+         for (zombie.iso.RoomDef r : b.rooms) {
+            int n = Math.min(r.rects.size(), 32);
+            int[] rr = new int[n * 4];
+            for (int j = 0; j < n; j++) {
+               zombie.iso.RoomDef.RoomRect q = r.rects.get(j);
+               rr[j * 4] = q.x;
+               rr[j * 4 + 1] = q.y;
+               rr[j * 4 + 2] = q.w;
+               rr[j * 4 + 3] = q.h;
+            }
+            int k = n == 0 ? 0 : roomPoints(rr, n, pts);
+            if (k >= 2) {
+               float d = (float)Math.hypot(pts[0] - cx, pts[1] - cy);
+               found.add(new float[] {d, found.size()});
+               StringBuilder sb = new StringBuilder(r.name + " z" + r.level + " " + r.getX() + "," + r.getY() + "-" + r.getX2() + "," + r.getY2() + " k" + k + ":");
+               for (int i = 0; i < k; i++) {
+                  sb.append(String.format(java.util.Locale.ROOT, " %.1f,%.1f", pts[i * 3], pts[i * 3 + 1]));
+               }
+               names.add(sb.toString());
+            }
+         }
+      }
+      found.sort((a, b) -> Float.compare(a[0], b[0]));
+      StringBuilder out = new StringBuilder("capsule shadows: dev rooms with several fixtures within 250 squares (" + found.size() + "):");
+      for (int i = 0; i < Math.min(24, found.size()); i++) {
+         out.append(String.format(java.util.Locale.ROOT, " [%.0f sq] %s;", found.get(i)[0], names.get((int)found.get(i)[1])));
+      }
+      return out.toString();
+   }
+
    /** dev: a room light (its room's name and rectangle). */
    static String describe(IsoRoomLight l) {
       if (l.room == null || l.room.def == null) {

@@ -1003,6 +1003,7 @@ public final class CapsuleShadow {
                g.append(' ').append((char)('A' + i % 26)).append('=').append(rm.def == null ? "?" : rm.def.name).append(lit ? "(lit)" : "");
             }
             Log.info(g.toString());
+            Log.info(StaticLightShadow.devLongRooms(cx, cy));
          }
          if (Config.SUN_SHADOW_ROOM_LIGHTS) {
             sb.append(" | lit rooms on the camera's floor:");
@@ -1042,11 +1043,16 @@ public final class CapsuleShadow {
       return at;
    }
 
+   /** staticPick's caster square for the next append (null: the capsules' middle), set by add. */
+   private static IsoGridSquare pickSquare;
+
    /**
     * sunShadowStaticLights: the caster just appended keeps the (at most two) static lights that light it most, among those
     * that reach it as the game's lamp model has it (StaticLightShadow.reach: and the wall plane its shadow stops at, f.llim), into f.lsel (frame slots, -1 none).
     */
    private static void staticPick(Frame f, int c, float mx, float my, float r, float cz) {
+      IsoGridSquare own = pickSquare;
+      pickSquare = null;
       f.lsel[c * 2] = -1;
       f.lsel[c * 2 + 1] = -1;
       int ns = f.nl - f.nt;
@@ -1054,7 +1060,9 @@ public final class CapsuleShadow {
          return;
       }
       zombie.iso.IsoCell cell = zombie.iso.IsoWorld.instance.currentCell;
-      int sx = (int)Math.floor(mx + f.ox), sy = (int)Math.floor(my + f.oy), sz = (int)Math.floor(cz / METRIC_Z + 0.01F);
+      // the square the game lights the caster by (a character's own: its capsules' middle leans into the next room by a wall)
+      int sx = own != null ? own.getX() : (int)Math.floor(mx + f.ox), sy = own != null ? own.getY() : (int)Math.floor(my + f.oy);
+      int sz = own != null ? own.getZ() : (int)Math.floor(cz / METRIC_Z + 0.01F);
       boolean any = false;
       for (int i = 0; i < ns; i++) {
          int l = f.nt + i;
@@ -1188,6 +1196,7 @@ public final class CapsuleShadow {
             }
             float boundR = CAPS[6];
             int nc = skeletonCapsules(ap, size, cx, cy, cz, CAPS);
+            pickSquare = sq;
             append(f, CAPS, nc, cz, alpha, 2F, sun ? sunVis : 0F);
             f.data[(f.n - 1) * TEXELS * 4 + 7] = Math.max(f.data[(f.n - 1) * TEXELS * 4 + 7], boundR + 0.02F); // the bounding capsule round the whole animal
             assignTile(f, chr, sun);
@@ -1219,10 +1228,14 @@ public final class CapsuleShadow {
          caps[o + 5] = cz + bz;
          caps[o + 6] = RADIUS[s] * 1.5F;
       }
+      pickSquare = sq;
       append(f, caps, K, cz, alpha, 0F, sun ? sunVis : 0F);
       assignTile(f, chr, sun);
       if (devPlayerNow) {
          f.devPlayer = f.n - 1;
+      }
+      if (Config.DEV_STATIC_LIGHT_LOG > 0 && !animal && chr instanceof zombie.characters.IsoPlayer pl && pl.isLocalPlayer()) {
+         devPickChange(f, f.n - 1, chr);
       }
       if (devTraceNow) {
          int base = (f.n - 1) * TEXELS * 4;
@@ -1238,6 +1251,27 @@ public final class CapsuleShadow {
 
    private static long animals;
    private static long devTraceN; // dev (devCasterTrace)
+   private static String devPickLast = ""; // dev (devStaticLightLog): the local player's static picks, logged when they change
+   private static long devPickSince, devPickFrames;
+
+   /** Dev (devStaticLightLog): the local player's static light picks (slot order kept) logged each time they change. */
+   private static void devPickChange(Frame f, int c, zombie.characters.IsoGameCharacter chr) {
+      StringBuilder sb = new StringBuilder();
+      for (int j = 0; j < 2; j++) {
+         int l = f.lsel[c * 2 + j];
+         if (l >= 0) {
+            sb.append(String.format(java.util.Locale.ROOT, " [%.1f,%.1f k%.0f]", f.lA[l * 4] + f.ox, f.lA[l * 4 + 1] + f.oy, f.lK[l]));
+         }
+      }
+      String s = sb.toString();
+      devPickFrames++;
+      if (!s.equals(devPickLast)) {
+         Log.info(String.format(java.util.Locale.ROOT, "capsule shadows: dev player picks at %.2f,%.2f epoch_ms %d (previous held %d frames):%s",
+            chr.getX(), chr.getY(), System.currentTimeMillis(), devPickFrames - devPickSince, s.isEmpty() ? " none" : s));
+         devPickLast = s;
+         devPickSince = devPickFrames;
+      }
+   }
    private static boolean devTraceNow;
    private static final float[] SEG_LEN = new float[K];
    private static final int[] SEG_BONE = new int[K];
