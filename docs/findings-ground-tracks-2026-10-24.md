@@ -67,6 +67,69 @@ Relief double-apply fixed (04d5d6b7): with `reliefSunMode=bake` the tracks add n
 the old look is the dev variant `doublerelief`). Two runs (gtr-horde4, gtr-crowd2) were submitted without `--mode bench`,
 cancelled and re-run as gtr-horde5 / gtr-crowd3; gtr-crowd3 shows dense footprints and 0 worker failures.
 
+## Tracks show at once (2026-10-25)
+
+The maintainer asked for tracks that appear the frame they are pressed, as the default. Before, a print showed only at its
+chunk's next re-bake: low priority, at least 300 ms later, at most 12 re-bakes a second under a horde. Key
+`groundTracksRealtime` (default on, menu "Tracks: show at once"), branch `tracks-realtime` (8ae14f3a, agent ground-tracks),
+merged into master. No override is touched. The bake stays the store; what changed since it is drawn on top each frame.
+
+How it works:
+- **Fresh marks.** `GroundState` marks every half square stamped since its chunk's last bake, plus the neighbour chunks
+  within reach. A loaded neighbour gets its re-bake queued. A chunk's marks clear at its level-0 bake, in stream order.
+- **Mirror.** Each level-0 bake copies the chunk's region of the state map, with one square of margin, on the GPU into a
+  2560² mirror atlas. The mirror is exactly the state that bake used.
+- **Per-frame pass.** After the composite, only marked chunks draw, over their marked half squares widened by the reach of
+  relief and sun shadow. The shader reads the live map and the mirror and discards every pixel where they agree, so
+  unchanged pixels stay the bake's. Where they differ, the baked pixel is scaled by the live track factor over the
+  mirrored one.
+- **Handover.** The re-bake draws the current state and clears the marks at that moment, so nothing pops.
+- **Trodden grass.** The grass objects stay bake-only.
+
+Candidates, measured on a 200-walker horde on dirt (desktop, uncapped ~870 fps, A/B within one run):
+
+| # | Variant | GPU (`ground.rt`) | Look |
+|---|---|---|---|
+| 1 | Marked rectangle, widened by a square | 28 µs | pops at chunk borders |
+| 2 | Per-square mask + reach | 17 µs | pops at chunk borders |
+| 3 | Half-square mask + margin mirror + neighbour marks | 20 µs | no pops |
+| 4 | 3 + discard where nothing changed (**adopted**) | 23 µs | no pops; equal to the bake where unchanged |
+
+Cost of the adopted pass:
+
+| Scene | Cost |
+|---|---|
+| 200-walker horde on dirt | +61 ± 21 µs GPU a frame |
+| Lawn walk, 12 walkers | ~2 µs a frame |
+| 120 km/h drive | 0 (paved road takes no tracks; only the mirror copies run) |
+| Off-road 30 km/h | 0.8 µs a frame |
+| Louisville horde | 20-26 µs GPU, 13-15 µs render thread; not in the game-thread samples |
+
+Louisville frame tails. All nine runs launched in `mode=bench`, loaded the overrides, had clean settle frames and no bake
+flood.
+- **Uncapped pair:** p99 32.0 vs 31.7 ms, p99.9 43.7 vs 42.5 ms. The game thread is 96 % busy, the GPU ~41 %.
+- **Two 60-cap pairs:** p99 ~4 ms worse with the pass on, so an A/B within one run (on / off every 2 s) separated cost from
+  the horde's run-to-run spread:
+
+| 60 cap, one run | p99 | p99.9 | frames > 25 ms |
+|---|---|---|---|
+| Realtime on | 32.5 ms | 36.1 ms | 38 of 1334 |
+| Realtime off | 33.4 ms | 53.4 ms | 62 of 1258 |
+
+The pairs' gap was spread, not cost: late-frame counts were equal (201 vs 206), and the slow frames are game-thread and
+world-submit frames from the horde's arrival at the route's end, none of them in the pass.
+
+Handover check: walkers stamp a dirt patch for 6 s, camera still, persisted tracks off (`gtr-rt-hand1*` / `hand0*`).
+- With the pass on, prints update every frame; off, they update in 300 ms steps.
+- After stamping stops, every loaded chunk's marks clear within ~0.1 s. The few small changes after that line up with
+  ordinary object bakes and show with the pass off too.
+- Fixed on the way: pops at chunk borders, margin marks that never cleared, and saved tracks of earlier runs changing at
+  re-bakes in both modes.
+
+Rigs: `devGroundCycle` variant `norealtime`; `devGroundTracksView=9` tints the pass's pixels (red changed since the bake).
+Three runs (gtr-rt-v9b, hand1e, hand0e) were submitted with `speed=0.001` on a one-square route (≈1000 s). They were
+cancelled and re-run with `speed=1`.
+
 ## Open
 
 1. Louisville stamping 10.3 µs a frame, over the 5 µs target (the dirt-field horde is 1.4): next step GroundState's game-side
@@ -78,5 +141,10 @@ cancelled and re-run as gtr-horde5 / gtr-crowd3; gtr-crowd3 shows dense footprin
 5. Relief infers the rut shape from the darkened colour; feeding it the real height is deferred.
 6. Composite and stamp-only modes (dev) never re-bake, so trodden grass goes stale there.
 7. Multiplayer: the state is per client, stamped from the movement each client sees, not synced.
+8. Show at once: tracks loaded from disk show at their chunk's bake, not through the pass. A light or relief sun change
+   between bakes shows at the next re-bake. Margin marks in an unloaded neighbour stay until that chunk bakes; they are never
+   drawn. Zoomed texture-scale variants share one mirror tile a chunk.
+9. Show at once costs 20-60 µs GPU in a horde on bare earth, over the ~10 µs aim set for the lawn walk and the drive. In
+   Louisville it sits inside an idle GPU: the game thread is the limit there.
 
 Test: `GroundTracksShaderTest`. Agent notes: `~/pzopt-wt/ground-tracks/build/notes.txt`.

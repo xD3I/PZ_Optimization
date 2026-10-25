@@ -8650,3 +8650,13 @@ A third line at the end of the level loop, right after `pzopt.TileRecord.endFram
 glint worker's list for this frame before the frame goes to the render thread. With `glintAsync` (default on),
 `Glints.queue` only gathers the sun or moon, queues the draw at its place and starts the worker, which walks the chunk levels
 and fills the frame's records while the game thread draws the rest. It returns at once when glints are off or no job is out.
+
+### FBORenderCell: the default program before the cutaway mask (2026-10-25, branch tree-flicker)
+
+In `renderInternal`, right before `IsoCell.drawStencilMask`, the game's default sprite program is queued again
+(`pzopt.DefaultProgram`, key `stencilMaskProgram`, default on). The sprite batches bind no program and draw with whatever is
+bound. A pzopt compute queued at the top of the cell render (GroundState, the ripples, the wakes) used to leave program 0
+bound, so the cutaway mask quad drew fixed-function and often wrote no stencil. The see-through tree round the player was
+then drawn whole for that frame (the tree flicker, runs `tf-i-stencil*`, `docs/findings-tree-flicker-2026-10-25.md`). Those
+passes now end with `DefaultProgram.restore()` too; the line is a guard against any other raw-GL pass before the mask. With
+the key off the method is stock. Dev: a second `devStencilProbe` point, `a0-beforeMask`.

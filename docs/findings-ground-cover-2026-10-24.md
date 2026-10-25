@@ -90,11 +90,92 @@ Motion (`devCapture` 1:1 60 fps, `harness/ground/cover/motion.py`: consecutive f
 | gcv-panforce-on / off (14734 / 14735) | same, every outdoor square frosted | 1,222 / 9.60 | 1,255 / 9.05 |
 | gcv-panforce-x20 (14739) | glints 20× brighter to count them | 46 points a frame, 97.0 % still there next frame (worst 10 %: 94.6) | |
 
+## Glint flicker (2026-10-25)
+
+The maintainer saw the glints flicker "like crazy" in the built-in benchmark's winter horde scene (forced snow, rain falling
+as snow, 8:00, uncapped, the e++ options). Branch `glint-flicker` (51827010 + 5ca789ea, agent ground-cover), merged into
+master.
+
+**Cause.** The game's legacy alpha test was still enabled at the glint draw, with whatever function the game's previous draw
+left. Every glint pixel is written with alpha 0, so:
+- on frames left at `GL_GREATER 0`, every glint fragment was discarded;
+- on frames left at `GL_ALWAYS`, all of them drew.
+
+The whole field therefore switched on and off from frame to frame. The trace rig `devGlintTrace=first,count` logs each frame's
+squares, lights and the pixels each glint draw wrote. In `gfl-trace7`, all 1,067 frames with `GREATER 0` wrote 0 pixels and
+all 1,160 with `ALWAYS` drew. Lights, depth, framebuffer, viewport, scissor, stencil, program, data texture, camera and zoom
+were identical on lit and empty frames. `WindLeaves` and `BloodWet` already disabled the test for their draws; `Glints` did
+not.
+
+**Fix.** `Glints.Gpu.draw` calls `glDisable(GL_ALPHA_TEST)` before the draw. The draw's existing state restore puts back
+the game's setting. The dev cycle variant `galpha` keeps the old behaviour.
+
+Glint draws that wrote nothing, before and after the fix in one run:
+
+| Scene | Before | After |
+|---|---|---|
+| Winter horde (`gfl-fix-abtrace`) | 1,831 of 3,050 (60 %) | 1 of 3,168 (1,473 of them had `GREATER 0` left on) |
+| Wet night (`gfl-wet-abtrace`) | 1,010 of 1,124 (90 %) | 0 of 1,048 |
+
+**Jev judge.** The new judge `harness/ground/glint-flicker.py` works on devCapture frames:
+- consecutive frames are aligned by phase correlation;
+- a spark is a pixel well above its 7×7 neighbourhood, and a spark that dies or is born counts as a toggle;
+- it also counts one-frame blinking blocks (as `zoom-flicker.py`) and mass toggles (a quarter of the sparks gone at once);
+- a glints-off control run of the same scene gives the background of particles, flashes and motion;
+- `--scene` describes the capture to Jev, and `--reference NAME=RUN` adds reference runs plus a `residual_is_twinkle`
+  question.
+
+Winter horde: 8-bit captures cannot show glints on HDR snow, which is already white, so the judge read the HDR glint target
+(`debugView=5`).
+
+| Winter horde | Before | After |
+|---|---|---|
+| Whole-field jumps / 10 s | 74.8 | 2.0 |
+| One-frame flashes / 10 s | 48.5 | 1.0 |
+| Empty frames | 21 % | 0 |
+| Toggle share | 0.29 | 0.05 |
+| Glint px a lit frame | ~170-340 | ~900-1,240 |
+| Jev | flicker confirmed 0.57 | **fixed 0.77** (before flickers 0.95, test 0.26) |
+
+Wet night, a car at 20 km/h with headlights on at 1:00, the real picture (`--mode drive`, `max_seconds`):
+
+| Run | Whole-field switches | Blinking blocks / 10 s | Toggle share |
+|---|---|---|---|
+| Glints off (control) | 0 | 42.4 | 0.105 |
+| Before the fix | 121 | 3,430 | 0.23 |
+| Fixed, twinkle 100 (default; `gfl-wetcap-after`, re-run `gfl-wettw100`) | 0 | 169.6 / 166.5 | 0.09 |
+| Fixed, `glintTwinklePct=25` (`gfl-wettw25`; 0 clamps to 25) | 0 | 68.7 | 0.126 |
+| Fixed, `glintTwinklePct=400` (`gfl-wettw400`) | 0 | 94.0 | 0.065 |
+| Fixed, car parked (`gfl-wetpark-true` vs `-false`) | 0 | 0.0 (control 0.0) | 300 vs 310 toggles a frame |
+
+- The wet-night residual is the glints' designed twinkle.
+- Excess blinks per 1,000 glint sparks fall with the angle window (86 / 44 / 14 at twinkle 25 / 100 / 400). The twinkle
+  setting is the size of each glint's angle window: bigger means each glint lives longer as the light moves, and more glints
+  catch the light.
+- The residual gathers within 350 px of the car's lights.
+- With the car parked nothing blinks. Jev there: fixed 0.64 (test flickers 0.03).
+- Jev on the default drive, with the twinkle references: `residual_is_twinkle` 0.71, verdict still_flickers 0.60. Its
+  "fixed" means "close to the glints-off control", which glints under a moving light never are.
+
+Cost, with empty options and glints toggled every 2 s:
+
+| Scene | Broken | Fixed |
+|---|---|---|
+| Wet night | +38.8 ± 10.4 µs a frame | +2.8 ± 20.1 µs (GPU median +2.2) |
+| Dawn | +6.7 ± 2.4 µs | +3.5 ± 7.4 µs |
+
+Game thread 3.6 / 4.2 µs, worker 58.2 / 66.6 µs (broken / fixed): the fixed build draws what the broken one dropped.
+
+The frosty dawn draws no glints with or without the fix: at 7:36 the sun is 10.5° below the horizon, and at 9:00 only 5.4°
+up.
+
 ## Open
 
 1. The glint worker costs ~57 µs a frame off the game thread (49 on the Mac): the walk over ~200 chunk levels and the copy of
    ~2,800 squares' records. The legacy GL 2.1 Mac path switches glints off.
-2. Twinkle under moving headlights at night not captured.
+2. The twinkle under moving headlights (wet night, 2026-10-25): +124 blinking blocks / 10 s over the control at the default
+   `glintTwinklePct` 100, +52 at 400 (which also shows more glints). Whether the default should be slower is the
+   maintainer's call.
 3. Sun glints are sparse: the camera is fixed and Kentucky's sun never reaches the mirror direction; only steep facets glint.
 4. Glints use at most 8 lights (torches and headlights first, then lamps, then taillights); a crowded scene can drop lamps.
 5. The wet-lamp look used forced wetting, which wets the grass too; in play only roads get the wet mask.

@@ -68,10 +68,87 @@ blades-on halves were faster in all three runs (paired −0.47 to −0.95 ms). T
 driver, not a saving; the cost there is not measurable. Earlier vertex-only attempts: a screen copy (25-140 µs) and
 instanced points (28 µs for the root pass alone).
 
+## Torch shadows of the blades (2026-10-25)
+
+With `pplShadows` on, pixelLight's torch shadow mask is marched in the scene depth after the composite, and the blades have
+already written their depth by then, so every blade near the player cast its own shadow into the beam. The maintainer asked
+for an option, off by default: `grassBladeTorchShadows` (live, menu "Grass blades: cast torch shadows"). Off,
+`PixelLight.beforeGrassBlades` (called from `GrassBlades.afterComposite` once the blades will draw) queues the shadow pass
+ahead of the blades and `afterComposite` skips its own. The march then sees the ground under them. Blades still take the
+shadows of fences, walls and furniture through their root colour. Pass mode (`pplMode=pass`) keeps the old order. Not yet
+measured or captured in a run; the order change adds no work.
+
+## Blade flicker while walking (2026-10-25)
+
+The maintainer reported the blades flickering while walking, worst at night under the torch. Their video
+(`~/Videos/Project Zomboid/Video_2026-10-25_02-15-59.mp4`, build eca12709-dirty with `grassBladeTorchShadows=false`, zoom
+0.5) was decoded as a 1:1 luma crop round the player. AV1 smooths single-pixel blinks, so the one-frame flash count reads ~0
+there. The temporal second-difference energy is concentrated on the torch-lit lawn: 1.06 lit against 0.13 dark, uniform over
+the beam's interior. Teleport walks did not trigger it; the real walk (`explore=walk`, 8189..8196,11449) with the
+maintainer's options file, night 1.15, torch on, does. Branch `blade-flicker`, merged into master.
+
+**Metric** (`harness/ground/blade-flicker.py --alternation`, `devGrassAlternate=1000`: blades A/B every second on one walk,
+1:1 `devCapture` crop round the player): the robust flash rate counts one-frame blinks over 6/255 that survive every ±1 px
+shift, per 1000 torch-lit pixels. "Paired" compares each A second with the B seconds either side (± SE). A B half that only
+switches a feature off reads ~0.7 high by itself, so −0.7 means no change.
+
+**Cause.** The game draws the ground shifted each frame by the camera's sub-pixel correction (`fixJigglyModels`, a fraction
+in [0, 1)). The blades' screen mapping had no such term, so while walking they slid up to a pixel against the ground and
+their own root colour. Shifting them by the fraction (the first fix) removed only a third. A sweep of the shift's size
+(`jiggleScale` 0 / 0.5 / 1.5 / 2 / 3: 12.0 / 9.5 / 7.2 / 7.1 / 11.4) showed the fraction was not the ground's motion. A
+per-frame log beside the capture (`gb165-jlog`, job 14916, 681 frame pairs) settled it:
+
+- **Zoom 0.5:** FBORenderChunk samples the chunk texture with mag filter NEAREST at every zoom but 0.75. The ground does not
+  move by the fraction: it jumps a whole pixel when the fraction passes 0.5, `ceil(fix − 0.5)`. That matched 98.8 % (x) and
+  99.1 % (y) of the frame pairs; the plain fraction matched 43 % and 77 %.
+- **Zoom 0.75** (`gb165-jlog075`, linear filter): the ground does move by the fraction (fit 1.06 x, 1.04 y, residual sd
+  0.13 px).
+
+**Fix.**
+
+- **`grassBladeJiggle`** (default on): the blades move by whole pixels where the chunk textures are point sampled
+  (`GrassBlades.groundPointSampled`), by the fraction elsewhere. The depth keeps the full fraction. Two floats a frame.
+- **`grassBladeAntialias`** (default on): the blades' edges blended. It does nothing at 0.5 or 1 and cuts the blinks at 0.75
+  (paired −2.9 ± 0.3), where the ground really moves by fractions. ~3 µs GPU.
+- Dev knobs kept for later A/Bs: `jiggleScale`, `jiggleSnap`, `aaPx`, `rootFilter`, `wind`, `partialTest`.
+
+| Run (job) | Zoom | B half | Robust A / B | Paired A − B |
+|---|---|---|---|---|
+| gb165-snapold (14919) | 0.5 | old build | 2.14 / 12.51 | −10.63 ± 1.05 |
+| gb165-snap (14917) | 0.5 | first fix (fraction) | 1.88 / 8.56 | −6.54 ± 0.62 |
+| gb165-snapoff (14918) | 0.5 | blades off | 1.89 / 1.56 | +0.36 ± 0.46 (no excess) |
+| 14921 | 1 | blades off | 2.52 / 2.44 | −0.08 ± 0.39 |
+| 14920 | 0.75 | blades off | 7.13 / 5.06 | +1.83 ± 0.45 (residual) |
+| 14924 | 0.75 | old build | 7.23 / 8.66 | −2.03 ± 0.35 |
+
+With the old jiggle mapping, removing the wind and every other blade motion (`gb165-frozen`), the depth test, the
+partial-square test, the visibility feedback or the root colour changed little to nothing. Neither does
+`grassBladeTorchShadows`: with every light path off (god rays, HDR, voxel light, torch source) the blades flickered the same.
+
+**Jev** (`blade-flicker.py --alt`):
+
+- Zoom 0.5 pairs: verdict fixed (0.66; improved 0.33).
+- All pairs, zoom 1 and 0.75 included: improved (0.52; fixed 0.37).
+- Odds that A flickers clearly more than blades off: 0.13 at zoom 0.5, 0.05 at 1, 0.20 at 0.75.
+
+**Cost** (fixed against the old build in one run, zoom 0.5, torch walk; `gbcost2-vsync` 14928 / `gbcost2-novsync` 14929):
+
+| Run | Blade pass GPU | Frame | GPU / game / render thread |
+|---|---|---|---|
+| 165 fps cap | 39.6 vs 36.5 µs (+3.1) | +0.4 ± 0.2 µs | 34 / 21 / 24 % (cap-bound) |
+| Uncapped, 526 fps | 31.5 vs 28.1 µs (+3.4) | median +10.6 µs | 94 % (GPU-bound) / 42 / 81 % |
+
+The game thread shows no cost (−2 %, noise). The +3 µs is the edge blending.
+
 ## Open
 
 - Thin dark contour lines on lawns come from another feature's post-process. They show with blades off and are drawn over
   the character (`gb-duskab-20261024-184431`). Not investigated.
+- Zoom 0.75 keeps ~+1.8 robust blinks per 1000 lit pixels over blades off (thin blades under real sub-pixel motion); a
+  wider edge filter (`aaPx` 2) did nothing.
+- pixelLight's `pplJiggle` and every `Ssr.View` user (CarGlass, CloudShadow, GodRays, Mirrors, Ssr) still use the
+  continuous jiggle fraction: at point-sampled zooms their reconstructed points are up to half a pixel off the ground they
+  shade. Not checked for visible effects.
 - The Mac path has no trails and no cut (no compute), and its GPU timers read 0.
 - Blades write no DLSS motion vectors.
 - The feet push is modest: the walker tramples the grass at their feet anyway.
