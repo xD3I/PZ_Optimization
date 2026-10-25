@@ -65,7 +65,7 @@ final class Enhancements {
             // read every frame by TorchInfo.set and the light gatherers (pzopt.TorchSource)
          }
          case "colorGrading", "colorGradingPct", "colorGradingNightPct" -> Grade.reconfigure();
-         case "sunShadowStrengthPct", "sunShadowSoftnessPct", "sunShadowCharacters", "sunShadowVehicles", "sunShadowTorches",
+         case "sunShadowStrengthPct", "sunShadowSoftnessPct", "sunShadowCharacters", "sunShadowVehicles", "sunShadowTorches", "sunShadowStaticLights", "sunShadowRoomLights",
                "sunShadowMeshes", "sunShadowAnimals", "sunShadowStockFadePct", "sunShadowRate",
                "moonShadows", "moonShadowPct", "cloudShadows", "cloudOpacityPct", "cloudSpeedPct", "cloudScalePct" -> {
             // SunShadow.update sees the new strength / penumbra next frame and recomputes the kept shadows (no re-bake);

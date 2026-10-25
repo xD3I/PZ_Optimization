@@ -1499,6 +1499,7 @@ public final class Config {
    public static volatile boolean SUN_SHADOW_VEHICLES; // sunShadows: vehicles outdoors cast a sun shadow (two body capsules and the cabin) onto the scene, per frame
    public static volatile boolean SUN_SHADOW_TORCHES; // sunShadows: characters and vehicles also cast soft shadows from the torches and headlights in reach, at any hour (pzopt.CapsuleShadow)
    public static volatile boolean SUN_SHADOW_STATIC_LIGHTS; // sunShadows: characters, animals and vehicles also cast soft shadows from the static lights that are on (street lamps, lamps, wall lights, fires) in the dark, the two that light each caster most (pzopt.StaticLightShadow)
+   public static volatile boolean SUN_SHADOW_ROOM_LIGHTS; // sunShadowStaticLights: rooms lit by their ceiling light too (IsoRoomLight: the switch on and power), a soft area light just under the ceiling, one point a room rectangle (two or three along a hallway); a room's light shades only who stands in that room (pzopt.StaticLightShadow)
    public static final int SUN_SHADOW_TORCH_PCT = integer("sunShadowTorchPct", 85); // how much of a torch's light a character's shadow takes away in the dark, %
    public static final boolean SUN_SHADOW_ATLAS = bool("sunShadowAtlas", true); // sunShadows, characters: zombies drawn as atlas sprites (no model) cast one upright capsule's shadow
    public static final boolean SUN_SHADOW_SILHOUETTE = bool("sunShadowSilhouette", true); // sunShadows, characters / animals / vehicles: the shadow takes the caster's drawn shape (limbs, hair, weapons, bags, an animal's legs, a car's body): after the moving objects are drawn, each caster's sun ray is marched through the scene depth inside its bounding capsule (pzopt.CapsuleShadow); where the penumbra grows wider than a limb the capsule model takes over; off: the capsules alone, drawn before the characters (2026-09-25)
@@ -2384,6 +2385,7 @@ public final class Config {
       SUN_SHADOW_VEHICLES = bool("sunShadowVehicles", true);
       SUN_SHADOW_TORCHES = bool("sunShadowTorches", true);
       SUN_SHADOW_STATIC_LIGHTS = bool("sunShadowStaticLights", true);
+      SUN_SHADOW_ROOM_LIGHTS = bool("sunShadowRoomLights", true);
       SUN_SHADOW_TREE_CARDS = bool("sunShadowTreeCards", true);
       SUN_SHADOW_MESHES = bool("sunShadowMeshes", true);
       SUN_SHADOW_WALL_CUT = bool("sunShadowWallCut", true);
