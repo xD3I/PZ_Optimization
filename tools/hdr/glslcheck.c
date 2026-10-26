@@ -2,6 +2,7 @@
 // printing the info logs: checks pzopt's shader injections against the game's shaders without launching the game.
 //   cc -O2 -o /tmp/glslcheck tools/hdr/glslcheck.c -lEGL -lGL && /tmp/glslcheck vert.glsl frag1.glsl [frag2.glsl...]
 //   /tmp/glslcheck unit.comp: a compute unit alone (a first argument ending in .comp; pzopt.GroundTracks, 2026-10-24)
+//   a later argument ending in .geom is a geometry unit (pzopt.TorchShadowMap's cells, 2026-10-26)
 #include <string.h>
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
@@ -52,7 +53,10 @@ int main(int argc, char **argv) {
       glAttachShader(p, unit(GL_COMPUTE_SHADER, argv[1]));
    } else {
       glAttachShader(p, unit(GL_VERTEX_SHADER, argv[1]));
-      for (int i = 2; i < argc; i++) glAttachShader(p, unit(GL_FRAGMENT_SHADER, argv[i]));
+      for (int i = 2; i < argc; i++) {
+         size_t l = strlen(argv[i]);
+         glAttachShader(p, unit(l > 5 && strcmp(argv[i] + l - 5, ".geom") == 0 ? GL_GEOMETRY_SHADER : GL_FRAGMENT_SHADER, argv[i]));
+      }
    }
    glLinkProgram(p);
    GLint ok; char log[8192];
