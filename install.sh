@@ -466,7 +466,9 @@ if [[ -n "$from" ]]; then
 else
   src="$zip"
   files=$(list_zip "$zip" | grep -v '/$' | LC_ALL=C sort)
-  echo "$files" | grep -qx 'pzopt/build-info.properties' || die "$zip is not a PZ_Optimization release zip"
+  # a here-string, not echo | grep -q: grep -q stops at the match, and with the list past the 64 KB pipe buffer echo then
+  # died of SIGPIPE, which pipefail turned into a failed check (most installs of a ~1,800-file zip)
+  grep -qx 'pzopt/build-info.properties' <<< "$files" || die "$zip is not a PZ_Optimization release zip"
   zip_rev=$(read_zip_entry "$zip" pzopt/build-info.properties | sed -n 's/^revision=//p')
 fi
 if [[ "$zip_rev" != "$REV" ]]; then
