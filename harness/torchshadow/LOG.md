@@ -260,3 +260,13 @@ sums (`pixel light shadow mask gpu alt:`).
   table and pillar shadows are there (`mont.png`). `tsmac13-yard` (15273): `torch shadow frames=2670 (map collects 2670)`,
   78 builds. The b11 Mac run's missing builds were not reproduced. Render-thread CPU a build is ~1.5 ms there (GS through
   the CoreGl shim) once the first link is amortised: fine at the native torch cadence, worth watching with torchSource.
+
+## Flip (Radeon 890M, Mesa 26.2.5 radeonsi, 1920x1080), merged master 7efdce2e, 2026-10-26
+- `tsflip-yard` (job 15287, bench save on foot at 8004,11210, empty user options, torch held, masks 0 soft / SM_PCF / SM_GS_CELLS /
+  SM_OFF at 1 s each): composite incl. map soft 866-951, sharp 841-923, GS cells 868-931, off 822-893 us (7 windows): soft
+  +30-60 us, sharp +15-40, GS cells about as compute. 102 builds in 10,800 frames (the kept map otherwise); render-thread CPU
+  ~250-335 us a build after the first (the run averages 1.7-1.9 ms with the first build's program links in it). 360 fps mean
+  uncapped, p99 5.4 ms. The objects stood beside the beam in this run (face=0 there faces south-east), so no look check.
+- `tsflip-yard3` (job 15294, objects on the beam's axis): the lamp pillar casts a shadow as wide as its post, straight away from
+  the torch down the screen onto the grass (`flip-tsflip-yard3-*/diff.png`: soft vs off, the difference in red); no acne, holes
+  or light bleeding; soft, sharp and GS cells give the same picture as on the desktop.
