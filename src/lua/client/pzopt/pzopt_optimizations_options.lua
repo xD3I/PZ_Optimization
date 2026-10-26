@@ -2628,10 +2628,17 @@ local ENHANCEMENT_SECTIONS = {
               } },
             { key = "voxelLightBounce", label = "Voxel lighting: bounced light",
               tip = "Lit floors and walls light their surroundings a little: a lamp pool fills the area round it, a lit window spills warm light outside." },
-            { key = "pplShadows", label = "Per-pixel lighting: torch shadows (experimental)",
-              tip = "Fence posts, furniture and walls cast shadows into your torch's beam (computed from the picture's depth at half resolution, one frame late). Experimental.",
+            { key = "pplShadows", label = "Per-pixel lighting: torch shadows",
+              tip = "Posts, fences, furniture, stairs and walls cast shadows into your torch's beam in their own shape: a shadow map of everything round the torch, built from the world's own depth (also what is off screen or hidden behind a wall), in the same frame, so the shadows move with the torch. Applies at the next launch.",
               why = {
-                  gpu = "A half-resolution march through the picture's depth plus a blur after the composite: ~160 us a frame on a laptop (Radeon 890M), 45-60 us on the desktop at 5K.",
+                  gpu = "The shadow map is built on the GPU only when the torch or the world round it changes (~0.2 ms at 5K on the desktop, zoomed in), kept while you stand; reading it adds ~0.05 ms (sharp edges) to ~0.1 ms (soft) a frame where the beam falls.",
+                  vram = "A 2048 x 2048 depth map (16 MB) and an 8 MB list of the cells it draws.",
+              } },
+            { key = "pplShadowFilter", label = "Per-pixel lighting: torch shadow edges",
+              choices = { "soft", "pcf" }, note = { ["soft"] = "default" },
+              tip = "Soft: sharp where an object touches the ground and softer further away, as a real torch's lens draws them. pcf: crisp edges everywhere, a little cheaper. Applies at the next launch.",
+              why = {
+                  gpu = "Soft reads the shadow map 8 times a pixel instead of once where the beam falls: about +0.07 ms a frame on the desktop at 5K, zoomed in.",
               } },
             { key = "pplTorchFeetGlow", label = "Per-pixel lighting: torch glow at your feet",
               tip = "A torch in your hands also lights a small circle round your feet, behind and beside you. Off: only the beam in front of you is lit. Applies at once." },
@@ -2679,7 +2686,7 @@ local ENHANCEMENT_SECTIONS = {
 local NEXT_LAUNCH_ONLY = { hdr = true, hdrAuto = true, godRaysRoofExact = true, carOccupant = true, carOccupantOcclusion = true, carOccupantLightPct = true,
     -- per-pixel lighting: read once at start-up (the chunk composite shader is patched when the game loads it)
     pixelLight = true, pplAnalytic = true, pplPointLights = true, pplNormals = true, pplWrapPct = true, pplSmooth = true,
-    pplWetSpecular = true, pplSpecPct = true, pplShadows = true, torchSourceSelfShadow = true,
+    pplWetSpecular = true, pplSpecPct = true, pplShadows = true, pplShadowFilter = true, torchSourceSelfShadow = true,
     -- voxel lighting: its shader code is compiled into the per-pixel lighting programs at start-up
     voxelLight = true, voxelLightTorchShadows = true, voxelLightSkyMethod = true, voxelLightBounce = true,
     -- reflections: the water, puddle and chunk composite shaders are patched when the game loads them (only then);
@@ -3393,7 +3400,8 @@ local EFFECTS = {
     voxelLight = { gpu = 1, vram = 1 },
     voxelLightSkyMethod = { gpu = 1 },
     pplPointLights = { gpu = 1 },
-    pplShadows = { gpu = 2 },
+    pplShadows = { gpu = 2, vram = 1 },
+    pplShadowFilter = { gpu = 1 },
     pplTorchFeetGlow = {},
     torchSource = {},
     torchSourceAim = {},

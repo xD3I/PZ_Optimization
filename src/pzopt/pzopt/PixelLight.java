@@ -95,6 +95,7 @@ public final class PixelLight {
          return;
       }
       VoxelLight.chunkBaked(c); // voxel lighting: the chunk's light layers are relit first
+      TorchShadowMap.chunkBaked(c); // pplShadowMapCache: a map holding this chunk is built again
       bakeEnd();
       if (bakeChunk != null) {
          unwhitenAll(); // a new texture while the last one still caches: cannot happen, but never leave squares white
@@ -213,7 +214,11 @@ public final class PixelLight {
          String[] a = Config.DEV_PPL_ALTERNATE.split(",");
          double t = (System.nanoTime() - worldUpNs) / 1e9 - Double.parseDouble(a[0].trim());
          if (t >= 0.0) {
+            int was = costMask;
             costMask = Integer.parseInt(a[2 + (int)((long)(t / Double.parseDouble(a[1].trim())) % (a.length - 2))].trim()); // the masks in turn (two or more)
+            if (costMask != was) {
+               Log.info("pixel light: dev cost mask " + costMask + " epoch_ms=" + System.currentTimeMillis()); // which captured frames show which mask
+            }
          }
       }
       if (rebakeAll) {
@@ -351,6 +356,17 @@ public final class PixelLight {
          }
       }
       shadowLight = f.composite ? f.shadowLight : -1;
+      if (shadowLight >= 0) {
+         shadowFrames++;
+      }
+      if (TorchShadowMap.ENABLED) {
+         int k = f.shadowLight;
+         if (k >= 0 && f.composite && (costMask & SM_OFF) == 0) {
+            TorchShadowMap.collect(f.sm, list, playerIndex, f.ox, f.oy, f.d0, f.la[k * 4], f.la[k * 4 + 1], f.la[k * 4 + 2], f.lh[k], f.la[k * 4 + 3]);
+         } else {
+            f.sm.clear();
+         }
+      }
       frames++;
       if (--logCountdown <= 0) {
          logCountdown = 3600;
@@ -446,7 +462,7 @@ public final class PixelLight {
       }
 
       /**
-       * devPplAlternate: the masks summed apart, the first 8 frames after every flip left out, a line every 1500 frames a mask
+       * devPplAlternate: the masks summed apart, the first 8 frames after every flip left out, a line every 300 frames a mask
        * (two masks: the line ctime.py reads; more: "composite gpu altn:" with every mask).
        */
       private static void alternate(int mask, long ns) {
@@ -475,7 +491,7 @@ public final class PixelLight {
          for (long c : altNN) {
             total += c;
          }
-         if (total >= 1500L * n) {
+         if (total >= 300L * n) { // (1500 a mask needed minutes at ~100 fps: 300, 2026-10-25)
             StringBuilder sb = new StringBuilder(n == 2 ? "pixel light composite gpu alt:" : "pixel light composite gpu altn:");
             for (int i = 0; i < n; i++) {
                sb.append(String.format(" m%s %.1f us (%d)", a[2 + i].trim(), altSumN[i] / 1e3 / Math.max(1L, altNN[i]), altNN[i]));
@@ -494,6 +510,8 @@ public final class PixelLight {
       private static int slot;
       private static final boolean[] pending = new boolean[8];
       private static long sum, count;
+      private static final int[] slotMask = new int[8];
+      private static final java.util.TreeMap<Integer, long[]> perMask = new java.util.TreeMap<>(); // dev cost mask -> {ns, frames}
 
       static void stamp(int i) {
          if (q == null) {
@@ -505,11 +523,24 @@ public final class PixelLight {
 
       static void collect() {
          pending[slot] = true;
+         slotMask[slot] = costMask;
          slot = (slot + 1) % 8;
          if (pending[slot] && GL15.glGetQueryObjecti(q[slot * 2 + 1], GL15.GL_QUERY_RESULT_AVAILABLE) != 0) {
-            sum += GL33.glGetQueryObjecti64(q[slot * 2 + 1], GL15.GL_QUERY_RESULT) - GL33.glGetQueryObjecti64(q[slot * 2], GL15.GL_QUERY_RESULT);
+            long ns = GL33.glGetQueryObjecti64(q[slot * 2 + 1], GL15.GL_QUERY_RESULT) - GL33.glGetQueryObjecti64(q[slot * 2], GL15.GL_QUERY_RESULT);
+            sum += ns;
+            long[] pm = perMask.computeIfAbsent(slotMask[slot], m -> new long[2]); // devPplAlternate: the mask pass per variant
+            pm[0] += ns;
+            pm[1]++;
             if (++count == 600) {
                Log.info(String.format("pixel light shadow mask gpu: %.1f us (600 frames) epoch_ms=%d", sum / 6e5, System.currentTimeMillis()));
+               if (perMask.size() > 1) {
+                  StringBuilder b = new StringBuilder("pixel light shadow mask gpu alt:");
+                  for (java.util.Map.Entry<Integer, long[]> e : perMask.entrySet()) {
+                     b.append(String.format(" m%d %.1f us (%d)", e.getKey(), e.getValue()[0] / 1e3 / Math.max(1, e.getValue()[1]), e.getValue()[1]));
+                  }
+                  Log.info(b.toString());
+               }
+               perMask.clear();
                sum = count = 0;
             }
          }
@@ -525,7 +556,7 @@ public final class PixelLight {
     * shadow of fences and walls through their root colour). Pass mode keeps the old order (its pass lights the blades too).
     */
    static void beforeGrassBlades() {
-      if (!Config.GRASS_BLADE_TORCH_SHADOWS && ACTIVE && shadowLight >= 0 && pendingPass == null) {
+      if (!Config.GRASS_BLADE_TORCH_SHADOWS && ACTIVE && shadowLight >= 0 && pendingPass == null && !TorchShadowMap.ENABLED) {
          SpriteRenderer.instance.drawGeneric(SHADOW_PASS);
          shadowQueuedEarly = true;
       }
@@ -543,7 +574,10 @@ public final class PixelLight {
       if (Config.DEV_PPL_TIMING) {
          SpriteRenderer.instance.drawGeneric(COMPOSITE_END);
       }
-      if (ACTIVE && shadowLight >= 0 && !shadowQueuedEarly) {
+      if (TorchShadowMap.ISM && ACTIVE && shadowLight >= 0) {
+         SpriteRenderer.instance.drawGeneric(ISM_PASS); // pplShadowMode=map-ism: the next frame's map from this frame's scene depth
+      }
+      if (ACTIVE && shadowLight >= 0 && !shadowQueuedEarly && !TorchShadowMap.ENABLED) {
          SpriteRenderer.instance.drawGeneric(SHADOW_PASS); // the next frame's composite reads it (reprojected)
       }
       shadowQueuedEarly = false;
@@ -564,6 +598,19 @@ public final class PixelLight {
          } catch (Throwable t) {
             Log.warn("pixel light: shadow pass failed, shadows off: " + t);
             GL.shadowFailed = true;
+         }
+      }
+   };
+
+   /** Render thread, after the composite (pplShadowMode=map-ism): the scene depth into the torch's map. */
+   private static final TextureDraw.GenericDrawer ISM_PASS = new TextureDraw.GenericDrawer() {
+      @Override
+      public void render() {
+         try {
+            GL.ismPass();
+         } catch (Throwable t) {
+            Log.warn("pixel light: torch shadow splat failed: " + t);
+            TorchShadowMap.failed = true;
          }
       }
    };
@@ -693,11 +740,25 @@ public final class PixelLight {
       }
    }
 
-   static final int V_NO_POINT = 1, V_NO_TORCH = 2, V_NO_WET = 4, V_NO_MASK = 8, V_BASE = 16, V_COPY = 32, V_NO_RELIEF = 64;
+   /** dev cost bits (devPplCostAt / devPplAlternate) of the torch shadow map: off (no map, no read), hard, pcf, pcss */
+   static final int SM_OFF = 65536, SM_HARD = 131072, SM_PCF = 262144, SM_PCSS = 524288, SM_SHEET = 1048576, SM_THICK_CONST = 2097152, SM_NO_TEMPORAL = 4194304, SM_VS_CELLS = 8388608, SM_CELL_THICK = 16777216, SM_GS_CELLS = 33554432, SM_HIZ = 67108864, SM_MARCH = 134217728, SM_SOFT = 268435456, SM_FINE = 536870912, SM_SMOOTH_FLIP = 1073741824;
+   static final int V_NO_POINT = 1, V_NO_TORCH = 2, V_NO_WET = 4, V_NO_MASK = 8, V_BASE = 16, V_COPY = 32, V_NO_RELIEF = 64, V_SM_FILTER = 128;
    private static final java.util.HashMap<Integer, Integer> programKeys = new java.util.HashMap<>(); // variant programs (dev tint)
    private static String variantDefines = "#define PPL_BASE\n"; // read by patchShader while a variant compiles
 
    /** Render thread: a variant program of the chunk composite (pzopt_chunkBase's placeholder, the source from here), or null. */
+   /**
+    * pplShadowMode=map: the map's filter is compiled in (one filter's code in the composite: the others' loops cost
+    * registers and occupancy); a dev cost bit asking for another filter takes a variant with it (V_SM_FILTER: filter + 1).
+    */
+   static int smFilterKey(boolean mask) {
+      if (!mask || !TorchShadowMap.ENABLED) {
+         return 0;
+      }
+      int f = (int)TorchShadowMap.filter(costMask);
+      return f == TorchShadowMap.configFilter() ? 0 : (f + 1) * V_SM_FILTER;
+   }
+
    static zombie.viewCone.ChunkRenderShader compileVariant(int key) {
       StringBuilder d = new StringBuilder();
       if ((key & V_BASE) != 0) {
@@ -710,6 +771,7 @@ public final class PixelLight {
          if ((key & V_NO_MASK) != 0) d.append("#define PPL_NO_MASK\n");
       }
       if ((key & V_NO_RELIEF) != 0) d.append("#define PPL_NO_RELIEF\n"); // dev (cost bit 32768): the same program without relief
+      if (key / V_SM_FILTER % 8 != 0) d.append("#define PPL_SM_FILTER ").append(key / V_SM_FILTER % 8 - 1).append("\n"); // dev: another map filter
       variantDefines = d.toString();
       try {
          zombie.viewCone.ChunkRenderShader v = new zombie.viewCone.ChunkRenderShader("pzopt_chunkBase");
@@ -755,6 +817,7 @@ public final class PixelLight {
    }
 
    static final int MAX_LIGHTS = 16;
+   private static long shadowFrames; // frames whose composite had the player's torch to shadow (pplShadows)
    private static int mergedTorches; // devPplFrameLog: torches merged into another at the same spot this frame
    private static long easeGlobalEvents; // pplEaseMs: LightDirt's global light events as of the last frame
 
@@ -951,6 +1014,7 @@ public final class PixelLight {
          + " squares simple=" + packSimple + " hidden=" + packHidden + " slow=" + packSlow
          + String.format(" pack=%.1fus/frame", frames > 0 ? packNs / 1e3 / frames : 0.0)
          + " eased=" + Gl.eased + " easeUploads=" + Gl.easeUploads
+         + (Config.PPL_SHADOWS ? " torch shadow frames=" + shadowFrames + (TorchShadowMap.ENABLED ? " (map collects " + TorchShadowMap.collects + ")" : "") : "")
          + (failed ? " FAILED" : "") + (Gl.passNs > 0 ? String.format(" gpu pass=%.1fus upload=%.1fus", Gl.passNs / 1e3, Gl.uploadNs / 1e3) : "");
    }
 
@@ -1864,6 +1928,7 @@ public final class PixelLight {
       final float[] la = new float[MAX_LIGHTS * 4], lb = new float[MAX_LIGHTS * 4], lc = new float[MAX_LIGHTS * 4];
       final float[] lh = new float[MAX_LIGHTS]; // each light's height above la.z, levels (the shader reads it from pplLc.w's fraction)
       final float[] lbody = new float[MAX_LIGHTS * 4]; // torchSourceSelfShadow: the carrier's body (x, y relative to the origin square, radius, 1) or zeros
+      final TorchShadowMap.Casters sm = new TorchShadowMap.Casters(); // pplShadowMode=map: this frame's casters round the torch
 
       ByteBuffer buf() {
          return this.big != null ? this.big : this.data;
@@ -1905,6 +1970,7 @@ public final class PixelLight {
       @Override
       public void postRender() {
          java.util.Arrays.fill(this.chunkKeys, 0, Math.min(this.chunks, this.chunkKeys.length), null); // the depth textures, no longer referenced
+         this.sm.clear();
          this.free = true;
       }
    }
@@ -1979,7 +2045,8 @@ public final class PixelLight {
             return baseShader; // a vehicle light only lights the wet glints (and, with voxel lighting, where the voxel light replaced the native's)
          }
          int key = (point ? 0 : V_NO_POINT) | (torch ? 0 : V_NO_TORCH) | (wet ? 0 : V_NO_WET) | (mask && this.maskValid && Config.PPL_SHADOWS ? 0 : V_NO_MASK)
-            | ((costMask & 32768) != 0 ? V_NO_RELIEF : 0); // dev: relief compiled out (devPplAlternate A/B of its cost)
+            | ((costMask & 32768) != 0 ? V_NO_RELIEF : 0) // dev: relief compiled out (devPplAlternate A/B of its cost)
+            | smFilterKey(mask && this.maskValid && Config.PPL_SHADOWS);
          if (key == 0) {
             return null;
          }
@@ -2015,7 +2082,7 @@ public final class PixelLight {
                bits |= 1 << i;
             }
          }
-         if (bits == 0 && this.shadowLight >= 0 && Config.PPL_SHADOWS) {
+         if (bits == 0 && this.shadowLight >= 0 && Config.PPL_SHADOWS && !TorchShadowMap.ENABLED) {
             bits = 1 << this.shadowLight; // the mask's torch: the full program (it reads the mask) even out of its reach
          }
          return bits;
@@ -2325,6 +2392,26 @@ public final class PixelLight {
             GL11.glBindTexture(GL30.GL_TEXTURE_2D_ARRAY, this.lattice);
             GL13.glActiveTexture(GL13.GL_TEXTURE0);
             this.stamp(2);
+            if (TorchShadowMap.ENABLED) {
+               // pplShadowMode=map: this frame's map from the torch, before the composite reads it (map-ism: the map the last
+               // frame splatted from its scene depth, with that frame's torch)
+               this.smCur[0] = f.sm.lx;
+               this.smCur[1] = f.sm.ly;
+               this.smCur[2] = f.sm.lz;
+               this.smCur[3] = f.sm.want && f.sm.range > 0.0F ? 1.0F / f.sm.range : 0.0F;
+               this.smDump = f.sm;
+               this.smZ0Cur = f.sm.z0;
+               this.smZ0 = TorchShadowMap.ISM ? TorchShadowMap.ismZ0 : f.sm.z0;
+               if (TorchShadowMap.ISM) {
+                  this.maskValid = this.shadowLight >= 0 && f.sm.want && TorchShadowMap.ismValid;
+                  System.arraycopy(TorchShadowMap.ismL, 0, this.smL, 0, 4);
+                  this.smL[0] += TorchShadowMap.ismOx - this.ox; // that frame's torch, relative to this frame's origin square
+                  this.smL[1] += TorchShadowMap.ismOy - this.oy;
+               } else {
+                  this.maskValid = this.shadowLight >= 0 && TorchShadowMap.build(f.sm);
+                  System.arraycopy(this.smCur, 0, this.smL, 0, 4);
+               }
+            }
             if (VoxelLight.ACTIVE) {
                VoxelLight.Gl.torchShadows(this.la, this.lc, this.lh, this.lights, this.ox, this.oy); // voxel lighting: the torches' visibility maps
             }
@@ -2439,14 +2526,24 @@ public final class PixelLight {
          GL20.glUniform1f(loc[17], Config.PPL_TORCH_FEET_GLOW ? 0.0F : 1.0F);
          boolean mask = this.maskValid && !shadowFailed && this.shadowLight >= 0 && Config.PPL_SHADOWS;
          GL20.glUniform4f(loc[10], Config.PPL_SMOOTH ? 1.0F : 0.0F, mask ? this.shadowLight : -1.0F, this.hasTorch() ? 1.0F : 0.0F, costMask);
-         if (mask) {
+         if (mask && TorchShadowMap.ENABLED) {
+            // pplShadowMode=map: the torch, the map's size and bias, the filter (dev: costMask bits)
+            GL20.glUniform4f(loc[11], this.smL[0], this.smL[1], this.smL[2], this.smL[3]);
+            boolean planar = TorchShadowMap.PARAM == 3;
+            GL20.glUniform4f(loc[12], planar ? TorchShadowMap.texW * this.smL[3] * 0.5F : TorchShadowMap.texelsPerRadian, 0.004F, Config.PPL_SHADOW_BIAS_PCT / 100.0F,
+               Config.PPL_SHADOW_LENS_PCT / 100.0F);
+            GL20.glUniform4f(loc[13], TorchShadowMap.filter(costMask), TorchShadowMap.texW, TorchShadowMap.texH, planar ? this.smL[2] - this.smZ0 : TorchShadowMap.cubeWiden);
+            GL13.glActiveTexture(GL13.GL_TEXTURE0 + MASK_UNIT);
+            GL11.glBindTexture(GL11.GL_TEXTURE_2D, TorchShadowMap.readTexture(costMask));
+            GL13.glActiveTexture(GL13.GL_TEXTURE0);
+         } else if (mask) {
             GL20.glUniform4f(loc[11], this.prevMap[0], this.prevMap[1], this.prevMap[2], this.prevMap[3]);
             GL20.glUniform4f(loc[12], this.prevVp[0], this.prevVp[1], this.prevVp[2], this.prevVp[3]);
             // the previous frame's mapping is relative to its own origin square: x - y and x + y shift by the difference
             GL20.glUniform4f(loc[13], (this.ox - this.oy) - (this.prevOx - this.prevOy), (this.ox + this.oy) - (this.prevOx + this.prevOy), 0.0F, 0.0F);
             GL20.glUniform4f(loc[16], Config.PPL_SHADOW_DEPTH_TEST ? this.prevMap[4] : 0.0F, this.prevMap[5], 0.0F, 0.0F);
             GL13.glActiveTexture(GL13.GL_TEXTURE0 + MASK_UNIT);
-            GL11.glBindTexture(GL11.GL_TEXTURE_2D, this.maskTex[1]);
+            GL11.glBindTexture(GL11.GL_TEXTURE_2D, this.maskTex[this.maskOut]);
             GL13.glActiveTexture(GL13.GL_TEXTURE0);
          }
          GL20.glUniform4f(loc[8], Config.PPL_NORMALS ? 1.0F : 0.0F, Config.PPL_WRAP_PCT / 100.0F, Config.PPL_SHADOWS ? 1.0F : 0.0F, Config.PPL_SHADOW_SQUARES);
@@ -2500,11 +2597,91 @@ public final class PixelLight {
       // the next frame's composite reads it through the previous frame's mapping
       static boolean shadowFailed;
       private int shadowProgram, blurProgram, maskW, maskH;
-      private final int[] maskTex = new int[2], maskFbo = new int[2];
+      private final int[] maskTex = new int[3], maskFbo = new int[3]; // 0 the march, 1 / 2 the blurred mask (2: pplShadowTemporalPct's other history)
+      private int maskOut = 1; // which of 1 / 2 the composite reads
+      private int tblurProgram;
+      private final int[] tu = new int[9];
       private final int[] su = new int[8], bu = new int[3];
       boolean maskValid;
       private final float[] prevMap = new float[6], prevVp = new float[4];
+      private final float[] smL = new float[4]; // pplShadowMode=map: the torch and 1 / the map's range of the map the composite reads
+      private final float[] smCur = new float[4]; // and of this frame (map-ism splats with it)
+      private float smZ0, smZ0Cur; // the torch's floor (pplShadowMapParam=planar) of the map read / of this frame
+      private TorchShadowMap.Casters smDump;
+
+      /** pplShadowMode=map-ism, after the composite: this frame's scene depth splatted into the map for the next frame. */
+      void ismPass() {
+         if (failed || this.shadowLight < 0 || this.shadowLight >= this.lights) {
+            TorchShadowMap.ismValid = false;
+            return;
+         }
+         GL11.glGetFloatv(GL11.GL_VIEWPORT, this.viewportF);
+         int sceneFbo = GL11.glGetInteger(GL30.GL_DRAW_FRAMEBUFFER_BINDING);
+         int depthTex = sceneDepthTexture(sceneFbo);
+         this.mapping(this.map);
+         TorchShadowMap.ism(depthTex, this.viewportF, this.map, this.smCur, this.smZ0Cur, this.ox, this.oy, this.smDump);
+      }
       private int prevOx, prevOy;
+
+      private int hizTex, hizW, hizH, hizLevels, hizProgram, hizMarchProgram;
+      private final int[] shu = new int[8];
+      private int[] hizFbo = new int[0];
+      private final int[] hu = new int[5];
+
+      /** pplShadowMode=hiz: level k of hizTex = the nearest scene depth over 2^(k+1) window px (from the viewport's origin). */
+      void hizPyramid(int depthTex, int vw, int vh) {
+         int w = (vw + 1) / 2, h = (vh + 1) / 2;
+         if (w != this.hizW || h != this.hizH) {
+            if (this.hizTex != 0) {
+               GL11.glDeleteTextures(this.hizTex);
+               for (int f : this.hizFbo) {
+                  GL30.glDeleteFramebuffers(f);
+               }
+            }
+            this.hizLevels = Math.max(1, Math.min(7, 32 - Integer.numberOfLeadingZeros(Math.max(w, h))));
+            this.hizTex = GL11.glGenTextures();
+            GL11.glBindTexture(GL11.GL_TEXTURE_2D, this.hizTex);
+            for (int l = 0; l < this.hizLevels; l++) {
+               GL11.glTexImage2D(GL11.GL_TEXTURE_2D, l, GL30.GL_R32F, Math.max(1, w >> l), Math.max(1, h >> l), 0, GL11.GL_RED, GL11.GL_FLOAT, (ByteBuffer)null);
+            }
+            GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL12.GL_TEXTURE_MAX_LEVEL, this.hizLevels - 1);
+            GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MIN_FILTER, GL11.GL_NEAREST_MIPMAP_NEAREST);
+            GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MAG_FILTER, GL11.GL_NEAREST);
+            this.hizFbo = new int[this.hizLevels];
+            for (int l = 0; l < this.hizLevels; l++) {
+               this.hizFbo[l] = GL30.glGenFramebuffers();
+               GL30.glBindFramebuffer(GL30.GL_FRAMEBUFFER, this.hizFbo[l]);
+               GL30.glFramebufferTexture2D(GL30.GL_FRAMEBUFFER, GL30.GL_COLOR_ATTACHMENT0, GL11.GL_TEXTURE_2D, this.hizTex, l);
+               GL20.glDrawBuffers(GL30.GL_COLOR_ATTACHMENT0);
+            }
+            this.hizW = w;
+            this.hizH = h;
+         }
+         GL20.glUseProgram(this.hizProgram);
+         GL20.glUniform1i(this.hu[0], 0);
+         GL13.glActiveTexture(GL13.GL_TEXTURE0);
+         for (int l = 0; l < this.hizLevels; l++) {
+            GL30.glBindFramebuffer(GL30.GL_FRAMEBUFFER, this.hizFbo[l]);
+            GL11.glViewport(0, 0, Math.max(1, w >> l), Math.max(1, h >> l));
+            if (l == 0) {
+               GL11.glBindTexture(GL11.GL_TEXTURE_2D, depthTex);
+               GL20.glUniform1i(this.hu[1], 0);
+               GL20.glUniform2i(this.hu[2], (int)this.viewportF[0], (int)this.viewportF[1]);
+            } else {
+               GL11.glBindTexture(GL11.GL_TEXTURE_2D, this.hizTex);
+               // only the level read is in the texture's range while the next one is drawn (no feedback loop)
+               GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL12.GL_TEXTURE_BASE_LEVEL, l - 1);
+               GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL12.GL_TEXTURE_MAX_LEVEL, l - 1);
+               GL20.glUniform1i(this.hu[1], 0); // texelFetch's lod counts from the base level
+               GL20.glUniform2i(this.hu[2], 0, 0);
+            }
+            GL11.glDrawArrays(GL11.GL_TRIANGLE_FAN, 0, 4);
+         }
+         GL11.glBindTexture(GL11.GL_TEXTURE_2D, this.hizTex);
+         GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL12.GL_TEXTURE_BASE_LEVEL, 0);
+         GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL12.GL_TEXTURE_MAX_LEVEL, this.hizLevels - 1);
+         GL11.glBindTexture(GL11.GL_TEXTURE_2D, 0);
+      }
 
       void shadowPass() {
          if (shadowFailed || failed || this.shadowLight < 0 || this.shadowLight >= this.lights) {
@@ -2521,7 +2698,19 @@ public final class PixelLight {
             return;
          }
          if (this.shadowProgram == 0) {
-            this.shadowProgram = AmbientOcclusion.link(AmbientOcclusion.QUAD_VERT, SHADOW_FRAG);
+            this.shadowProgram = AmbientOcclusion.link(AmbientOcclusion.QUAD_VERT, SHADOW_SSS ? SSS_FRAG : SHADOW_FRAG);
+            if (!SHADOW_SSS) { // the Hi-Z march: pplShadowMode=hiz, or the dev bit SM_HIZ in march mode (and SM_MARCH back in hiz mode)
+               this.hizProgram = AmbientOcclusion.link(AmbientOcclusion.QUAD_VERT, HIZ_REDUCE_FRAG);
+               this.hizMarchProgram = this.hizProgram == 0 ? 0 : AmbientOcclusion.link(AmbientOcclusion.QUAD_VERT, HIZ_FRAG);
+               this.hu[0] = GL20.glGetUniformLocation(this.hizProgram, "Src");
+               this.hu[1] = GL20.glGetUniformLocation(this.hizProgram, "uLod");
+               this.hu[2] = GL20.glGetUniformLocation(this.hizProgram, "uOff");
+               this.hu[3] = GL20.glGetUniformLocation(this.hizMarchProgram, "Hiz");
+               this.hu[4] = GL20.glGetUniformLocation(this.hizMarchProgram, "uHizTop");
+               if (this.hizMarchProgram == 0) {
+                  Log.warn("pixel light: the Hi-Z march did not compile" + (SHADOW_HIZ ? ", the plain march instead" : ""));
+               }
+            }
             this.blurProgram = AmbientOcclusion.link(AmbientOcclusion.QUAD_VERT, MASK_BLUR_FRAG);
             if (this.shadowProgram == 0 || this.blurProgram == 0) {
                shadowFailed = true;
@@ -2531,6 +2720,7 @@ public final class PixelLight {
             String[] names = {"SceneDepth", "pplMapA", "pplMapC", "pplSv", "pplSa", "pplSb", "pplOpt", "pplSteps"};
             for (int i = 0; i < names.length; i++) {
                this.su[i] = GL20.glGetUniformLocation(this.shadowProgram, names[i]);
+               this.shu[i] = GL20.glGetUniformLocation(this.hizMarchProgram, names[i]);
             }
             this.bu[0] = GL20.glGetUniformLocation(this.blurProgram, "Mask");
             this.bu[1] = GL20.glGetUniformLocation(this.blurProgram, "texel");
@@ -2538,9 +2728,9 @@ public final class PixelLight {
                this.init(); // the quad (and the pass program, unused here)
             }
          }
-         int mw = (vw + 1) / 2, mh = (vh + 1) / 2;
+         int mw = SHADOW_SSS ? vw : (vw + 1) / 2, mh = SHADOW_SSS ? vh : (vh + 1) / 2; // pplShadowMode=sss: full resolution
          if (mw != this.maskW || mh != this.maskH) {
-            for (int i = 0; i < 2; i++) {
+            for (int i = 0; i < 3; i++) {
                if (this.maskTex[i] != 0) {
                   GL11.glDeleteTextures(this.maskTex[i]);
                   GL30.glDeleteFramebuffers(this.maskFbo[i]);
@@ -2577,29 +2767,83 @@ public final class PixelLight {
             GL20.glDisableVertexAttribArray(i);
          }
          GL20.glVertexAttribPointer(0, 2, GL11.GL_FLOAT, false, 8, 0L);
+         // 0. pplShadowMode=hiz: the min-depth pyramid of this frame's scene depth
+         boolean hiz = this.hizMarchProgram != 0 && (SHADOW_HIZ ? (costMask & SM_MARCH) == 0 : (costMask & SM_HIZ) != 0);
+         int[] su = hiz ? this.shu : this.su;
+         if (hiz) {
+            this.hizPyramid(depthTex, vw, vh);
+         }
          // 1. march
          GL30.glBindFramebuffer(GL30.GL_FRAMEBUFFER, this.maskFbo[0]);
          GL11.glViewport(0, 0, mw, mh);
-         GL20.glUseProgram(this.shadowProgram);
-         GL20.glUniform1i(this.su[0], 0);
-         GL20.glUniform4f(this.su[1], this.map[0], this.map[1], this.map[2], this.map[3]);
-         GL20.glUniform4f(this.su[2], this.map[4], this.map[5], this.n, 0.0F);
-         GL20.glUniform4f(this.su[3], this.viewportF[0], this.viewportF[1], 2.0F, 0.0F);
+         GL20.glUseProgram(hiz ? this.hizMarchProgram : this.shadowProgram);
+         GL20.glUniform1i(su[0], 0);
+         GL20.glUniform4f(su[1], this.map[0], this.map[1], this.map[2], this.map[3]);
+         GL20.glUniform4f(su[2], this.map[4], this.map[5], this.n, 0.0F);
+         GL20.glUniform4f(su[3], this.viewportF[0], this.viewportF[1], SHADOW_SSS ? 1.0F : 2.0F, 0.0F);
          int k = this.shadowLight * 4;
-         GL20.glUniform4f(this.su[4], this.la[k], this.la[k + 1], this.la[k + 2] + this.lh[this.shadowLight], this.la[k + 3]); // z: the lamp's own height
-         GL20.glUniform4f(this.su[5], this.lb[k], this.lb[k + 1], this.lb[k + 2], this.lb[k + 3]);
-         GL20.glUniform4f(this.su[6], 1.0F, 0.0F, 1.0F, Config.PPL_SHADOW_SQUARES);
-         GL20.glUniform1f(this.su[7], Config.PPL_SHADOW_MAX_STEPS);
+         GL20.glUniform4f(su[4], this.la[k], this.la[k + 1], this.la[k + 2] + this.lh[this.shadowLight], this.la[k + 3]); // z: the lamp's own height
+         GL20.glUniform4f(su[5], this.lb[k], this.lb[k + 1], this.lb[k + 2], this.lb[k + 3]);
+         GL20.glUniform4f(su[6], 1.0F, 0.0F, 1.0F, Config.PPL_SHADOW_SQUARES);
+         GL20.glUniform1f(su[7], Config.PPL_SHADOW_MAX_STEPS);
+         if (hiz) {
+            GL20.glUniform4f(su[6], 1.0F, 0.0F, 1.0F, Config.PPL_SHADOW_HIZ_SQUARES);
+            GL20.glUniform1i(this.hu[3], 1);
+            GL20.glUniform1i(this.hu[4], this.hizLevels - 1);
+            GL13.glActiveTexture(GL13.GL_TEXTURE1);
+            GL11.glBindTexture(GL11.GL_TEXTURE_2D, this.hizTex);
+         }
          GL13.glActiveTexture(GL13.GL_TEXTURE0);
          GL11.glBindTexture(GL11.GL_TEXTURE_2D, depthTex);
          GL11.glDrawArrays(GL11.GL_TRIANGLE_FAN, 0, 4);
-         // 2. depth-aware 3x3 blur
-         GL30.glBindFramebuffer(GL30.GL_FRAMEBUFFER, this.maskFbo[1]);
-         GL20.glUseProgram(this.blurProgram);
-         GL20.glUniform1i(this.bu[0], 0);
-         GL20.glUniform2f(this.bu[1], 1.0F / mw, 1.0F / mh);
+         if (hiz) {
+            GL13.glActiveTexture(GL13.GL_TEXTURE1);
+            GL11.glBindTexture(GL11.GL_TEXTURE_2D, 0);
+            GL13.glActiveTexture(GL13.GL_TEXTURE0);
+         }
+         // 2. depth-aware 3x3 blur (pplShadowTemporalPct: blended with the last mask reprojected onto this frame's surfaces)
+         boolean temporal = Config.PPL_SHADOW_TEMPORAL_PCT > 0 && this.maskValid && (costMask & SM_NO_TEMPORAL) == 0;
+         if (temporal && this.tblurProgram == 0) {
+            this.tblurProgram = AmbientOcclusion.link(AmbientOcclusion.QUAD_VERT, MASK_TBLUR_FRAG);
+            if (this.tblurProgram == 0) {
+               temporal = false;
+               Log.warn("pixel light: the temporal shadow blur did not link, plain blur");
+            } else {
+               String[] tn = {"Mask", "Hist", "pplMapA", "pplMapC", "uVp", "uPrevA", "uPrevC", "uPrevVp", "uW"};
+               for (int i = 0; i < tn.length; i++) {
+                  this.tu[i] = GL20.glGetUniformLocation(this.tblurProgram, tn[i]);
+               }
+            }
+         }
+         int out = temporal || Config.PPL_SHADOW_TEMPORAL_PCT > 0 ? 3 - this.maskOut : 1;
+         GL30.glBindFramebuffer(GL30.GL_FRAMEBUFFER, this.maskFbo[out]);
+         if (temporal && this.tblurProgram != 0) {
+            GL20.glUseProgram(this.tblurProgram);
+            GL20.glUniform1i(this.tu[0], 0);
+            GL20.glUniform1i(this.tu[1], 1);
+            GL20.glUniform4f(this.tu[2], this.map[0], this.map[1], this.map[2], this.map[3]);
+            GL20.glUniform4f(this.tu[3], this.map[4], this.map[5], (this.ox - this.oy) - (this.prevOx - this.prevOy), (this.ox + this.oy) - (this.prevOx + this.prevOy));
+            GL20.glUniform4f(this.tu[4], this.viewportF[0], this.viewportF[1], SHADOW_SSS ? 1.0F : 2.0F, 0.0F);
+            GL20.glUniform4f(this.tu[5], this.prevMap[0], this.prevMap[1], this.prevMap[2], this.prevMap[3]);
+            GL20.glUniform4f(this.tu[6], this.prevMap[4], this.prevMap[5], 0.0F, 0.0F);
+            GL20.glUniform4f(this.tu[7], this.prevVp[0], this.prevVp[1], this.prevVp[2], this.prevVp[3]);
+            GL20.glUniform1f(this.tu[8], Config.PPL_SHADOW_TEMPORAL_PCT / 100.0F);
+            GL13.glActiveTexture(GL13.GL_TEXTURE1);
+            GL11.glBindTexture(GL11.GL_TEXTURE_2D, this.maskTex[this.maskOut]);
+            GL13.glActiveTexture(GL13.GL_TEXTURE0);
+         } else {
+            GL20.glUseProgram(this.blurProgram);
+            GL20.glUniform1i(this.bu[0], 0);
+            GL20.glUniform2f(this.bu[1], 1.0F / mw, 1.0F / mh);
+         }
          GL11.glBindTexture(GL11.GL_TEXTURE_2D, this.maskTex[0]);
          GL11.glDrawArrays(GL11.GL_TRIANGLE_FAN, 0, 4);
+         if (temporal && this.tblurProgram != 0) {
+            GL13.glActiveTexture(GL13.GL_TEXTURE1);
+            GL11.glBindTexture(GL11.GL_TEXTURE_2D, 0);
+            GL13.glActiveTexture(GL13.GL_TEXTURE0);
+         }
+         this.maskOut = out;
          if (Config.DEV_PPL_TIMING) {
             ShadowTimer.stamp(1);
             ShadowTimer.collect();
@@ -2989,6 +3233,9 @@ public final class PixelLight {
       "   if (mw > 1e-4) return msum / mw;",
       "   return best < 3.0 ? bestV : 1.0;",
       "}",
+      // pplShadowMode=map (pzopt.TorchShadowMap): the same unit holds this frame's octahedral depth map from the torch, read
+      // with the receiver's normal; march: the reprojected mask above
+      TorchShadowMap.ENABLED ? "#define PPL_SM_MAP\n" + TorchShadowMap.SAMPLE_GLSL : "float pplMaskN(vec3 P, vec3 n) { return pplMask(P); }",
       // the surface normal from the position's screen derivatives, in squares (a level is 2.449 squares tall), facing the
       // viewer; the sprites' depth textures make it a real normal on furniture too (call in uniform control flow)
       "vec3 pplSnapNormal(vec3 P, vec3 nn);",
@@ -3253,7 +3500,7 @@ public final class PixelLight {
       "            if (tv > 0.01) tv *= rlfHorizon(normalize(lpos - P * vec3(1.0, 1.0, PPL_LEVEL)));", // from the texel's horizons
       "#endif",
       "#ifndef PPL_NO_MASK",
-      "            if (tv > 0.01 && float(i) == pplOpt2.y) tv *= pplMask(P);",
+      "            if (tv > 0.01 && float(i) == pplOpt2.y) tv *= pplMaskN(P, n);",
       "#endif",
       "#ifdef PPL_SELF_SHADOW",
       "            if (tv > 0.01 && pplLbody[i].w > 0.5) tv *= pplBody(P.xy, a.xy, pplLbody[i]);",
@@ -3305,7 +3552,7 @@ public final class PixelLight {
       "   if (view == 3) { float c = mod(sq.x + sq.y + lz, 2.0); L = vec3(0.35 + 0.5 * c, 0.35 + 0.3 * fxy.x, 0.35 + 0.3 * fxy.y); }",
       "   if (view == 16) L = vec3(fract(P.x), fract(P.y), (mod(floor(P.x), 4.0) * 4.0 + mod(floor(P.y), 4.0) + 0.5) / 16.0);", // dev: the lit point itself, unshaded (the Fossoil shelf speckle)
       "   if (view == 8) L = vec3(float(conn & 15) / 15.0, float(conn >> 4) / 15.0, V);", // dev: connectivity, torch visibility
-      "   if (view == 9) L = vec3(pplOpt2.y >= 0.0 ? pplMask(P) : 0.5);", // dev: the torch shadow mask as read (reprojected)
+      "   if (view == 9) L = vec3(pplOpt2.y >= 0.0 ? pplMaskN(P, n) : 0.5);", // dev: the torch shadow mask as read (reprojected; map mode: the map)
       "#endif",
       "   if (view == 10) L = B.a < 0.999 && B.a > 0.001 ? vec3(1.0, 0.2, 0.2) : vec3(0.2, 1.0, 0.2);", // dev: red where the edge path runs
       "   if (view == 11) L = B.rgb;", // dev: the base light between the centres
@@ -3376,6 +3623,195 @@ public final class PixelLight {
       "      }",
       "   }",
       "   fragColor = vec4(vis, d, 0.0, 1.0);",
+      "}");
+
+   /**
+    * pplShadowMode=hiz: the march over a min-depth pyramid of the scene depth (Hi-Z tracing, as screen-space reflections do
+    * it): the ray climbs a level while no surface of the cell it crosses is in front of it (the floor under a ray rising to
+    * the torch: most of the way), drops a level where one may be, and at the finest level tests the window pixels it
+    * crosses with the march's thickness window. Every pixel's ray tests whole window pixels (no per-pixel sample phase:
+    * no stripes), and the reach costs little: pplShadowHizSquares.
+    */
+   static final boolean SHADOW_HIZ = "hiz".equals(Config.PPL_SHADOW_MODE);
+
+   private static final String HIZ_FRAG = String.join("\n",
+      "#version 420",
+      "uniform sampler2D SceneDepth;",
+      LIGHT_GLSL,
+      "float pplDepthAt(vec2 f) { return texelFetch(SceneDepth, ivec2(f), 0).r; }",
+      "uniform sampler2D Hiz;", // level k: the nearest depth over 2^(k+1) window px, from the viewport's origin
+      "uniform int uHizTop;", // its last level
+      "uniform vec4 pplSv;",
+      "uniform vec4 pplSa, pplSb;",
+      "uniform float pplSteps;",
+      "out vec4 fragColor;",
+      "vec3 pplWin(vec3 Q) {", // window px x, y and the depth of a world point
+      "   return vec3((Q.x - Q.y - pplMapA.y) / pplMapA.x, (Q.x + Q.y - 6.0 * Q.z - pplMapA.w) / pplMapA.z, (Q.x + Q.y + 2.0 * Q.z - pplMapC.y) / pplMapC.x);",
+      "}",
+      "bool pplHit(vec2 f, float ray) {",
+      "   float gap = ray - texelFetch(SceneDepth, ivec2(f), 0).r;",
+      "   return gap > 0.00016 && gap < 0.0035;",
+      "}",
+      "void main() {",
+      "   vec2 f = pplSv.xy + (floor(gl_FragCoord.xy) + 0.5) * pplSv.z;",
+      "   float d = texelFetch(SceneDepth, ivec2(f), 0).r;",
+      "   float vis = 1.0;",
+      "   if (d < 1.0) {",
+      "      vec3 P = pplPos(f, d);",
+      "      if (pplTorch(P.xy, pplSa, pplSb, 1.0) > 0.01) {",
+      "         vec3 dd = pplSa.xyz - P;",
+      "         float len = length(dd.xy);",
+      "         float span = min(len - 0.35, pplOpt.w);",
+      "         if (span > 0.05) {",
+      "            vec3 st = dd / len;",
+      "            vec3 a = pplWin(P + st * 0.06), b = pplWin(P + st * (span + 0.06));",
+      "            vec2 s0 = a.xy - pplSv.xy, dir = b.xy - a.xy;", // from the viewport's origin
+      "            float pxLen = length(dir);",
+      "            if (pxLen < 4.0) {", // a ray along the view: 16 even samples, as the march
+      "               for (int k = 0; k < 16; k++) {",
+      "                  float t = (float(k) + 0.5) / 16.0;",
+      "                  if (pplHit(pplSv.xy + s0 + dir * t, mix(a.z, b.z, t))) { vis = 0.0; break; }",
+      "               }",
+      "            } else {",
+      "               vec2 inv = vec2(abs(dir.x) > 1e-5 ? 1.0 / dir.x : 1e9, abs(dir.y) > 1e-5 ? 1.0 / dir.y : 1e9);",
+      "               vec2 sgn = step(0.0, dir);",
+      "               int level = 0;",
+      "               float t = 0.0;",
+      "               for (int it = 0; it < 128 && t < 1.0; it++) {",
+      "                  vec2 p = s0 + dir * t;",
+      "                  float cs = float(2 << level);",
+      "                  vec2 cell = floor(p / cs);",
+      "                  vec2 tb = ((cell + sgn) * cs - s0) * inv;",
+      "                  float te = min(min(abs(dir.x) > 1e-5 ? tb.x : 1e9, abs(dir.y) > 1e-5 ? tb.y : 1e9), 1.0);",
+      "                  ivec2 ci = ivec2(cell);",
+      "                  float m = any(lessThan(ci, ivec2(0))) || any(greaterThanEqual(ci, textureSize(Hiz, level))) ? 1.0 : texelFetch(Hiz, ci, level).r;", // off the screen: nothing
+      "                  float rmax = max(mix(a.z, b.z, t), mix(a.z, b.z, te));",
+      "                  if (rmax - m <= 0.00016) {", // nothing in this cell in front of the ray: over it, a level up
+      "                     t = te + 1e-5;",
+      "                     level = min(level + 1, uHizTop);",
+      "                  } else if (level > 0) {",
+      "                     level--;",
+      "                  } else {", // a 2 x 2 px cell that may hold a hit: the window pixels the ray crosses in it
+      "                     float n = clamp(ceil((te - t) * pxLen), 1.0, 4.0);",
+      "                     for (float k = 0.0; k < n; k += 1.0) {",
+      "                        float tk = mix(t, te, (k + 0.5) / n);",
+      "                        if (pplHit(pplSv.xy + s0 + dir * tk, mix(a.z, b.z, tk))) { vis = 0.0; break; }",
+      "                     }",
+      "                     if (vis == 0.0) break;",
+      "                     t = te + 1e-5;",
+      "                  }",
+      "               }",
+      "            }",
+      "         }",
+      "      }",
+      "   }",
+      "   fragColor = vec4(vis, d, 0.0, 1.0);",
+      "}");
+
+   /** The pyramid's reduction: the nearest of a 2 x 2 block of the level below (level 0: of the window's depth). */
+   private static final String HIZ_REDUCE_FRAG = String.join("\n",
+      "#version 330",
+      "uniform sampler2D Src;",
+      "uniform int uLod;",
+      "uniform ivec2 uOff;",
+      "out vec4 oDepth;",
+      "void main() {",
+      "   ivec2 p = ivec2(gl_FragCoord.xy) * 2 + uOff;",
+      "   ivec2 mx = textureSize(Src, uLod) - 1;",
+      "   float a = texelFetch(Src, min(p, mx), uLod).r, b = texelFetch(Src, min(p + ivec2(1, 0), mx), uLod).r;",
+      "   float c = texelFetch(Src, min(p + ivec2(0, 1), mx), uLod).r, e = texelFetch(Src, min(p + ivec2(1, 1), mx), uLod).r;",
+      "   oDepth = vec4(min(min(a, b), min(c, e)));",
+      "}");
+
+   /** pplShadowMode=sss: screen-space shadows in the manner of Bend Studio's (Days Gone): rings round the light's screen point. */
+   static final boolean SHADOW_SSS = "sss".equals(Config.PPL_SHADOW_MODE);
+
+   /**
+    * pplShadowMode=sss, full resolution: from each pixel towards the torch's point on the screen (the view is orthographic,
+    * so the ray's depth is linear in its screen distance), samples on rings round that point shared by every pixel (Bend's
+    * wavefronts: neighbouring pixels test the same columns, the shadow's edges follow the depth smoothly), one window px
+    * apart for the first 16, the spacing doubling every 16 (64 at most; the first spacing a power of two that makes them
+    * reach the march's span); a sample is a hit inside the march's thickness window.
+    */
+   private static final String SSS_FRAG = String.join("\n",
+      "#version 420",
+      "uniform sampler2D SceneDepth;",
+      LIGHT_GLSL,
+      "float pplDepthAt(vec2 f) { return texelFetch(SceneDepth, ivec2(f), 0).r; }",
+      "uniform vec4 pplSv;",
+      "uniform vec4 pplSa, pplSb;",
+      "uniform float pplSteps;",
+      "out vec4 fragColor;",
+      "void main() {",
+      "   vec2 f = pplSv.xy + (floor(gl_FragCoord.xy) + 0.5) * pplSv.z;",
+      "   float d = texelFetch(SceneDepth, ivec2(f), 0).r;",
+      "   float vis = 1.0;",
+      "   if (d < 1.0) {",
+      "      vec3 P = pplPos(f, d);",
+      "      if (pplTorch(P.xy, pplSa, pplSb, 1.0) > 0.01) {",
+      "         vec3 L = pplSa.xyz;",
+      "         float lenW = length((L - P).xy);",
+      "         float span = min(lenW - 0.35, pplOpt.w);",
+      "         vec2 fL = vec2((L.x - L.y - pplMapA.y) / pplMapA.x, (L.x + L.y - 6.0 * L.z - pplMapA.w) / pplMapA.z);",
+      "         float dL = (L.x + L.y + 2.0 * L.z - pplMapC.y) / pplMapC.x;",
+      "         vec2 dv = f - fL;",
+      "         float rp = length(dv);",
+      "         if (span > 0.05 && rp > 2.0) {",
+      "            vec2 dir = dv / rp;",
+      "            float rStart = rp * (1.0 - 0.06 / lenW), rEnd = rp * (1.0 - min(span / lenW, 1.0));",
+      "            float st = exp2(max(ceil(log2((rStart - rEnd) / 240.0)), 0.0));",
+      "            float r = (floor(rStart / st) - 0.0) * st;",
+      "            for (int k = 0; k < 64 && r > rEnd; k++) {",
+      "               float ray = d + (dL - d) * (1.0 - r / rp);",
+      "               float gap = ray - texelFetch(SceneDepth, ivec2(fL + dir * r), 0).r;",
+      "               if (gap > 0.00016 && gap < 0.0035) { vis = 0.0; break; }",
+      "               if ((k & 15) == 15) st *= 2.0;",
+      "               r = (floor(r / st) - 1.0) * st;",
+      "            }",
+      "         }",
+      "      }",
+      "   }",
+      "   fragColor = vec4(vis, d, 0.0, 1.0);",
+      "}");
+
+   /**
+    * pplShadowTemporalPct: the 3x3 depth-aware blur, then blended with the previous mask (Hist) at this texel's surface
+    * reprojected into the previous frame (the same depth test as the composite's read; a texel whose surface the last
+    * frame did not show takes the new value alone).
+    */
+   private static final String MASK_TBLUR_FRAG = String.join("\n",
+      "#version 330",
+      "uniform sampler2D Mask, Hist;",
+      "uniform vec4 pplMapA, pplMapC;", // this frame's window mapping; pplMapC.zw: this origin minus the previous one (x - y, x + y)
+      "uniform vec4 uVp;", // the viewport's origin, window px per mask texel
+      "uniform vec4 uPrevA, uPrevC, uPrevVp;",
+      "uniform float uW;", // the history's weight
+      "out vec4 fragColor;",
+      "void main() {",
+      "   ivec2 c = ivec2(gl_FragCoord.xy);",
+      "   vec2 m0 = texelFetch(Mask, c, 0).rg;",
+      "   float sum = 0.0, wsum = 0.0;",
+      "   for (int y = -1; y <= 1; y++) {",
+      "      for (int x = -1; x <= 1; x++) {",
+      "         vec2 m = texelFetch(Mask, c + ivec2(x, y), 0).rg;",
+      "         float w = abs(m.y - m0.y) < 0.0015 ? (x == 0 && y == 0 ? 2.0 : 1.0) : 0.0;",
+      "         sum += m.x * w;",
+      "         wsum += w;",
+      "      }",
+      "   }",
+      "   float v = sum / max(wsum, 1e-4);",
+      "   if (m0.y < 1.0) {",
+      "      vec2 f = uVp.xy + (vec2(c) + 0.5) * uVp.z;",
+      "      float A = pplMapA.x * f.x + pplMapA.y, B = pplMapA.z * f.y + pplMapA.w, C = pplMapC.x * m0.y + pplMapC.y;",
+      "      A += pplMapC.z; B += pplMapC.w; C += pplMapC.w;", // into the previous frame's origin
+      "      vec2 fp = vec2((A - uPrevA.y) / uPrevA.x, (B - uPrevA.w) / uPrevA.z);",
+      "      vec2 uv = (fp - uPrevVp.xy) / uPrevVp.zw;",
+      "      if (uv.x >= 0.0 && uv.y >= 0.0 && uv.x <= 1.0 && uv.y <= 1.0) {",
+      "         vec2 h = texture(Hist, uv).rg;",
+      "         if (abs(uPrevC.x * h.g + uPrevC.y - C) <= 1.0) v = mix(v, h.r, uW);",
+      "      }",
+      "   }",
+      "   fragColor = vec4(v, m0.y, 0.0, 1.0);",
       "}");
 
    /** 3x3 blur of the mask, only across texels at a depth close to the centre's. */
@@ -3669,7 +4105,7 @@ public final class PixelLight {
    // ------------------------------------------------------------------------------------------------ dev dump
 
    private static String pendingLitDump; // the scene again after this frame's pass: <tag>-lit
-   private static long worldUpNs;
+   static long worldUpNs; // (TorchShadowMap reads it: devPplShadowDumpAt)
    private static int dumpAtNext;
    private static float[] dumpAt;
 
