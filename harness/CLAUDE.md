@@ -368,6 +368,10 @@ session's batch, what is running. One choice question; its probabilities are the
 the order is the plan (`machines/<m>/plan`, `next [machine]` with an ETA per job; `submit` prints the new job's
 place and ETA). The policy (fairness between sessions, short jobs first when equal, wrap-up / media / release
 work unblocked, no starvation past ~30 min, a session's batch kept in order) is text in `queue-jev.py`, not code.
+One exception in code (2026-10-25): a session the maintainer gave priority (`touch $PZQ_DIR/sessions/<sid>/priority`,
+or a job whose intent starts with `MAINTAINER PRIORITY`) takes turns with everyone else: one priority job, then one of
+Jev's pick of the others, and so on (whoever did not start the machine's last job goes next; priority jobs in submission
+order). `next` says `N maintainer-priority job(s) take turns with the others`. Remove the file when that work is done.
 Jev unreachable: pending jobs show `blocked: waiting for Jev` and the worker retries every 30 s
 (`PZQ_JEV_FALLBACK=fifo` takes the oldest instead); `$PZQ_DIR/jev.log`. `submit` refuses a job without
 `--intent` / `--progress` (and `--name` on a session's first submit); `queue.sh session [--progress "..."]`

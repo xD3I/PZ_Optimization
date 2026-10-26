@@ -107,6 +107,15 @@ def gather(q, machine):
     pending = [j for j in jobs if j["_status"] == "pending" and j.get("machine") == machine]
     running = [j for j in jobs if j["_status"] == "running" and j.get("machine") == machine]
 
+    def is_prio(j):  # the maintainer's priority: sessions/<sid>/priority exists, or the job's intent starts with it
+        return ((q / "sessions" / j.get("session", "?") / "priority").exists()
+                or (j.get("intent") or "").startswith("MAINTAINER PRIORITY"))
+
+    # whether the job started last on this machine (running or finished) was a priority one: the turns alternate
+    last = max(((epoch(read(Path(j["_dir"]) / "started")) or 0, j) for j in jobs
+                if j.get("machine") == machine and j["_status"] != "pending"), key=lambda t: t[0], default=None)
+    last_prio = bool(last and is_prio(last[1]))
+
     sessions = {}
 
     def sess(sid):
@@ -161,6 +170,7 @@ def gather(q, machine):
             "args": (j.get("args") or "")[:200],
             "goal": j.get("goal") or None,
             "_dir": j["_dir"],
+            "_prio": is_prio(j),
         })
     run_now = None
     if running:
@@ -170,7 +180,7 @@ def gather(q, machine):
         run_now = {"label": r.get("label"), "session": sess(r.get("session", "?"))["name"],
                    "estimate_s": int(r.get("size") or 0) or None, "elapsed_s": int(el),
                    "remaining_s_estimate": max(0, int(r.get("size") or 0) - int(el))}
-    return cands, run_now, sessions
+    return cands, run_now, sessions, last_prio
 
 
 def eta(order, run_now):
@@ -197,11 +207,17 @@ def write_plan(q, machine, order, probs, etas, run_now, how):
 
 
 def rank(args):
-    cands, run_now, sessions = gather(args.q, args.machine)
+    cands, run_now, sessions, last_prio = gather(args.q, args.machine)
     if not cands:
         return 1
+    # jobs the maintainer gave priority take turns with the others (one each, starting with whoever did not run
+    # last), in submission order; Jev orders the others
+    prio = sorted((c for c in cands if c["_prio"]), key=lambda c: c["id"])
+    cands = [c for c in cands if not c["_prio"]]
     how = "single candidate"
-    if len(cands) == 1:
+    if not cands:
+        order, probs = [], []
+    elif len(cands) == 1:
         order, probs = cands, [1.0]
     else:
         try:
@@ -213,7 +229,7 @@ def rank(args):
             "now": time.strftime("%Y-%m-%d %H:%M"),
             "running_now": run_now,
             "sessions": {v["name"]: {k: x for k, x in v.items() if k != "name"} for v in sessions.values()},
-            "pending": [{k: v for k, v in c.items() if k != "_dir"} for c in cands],
+            "pending": [{k: v for k, v in c.items() if not k.startswith("_")} for c in cands],
         }
         crit = {f"job_{c['id']}": (f"{c['label']} ({c['kind']}, session {c['session']}, ~{c['estimate_s']} s, "
                                    f"waited {c['waited_min']} min): {c['intent'][:160]}") for c in cands}
@@ -232,6 +248,17 @@ def rank(args):
         how = f"Jev, confidence {ans.get('confidence', 0):.2f}"
         if pick not in key:
             how += " (pick not a candidate; ordered by probability)"
+    if prio:
+        mine, theirs, merged, ps = list(prio), list(zip(order, probs)), [], []
+        turn_mine = not last_prio
+        while mine or theirs:
+            if (turn_mine and mine) or not theirs:
+                merged.append(mine.pop(0)); ps.append(1.0)
+            else:
+                c, pr_ = theirs.pop(0); merged.append(c); ps.append(pr_)
+            turn_mine = not turn_mine
+        order, probs = merged, ps
+        how = f"{len(prio)} maintainer-priority job(s) take turns with the others; " + how
     etas = eta(order, run_now)
     write_plan(args.q, args.machine, order, probs, etas, run_now, how)
     for c, p, e in zip(order, probs, etas):
