@@ -673,6 +673,33 @@ public final class Config {
    public static final boolean CHUNK_HANDOFF_COST_CHUNK = "chunk".equals(string("chunkHandoffCost", "chunk")); // chunk by default (maintainer, 2026-10-15) f8-handoff 2026-10-15, chunkHandoffSlackWork: square (the 2026-10-05 model: a learned cost per square, at least half its decaying peak, learned in the slack only) or chunk (the running mean of a whole hand-off, slack and in-frame ones)
    public static final int CHUNK_HANDOFF_FRAME_BUDGET_US = Math.max(0, integer("chunkHandoffFrameBudgetUs", 1500)); // 1500 by default (maintainer, 2026-10-15) f8-handoff 2026-10-15, at a cap with slackWork: a backlog's in-frame hand-off (queue >= chunkHandoffSlackBacklog) stops once this frame's hand-offs took this long (at least one chunk, at most the stock count), the rest join in the slack; a world-load / teleport backlog (chunkHandoffPaceBacklog, 160) keeps the stock count; 0 = stock
    public static final boolean CHUNK_HANDOFF_FORCE_ANY_FRAME = bool("chunkHandoffForceAnyFrame", true); // on by default (maintainer, 2026-10-15) f8-handoff, chunkHandoffSlackMaxWait: an overdue chunk joins in the next slack, light frame or not (one forced job a frame as before)
+   public static final boolean LUA_LOAD_STREAM = bool("luaLoadStream", true); // lua-stream (2026-10-26): the time-sliced chunk hand-off below on (with luaLoadBudgetUs > 0); a boolean of its own so pzopt.ModCompat can switch it off when a Java mod patches IsoChunk.doLoadGridsquare / IsoChunkMap.updateInternal
+   public static final int LUA_LOAD_BUDGET_US = Math.max(0, integer("luaLoadBudgetUs", 1000)); // lua-stream 2026-10-25 (pzopt.LuaStream): a streamed chunk's hand-off (IsoChunk.doLoadGridsquare: its square loop with every mod's LoadGridsquare handlers, the loot fill, LoadChunk) runs square by square over the next frames under a per-frame time budget of at least this many us (more when a backlog builds up), instead of whole in one frame; one chunk at a time in the streamer's order, every square's handlers in stock order, the chunk drawn only once its last part ran; single player; 0 = off (the stock hand-off)
+   public static final int LUA_LOAD_DRAIN_MS = Math.max(1, integer("luaLoadDrainMs", 2000)); // luaLoadBudgetUs: the backlog (the loading chunk's rest + the queued chunks at their learned cost) is spread over this many ms of frames, on top of the keep-up share
+   public static final int LUA_LOAD_MAX_FRAME_PCT = Math.max(0, integer("luaLoadMaxFramePct", 0)); // luaLoadBudgetUs: the frame's hand-off may also take up to this share of the rest of the game step (its recent mean) when there is backlog; 0 = only the burst cap
+   public static final int LUA_LOAD_BURST_PCT = Math.max(0, integer("luaLoadBurstPct", 0)); // luaLoadBudgetUs: > 0 caps a frame's hand-off at this share of the keep-up share (the arrivals' long-run work a frame) plus the backlog's drain share; 0 (default since 1d) = no cap but luaLoadMaxFramePct (1c's 130 % cap without the drain share held the queue at 150 on the drive)
+   public static final int LUA_LOAD_DEMAND_WINDOW_MS = Math.max(100, integer("luaLoadDemandWindowMs", 8000)); // luaLoadBudgetUs: the arrivals' rate is averaged over this long (time constant)
+   public static final int LUA_LOAD_BACKLOG = Math.max(1, integer("luaLoadBacklog", 400)); // luaLoadBudgetUs: with this many chunks queued (a world load, a teleport; 160 before 1d: a 120 km/h drive on 650 mods reached it) a frame gets luaLoadBacklogMs
+   public static final int LUA_LOAD_BACKLOG_MS = Math.max(1, integer("luaLoadBacklogMs", 100)); // luaLoadBudgetUs: a backlog frame's hand-off time
+   public static final boolean LUA_LOAD_SLACK = bool("luaLoadSlack", true); // luaLoadBudgetUs at a frame cap: the steps also run in the game step's slack (pzopt.SlackWork) while their learned cost fits
+   public static final boolean LUA_LOAD_NEAREST_FIRST = bool("luaLoadNearestFirst", false); // luaLoadBudgetUs: the next chunk handed off is the queued one nearest the point the player reaches in luaLoadLookaheadMs (instead of the streamer's order), so the chunks on screen ahead are ready first
+   public static final int LUA_LOAD_LOOKAHEAD_MS = Math.max(0, integer("luaLoadLookaheadMs", 750)); // luaLoadNearestFirst: how far ahead along the player's motion
+   public static final int LUA_LOAD_NEAREST_MAX_WAIT_MS = Math.max(0, integer("luaLoadNearestMaxWaitMs", 1000)); // luaLoadNearestFirst: a chunk queued longer than this goes first wherever it is (0 = never), so a small budget does not starve the far ones
+   public static final boolean MAP_OBJECTS_FAST = bool("mapObjectsFast", false); // lua-stream idea 3 (pzopt.LuaStreamMapObjects): the hand-off's MapObjects walks (OnNewWithSprite / OnLoadWithSprite, already Java in Build 42) run only on a square with an object whose sprite name has a callback; exact (the stock walk calls nothing on the others)
+   public static final boolean DEV_MAP_OBJECTS_CHECK = bool("devMapObjectsCheck", false); // dev: mapObjectsFast, every square's decision compared with a verbatim copy of the stock walk's (console "map objects fast check")
+   public static final boolean DEV_LUA_STREAM_JAVA = bool("devLuaStreamJava", false); // dev: luaLoadBudgetUs / idea 7, every Lua -> Java call made inside a LoadGridsquare / LoadChunk handler counted and timed by method (inclusive; ~50 ns a call), the top 60 logged at the route's end and every 30 s (pzopt.LuaStreamJava)
+   public static final boolean DEV_LUA_STREAM_LOG = bool("devLuaStreamLog", false); // dev: luaLoadBudgetUs, a console line every 10 s (chunks, steps, budgets, chunk latency, forced finishes); the benchmark writes <step>-luastream.csv whatever its value
+   public static final boolean LUA_LOAD_PREFILTER = bool("luaLoadPrefilter", true); // lua-stream idea 4 (pzopt.LuaStreamDispatch): a LoadGridsquare handler is skipped on a square whose signature (level, outside / room bits, every object's class, sprite and name, the world items' types) it already met with no effect, while it read nothing but that signature (getters of the square, its objects, sprites, properties and lists, constant globals) and Lua tables unchanged since; exact by construction (pzopt.LuaEffects records the learning calls; a call that changed an upvalue or a table, called a setter, or read a coordinate, the cell, another square or a Java object out of a Lua table is never learned; mod data, room names, dead bodies and container counts are part of the signature)
+   public static final boolean LUA_LOAD_NOOP_SKIP = bool("luaLoadNoopSkip", false); // lua-stream idea 5 (risky): like luaLoadPrefilter but also for handlers that read more than the signature (coordinates, mod data, the cell): a handler that had no effect luaLoadNoopLearn times on a square signature is skipped on it; NOT exact (a handler keyed by coordinates misses its square), one skip in luaLoadNoopSample still runs, recorded, and an effect there turns that signature back on
+   public static final int LUA_LOAD_NOOP_LEARN = Math.max(1, integer("luaLoadNoopLearn", 4)); // luaLoadNoopSkip: no-effect calls on one signature before it is skipped
+   public static final boolean LUA_LOAD_SIG_PROJECT = bool("luaLoadSigProject", true); // luaLoadPrefilter: a handler's square signature hashes only the parts its covered getters ever read (level, room, tree, square properties, the objects' classes / sprites / names / mod data / containers, specials, world items, square mod data, dead bodies, players): one learned call covers every square alike in what it reads; false = the whole signature for every handler
+   public static final int LUA_LOAD_NOOP_SAMPLE = Math.max(1, integer("luaLoadNoopSample", 32)); // luaLoadNoopSkip / luaLoadPrefilter: one skip in this many runs anyway, recorded (the live checker)
+   public static final boolean LUA_LOAD_BATCH = bool("luaLoadBatch", false); // lua-stream idea 6: a chunk's LoadGridsquare handlers run handler by handler over all its squares (after the square loop) instead of square by square inside it; reorders mod handlers against each other and against the later squares' erosion / map objects (devLuaLoadEffects counts the chunks where that can matter)
+   public static final boolean LUA_LOAD_CHUNK_SPLIT = bool("luaLoadChunkSplit", true); // lua-stream idea 8, with luaLoadBudgetUs: a streamed chunk's LoadChunk handlers run one per hand-off step (under the frame budget) instead of all in the step that ends the chunk; the chunk is drawn after the last one (its handlers see loadedFrame -1 instead of the frame number)
+   public static final boolean DEV_LUA_LOAD_CHECK = bool("devLuaLoadCheck", false); // dev: luaLoadPrefilter / luaLoadNoopSkip, every skip runs the handler anyway, recorded, and counts the ones that had an effect (console "lua load check"; the dual-run checker)
+   public static final boolean DEV_LUA_LOAD_ORDER_CHECK = bool("devLuaLoadOrderCheck", false); // dev: pzopt.LuaOrderCheck, every LoadGridsquare (and, with luaLoadChunkSplit, LoadChunk) handler call recorded with its footprint (table keys, squares, global state, random draws read / written); at the route end the console counts the pairs luaLoadBatch would reverse and that conflict, and the chunk pairs luaLoadNearestFirst reversed and that conflict; slow
+   public static final boolean DEV_LUA_LOAD_EFFECTS = bool("devLuaLoadEffects", false); // dev: every LoadGridsquare handler call recorded by pzopt.LuaEffects (effects, reads beyond the signature), per handler in <step>-luahandlers.csv; slow (every table access hooked)
+   public static final boolean DEV_LUA_STREAM_HANDLERS = bool("devLuaStreamHandlers", false); // dev: the LoadGridsquare dispatch through pzopt.LuaStreamDispatch with nothing skipped, each handler timed (<step>-luahandlers.csv, console at the route end)
    public static final boolean DEV_HANDOFF_LOG = bool("devHandoffLog", false); // dev, f8-handoff: one console line per chunk hand-off (levels, squares, objects, new, in slack, ns per part)
    public static final int CHUNK_HANDOFF_SLACK_MAX_WAIT = Math.max(0, integer("chunkHandoffSlackMaxWait", 6)); // 6 by default (maintainer, 2026-10-15) f8-handoff 2026-10-15, chunkHandoffSlackWork: a queued chunk whose hand-off does not fit the slack joins after this many frames, into a light frame (four times as many: any frame); 0 = slackMaxWaitFrames (600)
    public static final int CHUNK_HANDOFF_SLACK_BACKLOG = Math.max(1, integer("chunkHandoffSlackBacklog", 24)); // chunkHandoffSlackWork: with this many queued (a world load, a teleport) the in-frame hand-off runs as before
@@ -768,6 +795,33 @@ public final class Config {
    public static final boolean LUA_SILENT_SKIP = bool("luaSilentSkip", true); // zombie redesign: a batched zombie's OnZombieUpdate is not captured for the replay while no Lua function listens to that event (checked when the entity flight opens; pzopt.UpdateBatch)
    public static final boolean POSTUPDATE_ELIGIBLE_ON_WORKER = bool("postupdateEligibleOnWorker", true); // zombie redesign, with postupdateParallel: the movement batch's eligibility test runs in each zombie's task on the workers instead of in the game thread's scan (pzopt.PostupdateBatch)
    public static final boolean POSTUPDATE_VEHICLE_ON_WORKER = bool("postupdateVehicleOnWorker", true); // zombie redesign, with postupdateParallel: a zombie whose move comes within reach of a vehicle resolves it in its task on the worker (PolygonalMap2's lock, polygons brought up to date first) instead of leaving its whole movement to the game thread (pzopt.PostupdateBatch)
+   // ---- mod Lua on the per-zombie update event (2026-10-25, worktree lua-zombie; pzopt.LuaZombie) ----
+   public static final int LUA_ZOMBIE_HZ = integer("luaZombieHz", 0); // mod Lua: a mod's OnZombieUpdate handler runs on a zombie at most this many times a second (0 = every update, stock); the zombies' phases are spread so every frame carries an equal share (pzopt.LuaZombie)
+   public static final boolean LUA_ZOMBIE_LOD = bool("luaZombieLod", true); // mod Lua: the OnZombieUpdate rate by tier (instead of luaZombieHz): near a local player luaZombieLodHz0, else on screen luaZombieLodHz1, off screen luaZombieLodHz2
+   public static final int LUA_ZOMBIE_LOD_NEAR = integer("luaZombieLodNear", 12); // mod Lua, luaZombieLod: the near tier's distance to a local player in squares
+   public static final int LUA_ZOMBIE_LOD_HZ0 = integer("luaZombieLodHz0", 0); // mod Lua, luaZombieLod: the near tier's rate (0 = every update; the budget never lowers it)
+   public static final int LUA_ZOMBIE_LOD_HZ1 = integer("luaZombieLodHz1", 10); // mod Lua, luaZombieLod: the on-screen tier's rate
+   public static final int LUA_ZOMBIE_LOD_HZ2 = integer("luaZombieLodHz2", 4); // mod Lua, luaZombieLod: the off-screen tier's rate
+   public static final boolean LUA_ZOMBIE_TIME_COMP = bool("luaZombieTimeComp", true); // mod Lua, with a rate: a deferred handler call sees GameTime's multiplier (getMultiplier, getTimeDelta, ...) for the time since its last call on that zombie
+   public static final String LUA_ZOMBIE_WRITERS = string("luaZombieWriters", "learn"); // mod Lua, with a rate: handlers the static scan finds writing the zombie: full (every update), learn (at the rate, every update on a zombie the last call changed, for luaZombieHotMs), stagger (at the rate); watch: every mod handler learned, a write being a setter call on the zombie seen by the write barrier in Kahlua's MethodCaller (pzopt.LuaZombieWatch) or a snapshot change
+   public static final int LUA_ZOMBIE_HOT_MS = integer("luaZombieHotMs", 1000); // mod Lua, luaZombieWriters=learn: how long a changed zombie keeps its writer handler at every update
+   public static final String LUA_ZOMBIE_EXEMPT = string("luaZombieExempt", ""); // mod Lua: handlers kept at every update, "modId" or "modId|file|function", comma-separated (besides LuaZombie.KNOWN)
+   public static final boolean LUA_ZOMBIE_CAPTURE_DUE = bool("luaZombieCaptureDue", true); // mod Lua, with a rate: a batched zombie with no handler due is not captured for UpdateBatch's game-thread replay
+   public static final int LUA_ZOMBIE_BUDGET_US = integer("luaZombieBudgetUs", 2000); // mod Lua: the deferred handlers' cost a frame is held near this many us by stretching every zombie's interval (LOD: all but the near tier), never beyond luaZombieMaxGapMs; alone (no rate) the base is every update (0 = the fixed rate)
+   public static final int LUA_ZOMBIE_MAX_GAP_MS = integer("luaZombieMaxGapMs", 1000); // mod Lua, luaZombieBudgetUs: the longest interval the budget may give a zombie's deferred handlers
+   public static final boolean LUA_ZOMBIE_DIRTY_SKIP = bool("luaZombieDirtySkip", false); // mod Lua (risky): a zombie due for its deferred handlers is skipped when its square, state, target, health and mod data are what they were at its last call
+   public static final boolean LUA_ZOMBIE_BATCH_API = bool("luaZombieBatchApi", false); // mod Lua: Events.OnZombieUpdateBatch(zombies, elapsed) for mod authors, once a frame with the zombies due (every updated zombie without a rate)
+   public static final int LUA_ZOMBIE_CHEAP_US = integer("luaZombieCheapUs", 0); // mod Lua, with a rate: a handler whose mean cost a call (EWMA) is below this many us runs every update (deferring it saves little and keeps its guard exact); 0 = every mod handler at the rate
+   public static final boolean LUA_ZOMBIE_COST = bool("luaZombieCost", false); // mod Lua: each OnZombieUpdate handler's cost per call (EWMA) in the lua zombie log lines
+   public static final boolean LUA_ZOMBIE_DISPATCH = bool("luaZombieDispatch", false); // mod Lua, measurement: our dispatch with every handler at every update (the loop's own cost against the stock Event.trigger)
+   public static final boolean LUA_ZOMBIE_OUT = bool("luaZombieOut", false); // mod Lua, measurement: pzopt-luazombie.out, one row a frame (dispatch, replay, calls, skips), also with every key off
+   public static final boolean LUA_ZOMBIE_COST_SHARE = bool("luaZombieCostShare", false); // mod Lua, with luaZombieBudgetUs: a deferred handler's interval grows with the square root of its cost a call (1, 2, 4 or 8 times the cheapest one's): for the same budget the shortest mean interval over the handlers
+   public static final boolean DEV_LUA_ZOMBIE_ALPHA = bool("devLuaZombieAlpha", false); // dev: the flicker check, reversals of the on-screen zombies' target / drawn alpha a frame (pzopt.LuaZombieAlpha, pzopt-luazombie.out alpha_* columns)
+   public static final int DEV_LUA_ZOMBIE_CHECK = integer("devLuaZombieCheck", 0); // dev: the dual-evaluation rig, on one zombie in N a frame every deferred handler runs anyway and the zombie's state before / after says what the skip would lose (lua zombie check lines)
+   public static final String DEV_LUA_ZOMBIE_VARIANTS = string("devLuaZombieVariants", ""); // dev: OnZombieUpdate rates compared within one run, "hz[:lod][:b<us>][:watch][:n<near>][:w]" (w = luaZombieCostShare) items separated by ';' ("0" = the stock dispatch, b = luaZombieBudgetUs), cycled every devLuaZombieCycleMs (pzopt-luazombie.out ab column = the variant index)
+   public static final int DEV_LUA_ZOMBIE_CYCLE_MS = integer("devLuaZombieCycleMs", 230); // dev: devLuaZombieVariants' slice length
+   public static final boolean DEV_GT_APPEND = bool("devGtAppend", false); // dev: pzopt-gtab.out is appended to instead of rewritten by each process (a benchmark chain runs one process per pass; harness/benchmark-run.sh removes the file at the chain's start)
+   public static final boolean LUA_COLLIDE_DEDUPE = bool("luaCollideDedupe", false); // mod Lua: OnCharacterCollide / OnObjectCollide fire once per (object, other) pair a frame (pzopt.LuaCollide)
    public static final int POSTUPDATE_STREAM_MIN = integer("postupdateStreamMin", 128); // zombie redesign: postupdateFuse's early stream and postupdateClean run only in a frame with at least this many zombies in the movement queue (below it the synchronous shape: the stream's wake and join cost more than a handful of zombies save, -2.5 % fps on the 600 fps drive)
    public static final boolean POSTUPDATE_CLEAN = bool("postupdateClean", true); // zombie redesign, with postupdateParallel + postupdateNoopSkip: a zombie whose square move is a no-op and whose remaining postupdate needs nothing of the game thread (no target, no hits, states without side-effecting condition variables, head on the evaluation task) finishes it in its movement task, and the bucket loop skips it by reference (pzopt.PostupdateBatch, IsoZombie.pzoptCleanPostupdate)
    public static final boolean DEV_CLEAN_EARLY = bool("devCleanEarly", false); // dev: postupdateClean as before the f8-cleanfix (2026-10-13), the rig's control arm: a clean zombie's evaluation published before the bucket loop and nothing put back for a clean zombie the loop never reached (stock skips the entry after one that removes itself) — inexact
@@ -900,6 +954,276 @@ public final class Config {
    public static final boolean LUA_INTERN_CONSTANTS = bool("luaInternConstants", true);
    /** UIElement: prerender / render / update calls to an empty Lua function (a single RETURN) are skipped. */
    public static final boolean LUA_SKIP_EMPTY = bool("luaSkipEmpty", true);
+   /** pzopt.LuaMap (Lua VM pass, 2026-10-25): every Lua table's hash part is a compact insertion-ordered map (same pairs order as the stock LinkedHashMap; the 1..n run found by index). */
+   public static final boolean LUA_FAST_TABLE = bool("luaFastTable", false);
+   /** pzopt.LuaJit (Lua VM pass, 2026-10-25): hot Lua functions compiled to JVM bytecode on a background thread; the interpreter's frames, pc and errors are kept, so tracebacks and the mod profiler read the same. */
+   public static final boolean LUA_JIT = bool("luaJit", false);
+   /** luaJit: background compiler threads (functions and luaJavaFast classes are made in parallel; the game thread never waits for them). */
+   public static final int LUA_JIT_WORKERS = integer("luaJitWorkers", 1);
+   /** luaJit: calls of a Lua function before it is queued for the compiler. */
+   public static final int LUA_JIT_THRESHOLD = integer("luaJitThreshold", 40);
+   /**
+    * luaJitRateMs (2026-10-26): luaJitThreshold entries count only when they come within this many ms (the first count, from
+    * load, starts the clock; a slower count starts over), so a function called a few times a second (a retained UI
+    * element's render, a rare handler) keeps the interpreter: its generated class would run in HotSpot's bytecode
+    * interpreter / C1 for minutes, slower than Kahlua's own C2-compiled loop. 0 = any rate (calls since load). Default
+    * 2000 (lj-h16..h18: mods 0.2339 -> 0.2255 ms against the jit without it, every batch at or under it).
+    */
+   public static final int LUA_JIT_RATE_MS = integer("luaJitRateMs", 2000);
+   /**
+    * luaJitTypedArgs (2026-10-26): a compiled call whose arguments include numbers the compiled code holds unboxed passes
+    * them to its call site as JVM doubles; an exposed Java method whose numeric parameters all arrive that way takes them
+    * without a box (LuaJavaFast's dcallD), any other callee gets them boxed as the compiled code would have boxed them.
+    */
+   public static final boolean LUA_JIT_TYPED_ARGS = bool("luaJitTypedArgs", false);
+   /**
+    * luaJitFrameLite (2026-10-26): call-frame bookkeeping that stock does and that provably has nothing to do is skipped: a
+    * compiled RETURN of a function without closures does not close upvalues, and clearing Lua stack slots that are
+    * already nil writes nothing (Coroutine.stackClear: the same stack afterwards, without a GC store barrier per slot).
+    */
+   public static final boolean LUA_JIT_FRAME_LITE = bool("luaJitFrameLite", false);
+   /** luaJitSlot4 (2026-10-26): a compiled table read site remembers its key's position in four table layouts (luaJitSlot2: two) before a hash lookup. */
+   public static final boolean LUA_JIT_SLOT4 = bool("luaJitSlot4", false);
+   /**
+    * luaJitUiInline (2026-10-26): while a UI render records its reads (uiVerify), a compiled read of a table the site
+    * already logged for that recording takes the small inlined path (UiDeps.readSite would log nothing again).
+    */
+   public static final boolean LUA_JIT_UI_INLINE = bool("luaJitUiInline", false);
+   /** luaJit: registers no closure captures live in JVM locals (spilled to the Lua stack only around calls and deopts); false = every register on the Lua stack, as the interpreter. */
+   public static final boolean LUA_JIT_LOCALS = bool("luaJitLocals", true);
+   /** luaJit: compile functions whose JVM code exceeds HotSpot's 8000-byte limit for JIT compilation (they then run in the JVM interpreter). */
+   public static final boolean LUA_JIT_HUGE = bool("luaJitHuge", false);
+   /** luaJit: numbers that stay numbers (arithmetic, numeric for loops, comparisons) are kept as unboxed doubles in JVM locals and boxed only where a value leaves as an object. */
+   public static final boolean LUA_JIT_NUMBERS = bool("luaJitNumbers", true);
+   /** luaJit: reads of constant String keys (globals, fields, methods) remember the key's position in the table's LuaMap (needs luaFastTable). */
+   public static final boolean LUA_JIT_IC = bool("luaJitInlineCache", true);
+   /**
+    * luaJitMissCache (2026-10-26): a compiled constant-key read the table lacks (obj:method() on an instance) remembers its
+    * metatable's answer at the site until a class table changes (KahluaTableImpl.pzoptMissGetIc) instead of a lookup in the
+    * metatable's chain cache (a HashMap) each time.
+    */
+   public static final boolean LUA_JIT_MISS_CACHE = bool("luaJitMissCache", true);
+   /**
+    * luaJitBoxAlloc (2026-10-26): compiled Lua code and the generated Java calls box a number as a new Double (pzopt.LuaBox,
+    * escape analysis removes most of them) instead of BoxedStaticValues' shared-object tables (8.6 % of the compiled
+    * mods' time in lj-h5). Same values (-0.0 still becomes +0.0); only the identity of integral boxes differs.
+    */
+   public static final boolean LUA_JIT_BOX_ALLOC = bool("luaJitBoxAlloc", true);
+   /**
+    * luaJavaConvertCache (2026-10-26): a generated Java call (luaJavaFast) keeps the converter of its last result class
+    * (KahluaConverterManager.pzoptEpoch says when the manager's converters changed) instead of the manager's HashMap
+    * lookup per call; a game object (no converter but the array one) goes to Lua without a converter call.
+    */
+   public static final boolean LUA_JAVA_CONVERT_CACHE = bool("luaJavaConvertCache", true);
+   /**
+    * luaJitUiDeps (2026-10-26): compiled table reads / writes keep their fast paths (position caches, the Java method cache,
+    * t[i]) while a retained UI element's render is recorded (uiVerify), logging the reads and writes stock rawget /
+    * tableSet log; before, every table access of a recorded render took the stock walk (a third of the compiled code's
+    * table time on the 54-mod list). false = the stock paths during recordings.
+    */
+   public static final boolean LUA_JIT_UI_DEPS = bool("luaJitUiDeps", true);
+   /**
+    * luaMetaVersionNarrow (2026-10-26, Lua VM pass): setmetatable on a table no table uses as a metatable (an instance:
+    * {@code setmetatable(o, self)} in every constructor) no longer bumps KahluaTableImpl.pzoptMetaVersion, the version
+    * every class-chain cache (luaIndexCache) and luaJit miss cache is valid under: no cached chain contains such a table
+    * (a chain is metatable -> its metatable, all marked), and the miss cache compares the instance's own metatable.
+    * uiVerify's chain sums keep seeing every setmetatable through a second counter. false = every setmetatable bumps.
+    */
+   public static final boolean LUA_META_VERSION_NARROW = bool("luaMetaVersionNarrow", true);
+   /**
+    * luaMetaKeyVersion (2026-10-26, Lua VM pass): a write to a class table (some table's metatable) bumps a version of its
+    * key's bucket (1024 buckets by hash code) instead of the global KahluaTableImpl.pzoptMetaVersion; class-chain caches
+    * (luaIndexCache) and luaJit miss caches check both, so a class table that keeps a counter or a timer no longer drops
+    * every cached method lookup of every class each time it changes. Metatable changes, wipes and reloads still bump the
+    * global version. false = every class-table write bumps the global version.
+    */
+   public static final boolean LUA_META_KEY_VERSION = bool("luaMetaKeyVersion", true);
+   /**
+    * luaJitMissPoly (2026-10-26, Lua VM pass): a compiled method-lookup site keeps a second (metatable, answer) entry, so a
+    * site that sees instances of two classes (a base-class method called on two subclasses) answers both from its cache.
+    */
+   public static final boolean LUA_JIT_MISS_POLY = bool("luaJitMissPoly", true);
+   /**
+    * luaJitGetStrInline (2026-10-26, Lua VM pass): a compiled constant-key read's common case (the key at the site's
+    * remembered position, a value there, no UI recording) in a small method C2 inlines into the compiled function, the rest
+    * (absent keys, Java objects, recordings) in the old method; the profile showed the read helper as a call of its own.
+    */
+   public static final boolean LUA_JIT_GET_STR_INLINE = bool("luaJitGetStrInline", true);
+   /**
+    * luaJitZbTableget (2026-10-26, Lua VM pass): with ZombieBuddy's own tableget patch the only one, a compiled read of an
+    * absent key that does not start with "zb" takes luaJit's copy of the stock miss path instead of the patched tableget
+    * (which, for such keys, runs the stock body unchanged): pzopt.LuaJit.TABLEGET_ZB_ONLY. false = every absent key
+    * through the patched tableget whenever any mod patches it.
+    */
+   public static final boolean LUA_JIT_ZB_TABLEGET = bool("luaJitZbTableget", true);
+   /**
+    * luaJitUiReadMemo (2026-10-26, Lua VM pass): while a retained UI render is recorded (uiVerify), a compiled constant-key
+    * read site that already logged the same table in the same recording skips the log (UiDeps.readSite): the log keeps
+    * one entry per key and its first value, so the entry is already there.
+    */
+   public static final boolean LUA_JIT_UI_READ_MEMO = bool("luaJitUiReadMemo", true);
+   /**
+    * luaJitNilCache (2026-10-26, Lua VM pass): a compiled constant-key read whose answer was nil after the whole stock
+    * walk (the table, its metatable chain, every __index table) remembers that answer for the table's metatable when every
+    * table the walk passed is a class table (one some table uses as its metatable: its writes and metatable changes move the
+    * versions the cache compares, KahluaTableImpl.pzoptNilProof), so `obj.missing or default` on an instance no longer
+    * walks the class chain again. Never while a UI render is recorded (the walk's reads are logged).
+    */
+   public static final boolean LUA_JIT_NIL_CACHE = bool("luaJitNilCache", true);
+   /**
+    * luaJitNilCacheUi (2026-10-26, Lua VM pass): luaJitNilCache while a UI render is recorded too. The proven walk's reads
+    * (each metatable's __index, each __index table's key, KahluaTableImpl.pzoptNilChain) are logged as the walk would log
+    * them, once per table per recording and site, instead of the walk itself: nil reads of `self.field` in renders walked
+    * the class chain on every call (5.8 % of the Lua samples on the 54-mod list, all inside recorded renders).
+    */
+   public static final boolean LUA_JIT_NIL_CACHE_UI = bool("luaJitNilCacheUi", false);
+   /**
+    * luaJitNilPoly (2026-10-26, Lua VM pass): a read site keeps its proven nils (luaJitNilCache, luaJitNilCacheUi) for the
+    * last two metatables it met instead of one: a render method of a base class reading `self.optional` on instances of
+    * two subclasses replaced its one entry, walked and proved again on every call.
+    */
+   public static final boolean LUA_JIT_NIL_POLY = bool("luaJitNilPoly", false);
+   /**
+    * luaJitGetJavaInline (2026-10-26, Lua VM pass): a compiled constant-key read of a Java object's method (`obj:getX()`:
+    * its class metatable's __index answer, cached per site for the class) is answered in the small inlined part of
+    * LuaJit.getStr instead of a call of getStrSlow. Same checks as before (class, thread, the metatable epoch, nothing
+    * recorded). Measured negative (lj-h10, 2026-10-26: with it, luaJitNilCache and luaJitSlot2 mods Lua 0.238 -> 0.268 ms a
+    * frame over 3 pairs; LuaJit.getStr's own samples 281 -> 517: the larger getStr is inlined into fewer compiled bodies,
+    * C2's per-method inlining budget runs out sooner): default off.
+    */
+   public static final boolean LUA_JIT_GET_JAVA_INLINE = bool("luaJitGetJavaInline", false);
+   /**
+    * luaJitSlot2 (2026-10-26, Lua VM pass): a compiled constant-key read keeps the key's position in the last two table
+    * layouts it met (instances of one class built in two orders), so a site alternating between them finds the key
+    * without hashing it.
+    */
+   public static final boolean LUA_JIT_SLOT2 = bool("luaJitSlot2", true);
+   /**
+    * luaPatternNoPool (2026-10-26, Lua VM pass): string.find / match / gmatch / gsub take StringLib's pooled matcher
+    * state (a synchronized ObjectPool entry, released with its lists on return) only when the stock matcher runs; a
+    * pattern luaPatternFast matches, or a plain find, no longer takes and returns one. Errors are wrapped as before.
+    */
+   public static final boolean LUA_PATTERN_NO_POOL = bool("luaPatternNoPool", true);
+   /**
+    * luaJitSelfJava (2026-10-26, Lua VM pass): a compiled method lookup (`obj:m()`, Lua's SELF) goes through
+    * LuaJit.getSelf: a Java object's method from the site's class entry in its small inlined part, a table straight to the
+    * general path (its method is rarely in the instance). Field reads keep LuaJit.getStr (luaJitGetJavaInline put the Java
+    * test there and was negative: a larger getStr is inlined less).
+    */
+   public static final boolean LUA_JIT_SELF_JAVA = bool("luaJitSelfJava", true);
+   /** luaJitBoxPlain (2026-10-26, Lua VM pass): with luaJitBoxAlloc, every number boxed as a fresh Double (pzopt.LuaBox.PLAIN). */
+   public static final boolean LUA_JIT_BOX_PLAIN = bool("luaJitBoxPlain", false);
+   /**
+    * luaStringFast (2026-10-26, Lua VM pass): Kahlua's pattern matcher (string.find / match / gmatch / gsub) takes its
+    * position objects (StringLib.StringPointer, one per step and clone) from a plain allocation instead of the game's
+    * synchronized ObjectPool plus a per-call release list: 70 % of a gsub's time on the 54-mod list was the pool
+    * (MiniHealthPlus runs a gsub per enabled mod every player update). Same objects, same results.
+    */
+   public static final boolean LUA_STRING_FAST = bool("luaStringFast", true);
+   /**
+    * luaPatternFast (2026-10-26, Lua VM pass): string.find / match / gmatch / gsub run a port of Kahlua's matcher on int
+    * positions (pzopt.LuaPattern: the same steps, quirks and error texts, no position object per step). A pattern with a
+    * back-reference ('%' and a digit) keeps the stock matcher (luaStringFast still applies there).
+    */
+   public static final boolean LUA_PATTERN_FAST = bool("luaPatternFast", true);
+   /** luaPatternFast (2026-10-26): a pattern of one single-character item (optionally quantified) matched by a scan with the item's answer memoised per character (pzopt.LuaPattern.single). */
+   public static final boolean LUA_PATTERN_SINGLE = bool("luaPatternSingle", true);
+   /** pzopt.LuaJavaFast (Lua VM pass, 2026-10-25): a hot exposed Java method called from Lua through a generated class with a constant MethodHandle instead of reflection and the pooled argument objects (same checks, conversions, results and error logging; anything unusual takes the stock path). */
+   public static final boolean LUA_JAVA_FAST = bool("luaJavaFast", true);
+   /**
+    * luaJavaFastUiDeps (2026-10-26, Lua VM pass): luaJavaFast's generated calls also run while a retained UI render is
+    * recorded (uiVerify) and log each call as MethodCaller does (the same UiDeps.enter / call / threw / exit, the
+    * converted arguments and the raw result). The recorded renders' draw calls were Method.invoke: 5 % of the Lua time
+    * on the 54-mod list. false = the stock path during recordings.
+    */
+   public static final boolean LUA_JAVA_FAST_UI_DEPS = bool("luaJavaFastUiDeps", true);
+   /** luaJavaFast: calls of one exposed method before its class is generated. */
+   public static final int LUA_JAVA_FAST_THRESHOLD = integer("luaJavaFastThreshold", 64);
+   /** luaJit: a call of a compiled Lua function from compiled code enters its code from the call site itself (a per-site type profile, so HotSpot can inline small callees) instead of through the shared call helper. */
+   public static final boolean LUA_JIT_DIRECT_CALLS = bool("luaJitDirectCalls", true);
+   /** luaJit: every CALL of compiled code is an invokedynamic site with an inline cache of up to 4 callees (a compiled Lua function by its prototype, an exposed Java method by its invoker), each entered as a constant HotSpot can inline; wins over luaJitDirectCalls. */
+   public static final boolean LUA_JIT_INDY_CALLS = bool("luaJitIndyCalls", true);
+   /** luaJit (with luaJitIndyCalls): a CALL with a fixed argument count (up to 8) and fixed results passes its arguments to the site as JVM values: an exposed Java method with a generated call (luaJavaFast) gets them and returns its result without the Lua stack, a Java call frame or the result copy (the frame is pushed only to report an exception, as stock); any other callee gets them written to the Lua stack as before. */
+   public static final boolean LUA_JIT_DIRECT_ARGS = bool("luaJitDirectArgs", true);
+   /** luaJitIndyCalls: a site that is full (4 callees) or found its callees never get a fast form stays on its miss handler (which then only makes the plain call) instead of being relinked to the plain call: every relink of a site HotSpot has compiled deoptimizes it and walks the whole code cache. */
+   public static final boolean LUA_JIT_SITE_NO_GENERIC = bool("luaJitSiteNoGeneric", false);
+   /**
+    * luaJitIndyCalls: a site that missed more than this many calls before its callee got code is left unlinked (its holder is
+    * likely compiled by HotSpot already, so the link costs a deoptimization and a code cache walk); 0 = always link.
+    * Default 8 (2026-10-26, lj-h28 / h29: the bench route's 25 s compiled ~96 functions and relinked ~750 sites for ~95 ms;
+    * with 8: ~625 relinks, 30 ms, mods 0.2101 ms (4 runs) -> 0.1954 (2 runs); 64: 68 ms, mods 0.2113 (4 runs,
+    * neutral); 1: 23 ms, mods 0.1969 (2 runs)).
+    */
+   public static final int LUA_JIT_SITE_PATIENCE = integer("luaJitSitePatience", 8);
+   /** luaJit: a Lua function compiled code calls without code is queued for the compiler after luaJitCalleeThreshold calls instead of luaJitThreshold, so it gets code (and its call sites their link) before HotSpot compiles the caller; 0 = off. */
+   public static final int LUA_JIT_CALLEE_THRESHOLD = integer("luaJitCalleeThreshold", 0);
+   /** luaJit: on-stack replacement: a function whose loops run long in the interpreter (or that the interpreter took over after a deopt) is queued after luaJitLoopThreshold back-edges and continues in its compiled code at the next loop header. */
+   public static final boolean LUA_JIT_OSR = bool("luaJitOsr", true);
+   /** luaJitOsr: loop back-edges the interpreter runs in a function before it is queued for the compiler. */
+   public static final int LUA_JIT_LOOP_THRESHOLD = integer("luaJitLoopThreshold", 2000);
+   /** luaJit: a Lua function without code that compiled code calls runs in an interpreter loop of its own (as when Java calls Lua) instead of handing the caller's frame, and every compiled frame under it, to the interpreter. */
+   public static final boolean LUA_JIT_NESTED = bool("luaJitNested", true);
+   /** luaJit: a function whose JVM code passes luaJitSplitAbove bytes is compiled as several methods (regions of its instructions, cut where few registers are live and outside loops when possible), each under HotSpot's 8000-byte limit; control passes between them through the Lua stack. */
+   public static final boolean LUA_JIT_SPLIT = bool("luaJitSplit", true);
+   /** luaJitSplit: the code size (bytes) above which a function is split (HotSpot's limit is 8000; tests set it low to split everything). */
+   public static final int LUA_JIT_SPLIT_ABOVE = integer("luaJitSplitAbove", 8000);
+   /**
+    * luaJitSplit (2026-10-26): a jump from one region of a split function to another hands the numbers the target keeps
+    * unboxed over as doubles (KahluaThread.pzoptJitD) instead of boxing each onto the Lua stack and unboxing it again; a
+    * hot loop cut across regions boxed every live number at every crossing (JumboTreeIndoorFix.hideTreesWalk: half its
+    * time in LuaBox.box).
+    */
+   public static final boolean LUA_JIT_SPLIT_RAW = bool("luaJitSplitRaw", false);
+   /**
+    * luaJit numbers (2026-10-26): an unboxed number is not boxed for an arithmetic or a comparison whose other operand is
+    * an object (the object alone is checked and unboxed; the slow path boxes the number for the metamethod), nor for a
+    * TEST / TESTSET / NOT (a number is true): `(d < 0) and -d or d` boxed -d on every pass. Default on (lj-h22: mods
+    * 0.2296 -> 0.2235 ms, the box samples under compiled Lua -15 %).
+    */
+   public static final boolean LUA_JIT_MIXED_NUM = bool("luaJitMixedNum", true);
+   /**
+    * luaJitSplit (2026-10-26): a split function's cuts are chosen by what crossing them costs (loop depth, live registers)
+    * with each region's size measured per instruction, instead of an even split moved within a window: hideTreesWalk's
+    * whole dx loop (4 KB) fits one region, the even split cut it twice inside its innermost loop. Default on with
+    * luaJitEntryCompact (lj-h23: mods 0.2457 -> 0.2358 ms, JumboTreeIndoorFix 0.052 -> 0.041, code 1,979 -> 1,784 KB).
+    */
+   public static final boolean LUA_JIT_SPLIT_DP = bool("luaJitSplitDp", true);
+   /**
+    * luaJit (2026-10-26): the entries of a compiled function (loop headers the interpreter enters at, a split function's
+    * region entries) clear the registers' slots once before the switch instead of each entry clearing the registers dead
+    * at its target: ~7 bytes per register per entry (hideTreesWalk's entries were 3.3 KB of 14.5).
+    */
+   public static final boolean LUA_JIT_ENTRY_COMPACT = bool("luaJitEntryCompact", true);
+   /**
+    * luaJit numbers (2026-10-26): the result of an arithmetic instruction whose operands the compiler cannot prove numbers
+    * (`px + dx` with px read from a table) stays unboxed: the fast path's number is never boxed, the slow path's result is
+    * unboxed when it is a number, and anything else (a metamethod's table, -0.0) hands the frame to the interpreter after
+    * the instruction. A function whose speculations fail luaJitSpecLimit times is compiled again without them.
+    */
+   public static final boolean LUA_JIT_SPEC_ARITH = bool("luaJitSpecArith", false);
+   /** luaJitSpecArith: failed speculations of one compiled function before it is compiled again without them. */
+   public static final int LUA_JIT_SPEC_LIMIT = integer("luaJitSpecLimit", 8);
+   /**
+    * luaJitSplit (2026-10-26): functions up to this many bytes of JVM code compile whole instead of split (or refused past
+    * 8000), for a JVM launched with -XX:-DontCompileHugeMethods (which JIT-compiles such methods). -1 = 32000 when the
+    * running JVM has that flag, else 0. Default 0: measured negative (lj-h20: mods 0.2251 -> 0.2461 ms, the game thread's
+    * process CPU up: C2 on 8-32 KB methods).
+    */
+   public static final int LUA_JIT_WHOLE_BELOW = integer("luaJitWholeBelow", 0);
+   /** luaJitSplit: at most this many regions (a bigger function is not compiled: such code is a data file's main chunk, run once). */
+   public static final int LUA_JIT_SPLIT_MAX = integer("luaJitSplitMax", 32);
+   /** luaJit: log every compile (size, time) and every failure. */
+   public static final boolean DEV_LUA_JIT_LOG = bool("devLuaJitLog", false);
+   /** luaJit dev counters: how the compiled table reads / writes of constant keys resolve (slot hit, hash find, metatable walk, Java object, other), in the luaJit summary. */
+   public static final boolean DEV_LUA_JIT_STATS = bool("devLuaJitStats", false);
+   /** devLuaJitClassNames: compiled Lua classes named after their function (profiles tell them apart). */
+   public static final boolean DEV_LUA_JIT_CLASS_NAMES = bool("devLuaJitClassNames", false);
+   /** luaJit rig: loop and region entries also unbox number registers that are dead there, so an entry finds null and hands the frame to the interpreter (exercises that path; LuaJitDiffTest). */
+   public static final boolean DEV_LUA_JIT_ENTRY_DEOPT = bool("devLuaJitEntryDeopt", false);
+   /** luaJit rig (in-game differential test, pzopt.LuaJitDual): entries 1, 2, 4, 8, ... and every N-th of each compiled function run the compiled code as a shadow (its table writes undone), then the interpreter for real, and compare results, errors and table writes; 0 = off. */
+   public static final int DEV_LUA_JIT_DUAL = integer("devLuaJitDual", 0);
+   /** devLuaJitDual: the shadow may call exposed Java getters (get / is / has / can ... names, not random / time ones); false = only the pure Lua library functions. */
+   public static final boolean DEV_LUA_JIT_DUAL_GETTERS = bool("devLuaJitDualGetters", true);
    /** media/lua/client/pzopt/pzopt_ui_fast.lua: vanilla-identical fast paths for the inventory windows (only while their functions are vanilla). */
    public static final boolean UI_LUA_FAST = bool("uiLuaFast", true);
    /** pzopt.UiTicks: every top-level UI element's 100 ms Lua update on its own phase instead of all in one frame. */
@@ -968,6 +1292,12 @@ public final class Config {
     * fresh in that same frame instead of after the back-off timer (up to uiRetainedMaxMs) or the hover rate (uiHoverHz).
     */
    public static final boolean UI_VERIFY = bool("uiVerify", true);
+   /**
+    * uiDepsKeyIndex (2026-10-26, Lua VM pass): a recording render's table reads are deduplicated through a hash index once
+    * a table has 4 keys read (UiDeps.Log.addKey; the linear scan was 80 % of UiDeps' time and 12 % of all Lua time on the
+    * 54-mod list). Same entries, same order; false = the scan (A/B).
+    */
+   public static final boolean UI_DEPS_KEY_INDEX = bool("uiDepsKeyIndex", true);
    /**
     * uiAnimate: an element whose output changed in its last fresh renders (an animation, smooth scrolling, a drag, the map
     * while panning) renders fresh on every frame instead of at uiRenderFPS.
@@ -1067,6 +1397,64 @@ public final class Config {
    public static final boolean LAZY_OPTIONS_SCREEN = bool("lazyOptionsScreen", true); // the options screen built when first opened, key bindings at once (Lua)
    public static final boolean PREVIEW_CLIPS = bool("previewClips", false); // the options tabs' before / after GIFs in the preview panel; the tick box in each tab's header saves it at once (Lua)
    public static final boolean LUA_EVENT_PROFILE = bool("luaEventProfile", false); // measurement: time every Lua event handler (pzopt.LuaEventProfile)
+   // --- Lua event dispatch and the mod tick rate (pzopt.LuaTick, 2026-10-25, from a Discord suggestion: OnTick fires every
+   // frame, a big mod list's handlers barrage the game thread). Read docs/override-edits.md "Lua tick" before changing them.
+   /** Event.trigger without the per-call profiler key string and the O(n) "still listed" test (stock behaviour, proven by LuaTickTest). */
+   public static final boolean LUA_EVENT_DISPATCH_FAST = bool("luaEventDispatchFast", true);
+   /** An event handler that is an empty Lua function (one RETURN) is not called (no effect either way). */
+   public static final boolean LUA_EVENT_SKIP_EMPTY = bool("luaEventSkipEmpty", true);
+   /** 0 = every frame (stock); N = a mod's handler of a capped event (luaTickEvents) runs at most N times a second (default 60: nothing changes at 60 fps or below). */
+   public static final int LUA_TICK_HZ = Math.max(0, integer("luaTickHz", 60));
+   /** The events whose mod handlers luaTickHz / luaTickAdaptive may space out (OnRenderTick and the UI events never). */
+   public static final String LUA_TICK_EVENTS = string("luaTickEvents", "OnTick,OnPlayerUpdate,OnTickEvenPaused");
+   /** off | budget (a mod Lua time budget from the game thread's headroom, max-min fair) | aimd (the budget halves / grows). */
+   public static final String LUA_TICK_ADAPTIVE = string("luaTickAdaptive", "off").toLowerCase(java.util.Locale.ROOT);
+   /** Adaptive target frame rate; 0 = the frame cap in force, else 240 when uncapped. */
+   public static final int LUA_TICK_TARGET_FPS = Math.max(0, integer("luaTickTargetFps", 0));
+   /** The adaptive budget only shrinks while the game thread is at least this busy (% of the frame on the CPU). */
+   public static final int LUA_TICK_BUSY_PCT = Math.max(0, Math.min(100, integer("luaTickBusyPct", 80)));
+   /** The smallest adaptive mod Lua budget a frame keeps (µs). */
+   public static final int LUA_TICK_MIN_BUDGET_US = Math.max(0, integer("luaTickMinBudgetUs", 1000));
+   /** A spaced-out handler still runs at least every N frames ... */
+   public static final int LUA_TICK_MAX_STALE_FRAMES = Math.max(1, Math.min(120, integer("luaTickMaxStaleFrames", 4)));
+   /** ... and at least every N ms (whichever comes first). */
+   public static final int LUA_TICK_MAX_STALE_MS = Math.max(1, integer("luaTickMaxStaleMs", 250));
+   /** Spike deferral: a spaced-out handler due on a frame that is already this % of the smoothed frame time long when the event fires waits a frame (within its staleness bound); 0 = off. */
+   public static final int LUA_TICK_SPIKE_DEFER_PCT = Math.max(0, integer("luaTickSpikeDeferPct", 0));
+   /** Adaptive: handlers whose mean call costs less than this (µs) stay every frame (spacing them out buys the budget nothing). The cap (luaTickHz) spaces them too. */
+   public static final int LUA_TICK_CHEAP_US = Math.max(0, integer("luaTickCheapUs", 20));
+   /** Spread the spaced-out handlers over the frames of their period (projected-load ring) instead of all on one frame. */
+   public static final boolean LUA_TICK_STAGGER = bool("luaTickStagger", true);
+   /** The stagger places handlers by their measured cost (largest first, rebalanced) instead of by count. */
+   public static final boolean LUA_TICK_COST_AWARE = bool("luaTickCostAware", true);
+   /** fps = a spaced-out handler reads the frame-time getters (getMultiplier, getTimeDelta, ...) summed over the frames since its last call; object = the same through perObjectMultiplier; off. */
+   public static final String LUA_TICK_TIME_COMP = string("luaTickTimeComp", "fps").toLowerCase(java.util.Locale.ROOT);
+   /** Handlers whose code reads input, the camera, the screen or moves characters (pzopt.LuaTickScan) stay every frame. */
+   public static final boolean LUA_TICK_SCAN = bool("luaTickScan", true);
+   // luaTickScan's kinds of per-frame work: input (keys, mouse, pad), screen (camera, screen coordinates), ui (placing /
+   // drawing UI, speech), move (positions, facing, animation variables), ticks (a numberTicks modulo throttle)
+   public static final String LUA_TICK_SCAN_KINDS = string("luaTickScanKinds", "input,screen,ui,move,ticks");
+   /**
+    * A handler whose only per-frame reason is input polling (luaTickScan found input calls and nothing else) is spaced out
+    * like the rest, and also runs in every frame where a key, a mouse button or the wheel changed (the frames an
+    * isKeyPressed / button edge exists) and every frame while a controller is assigned to a player.
+    */
+   public static final boolean LUA_TICK_INPUT_WAKE = bool("luaTickInputWake", false);
+   /** Mod ids (comma separated) whose handlers always run every frame (the player's per-mod choice; ModLuaTick.KNOWN adds built-in ones). */
+   public static final String LUA_TICK_MODS_EVERY_FRAME = string("luaTickModsEveryFrame", "");
+   /** Mod ids whose handlers are spaced out even where the scan or the known list would keep them every frame. */
+   public static final String LUA_TICK_MODS_CAPPED = string("luaTickModsCapped", "");
+   /** The handler argument numberTicks: real (the game's frame count, stock) | own (+1 per call of that handler). */
+   public static final String LUA_TICK_TICKS = string("luaTickTicks", "real").toLowerCase(java.util.Locale.ROOT);
+   /** Time one in N handler calls for the cost estimate (every call while a handler is new or a recording runs). */
+   public static final int LUA_TICK_SAMPLE_EVERY = Math.max(1, integer("luaTickSampleEvery", 4));
+   /** Measurement: per-handler table + per-frame rows into the benchmark's results (step-NN-...-luatick.*) and the console. */
+   public static final boolean LUA_TICK_STATS = bool("luaTickStats", false);
+   /** dev: within-run A/B, the schedule (cap / adaptive), the fast dispatch (devLuaTickAlternateWhat=fast) or all three of schedule, fast dispatch and empty-handler skip (=all) switch off and on every N ms. */
+   public static final int DEV_LUA_TICK_ALTERNATE = Math.max(0, integer("devLuaTickAlternate", 0));
+   public static final String DEV_LUA_TICK_ALTERNATE_WHAT = string("devLuaTickAlternateWhat", "schedule").toLowerCase(java.util.Locale.ROOT);
+   /** 0 = off; N = a Lua error repeated by the same event handler with the same message is printed N times, then counted. */
+   public static final int LUA_ERROR_THROTTLE = Math.max(0, integer("luaErrorThrottle", 3));
    public static final boolean MOD_LUA_PROFILE = bool("modLuaProfile", true); // measurement: harness runs record each mod's Lua per frame over the route window (pzopt.HarnessModLua -> ModLuaProfile: pzopt-luaprof.out / pzopt-luaprof-frames.out); no effect outside harness runs (the in-game benchmark has its own modlua plan key)
    public static final boolean DEV_ELECTRICITY_CHECK = bool("devElectricityCheck", false); // dev: count the stock 64-level walk in the same call (instrumented runs)
    public static final int FILE_INFLIGHT_LOAD = Math.max(FILE_INFLIGHT, integer("fileInflightLoad", 128));
@@ -2687,7 +3075,8 @@ public final class Config {
          {"catDriveEnabled", "vehicleSmooth", "off", "driveCameraLate", "false", "driveLookSmooth", "false", "cameraScreenPixels", "false",
             "physicsStepHz", "100", "physicsStepMode", "fixed", "wake", "false", "chunkHandoffDivisor", "0", "hotsaveStaged", "false",
             "hotsaveIntervalSec", "0", "chunkGridWidth", "0", "driveTreeCutaway", "true", "treeRebakeLazy", "false", "treeCutawayReach", "false",
-            "handoffRecalcFast", "false", "propIdCache", "false", "slackWork", "false"},
+            "handoffRecalcFast", "false", "propIdCache", "false", "slackWork", "false",
+            "luaLoadStream", "false", "luaLoadPrefilter", "false", "luaLoadBatch", "false", "luaLoadNoopSkip", "false", "mapObjectsFast", "false"},
          {"catWorldEnabled", "treesInChunkTexture", "false", "treeBakePass", "false", "treeAppend", "false", "windowsInChunkTexture", "false",
             "translucentTilesInChunkTexture", "false", "windSpriteSway", "false", "curtainDepthNudgePct", "0", "bakeScheduler", "false",
             "bakeBudgetAdaptive", "false", "occlusionGrantedOnly", "false", "bakeMipLevels", "0", "renderChunkTopUp", "0", "bakeBudget", "0",
@@ -2714,7 +3103,8 @@ public final class Config {
             "schedulerClassifyParallel", "false", "zombieStatsFold", "false",
             "postupdateParallel", "false", "randPerWorker", "false", "playerLosParallel", "false", "schedulerFillParallel", "false",
             "lookupMemo", "false", "nearVehicleGrid", "false", "renderLastFast", "false", "separateEdgeCache", "false", "luaSilentSkip", "false",
-            "ragdollGate", "false", "bodyModelCache", "false", "hordeBatch", "off", "atlasBatch", "false", "renderPrewarm", "false",
+            "luaZombieLod", "false", "luaZombieHz", "0", "luaZombieBudgetUs", "0", "luaZombieDirtySkip", "false", "luaZombieBatchApi", "false", "luaZombieCostShare", "false",
+            "luaCollideDedupe", "false", "ragdollGate", "false", "bodyModelCache", "false", "hordeBatch", "off", "atlasBatch", "false", "renderPrewarm", "false",
             "bodyAtlasPrewarm", "false", "zombieLodSpriteLight", "0", "zombieFirstSightSprite", "false", "zombieSpawnSpread", "false",
             "burstGovernor", "false"},
          {"catLoadEnabled", "noLoadingScreen", "false", "resumeShot", "false", "centerFirstLoad", "false", "noLoadFade", "false",
@@ -2725,11 +3115,13 @@ public final class Config {
             "skipIdChecks", "false", "voronoiFast", "false", "texCompress", "driver", "textureBufferMb", "50"},
          {"catUiEnabled", "uiRetained", "false", "uiRetainedChildren", "false", "uiTickStagger", "false", "uiLuaFast", "false",
             "hotsaveWarmup", "false", "mapStreetCache", "false", "mapStreetMemo", "false", "mapVisitedFast", "false", "luaIndexCache", "false",
-            "luaInternConstants", "false", "luaSkipEmpty", "false"},
+            "luaInternConstants", "false", "luaSkipEmpty", "false", "luaJit", "false", "luaJavaFast", "false", "luaFastTable", "false",
+            "luaPatternFast", "false", "luaStringFast", "false"},
          {"catSystemEnabled", "corePlacement", "off", "gpuPstate", "off", "jitSteady", "false", "lightingSyncPark", "false",
             "audioLimiter", "false", "soundTickHz", "0", "emitterIdleSkip", "false", "worldSoundCleanupFast", "false", "hearingHoist", "false",
             "soundZoneCache", "false", "worldSoundFast", "false",
-            "workerQosMac", "utility"},
+            "workerQosMac", "utility",
+            "luaEventDispatchFast", "false", "luaEventSkipEmpty", "false", "luaTickHz", "0", "luaTickAdaptive", "off", "luaTickInputWake", "false", "luaErrorThrottle", "0"},
       };
       // key -> {value while a master is off, its masters...}
       for (String[] g : groups) {
@@ -2935,7 +3327,7 @@ public final class Config {
    public static String describe() {
       return "parallel=" + PARALLEL + " workers=" + WORKERS + " (effective " + effectiveWorkers() + ", cores "
             + Runtime.getRuntime().availableProcessors() + ") wake=" + WAKE + " (effective " + effectiveWake() + ") chunkGridWidth=" + CHUNK_GRID_SETTING + " instrument=" + INSTRUMENT + " dev=" + DEV + " luaChecksumExempt=" + LUA_CHECKSUM_EXEMPT
-            + " translucentCache=" + TRANSLUCENT_CACHE + " hotsaveIntervalSec=" + HOTSAVE_INTERVAL_SEC + " persistentVbo=" + PERSISTENT_VBO + " persistentVboSlots=" + PERSISTENT_VBO_SLOTS + " persistentVboFrameSync=" + PERSISTENT_VBO_FRAME_SYNC + " persistentVboTrustFrames=" + PERSISTENT_VBO_TRUST_FRAMES + " seamSpread=" + SEAM_SPREAD + " fliesToggleFix=" + FLIES_TOGGLE_FIX + " bakeMipLevels=" + BAKE_MIP_LEVELS + " occlusionRetain=" + OCCLUSION_RETAIN + " bakeScheduler=" + BAKE_SCHEDULER + " bakeFrameBudget=" + BAKE_FRAME_BUDGET + " bakeArrivalQuota=" + BAKE_ARRIVAL_QUOTA + " seamDirections=" + SEAM_DIRECTIONS + " chunkHandoffSlack=" + CHUNK_HANDOFF_SLACK + " propIdCache=" + PROP_ID_CACHE + " handoffRecalcFast=" + HANDOFF_RECALC_FAST + " handoffRecalcMemo=" + HANDOFF_RECALC_MEMO + " handoffRecalcParallel=" + HANDOFF_RECALC_PARALLEL + " occlusionGrantedOnly=" + OCCLUSION_GRANTED_ONLY + " occlusionCountParallel=" + OCCLUSION_COUNT_PARALLEL + " kidsRoomMemo=" + KIDS_ROOM_MEMO + " lightingNewChunkBudget=" + LIGHTING_NEW_CHUNK_BUDGET + " bakeBudgetAdaptive=" + BAKE_BUDGET_ADAPTIVE + " bakeFrameBudgetMin=" + BAKE_FRAME_BUDGET_MIN + " bakeBudgetPct=" + BAKE_BUDGET_LOW_PCT + "/" + BAKE_BUDGET_HIGH_PCT + " bakeFrameBudgetHard=" + BAKE_FRAME_BUDGET_HARD + " bakeSmooth=" + BAKE_SMOOTH + "/" + BAKE_SMOOTH_MIN + " bakeDeadlinePct=" + BAKE_DEADLINE_PCT + " bakeMaxWait=" + BAKE_MAX_WAIT_CUTAWAY + "/" + BAKE_MAX_WAIT_ARRIVAL + "/" + BAKE_MAX_WAIT_STRONG + "/" + BAKE_MAX_WAIT_REDRAW + "/" + BAKE_MAX_WAIT_LIGHT + " seamRebakeBudget=" + SEAM_REBAKE_BUDGET + " seamHeavyBakes=" + SEAM_HEAVY_BAKES + " seamMaxFrames=" + SEAM_MAX_FRAMES + " treesInChunkTexture=" + TREES_IN_CHUNK_TEXTURE + " windowsInChunkTexture=" + WINDOWS_IN_CHUNK_TEXTURE + " translucentTilesInChunkTexture=" + TRANSLUCENT_TILES_IN_CHUNK_TEXTURE + " glassTilesPerFrame=" + GLASS_TILES_PER_FRAME + " floorDecalsPerFrame=" + FLOOR_DECALS_PER_FRAME + " translucentGridsPerFrame=" + TRANSLUCENT_GRIDS_PER_FRAME + " treeBakePass=" + TREE_BAKE_PASS + " curtainDepthNudgePct=" + Math.round(CURTAIN_DEPTH_NUDGE * 100.0F) + " bakeBudget=" + BAKE_BUDGET + " lightingBudget=" + LIGHTING_BUDGET + " lightingRebakeMs=" + LIGHTING_REBAKE_MS + " rebakeBudget=" + REBAKE_BUDGET + " rebakeMaxFrames=" + REBAKE_MAX_FRAMES + " lightingRebakeBudget=" + LIGHTING_REBAKE_BUDGET + " lightingRebakeMaxFrames=" + LIGHTING_REBAKE_MAX_FRAMES + " zoomRetain=" + ZOOM_RETAIN + " zoomRebakeBudget=" + ZOOM_REBAKE_BUDGET + " zoomFrameMs=" + Math.round(ZOOM_FRAME_MS) + " zoomPlaceholder=" + ZOOM_PLACEHOLDER + " zoomEaseMs=" + ZOOM_EASE_MS + " zoomEase=" + ZOOM_EASE + " lightingStrongDelta=" + LIGHTING_STRONG_DELTA + " lightingStrongBudget=" + LIGHTING_STRONG_BUDGET + " lightingStrongFrameMs=" + Math.round(LIGHTING_STRONG_FRAME_MS) + " lightingGlobalDeltaPct=" + Math.round(LIGHTING_GLOBAL_DELTA * 100.0F) + " lightingFlush=" + LIGHTING_FLUSH + " lightSwitchCheckFrames=" + LIGHT_SWITCH_CHECK_FRAMES + " cutawayFast=" + CUTAWAY_FAST + " cutawayRadius=" + CUTAWAY_RADIUS + " gridStackInterval=" + GRID_STACK_INTERVAL + " roofHideDebounceFrames=" + ROOF_HIDE_DEBOUNCE_FRAMES + " weatherMaskIdleSkip=" + WEATHER_MASK_IDLE_SKIP + " worldSoundFast=" + WORLD_SOUND_FAST + " keyboardFresh=" + KEYBOARD_FRESH + " inputLatch=" + INPUT_LATCH + " inputLatchWaitUs=" + INPUT_LATCH_WAIT_US + " frameStartGate=" + FRAME_START_GATE + " gpuMaxFrames=" + GPU_MAX_FRAMES + " reflexSleep=" + REFLEX_SLEEP + " reflexBoost=" + REFLEX_BOOST + " reflexQueueUs=" + REFLEX_QUEUE_US + " reflexCapFps=" + REFLEX_CAP_FPS + " vsyncAdaptive=" + VSYNC_ADAPTIVE + " vblankLock=" + VBLANK_LOCK + " vblankLockMarginUs=" + VBLANK_LOCK_MARGIN_US + " aimHoldMs=" + AIM_HOLD_MS + " cursorLatch=" + CURSOR_LATCH + " saveCellAsync=" + SAVE_CELL_ASYNC + " chunkMapFast=" + CHUNK_MAP_FAST + " propertySurfaceNoAlloc=" + PROPERTY_SURFACE_NOALLOC + " weatherNoGlGet=" + WEATHER_NO_GLGET + " glNoSync=" + GL_NO_SYNC + "/" + GL_NAME_POOL + " renderChunkPrewarm=" + RENDER_CHUNK_PREWARM + " renderChunkTopUp=" + RENDER_CHUNK_TOP_UP + " renderChunkTopUpPerFrame=" + RENDER_CHUNK_TOP_UP_PER_FRAME + " lightingVisionParallel=" + LIGHTING_VISION_PARALLEL + " threadNice=" + THREAD_NICE + " profileHandshake=" + PROFILE_HANDSHAKE + " luaProfile=" + LUA_PROFILE + " uiProfile=" + UI_PROFILE + " uiRetained=" + UI_RETAINED + " uiRetainedChildren=" + UI_RETAINED_CHILDREN + " luaIndexCache=" + LUA_INDEX_CACHE + " luaInternConstants=" + LUA_INTERN_CONSTANTS + " luaSkipEmpty=" + LUA_SKIP_EMPTY + " uiLuaFast=" + UI_LUA_FAST + " uiTickStagger=" + UI_TICK_STAGGER + " mapStreetMemo=" + MAP_STREET_MEMO + " mapStreetCache=" + MAP_STREET_CACHE + " uiHoverHz=" + UI_HOVER_HZ + " uiRetainedMaxMs=" + UI_RETAINED_MAX_MS + " uiRetainedCheapUs=" + UI_RETAINED_CHEAP_US + " gcMode=" + GC_MODE + " gcPauseMs=" + GC_PAUSE_MS + " gcHeap=" + GC_HEAP + " gcHeapFixed=" + GC_HEAP_FIXED + " gcPreTouch=" + GC_PRE_TOUCH + " jitMode=" + JIT_MODE + " jitC1Cores=" + JIT_C1_CORES + " vehicleCull=" + VEHICLE_CULL + " playerLosFast=" + PLAYER_LOS_FAST + " zombieSpotFast=" + ZOMBIE_SPOT_FAST + " playerLosNative=" + PLAYER_LOS_NATIVE + " playerLosParallel=" + PLAYER_LOS_PARALLEL + " schedulerFillParallel=" + SCHEDULER_FILL_PARALLEL + " animBonesParallel=" + ANIM_BONES_PARALLEL + " animBatchAsync=" + ANIM_BATCH_ASYNC + " animatorParallel=" + ANIMATOR_PARALLEL + " animatorPipeline=" + ANIMATOR_PIPELINE + " frameSpinUs=" + FRAME_SPIN_US + " workerQosMac=" + WORKER_QOS_MAC + " joinSpinPark=" + JOIN_SPIN_PARK + " frameThreads=" + FRAME_THREADS + " actionEvalParallel=" + ACTION_EVAL_PARALLEL + " actionSnapshotFilter=" + ACTION_SNAPSHOT_FILTER + " emitterParamSkip=" + EMITTER_PARAM_SKIP + " emitterIdleSkip=" + EMITTER_IDLE_SKIP + " worldSoundCleanupFast=" + WORLD_SOUND_CLEANUP_FAST + " hearingHoist=" + HEARING_HOIST + " soundTickHz=" + SOUND_TICK_HZ + " audioLimiter=" + AUDIO_LIMITER + " audioLimiterCeilingDb=" + Math.round(AUDIO_LIMITER_CEILING_DB) + " separateFast=" + SEPARATE_FAST + " ragdollGate=" + RAGDOLL_GATE + " bodyModelCache=" + BODY_MODEL_CACHE + " separateParallel=" + SEPARATE_PARALLEL + " entityUpdateParallel=" + ENTITY_UPDATE_PARALLEL + " entityUpdateLuaReplay=" + ENTITY_UPDATE_LUA_REPLAY + " animalLosFast=" + ANIMAL_LOS_FAST + " entityUpdatePipeline=" + ENTITY_UPDATE_PIPELINE + " emitterDefer=" + EMITTER_DEFER + " physicsDefer=" + PHYSICS_DEFER + " actionGroupCache=" + ACTION_GROUP_CACHE + " profilerThreadMemo=" + PROFILER_THREAD_MEMO + " sleepCheckMemo=" + SLEEP_CHECK_MEMO + " stateParamMemo=" + STATE_PARAM_MEMO + " zombieSimLodTiles=" + ZOMBIE_SIM_LOD_TILES + " zombieSimLodSteps=" + ZOMBIE_SIM_LOD_STEPS + " zombieCheckSpread=" + ZOMBIE_CHECK_SPREAD + " lightingReadParallel=" + LIGHTING_READ_PARALLEL + " zombieCullSortFast=" + ZOMBIE_CULL_SORT_FAST + " skinTransformsPrecompute=" + SKIN_TRANSFORMS_PRECOMPUTE + " skinPalettePrecompute=" + SKIN_PALETTE_PRECOMPUTE + " shadowPrep=" + SHADOW_PREP + " boneIndexCache=" + BONE_INDEX_CACHE + " ecsLookupFast=" + ECS_LOOKUP_FAST + " actionConditionFast=" + ACTION_CONDITION_FAST + " charDrawPrep=" + CHAR_DRAW_PREP + " zombieAtlasFast=" + ZOMBIE_ATLAS_FAST + " charDrawThreads=" + CHAR_DRAW_THREADS + " vehicleSmooth=" + VEHICLE_SMOOTH + " driveCameraLate=" + DRIVE_CAMERA_LATE + " driveLookSmooth=" + DRIVE_LOOK_SMOOTH + " cameraScreenPixels=" + CAMERA_SCREEN_PIXELS + " frameClockSmooth=" + FRAME_CLOCK_SMOOTH + " vsyncLock=" + VSYNC_LOCK + " physicsStepHz=" + PHYSICS_STEP_HZ + " physicsStepMode=" + PHYSICS_STEP_MODE
+            + " translucentCache=" + TRANSLUCENT_CACHE + " hotsaveIntervalSec=" + HOTSAVE_INTERVAL_SEC + " persistentVbo=" + PERSISTENT_VBO + " persistentVboSlots=" + PERSISTENT_VBO_SLOTS + " persistentVboFrameSync=" + PERSISTENT_VBO_FRAME_SYNC + " persistentVboTrustFrames=" + PERSISTENT_VBO_TRUST_FRAMES + " seamSpread=" + SEAM_SPREAD + " fliesToggleFix=" + FLIES_TOGGLE_FIX + " bakeMipLevels=" + BAKE_MIP_LEVELS + " occlusionRetain=" + OCCLUSION_RETAIN + " bakeScheduler=" + BAKE_SCHEDULER + " bakeFrameBudget=" + BAKE_FRAME_BUDGET + " bakeArrivalQuota=" + BAKE_ARRIVAL_QUOTA + " seamDirections=" + SEAM_DIRECTIONS + " chunkHandoffSlack=" + CHUNK_HANDOFF_SLACK + " propIdCache=" + PROP_ID_CACHE + " handoffRecalcFast=" + HANDOFF_RECALC_FAST + " handoffRecalcMemo=" + HANDOFF_RECALC_MEMO + " handoffRecalcParallel=" + HANDOFF_RECALC_PARALLEL + " occlusionGrantedOnly=" + OCCLUSION_GRANTED_ONLY + " occlusionCountParallel=" + OCCLUSION_COUNT_PARALLEL + " kidsRoomMemo=" + KIDS_ROOM_MEMO + " lightingNewChunkBudget=" + LIGHTING_NEW_CHUNK_BUDGET + " bakeBudgetAdaptive=" + BAKE_BUDGET_ADAPTIVE + " bakeFrameBudgetMin=" + BAKE_FRAME_BUDGET_MIN + " bakeBudgetPct=" + BAKE_BUDGET_LOW_PCT + "/" + BAKE_BUDGET_HIGH_PCT + " bakeFrameBudgetHard=" + BAKE_FRAME_BUDGET_HARD + " bakeSmooth=" + BAKE_SMOOTH + "/" + BAKE_SMOOTH_MIN + " bakeDeadlinePct=" + BAKE_DEADLINE_PCT + " bakeMaxWait=" + BAKE_MAX_WAIT_CUTAWAY + "/" + BAKE_MAX_WAIT_ARRIVAL + "/" + BAKE_MAX_WAIT_STRONG + "/" + BAKE_MAX_WAIT_REDRAW + "/" + BAKE_MAX_WAIT_LIGHT + " seamRebakeBudget=" + SEAM_REBAKE_BUDGET + " seamHeavyBakes=" + SEAM_HEAVY_BAKES + " seamMaxFrames=" + SEAM_MAX_FRAMES + " treesInChunkTexture=" + TREES_IN_CHUNK_TEXTURE + " windowsInChunkTexture=" + WINDOWS_IN_CHUNK_TEXTURE + " translucentTilesInChunkTexture=" + TRANSLUCENT_TILES_IN_CHUNK_TEXTURE + " glassTilesPerFrame=" + GLASS_TILES_PER_FRAME + " floorDecalsPerFrame=" + FLOOR_DECALS_PER_FRAME + " translucentGridsPerFrame=" + TRANSLUCENT_GRIDS_PER_FRAME + " treeBakePass=" + TREE_BAKE_PASS + " curtainDepthNudgePct=" + Math.round(CURTAIN_DEPTH_NUDGE * 100.0F) + " bakeBudget=" + BAKE_BUDGET + " lightingBudget=" + LIGHTING_BUDGET + " lightingRebakeMs=" + LIGHTING_REBAKE_MS + " rebakeBudget=" + REBAKE_BUDGET + " rebakeMaxFrames=" + REBAKE_MAX_FRAMES + " lightingRebakeBudget=" + LIGHTING_REBAKE_BUDGET + " lightingRebakeMaxFrames=" + LIGHTING_REBAKE_MAX_FRAMES + " zoomRetain=" + ZOOM_RETAIN + " zoomRebakeBudget=" + ZOOM_REBAKE_BUDGET + " zoomFrameMs=" + Math.round(ZOOM_FRAME_MS) + " zoomPlaceholder=" + ZOOM_PLACEHOLDER + " zoomEaseMs=" + ZOOM_EASE_MS + " zoomEase=" + ZOOM_EASE + " lightingStrongDelta=" + LIGHTING_STRONG_DELTA + " lightingStrongBudget=" + LIGHTING_STRONG_BUDGET + " lightingStrongFrameMs=" + Math.round(LIGHTING_STRONG_FRAME_MS) + " lightingGlobalDeltaPct=" + Math.round(LIGHTING_GLOBAL_DELTA * 100.0F) + " lightingFlush=" + LIGHTING_FLUSH + " lightSwitchCheckFrames=" + LIGHT_SWITCH_CHECK_FRAMES + " cutawayFast=" + CUTAWAY_FAST + " cutawayRadius=" + CUTAWAY_RADIUS + " gridStackInterval=" + GRID_STACK_INTERVAL + " roofHideDebounceFrames=" + ROOF_HIDE_DEBOUNCE_FRAMES + " weatherMaskIdleSkip=" + WEATHER_MASK_IDLE_SKIP + " worldSoundFast=" + WORLD_SOUND_FAST + " keyboardFresh=" + KEYBOARD_FRESH + " inputLatch=" + INPUT_LATCH + " inputLatchWaitUs=" + INPUT_LATCH_WAIT_US + " frameStartGate=" + FRAME_START_GATE + " gpuMaxFrames=" + GPU_MAX_FRAMES + " reflexSleep=" + REFLEX_SLEEP + " reflexBoost=" + REFLEX_BOOST + " reflexQueueUs=" + REFLEX_QUEUE_US + " reflexCapFps=" + REFLEX_CAP_FPS + " vsyncAdaptive=" + VSYNC_ADAPTIVE + " vblankLock=" + VBLANK_LOCK + " vblankLockMarginUs=" + VBLANK_LOCK_MARGIN_US + " aimHoldMs=" + AIM_HOLD_MS + " cursorLatch=" + CURSOR_LATCH + " saveCellAsync=" + SAVE_CELL_ASYNC + " chunkMapFast=" + CHUNK_MAP_FAST + " propertySurfaceNoAlloc=" + PROPERTY_SURFACE_NOALLOC + " weatherNoGlGet=" + WEATHER_NO_GLGET + " glNoSync=" + GL_NO_SYNC + "/" + GL_NAME_POOL + " renderChunkPrewarm=" + RENDER_CHUNK_PREWARM + " renderChunkTopUp=" + RENDER_CHUNK_TOP_UP + " renderChunkTopUpPerFrame=" + RENDER_CHUNK_TOP_UP_PER_FRAME + " lightingVisionParallel=" + LIGHTING_VISION_PARALLEL + " threadNice=" + THREAD_NICE + " profileHandshake=" + PROFILE_HANDSHAKE + " luaProfile=" + LUA_PROFILE + " uiProfile=" + UI_PROFILE + " uiRetained=" + UI_RETAINED + " uiRetainedChildren=" + UI_RETAINED_CHILDREN + " luaIndexCache=" + LUA_INDEX_CACHE + " luaLoadStream=" + LUA_LOAD_STREAM + " luaLoadBudgetUs=" + LUA_LOAD_BUDGET_US + "/" + LUA_LOAD_DRAIN_MS + "/" + LUA_LOAD_MAX_FRAME_PCT + "/" + LUA_LOAD_BURST_PCT + "/" + LUA_LOAD_DEMAND_WINDOW_MS + "/" + LUA_LOAD_BACKLOG + "/" + LUA_LOAD_BACKLOG_MS + " luaLoadNearestFirst=" + LUA_LOAD_NEAREST_FIRST + " mapObjectsFast=" + MAP_OBJECTS_FAST + " luaLoadPrefilter=" + LUA_LOAD_PREFILTER + " luaLoadSigProject=" + LUA_LOAD_SIG_PROJECT + " luaLoadNoopSkip=" + LUA_LOAD_NOOP_SKIP + " luaLoadBatch=" + LUA_LOAD_BATCH + " luaLoadChunkSplit=" + LUA_LOAD_CHUNK_SPLIT + " luaInternConstants=" + LUA_INTERN_CONSTANTS + " luaSkipEmpty=" + LUA_SKIP_EMPTY + " uiLuaFast=" + UI_LUA_FAST + " uiTickStagger=" + UI_TICK_STAGGER + " mapStreetMemo=" + MAP_STREET_MEMO + " mapStreetCache=" + MAP_STREET_CACHE + " uiHoverHz=" + UI_HOVER_HZ + " uiRetainedMaxMs=" + UI_RETAINED_MAX_MS + " uiRetainedCheapUs=" + UI_RETAINED_CHEAP_US + " gcMode=" + GC_MODE + " gcPauseMs=" + GC_PAUSE_MS + " gcHeap=" + GC_HEAP + " gcHeapFixed=" + GC_HEAP_FIXED + " gcPreTouch=" + GC_PRE_TOUCH + " jitMode=" + JIT_MODE + " jitC1Cores=" + JIT_C1_CORES + " vehicleCull=" + VEHICLE_CULL + " playerLosFast=" + PLAYER_LOS_FAST + " zombieSpotFast=" + ZOMBIE_SPOT_FAST + " playerLosNative=" + PLAYER_LOS_NATIVE + " playerLosParallel=" + PLAYER_LOS_PARALLEL + " schedulerFillParallel=" + SCHEDULER_FILL_PARALLEL + " animBonesParallel=" + ANIM_BONES_PARALLEL + " animBatchAsync=" + ANIM_BATCH_ASYNC + " animatorParallel=" + ANIMATOR_PARALLEL + " animatorPipeline=" + ANIMATOR_PIPELINE + " frameSpinUs=" + FRAME_SPIN_US + " workerQosMac=" + WORKER_QOS_MAC + " joinSpinPark=" + JOIN_SPIN_PARK + " frameThreads=" + FRAME_THREADS + " actionEvalParallel=" + ACTION_EVAL_PARALLEL + " actionSnapshotFilter=" + ACTION_SNAPSHOT_FILTER + " emitterParamSkip=" + EMITTER_PARAM_SKIP + " emitterIdleSkip=" + EMITTER_IDLE_SKIP + " worldSoundCleanupFast=" + WORLD_SOUND_CLEANUP_FAST + " hearingHoist=" + HEARING_HOIST + " soundTickHz=" + SOUND_TICK_HZ + " audioLimiter=" + AUDIO_LIMITER + " audioLimiterCeilingDb=" + Math.round(AUDIO_LIMITER_CEILING_DB) + " separateFast=" + SEPARATE_FAST + " ragdollGate=" + RAGDOLL_GATE + " bodyModelCache=" + BODY_MODEL_CACHE + " separateParallel=" + SEPARATE_PARALLEL + " entityUpdateParallel=" + ENTITY_UPDATE_PARALLEL + " entityUpdateLuaReplay=" + ENTITY_UPDATE_LUA_REPLAY + " animalLosFast=" + ANIMAL_LOS_FAST + " entityUpdatePipeline=" + ENTITY_UPDATE_PIPELINE + " emitterDefer=" + EMITTER_DEFER + " physicsDefer=" + PHYSICS_DEFER + " actionGroupCache=" + ACTION_GROUP_CACHE + " profilerThreadMemo=" + PROFILER_THREAD_MEMO + " sleepCheckMemo=" + SLEEP_CHECK_MEMO + " stateParamMemo=" + STATE_PARAM_MEMO + " zombieSimLodTiles=" + ZOMBIE_SIM_LOD_TILES + " zombieSimLodSteps=" + ZOMBIE_SIM_LOD_STEPS + " zombieCheckSpread=" + ZOMBIE_CHECK_SPREAD + " lightingReadParallel=" + LIGHTING_READ_PARALLEL + " zombieCullSortFast=" + ZOMBIE_CULL_SORT_FAST + " skinTransformsPrecompute=" + SKIN_TRANSFORMS_PRECOMPUTE + " skinPalettePrecompute=" + SKIN_PALETTE_PRECOMPUTE + " shadowPrep=" + SHADOW_PREP + " boneIndexCache=" + BONE_INDEX_CACHE + " ecsLookupFast=" + ECS_LOOKUP_FAST + " actionConditionFast=" + ACTION_CONDITION_FAST + " charDrawPrep=" + CHAR_DRAW_PREP + " zombieAtlasFast=" + ZOMBIE_ATLAS_FAST + " charDrawThreads=" + CHAR_DRAW_THREADS + " vehicleSmooth=" + VEHICLE_SMOOTH + " driveCameraLate=" + DRIVE_CAMERA_LATE + " driveLookSmooth=" + DRIVE_LOOK_SMOOTH + " cameraScreenPixels=" + CAMERA_SCREEN_PIXELS + " frameClockSmooth=" + FRAME_CLOCK_SMOOTH + " vsyncLock=" + VSYNC_LOCK + " physicsStepHz=" + PHYSICS_STEP_HZ + " physicsStepMode=" + PHYSICS_STEP_MODE
             + " fileThreads=" + FILE_THREADS + " fileInflight=" + FILE_INFLIGHT + " textureBufferMb=" + TEXTURE_BUFFER_MB + " parallelDepthMaps=" + PARALLEL_DEPTH_MAPS + " loaderCpuFixes=" + LOADER_CPU_FIXES + " loadWorkers=" + LOAD_WORKERS + " scriptParserFast=" + SCRIPT_PARSER_FAST + " fmodAsync=" + FMOD_ASYNC + " noLoadFade=" + NO_LOAD_FADE + " noIntroWait=" + NO_INTRO_WAIT + " noClickToStart=" + NO_CLICK_TO_START + " noLoadingScreen=" + NO_LOADING_SCREEN + " centerFirstLoad=" + CENTER_FIRST_LOAD + " resumeShot=" + RESUME_SHOT + " resumeShotDetail=" + RESUME_SHOT_DETAIL + " bootPump=" + BOOT_PUMP + " earlyModels=" + EARLY_MODELS + " luaPrecompile=" + LUA_PRECOMPILE + " preloadAnimSets=" + PRELOAD_ANIM_SETS + " tileDefPreload=" + TILE_DEF_PRELOAD + " skipIdChecks=" + SKIP_ID_CHECKS + " voronoiFast=" + VORONOI_FAST + " earlyTilePacks=" + EARLY_TILE_PACKS + " aotCache=" + AOT_CACHE + " animClipCache=" + ANIM_CLIP_CACHE + " packIndex=" + PACK_INDEX + " itemParamSwitch=" + ITEM_PARAM_SWITCH + " bootFileThreads=" + BOOT_FILE_THREADS + " shaderCache=" + SHADER_CACHE + " shaderWarmup=" + SHADER_WARMUP + " tileVertexDepth=" + TILE_VERTEX_DEPTH + " mipmapArrays=" + MIPMAP_ARRAYS + " puddleCache=" + PUDDLE_CACHE + " puddleCacheFrames=" + PUDDLE_CACHE_FRAMES + " puddleVbo=" + PUDDLE_VBO + " treeAppend=" + TREE_APPEND + " treeRebakeLazy=" + TREE_REBAKE_LAZY + " treeRebakeLingerMs=" + TREE_REBAKE_LINGER_MS + " puddleEarlyZ=" + PUDDLE_EARLY_Z + " rainSplashesFast=" + RAIN_SPLASHES_FAST + " rainTiles=" + RAIN_TILES + " vboBatchKb=" + VBO_BATCH_KB + " vboFastQuads=" + VBO_FAST_QUADS + " fogPass=" + FOG_PASS + " fogScalePct=" + FOG_SCALE_PCT + " fogMaskFrames=" + FOG_MASK_FRAMES
             + " uniformCache=" + UNIFORM_CACHE + " windSpriteSway=" + WIND_SPRITE_SWAY + " compositeShaderRun=" + COMPOSITE_SHADER_RUN + " ambientOcclusion=" + AO + " aoMode=" + AO_MODE + " aoScalePct=" + AO_SCALE_PCT + " aoRadiusPct=" + AO_RADIUS_PCT + " aoStrengthFloorPct=" + AO_STRENGTH_FLOOR_PCT + " aoStrengthWallPct=" + AO_STRENGTH_WALL_PCT + " aoStrengthObjectPct=" + AO_STRENGTH_OBJECT_PCT + " aoStrengthVegetationPct=" + AO_STRENGTH_VEGETATION_PCT + " aoStrengthPlantPct=" + AO_STRENGTH_PLANT_PCT + " aoPlantLeafOcclusion=" + AO_PLANT_LEAF_OCCLUSION + " aoThicknessPct=" + AO_THICKNESS_PCT + " sunShadows=" + SUN_SHADOWS + " sunShadowStrengthPct=" + SUN_SHADOW_STRENGTH_PCT + " skyPath=" + SKY_PATH + " moonShadows=" + MOON_SHADOWS + " moonShadowPct=" + MOON_SHADOW_PCT + " cloudShadows=" + CLOUD_SHADOWS + " cloudOpacityPct=" + CLOUD_OPACITY_PCT + " cloudSpeedPct=" + CLOUD_SPEED_PCT + " cloudScalePct=" + CLOUD_SCALE_PCT + " godRays=" + GOD_RAYS + " godRaysMethod=" + GOD_RAYS_METHOD + " godRaysStrengthPct=" + GOD_RAYS_STRENGTH_PCT + " godRaysHazePct=" + GOD_RAYS_HAZE_PCT + " godRaysDustPct=" + GOD_RAYS_DUST_PCT + " sunShadowSoftnessPct=" + SUN_SHADOW_SOFTNESS_PCT
             + " upscaler=" + UPSCALER + " upscaleNoGlGet=" + UPSCALE_NO_GLGET + " upscalerQuality=" + UPSCALER_QUALITY + " upscalerScalePct=" + UPSCALER_SCALE_PCT + " fsrSharpnessPct=" + FSR_SHARPNESS_PCT + " dlssSharpen=" + DLSS_SHARPEN + " upscalerObjectMv=" + UPSCALER_OBJECT_MV + " dynRes=" + DYN_RES + " dynResController=" + DYN_RES_CONTROLLER + " dynResTargetPct=" + DYN_RES_TARGET_PCT + " dynResMinPct=" + DYN_RES_MIN_PCT + " dynResMaxPct=" + DYN_RES_MAX_PCT + " dynResFps=" + DYN_RES_FPS + " dlssPreset=" + DLSS_PRESET + " dlssAutoExposure=" + DLSS_AUTO_EXPOSURE + " dlssPipeline=" + DLSS_PIPELINE + " dlssOutputPct=" + DLSS_OUTPUT_PCT + " dlssOutputFilter=" + DLSS_OUTPUT_FILTER + " dlssFlushAfterWait=" + DLSS_FLUSH_AFTER_WAIT + " dlssFlushAfterComposite=" + DLSS_FLUSH_AFTER_COMPOSITE + " dlssWaitOutputOnly=" + DLSS_WAIT_OUTPUT_ONLY + " dlssDirectColor=" + DLSS_DIRECT_COLOR + " dlssWaterCurrent=" + DLSS_WATER_CURRENT + " dlssWaterHistoryPct=" + DLSS_WATER_HISTORY_PCT;

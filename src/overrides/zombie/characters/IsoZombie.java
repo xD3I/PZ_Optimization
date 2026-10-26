@@ -242,6 +242,7 @@ public final class IsoZombie extends IsoGameCharacter implements IHumanVisual {
    public int pzoptSightForce = -1; // pzopt: zombieFirstSightSprite (phasing fix 2026-10-18), the cull pass in which this zombie's first composite is made past the budgets (zombieFirstSightMaxWaitMs)
    public int pzoptSightKept = -1; // pzopt: the cull pass in which this zombie, clothed before, came up without a composite (a model reset) and kept the stock order (census)
    public long pzoptSightWaitNs; // pzopt: when this zombie's wait for its first composite began
+   public pzopt.LuaZombie.State pzoptLuaZ; // pzopt: luaZombieHz, this zombie's mod Lua schedule (pzopt.LuaZombie)
    public long pzoptClothedNs; // pzopt: the last cull pass in which this zombie's model had its clothing composite (pzopt.FirstSight.pending)
    public float pzoptLodSpriteScale = 1.0F; // pzopt: renderTextureInsteadOfModel's alpha factor (the sprite share while a crossfade draws it under the model)
    public IsoGridSquare pzoptOutlineSquare; // pzopt: occluded outlines, the square the occluder test ran for (OccludedOutline.classify)
@@ -879,6 +880,10 @@ public final class IsoZombie extends IsoGameCharacter implements IHumanVisual {
    public void setOwnerPlayer(IsoPlayer player) {
       PZOptional.ifPresent((NetworkZombieComponent)this.tryGetECSComponent(NetworkZombieComponent.class), NetworkZombieComponent::setOwnerPlayer, player);
    }
+
+   public Object pzoptVehicle4Test() { // pzopt: luaZombie check, the vehicle collision filter a handler may set
+      return this.vehicle4testCollision; // pzopt
+   } // pzopt
 
    public void setVehicle4TestCollision(BaseVehicle vehicle) {
       this.vehicle4testCollision = vehicle;
@@ -3844,7 +3849,7 @@ public final class IsoZombie extends IsoGameCharacter implements IHumanVisual {
                this.checkZombieEntersPlayerBuilding();
                this.updateMovementStatistics();
                this.setCollidable(true);
-               LuaEventManager.triggerEvent("OnZombieUpdate", this);
+               pzopt.LuaZombie.update(this); // pzopt: luaZombieHz / luaZombieLod -- mod OnZombieUpdate handlers at a rate per zombie (every key off: the stock triggerEvent)
                if (Core.lastStand
                   && this.getStateMachine().getCurrent() != ThumpState.instance()
                   && this.getStateMachine().getCurrent() != AttackState.instance()
@@ -4923,6 +4928,7 @@ public final class IsoZombie extends IsoGameCharacter implements IHumanVisual {
    public void resetForReuse() {
       pzopt.ZombieLate.touch(this, pzopt.ZombieLate.R_REUSE); // pzopt: f8-streamfix, a held zombie (left the world in the bucket loop) is applied before it is reset
       pzopt.ActionEval.settle(this, pzopt.ActionEval.S_REUSE); // pzopt: f8-streamfix, its evaluation task (if one is out) finishes before the reset (setGroup cleared the container it evaluates)
+      this.pzoptLuaZ = null; // pzopt: luaZombieHz, a reused zombie is a new zombie to the mod Lua schedule (its first update runs every handler)
       this.setCrawler(false);
       this.initializeStates();
       this.getActionContext().setGroup(pzoptGroup(false));

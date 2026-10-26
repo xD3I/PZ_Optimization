@@ -26,6 +26,9 @@ public class CategoryMastersTest {
          // menu-impeccable prototype, 2026-10-19): the System switch leaves them as set
          "gcHeap", "luaGcNoop", "gcMode", "gcHeapFixed", "gcPreTouch", "gcPauseMs", "gcG1Tuned", "gcSlack", "gcSlackQueue",
          // tuning of a gated switch (inert once it is off)
+         // the mod-Lua zombie scheduler's tuning (lua-zombie, 2026-10-25): inert with luaZombieLod / Hz / BudgetUs off
+         "luaZombieMaxGapMs", "luaZombieLodNear", "luaZombieLodHz1", "luaZombieLodHz2", "luaZombieWriters", "luaZombieTimeComp",
+         "luaZombieCaptureDue", "luaZombieCheapUs",
          "macGlTimerQueries", "chunkGridFollowView", "treeRebakeLingerMs", "treeCutawayReachPx", "treeBakeMaxChunksPerSec",
          "treeBakeDirect", "glassTilesPerFrame", "floorDecalsPerFrame", "translucentGridsPerFrame", "translucentLightsPerFrame", "bakeFrameBudget",
          "rebakeMaxFrames", "zoomEase", "zoomRebakeBudget", "zoomPlaceholder", "zoomFrameMs", "bloodSettleSec", "bloodAppendPlants",
@@ -42,7 +45,9 @@ public class CategoryMastersTest {
          "entityUpdatePlayerFirst", "entityUpdateMoreStates", "postupdateFuse", "postupdateClean", "postupdateEligibleOnWorker",
          "postupdateVehicleOnWorker", "postupdateNoopSkip", "hordeBatchUpload", "hordeBatchVao", "hordeBatchOrder",
          "hordeBatchUnits", "hordePaletteMismatch", "renderPrewarmOutlines", "zombieLodFixed3d", "zombieLodHysteresis",
-         "zombieLodFadeMs", "zombieCompositeBudgetUs", "zombieCompositeMaxPerFrame", "zombieModelAddBudgetUs", "burstLateUs",
+         "zombieLodFadeMs", "zombieCompositeBudgetUs",
+         // lua-stream (2026-10-26): luaLoadStream's and luaLoadPrefilter's own options (inert once their switch is off)
+         "luaLoadBudgetUs", "luaLoadNearestFirst", "luaLoadChunkSplit", "luaLoadSlack", "luaLoadSigProject", "zombieCompositeMaxPerFrame", "zombieModelAddBudgetUs", "burstLateUs",
          "burstWorkPct", "zombieSpawnBurstUs", "zombieModelAddBurstUs", "zombieModelAddHeavyEvery", "zombieSpawnSlackBudgetUs",
          "zombieSpawnHeavyMin", "zombieSpawnMaxAgeMs", "zombieSpawnAgedCapUs", "aotNoIndy", "uiVerify", "uiAnimate", "uiSlack",
          "uiMoveReplay");

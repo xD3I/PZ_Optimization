@@ -84,6 +84,11 @@ public final class UpdateBatch {
       POM.get()[0] = Float.NaN;
    }
 
+   /** luaZombieTimeComp (pzopt.LuaZombie): this thread's holder itself, set around a deferred handler call and put back after. */
+   public static float[] pomHolder() {
+      return POM.get();
+   }
+
    /** The perObjectMultiplier this thread should see: the dispatch-time capture inside a batch task, the live field otherwise. */
    public static float pom(zombie.GameTime gameTime) {
       float v = POM.get()[0];
@@ -608,6 +613,13 @@ public final class UpdateBatch {
                continue;
             }
             String e = (String) r[0];
+            if (LuaZombie.ACTIVE && r.length == 2 && LuaZombie.EVENT.equals(e)) { // luaZombieHz: the zombie's handlers by its plan
+               LuaZombie.replay(r[1]);
+               luaReplayed++;
+               LuaZombieOut.replayEvents++;
+               continue;
+            }
+            LuaZombieOut.replayEvents++;
             switch (r.length) {
                case 1 -> zombie.Lua.LuaEventManager.triggerEvent(e);
                case 2 -> zombie.Lua.LuaEventManager.triggerEvent(e, r[1]);
@@ -1611,7 +1623,11 @@ public final class UpdateBatch {
          drainBallistics(n); // ... which is what reaches updateBallisticsTarget; both before the replay, so no
          // handler of a captured event can observe a hitbox that is still where the zombie stood last frame
          if (flightLuaReplay) {
+            long rt0 = LuaZombieOut.ON ? System.nanoTime() : 0L;
             replayLuaEvents(n);
+            if (LuaZombieOut.ON) {
+               LuaZombieOut.replayNs += System.nanoTime() - rt0; // the replay's whole time (luaZombieOut)
+            }
          }
       } finally {
          h[0] = Float.NaN;

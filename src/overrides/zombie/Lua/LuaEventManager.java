@@ -232,6 +232,18 @@ public final class LuaEventManager implements JavaFunction {
       } // pzopt
    } // pzopt
 
+   /** pzopt: luaZombieHz (pzopt.LuaZombie), game thread: the event object of this name, or null (no checkEvent side effects). */
+   public static Event pzoptEvent(String event) { // pzopt
+      synchronized (EventMap) { // pzopt
+         return EventMap.get(event); // pzopt
+      } // pzopt
+   } // pzopt
+
+   /** pzopt: luaZombieHz, the monitor triggerEvent holds while it dispatches (pzopt.LuaZombie's dispatch holds it too). */
+   public static Object pzoptEventLock() { // pzopt
+      return EventMap; // pzopt
+   } // pzopt
+
    private static Event checkEvent(String event) {
       Event e = EventMap.get(event);
       if (e == null) {
@@ -952,6 +964,7 @@ public final class LuaEventManager implements JavaFunction {
       KahluaTable table = platform.newTable();
       environment.rawset("Events", table);
       LuaEventManager.AddEvents();
+      pzopt.LuaZombie.registerEvents(); // pzopt: luaZombieBatchApi, Events.OnZombieUpdateBatch for mods that use it
    }
 
    public static void reroute(Prototype prototype, LuaClosure luaClosure) {

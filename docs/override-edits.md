@@ -8691,3 +8691,239 @@ bound, so the cutaway mask quad drew fixed-function and often wrote no stencil. 
 then drawn whole for that frame (the tree flicker, runs `tf-i-stencil*`, `docs/findings-tree-flicker-2026-10-25.md`). Those
 passes now end with `DefaultProgram.restore()` too; the line is a guard against any other raw-GL pass before the mask. With
 the key off the method is stock. Dev: a second `devStencilProbe` point, `a0-beforeMask`.
+
+### Lua event dispatch and the mod tick rate (2026-10-25, branch lua-tick): Event, GameTime, ExceptionLogger (new), DebugLogStream (new), PerformanceSettings
+
+`zombie.Lua.Event` gets a field `pzoptTick` (the event's `pzopt.LuaTick` state, so no map lookup per trigger) and one hook
+in `trigger`, right after the stock `callbacks.isEmpty()` test: with any of the keys below on (`LuaTick.ON`, fixed at class
+load) the loop over the callbacks is `pzopt.LuaTick.trigger`. Its return value, the `LuaManager.caller.protectedCallVoid` per
+handler (through `LuaEventProfile.call`), the slow-event warning and the `ExceptionLogger` call on a Java exception are the
+stock ones; with every key off the hook is never taken and the method is stock.
+
+Defaults (2026-10-26): `luaEventDispatchFast=true`, `luaEventSkipEmpty=true`, `luaTickHz=60`, `luaErrorThrottle=3`,
+`luaTickAdaptive=off`, `luaTickInputWake=false`; the System category's master switch puts all of them back to stock.
+
+- `luaEventDispatchFast`: the same handlers in the same order as stock whatever a handler does to the list while it runs.
+  Stock tests `callbacks.contains(closure)` after every call (a list walk: O(n^2) for OnTick's ~600 handlers on a big mod
+  list) and builds `"Lua - " + name` for `GameProfiler.profile` per call even with the profiler off. The fast loop tests the
+  slot it just called first (`n < size && get(n) == closure` means still listed; only otherwise `contains`), and enters the
+  profiler area only while `GameProfiler.isRunning()`. `tests/pzopt/LuaTickTest` fuzzes 20,000 lists against the stock loop
+  (remove self / another one before or after, add, clear, set, duplicates, several rounds).
+- `luaEventSkipEmpty`: a handler whose prototype is a bare `return` is not called (`luaSkipEmpty`'s rule, for events).
+- `luaTickHz` / `luaTickAdaptive` (OnTick, OnPlayerUpdate, OnTickEvenPaused; `luaTickEvents`): a mod's handler may run every
+  n-th frame; the game's and our handlers, handlers `pzopt.LuaTickScan` finds input / UI / camera / movement calls in,
+  cheap ones (adaptive only) and the player's per-mod choices stay every frame. Not while every player sleeps, never on a
+  server. `luaTickInputWake`: a handler whose only scan reason is input polling is spaced out too, and also runs in every
+  frame where a key, a mouse button, the wheel or the text-entry state changed (the frames an `isKeyPressed` / button edge
+  exists: `GameKeyboard.down` vs `lastDown`, `Mouse.buttonDownStates` vs `buttonPrevStates`) and every frame while a
+  controller is assigned to a player.
+- `luaErrorThrottle`: see below.
+
+`zombie.GameTime`: the four getters that hand Lua the frame's length (`getRealworldSecondsSinceLastUpdate`, `getMultiplier`,
+`getUnmoddedMultiplier`, `getMultiplierInMenu`) read `fpsMultiplier` through `pzopt.LuaTickTime.fps(...)` (inside the
+existing `ZombieLate.fps` wrap). It returns the field unless the game thread is inside a spaced-out handler's call
+(`luaTickTimeComp=fps`), where it returns the multipliers summed over the frames since that handler last ran, so a mod that
+integrates `getMultiplier()` / `getTimeDelta()` / `getGameWorldSecondsSinceLastUpdate()` advances by the same amount per
+second as when called every frame. Every other caller (and every other thread) reads the field.
+
+`zombie.core.logger.ExceptionLogger` (new override, `onClassLoadedQuiet`: the logger touches it first) and
+`zombie.debug.DebugLogStream` (new override, no marker: it is the logger) carry `luaErrorThrottle` (default 3; 0 = stock): while
+`LuaTick` dispatches a handler, an exception or Lua stack trace that handler already printed N times is not printed again
+(`logException` skips the caller-prefix stack walk and `printException`; `errorWithTraceOffset` returns at its top); a line
+every 100 repeats says how many were dropped. The exception counter, the error popup, KahluaThread's error count and the
+debug error list are untouched (the throttle only skips printing). Outside a LuaTick dispatch both methods are stock.
+
+`zombie.core.PerformanceSettings` gets one added method, `getPzoptLuaTickMods()` (returns `pzopt.LuaTick.modsReport()`): the
+PZ OPTIMIZATION screen's Compatibility page lists, per mod with OnTick / OnPlayerUpdate handlers, how many the scan keeps every
+frame, why, and their measured cost, beside the player's AUTO / EVERY FRAME / CAPPED choice (`luaTickModsEveryFrame` /
+`luaTickModsCapped`). No stock method changes.
+
+## Mod Lua on the per-zombie update event (2026-10-25, branch lua-zombie)
+
+### IsoZombie.update: OnZombieUpdate through pzopt.LuaZombie
+
+The one `LuaEventManager.triggerEvent("OnZombieUpdate", this)` of the zombie update is `pzopt.LuaZombie.update(this)`.
+With every lua-zombie key off (the default) that is the same triggerEvent call, nothing else. With a key on, the class
+dispatches the event itself, handler by handler, with Event.trigger's semantics (the same lock, LuaEventProfile.call, the
+exception logger, the GameProfiler area, the index step when a handler removes itself) and decides per handler and zombie
+whether the handler runs on this update (`luaZombieHz`, `luaZombieLod`, the learned writers, the cheap handlers); a batched
+zombie on a frame worker is still captured for UpdateBatch's replay, which hands it back to the same class. Two additions to
+the class: the field `pzoptLuaZ` (the zombie's schedule: phase, time since its last deferred call, learned handlers) and
+`pzoptVehicle4Test()`, a getter of the private `vehicle4testCollision` for the rig's state snapshot (the airborne-contact
+mods set it from their handler).
+`resetForReuse` clears `pzoptLuaZ` (one line): a zombie taken from VirtualZombieManager's reuse pool is a new zombie to the
+schedule, so its first update runs every handler as stock (a mod's first-sight setup such as an outfit change).
+
+### LuaEventManager: the event object, its lock, the batch event
+
+`pzoptEvent(name)` returns the Event of that name without checkEvent's side effects (an unknown name is not added),
+`pzoptEventLock()` the monitor every triggerEvent holds while dispatching, so the class's own dispatch holds the same one.
+`register` calls `pzopt.LuaZombie.registerEvents()` after `AddEvents()`: with `luaZombieBatchApi` it adds
+`OnZombieUpdateBatch` to the Events table, so a mod's `Events.OnZombieUpdateBatch.Add` works at load time; with the key off
+it adds nothing.
+
+### IsoMovingObject.collideWith: pzopt.LuaCollide
+
+The two events (OnCharacterCollide for two characters, OnObjectCollide otherwise) are fired by `pzopt.LuaCollide.collide`,
+the same calls; with `luaCollideDedupe` an (object, other) pair already reported in the frame fires no second time. Off, the
+method is stock (it only counts the reports for pzopt-luazombie.out).
+
+### MethodCaller.call: the write barrier of luaZombieWriters=watch
+
+Kahlua's MethodCaller (every Lua -> Java method call) keeps one more final flag, set in the constructor from the method's
+name (`pzopt.LuaZombieWatch.isWriter`: the static scan's state-changing names such as setX, setTarget, knockDown, Kill,
+addBlood; no getter). `call` then counts a writer call whose receiver is the zombie whose OnZombieUpdate handler
+pzopt.LuaZombie is running (`LuaZombieWatch.target`, null outside that dispatch): one null test per Java call, nothing
+changes in what is called or returned. With `luaZombieWriters=watch` a handler that wrote the zombie runs every update on
+it for luaZombieHotMs.
+
+### IsoChunk / IsoChunkMap / MethodCaller: time-sliced chunk hand-off and the LoadGridsquare dispatch (2026-10-25, branch lua-stream)
+
+`IsoChunk.doLoadGridsquare` is cut into its stock parts, with the stock lines moved unchanged into new public methods:
+`pzoptLoadPre` (border recalc, vehicles, stories, up to the square loop), `pzoptLoadSquare(x, y, z)` (one turn of the
+square loop: objects added to the world, erosion, map objects, rats, the `LoadGridsquare` event), `pzoptLoadMid`
+(erosion of the chunk, global objects, pathfinding, populations, buildings, vision polygons), `pzoptLoadLoot(x, y, z)`
+(one turn of the loot loop) and `pzoptLoadEnd` (adjacent chunks, MP state, loadedFrame / renderFrame, `LoadChunk`).
+`doLoadGridsquare` calls them in the stock order; right after `pzoptLoadPre` it asks `pzopt.LuaStream.defer(this)`, which
+says yes only while `LuaStream` itself hands that chunk off (`luaLoadStream` on with `luaLoadBudgetUs` > 0, single player; both on by default since 2026-10-26, 1000 us): the rest then runs
+as steps over the next frames, still in the stock order, the chunk undrawn (loadedFrame -1) until its last step.
+`removeFromWorld` and `Save` first finish a chunk that is still loading (`LuaStream.finishIfCurrent`). The two events are
+wrapped in `LuaStream.evBegin / evEnd` (per-frame time for the benchmark csv). The `LoadGridsquare` call goes through
+`pzopt.LuaStreamDispatch.loadGridsquare` (the stock `triggerEvent` with its keys off; with `luaLoadPrefilter`,
+`luaLoadNoopSkip`, `luaLoadBatch` or `devLuaStreamHandlers` a replay of `Event.trigger`'s loop that may leave out a
+handler it learned does nothing on that square), the `LoadChunk` call through `LuaStreamDispatch.loadChunk` (stock unless
+`luaLoadChunkSplit` holds it for one handler a step). The map-object walks (`MapObjects.newGridSquare / loadGridSquare`)
+are gated by `pzopt.LuaStreamMapObjects.mayCall` (`mapObjectsFast`, default off; true unless no object of the square has a
+registered sprite name, in which case the stock walk calls nothing). `pzoptLoadPre` ends with
+`LuaStreamDispatch.batchBegin` and `pzoptLoadMid` starts with `batchFlushAll` (`luaLoadBatch` only).
+
+`IsoChunkMap.updateInternal` calls `LuaStream.tick()` first and, with the key on, leaves the hand-off of the queue to
+`LuaStream.frame(this)` (the stock count / pace block's count is set to 0; the slack-work hand-off is skipped). A new
+public `pzoptHandOff(chunk)` calls the private `pzoptHandOffChunk`. `processAllLoadGridSquare` (the loading screen) first
+finishes the loading chunk (`LuaStream.finishAll`), `Dispose` resets it.
+
+`MethodCaller.call` times every Lua -> Java call inside the two events when `devLuaStreamJava` is on (`pzopt.LuaStreamJava`,
+off by default: one boolean test otherwise).
+
+With every lua-stream key off all of these are the stock behaviour.
+
+`KahluaTableImpl.rawset` hands the written key to `pzopt.UiDeps.write(this, key)` (was `write(this)`) on its two
+value-changing paths, inside the existing `UiDeps.on` test: lua-stream's order check (`devLuaLoadOrderCheck`,
+`pzopt.LuaOrderCheck`) keeps which key a recorded handler call wrote. `UiDeps.write(t, key)` forwards to the old
+`write(t)` when no LoadGridsquare call is recorded, so uiVerify sees what it saw before. `wipe()` keeps `write(this)`
+(the whole table).
+
+### Lua VM pass: luaJit, luaJavaFast, luaFastTable, luaStringFast (2026-10-25, branch lua-jit): KahluaThread, Prototype, KahluaTableImpl, LuaJavaInvoker, MultiLuaJavaInvoker, MethodCaller, StringLib, KahluaConverterManager
+
+The Kahlua VM itself made faster without changing when or how often any Lua runs (`pzopt.LuaJit`, `LuaJitCompiler`,
+`LuaJitSites`, `LuaJavaFast`, `LuaMap`; log `LUA-JIT-LOG.md` of the branch). Every key off = the stock VM: the hooks
+below test a static final first. KahluaThread, LuaJavaInvoker, MultiLuaJavaInvoker and StringLib are new overrides (Vineflower).
+
+- `Prototype`: per-function counters and the compiled code (`pzoptJitCount`, `pzoptJitWindow` (luaJitRateMs), `pzoptJitLoops`, `pzoptJit`,
+  `pzoptJitState`, `pzoptJitWhy`). No method changed.
+- `KahluaThread.luaMainloop`: at a frame's entry (and after a callee left a frame at pc 0) `LuaJit.enter` may run the
+  function's compiled code in place of the next instruction; its status is applied as the interpreter's own OP_RETURN /
+  OP_CALL / OP_TAILCALL would (return to Java, the caller's restoreTop, the next frame). Backward JMP and FORLOOP ask
+  `LuaJit.backEdge` (luaJitOsr): a function with code takes the frame over at the loop header. The catch skips the
+  error report (ExceptionLogger, debugException, doStacktraceProper) for the one exception a nested loop already reported
+  (`pzoptJitReported`, luaJitNested) and still unwinds and rethrows as stock. Never while `Core.debug` or a frame can yield.
+- `KahluaThread.pzoptJit*`: the slow paths of compiled code, each the interpreter's own block for that case (arith /
+  unm / len / concat / compare metamethods, SETGLOBAL, CALL of nil / of a `__call` table / of Java / of Lua, TAILCALL,
+  the frame push and result copy of a call, `pzoptJitTablegetMiss` = stock tableget minus its first rawget). Compiled
+  code calls these; the interpreter does not. `pzoptJitSt` carries the status of a luaJitDirectArgs call that went the
+  stack way (an exposed method called with its arguments as JVM values pushes no Java frame, except around the stock
+  exception report).
+- `KahluaTableImpl` (on top of the uiVerify / luaIndexCache edits): luaFastTable swaps the platform's new empty
+  LinkedHashMap for a `pzopt.LuaMap` (same pairs order, same answers: `LuaMapTest`); `len` of a LuaMap that holds exactly
+  1..n answers n (the stock binary search ends there); `pzoptSeqGet` (t[i] with an unboxed i), `pzoptJitMap` /
+  `pzoptMissGet` / `pzoptJitSetSlot` (the inline caches: a present key's value replaced in place with rawset's
+  bookkeeping: pzoptMetaVersion, uiRetained's write count, the luaJit epoch of watched tables; `Core.debug` -> stock
+  for data breakpoints); writes to a table a compiled site read a Java method through bump `pzoptJitEpoch`;
+  `pzoptMissGetIc` (luaJitMissCache, 2026-10-26): `pzoptMissGet` through the site's remembered (metatable,
+  pzoptMetaVersion, answer), the rule `pzoptChainGet` already keeps, so `obj:method()` on an instance skips the chain
+  cache's HashMap; a reload-replaced metatable or `Core.debug` takes `pzoptMissGet`. luaJitUiDeps (2026-10-26):
+  `pzoptJitMap` / `pzoptSeqGet` no longer refuse while a retained UI render is recorded (`UiDeps.on`): `pzopt.LuaJit`
+  logs the reads stock rawget / tableSet would log, and `pzoptJitSetSlot` calls `UiDeps.write` on a value-changing write
+  as rawset does (LuaJitDiffTest records every case once as a UI render and compares the read sets).
+  luaMetaVersionNarrow (2026-10-26): `setMetatable` bumps `pzoptMetaVersion` only for a table some table uses as its
+  metatable (`pzoptMeta`); for an instance it counts `pzoptMtSets` instead (uiVerify's chain sums read both). A cached
+  chain is a metatable and its metatables, all marked, and the miss cache compares the instance's own metatable, so
+  `setmetatable(o, self)` in every constructor no longer empties every class-chain and miss cache. Test case
+  `check_instance_mt_churn` checks each lookup against a cache-free walk. luaMetaKeyVersion (2026-10-26): `rawset` and
+  `pzoptJitSetSlot` on a class table call `pzoptMetaChanged(key)`, which bumps the key's bucket in `pzoptKeyVer` (1024
+  buckets by hash code; equal keys share one) and `pzoptMetaWrites` (uiVerify's chain memo) instead of `pzoptMetaVersion`;
+  `pzoptChainGet` entries and the miss cache's entries keep the bucket version beside the global one (`PzoptChain.kver`,
+  `LuaJitIc.Miss.kver`). `setMetatable` of a class, `wipe` and reloads still bump the global version. luaJitMissPoly
+  (2026-10-26): `pzoptMissGetIc` keeps a second (metatable, versions, answer) entry per site (`LuaJitIc.miss2`).
+  luaJitNilCache (2026-10-26): new `pzoptNilProof(key)` walks what `KahluaThread.tableget` would walk past this table
+  (each metatable's `__index`, each `__index` table and its raw chain) and says true only when the answer is nil and every
+  table met is a class table (`pzoptMeta`, no rewrite table); compiled reads (`LuaJit.getStrSlow`) then keep that nil per
+  (metatable, global version, the key's and `__index`'s bucket versions) and skip the stock walk while all four hold
+  (never while uiVerify records). Test case `nil_cache_churn` (class writes, `__index` swaps to a class / a plain table /
+  a function, instance metatable changes); mutants without either bucket version, the global version or the class-table
+  test all fail LuaJitDiffFastTableTest. luaJitNilCacheUi / luaJitNilPoly (2026-10-26, both off by default: measured
+  neutral to negative): new `pzoptNilChain(key)` is `pzoptNilProof`'s walk returning the reads the stock walk logs for a
+  recorded UI render (each metatable's `__index` and its answer, each `__index` table's key and nil, in walk order), null
+  where `pzoptNilProof` is false; with luaJitNilCacheUi a proven nil inside a recorded render logs those reads through
+  `UiDeps.read` instead of walking (once per chain per recording and site), with luaJitNilPoly a site keeps two proven
+  nils (`LuaJitIc.nilA` / `nilB`). Test cases `nil_cache_ui`, `nil_cache_ui_mono`, `nil_cache_ui_static`; the diff test
+  records every case's UI run twice.
+- `Coroutine.stackClear` (luaJitFrameLite, 2026-10-26, off by default until measured): a Lua stack slot that is already
+  nil is skipped instead of written nil again; the stack afterwards is the same. Compiled Lua keeps most registers in JVM
+  locals, so the frame a call or return clears is mostly nil already, and every store of a reference costs the generational
+  ZGC store barrier. No other method changed.
+- `LuaJavaInvoker.call`: after `luaJavaFastThreshold` calls the method gets a generated class (`pzopt.LuaJavaFast`,
+  constant MethodHandle, the stock checks and KahluaNumberConverter conversions inline, exceptions logged as
+  `MethodCaller.logException`); a call it cannot do exactly as stock (varargs, ReturnValues, short parameters, an
+  unexpected argument; a uiVerify recording with luaJavaFastUiDeps off, while on (2026-10-26) the generated call logs
+  UiDeps.enter / call / threw / exit as MethodCaller does) returns -1 and the stock body (`pzoptStockCall`) runs from the start.
+  Decompiler fix: `matchesArgumentTypesOrPrimitives` shares one `return false` as the jar does (Vineflower split it; audit
+  `1 x const i 0`).
+- `MultiLuaJavaInvoker.call`: stock's first two overload passes emulated (first exact class match, else first match
+  with primitives) to reach the chosen invoker's generated call; turns itself off after 1024 misses with misses > 4 x
+  hits. Stock bug seen on the way, left as is: when no overload fits, the last failed MethodArguments goes back into the
+  pool twice; the duplicate is later handed out after another failed call left it invalid, and a valid call of that size
+  then fails (an error state already; the fast path takes nothing from the pools).
+- `MethodCaller`: getters `pzoptMethod`, `pzoptOwner` and `pzoptLogException` (the private logException) for LuaJavaFast.
+- luaJitDirectArgs: `KahluaThread.pzoptJitSt` (the status of a direct-argument call that went the stack way) and
+  `pzoptJitPushJavaFn` (callJava's frame push, only around an exception report); `MultiLuaJavaInvoker.pzoptSelect` and
+  `LuaJavaInvoker.pzoptMatches` (stock's first two overload passes over argument values) so a compiled site can link an
+  overload set by the arguments' classes.
+- devLuaJitDual (dev rig, off): `KahluaThread` fields `pzoptDualShadow` / `pzoptDualFrame` / `pzoptDualRec`, a Java-call
+  gate at the top of `callJava`, an upvalue-write gate in OP_SETUPVAL, `flushErrorMessage` / `debugException` / the
+  mainloop catch report nothing during a shadow run, OP_RETURN / the Java branch of OP_TAILCALL / the mainloop catch /
+  `pcall`'s error path tell the rig a real run ended, `backEdge` takes the thread, `pzoptDualSave` / `pzoptDualRestore`;
+  `KahluaTableImpl` constructor, `rawset`, `pzoptJitSetSlot`, `wipe`, `setMetatable` journal writes during a recorded
+  run, `iterator` registers the pairs iterators made during one (the shadow stops before advancing an older one: an OSR
+  entry's live iterators); `Prototype.pzoptDualSeen`. Every hook tests the static final `LuaJitDual.ON` first.
+- `StringLib` (new override, 2026-10-26, luaStringFast): the pattern matcher (find / match / gmatch / gsub) takes its
+  position objects from a synchronized global pool, keeps each in a per-call list and hands the list back at the end
+  (one synchronized release per object); with the key on `Allocations.allocStringPointer` allocates a plain object
+  instead (no pool, no list). Match states and the per-call holder stay pooled. Only one case answers differently: a
+  back-reference to a capture the pattern never opened (`%1` with no capture; real Lua raises "invalid capture index"),
+  where stock reads a capture left over from an earlier match whose pooled position may already serve a later call, so
+  stock's own answer there depends on history. `LuaStringFastTest` (48 subjects x 300 patterns x 17 calls, three paths) compares the
+  rest: 0 mismatches. luaPatternFast (2026-10-26, `pzopt.LuaPattern`): `findAuxInner`'s pattern branch and `gsub` (after
+  stock's argument reads and its repl type check, moved ahead of the pointer allocations) hand a pattern without '%' and a
+  digit to a line-by-line port of `match` and its helpers on int positions (the same steps, quirks, recursion and error
+  texts; the outer try / catch still wraps errors as stock); a back-reference pattern keeps the stock code. The same
+  test compares it against the stock matcher (the 278 of 300 patterns it takes): 0 mismatches; three mutations of the
+  port gave 14, 586 and some hundred mismatches. String microbenchmark (`LuaStringBench`, five calls of the kinds mods
+  run per frame): 9.5 us stock, 4.4 us luaStringFast, 3.2 us luaPatternFast. Vineflower gave `format` duplicate local names in two switch cases (compile errors only); they
+  are renamed, unmarked, so the bytecode audit still compares `format` with the jar.
+- `KahluaConverterManager` (new override, 2026-10-26, luaJavaConvertCache): `addJavaConverter` bumps `pzoptEpoch` where it
+  clears the manager's class cache; `pzoptJavaConverter(Class)` is the private `getJavaCache` lookup and
+  `pzoptPassThrough(Class, converter)` says the converter answers null for every object of that class (the null
+  converter, or the game's `KahluaArrayConverter` Object converter for a class that is not an array). A generated Java
+  call (`LuaJavaFast.toLua`) keeps its last result class's converter while the epoch holds and then runs the stock
+  `fromJavaToLua` body after the lookup (the same StackOverflowError message); a call whose result class keeps changing
+  (64 misses) keeps the manager's own lookup. `LuaJavaConvertCacheTest`: array results, alternating classes, a converter
+  added after the sites cached theirs.
+- luaJitBoxAlloc (2026-10-26, no game class edited): compiled code and the generated Java calls box a number as
+  `Double.valueOf(d + 0.0)` (`pzopt.LuaBox`) instead of `BoxedStaticValues.toDouble`, whose shared-object tables cost a
+  cache miss per box and keep C2 from removing it. Same values (the `+ 0.0` turns -0.0 into +0.0 as the cache does);
+  only the identity of integral boxes differs, which Lua cannot see (numbers compare by value, table keys by equals).
+- Tests: `LuaJitDiffTest` (interpreter vs compiled every function / random halves / tier-up thresholds; results by
+  bits, error messages, tracebacks, error reports; run also with `-Dpzopt.luaJitSplitAbove=300` and
+  `-Dpzopt.devLuaJitEntryDeopt=true`), `LuaMapTest`, `LuaJitCorpus` (every function of the game's and a mod list's Lua
+  compiled and defined), `LuaVmBench`.

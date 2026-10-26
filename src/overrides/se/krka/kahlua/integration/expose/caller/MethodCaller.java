@@ -12,6 +12,7 @@ public class MethodCaller extends AbstractCaller {
    private final Object owner;
    private final boolean hasSelf;
    private final boolean hasReturnValue;
+   private final boolean pzoptZombieWriter; // pzopt: luaZombieWriters=watch, a state-changing method (pzopt.LuaZombieWatch)
 
    public MethodCaller(Method method, Object owner, boolean hasSelf) {
       super(method.getParameterTypes(), method.isVarArgs());
@@ -20,6 +21,7 @@ public class MethodCaller extends AbstractCaller {
       this.hasSelf = hasSelf;
       method.setAccessible(true);
       this.hasReturnValue = !method.getReturnType().equals(void.class);
+      this.pzoptZombieWriter = pzopt.LuaZombieWatch.isWriter(method); // pzopt: luaZombieWriters=watch
       if (this.hasReturnValue && this.needsMultipleReturnValues()) {
          throw new IllegalArgumentException("Must have a void return type if first argument is a ReturnValues: got: " + method.getReturnType());
       }
@@ -32,6 +34,10 @@ public class MethodCaller extends AbstractCaller {
       }
 
       int pzoptDepth = pzopt.UiDeps.on ? pzopt.UiDeps.enter() : -1; // pzopt: uiVerify, a Lua -> Java call of a recorded UI render
+      if (this.pzoptZombieWriter && pzopt.LuaZombieWatch.target != null) { // pzopt: luaZombieWriters=watch, the write barrier
+         pzopt.LuaZombieWatch.call(self); // pzopt: luaZombieWriters=watch
+      } // pzopt: luaZombieWriters=watch
+      long pzoptJ = pzopt.LuaStreamJava.on ? System.nanoTime() : 0L; // pzopt: devLuaStreamJava, the Java a LoadGridsquare / LoadChunk handler calls, counted and timed
       try {
          Object ret = this.method.invoke(self, params);
          if (pzoptDepth >= 0) { // pzopt: uiVerify
@@ -48,7 +54,22 @@ public class MethodCaller extends AbstractCaller {
          logException(e);
       }
       pzopt.UiDeps.exit(pzoptDepth); // pzopt: uiVerify
+      if (pzoptJ != 0L) { // pzopt: devLuaStreamJava
+         pzopt.LuaStreamJava.call(this.method, pzoptJ); // pzopt
+      } // pzopt
    }
+
+   public Method pzoptMethod() { // pzopt: luaJavaFast
+      return this.method; // pzopt: luaJavaFast
+   } // pzopt: luaJavaFast
+
+   public Object pzoptOwner() { // pzopt: luaJavaFast
+      return this.owner; // pzopt: luaJavaFast
+   } // pzopt: luaJavaFast
+
+   public static void pzoptLogException(Throwable throwable) { // pzopt: luaJavaFast, an exception of the method called by pzopt.LuaJavaFast
+      logException(throwable); // pzopt: luaJavaFast
+   } // pzopt: luaJavaFast
 
    private static void logException(Throwable throwable) {
       UIManager.defaultthread.doStacktraceProper();

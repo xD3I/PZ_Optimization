@@ -78,6 +78,7 @@ public final class BenchRecorder {
       startEpochMs = System.currentTimeMillis();
       endNs = 0;
       startSampler();
+      LuaStreamDispatch.resetCounters(); // lua-stream: the handler census covers the route window (what was learned stays)
       on = true;
    }
 
@@ -552,6 +553,9 @@ public final class BenchRecorder {
     * timed window, as pzopt.GameThreadProfile wrote them). Never throws: a pass without them only shows fewer charts.
     */
    static void writeTimelines(java.io.File dir, String base) {
+      LuaStream.writeCsv(new java.io.File(dir, base + "-luastream.csv")); // lua-stream: per game step LoadGridsquare / LoadChunk / hand-off time
+      LuaStream.writeReadyCsv(new java.io.File(dir, base + "-chunkready.csv")); // lua-stream: per chunk, queued for the hand-off -> ready to draw
+      LuaStreamDispatch.writeCsv(new java.io.File(dir, base + "-luahandlers.csv")); // lua-stream: per LoadGridsquare handler census (when dispatched by pzopt.LuaStreamDispatch)
       try {
          timeline.writeCsv(new java.io.File(dir, base + "-samples.csv"));
       } catch (Throwable t) {

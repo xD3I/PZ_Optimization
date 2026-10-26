@@ -52,6 +52,7 @@ public final class Benchmark {
       if (!"W".equals(BenchPlan.parts()[1]) && !"0".equals(BenchPlan.plan().getProperty("modlua", "1"))) {
          ModLuaProfile.start(); // each mod's Lua per frame (the report's Mods row)
       }
+      LuaTick.recordStart(); // luaTickStats: per-frame mod tick rows over the route
       zombiesAtStart = zombies();
       Log.info("benchmark: route started, recording (" + zombiesAtStart + " zombies, " + vehicles() + " vehicles loaded)");
    }
@@ -109,6 +110,7 @@ public final class Benchmark {
             BenchRecorder.writeFramesCsv(new File(dir, String.format("step-%02d-%s-%s-%s-frames.csv", step, parts[0], parts[1], parts[2])), "ProjectZomboid");
             BenchRecorder.writeTimelines(dir, String.format("step-%02d-%s-%s-%s", step, parts[0], parts[1], parts[2]));
             ModLuaProfile.write(dir, String.format("step-%02d-%s-%s-%s", step, parts[0], parts[1], parts[2]));
+            LuaTick.recordWrite(dir, String.format("step-%02d-%s-%s-%s", step, parts[0], parts[1], parts[2])); // luaTickStats
             BenchCapture.write(dir, String.format("step-%02d-%s-%s-%s", step, parts[0], parts[1], parts[2]));
          }
          if (BenchPlan.option("screenshot") && !"W".equals(parts[1])) {

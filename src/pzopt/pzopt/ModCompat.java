@@ -71,6 +71,8 @@ public final class ModCompat {
       final String cls; // internal name, zombie/iso/IsoChunk
       final String method; // null: the class only (a transformer naming it, no method found)
       final String how;
+      /** The class carrying the ZombieBuddy @Patch (internal name), null for other kinds of hits. */
+      String patchClass;
 
       Hit(String source, String cls, String method, String how) {
          this(source, null, cls, method, how);
@@ -183,6 +185,38 @@ public final class ModCompat {
          }
       }
       return new ArrayList<>(out);
+   }
+
+   /**
+    * Whether any Java mod found by the scan, known-compatible ones included, patches this method ("se/krka/kahlua/vm/KahluaThread.tableget";
+    * a class-only hit counts): pzopt.LuaJit routes compiled code through the patched stock method then.
+    */
+   /**
+    * Whether every patch of this method found by the scan is a ZombieBuddy @Patch in a class whose name starts with
+    * prefix (and there is one): pzopt.LuaJit knows what ZombieBuddy's own tableget patch does (its zb* names).
+    */
+   static boolean patchedOnlyBy(String method, String prefix) {
+      int dot = method.lastIndexOf('.');
+      boolean any = false;
+      for (Hit h : found) {
+         if (h.cls.equals(method.substring(0, dot)) && (h.method == null || h.method.equals(method.substring(dot + 1)))) {
+            if (h.method == null || h.patchClass == null || !h.patchClass.startsWith(prefix)) {
+               return false;
+            }
+            any = true;
+         }
+      }
+      return any;
+   }
+
+   static boolean patchedByAny(String method) {
+      int dot = method.lastIndexOf('.');
+      for (Hit h : found) {
+         if (h.cls.equals(method.substring(0, dot)) && (h.method == null || h.method.equals(method.substring(dot + 1)))) {
+            return true;
+         }
+      }
+      return false;
    }
 
    public static String reason(String key) {
@@ -582,7 +616,9 @@ public final class ModCompat {
          if (cn instanceof String c) {
             String internal = c.replace('.', '/');
             if (shadows(shadowed, internal)) {
-               hits.add(new Hit(source, jar, internal, mn instanceof String m ? m : null, "ZombieBuddy @Patch"));
+               Hit h = new Hit(source, jar, internal, mn instanceof String m ? m : null, "ZombieBuddy @Patch");
+               h.patchClass = cf.self;
+               hits.add(h);
                patched = true;
             }
          }
@@ -628,6 +664,8 @@ public final class ModCompat {
       final List<String> strings = new ArrayList<>();
       final List<String> classes = new ArrayList<>();
       final List<Map<String, Object>> annotations = new ArrayList<>();
+      /** This class's own internal name. */
+      String self;
       private Object[] cp;
 
       /** A class that rewrites bytecode: its string constants name what it patches (a plain class naming ours reads it). */
@@ -653,6 +691,7 @@ public final class ModCompat {
          cf.cp = new Object[n];
          int[] stringRefs = new int[n];
          int[] classRefs = new int[n];
+         int[] classNames = new int[n]; // constant index -> its name's index (this_class)
          int ns = 0;
          int nc = 0;
          for (int i = 1; i < n; i++) {
@@ -665,7 +704,11 @@ public final class ModCompat {
                   i++;
                }
                case 8 -> stringRefs[ns++] = in.readUnsignedShort();
-               case 7 -> classRefs[nc++] = in.readUnsignedShort();
+               case 7 -> {
+                  int ni = in.readUnsignedShort();
+                  classRefs[nc++] = ni;
+                  classNames[i] = ni;
+               }
                case 16, 19, 20 -> in.skipNBytes(2);
                case 9, 10, 11, 12, 17, 18 -> in.skipNBytes(4);
                case 15 -> in.skipNBytes(3);
@@ -682,7 +725,12 @@ public final class ModCompat {
                cf.classes.add(c);
             }
          }
-         in.skipNBytes(6); // access, this, super
+         in.skipNBytes(2); // access
+         int self = in.readUnsignedShort();
+         if (self > 0 && self < n && cf.cp[classNames[self]] instanceof String sn) {
+            cf.self = sn;
+         }
+         in.skipNBytes(2); // super
          in.skipNBytes(2L * in.readUnsignedShort()); // interfaces
          for (int part = 0; part < 2; part++) { // fields, methods
             int count = in.readUnsignedShort();

@@ -52,6 +52,7 @@ mkdir -p "$out"
 touch "$out/.started"   # for find -newer (BSD find has no -newermt @epoch)
 empty="$out/empty-options.ini"
 : > "$empty"
+rm -f "$ZD/pzopt-luazombie.out" "$ZD/pzopt-gtab.out"   # lua-zombie: this chain's own rows only
 
 if pgrep -f "$GAME_PAT" >/dev/null; then echo "a game is running" >&2; exit 75; fi
 [[ -n "$LAUNCHER" ]] && cp "$LAUNCHER" "$out/launcher.json.orig"
@@ -233,7 +234,7 @@ mkdir -p "$out/shots"   # the game's own screenshots of this chain (shots option
 find "$ZD/Screenshots" -maxdepth 1 -name 'pzopt-bench-*.png' -newer "$out/.started" -exec cp {} "$out/shots/" \; 2>/dev/null || true
 mkdir -p "$out/logs"
 find "$ZD/Logs" -maxdepth 1 -type f -newer "$out/.started" -exec cp {} "$out/logs/" \; 2>/dev/null || true
-for f in pzopt-bench.out pzopt-overlay.out pzopt-pacing.out pzopt-gamethread.out pzopt-stacks.out; do cp "$ZD/$f" "$out/last-$f" 2>/dev/null || true; done
+for f in pzopt-bench.out pzopt-overlay.out pzopt-pacing.out pzopt-gamethread.out pzopt-stacks.out pzopt-luazombie.out pzopt-gtab.out; do cp "$ZD/$f" "$out/last-$f" 2>/dev/null || true; done
 echo "run_dir=$out"
 if [[ "$ui" == pad ]]; then  # the controller check: the focus trace
   grep -a "BENCHPAD\|pad tour done" "$out/console-last.txt" > "$out/benchpad.txt" || true

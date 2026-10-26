@@ -23,6 +23,7 @@ public final class Event {
    public String name;
    private final int index;
    private final boolean pzoptUiEvent; // pzopt: uiRetained, an event after which the UI shows something else
+   public Object pzoptTick; // pzopt: luaTick, pzopt.LuaTick's state of this event (its handlers' schedule)
 
    public boolean trigger(KahluaTable env, LuaCaller caller, Object[] params) {
       if (this.pzoptUiEvent) { // pzopt: uiRetained, every UI element renders fresh
@@ -31,6 +32,9 @@ public final class Event {
       if (this.callbacks.isEmpty()) {
          return false;
       }
+      if (pzopt.LuaTick.ON) { // pzopt: luaTick, the loop with the fast dispatch / the mod tick rate (stock behaviour while its keys are off)
+         return pzopt.LuaTick.trigger(this, caller, params); // pzopt: luaTick
+      } // pzopt: luaTick
 
       GameProfiler profiler = GameProfiler.getInstance();
       if (DebugOptions.instance.checks.slowLuaEvents.getValue()) {

@@ -246,6 +246,9 @@ local MOVED_TABS = {
     { tab = "compat", cat = "mods", title = "Mods & MP", catTitle = "Mod settings", colour = { 0.55, 0.85, 0.85 },
       blurb = "How PZ Optimization meets other mods: Java mods that patch the same game code, windows mods draw in, mod Lua reached from helper threads.",
       subTitle = "Mods", keys = { "modProfile", "modCompat", "uiRetainedMods", "luaWorkerGate" } },
+    { tab = "compat", cat = "modlua", title = "Mods & MP", catTitle = "Mod Lua events", colour = { 0.55, 0.85, 0.85 },
+      blurb = "How often mods' per-frame Lua runs (OnTick, OnPlayerUpdate) and how their repeated errors are printed.",
+      subTitle = "Mod Lua events", keys = { "luaTickHz", "luaTickAdaptive", "luaEventDispatchFast", "luaEventSkipEmpty", "luaErrorThrottle" } },
     { tab = "compat", cat = "mp", title = "Mods & MP", catTitle = "Multiplayer settings", colour = { 0.55, 0.85, 0.85 },
       blurb = "Playing on a server.",
       subTitle = "Multiplayer", keys = { "luaChecksumExempt" } },
@@ -2540,6 +2543,47 @@ PAGES.compat = function(self)
         reserve = { { string.upper(PzoptCompatApi.names.performance or "MAX PERFORMANCE"),
             string.upper(PzoptCompatApi.names.compatibility or "MAX COMPATIBILITY"), "RESTART GAME" } } })
     if TAB_LAYOUT then movedSettings(self, p, "compat") end
+    -- the mods' per-frame Lua (pzopt.LuaTick): one row per mod with OnTick / OnPlayerUpdate handlers, the player's choice
+    local tick = PzoptCompatApi.tickMods and PzoptCompatApi.tickMods() or {}
+    if #tick > 0 then table.insert(p.items, { kind = "section", label = "Mods' per-frame Lua (OnTick, OnPlayerUpdate)" }) end
+    for i, m in ipairs(tick) do
+        local mod = m
+        local names = PzoptCompatApi.TICK_NAMES
+        table.insert(p.items, { id = "tick" .. i, kind = "row", label = esc(mod.name),
+            value = function()
+                local v = names[PzoptCompatApi.tickMode(mod.id)]
+                if mod.costUs >= 0 then v = v .. string.format(" - %.2f ms", mod.costUs / 1000) end
+                return v
+            end,
+            desc = function()
+                local t = esc(mod.name) .. ": " .. mod.n .. " handler" .. (mod.n == 1 and "" or "s") .. " on " .. esc(mod.events) .. ". "
+                if mod.pinned > 0 then
+                    t = t .. mod.pinned .. " of them stay every frame on their own (they " .. esc(mod.reason) .. (mod.pinned > 1 and ", ..." or "") .. "). "
+                end
+                if mod.costUs >= 0 then
+                    t = t .. string.format("Measured this session: %.2f ms a frame if called every frame. ", mod.costUs / 1000)
+                end
+                t = t .. " <LINE> <LINE> Auto: the rate settings above and the code check decide. Every frame: this mod's handlers "
+                    .. "are never spaced out (pick it when something of the mod lags or misbehaves with a rate set). Capped: they "
+                    .. "follow the rate even where the check would keep them every frame. Applies on the next launch."
+                local pin = PzoptCompatApi.tickPinned()
+                if pin ~= "" then t = t .. " <LINE> <RGB:1,0.85,0.45> Pinned by " .. esc(pin) .. " on this install." end
+                return t
+            end,
+            actionsFn = function()
+                if PzoptCompatApi.tickPinned() ~= "" then return {} end
+                local acts, cur = {}, PzoptCompatApi.tickMode(mod.id)
+                for _, v in ipairs({ "auto", "every", "capped" }) do
+                    local choice = v
+                    table.insert(acts, { label = (choice == cur and "* " or "") .. string.upper(names[choice]), act = function()
+                        for _, k in ipairs(PzoptCompatApi.TICK_KEYS) do TOUCHED[k] = true end
+                        PzoptCompatApi.setTickMode(mod.id, choice)
+                    end })
+                end
+                return acts
+            end,
+            reserve = { { "* AUTO", "* EVERY FRAME", "* CAPPED" } } })
+    end
     if #d.jars > 0 then table.insert(p.items, { kind = "section", label = "Java files of this launch" }) end
     for i, jar in ipairs(d.jars) do
         table.insert(p.items, { id = "jar" .. i, kind = "row", label = jar.name, value = PzoptCompatApi.verdict(d, i),

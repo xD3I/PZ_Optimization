@@ -14,6 +14,7 @@ fail=0
 # UpscalerTest read a non-default Config value and fail the release; tests that need the file set their own path
 NO_USER_OPTIONS="$OUT/no-user-options.ini"
 for t in $(cd "$OUT" && find . -name '*Test.class' | sed 's|^\./||;s|\.class$||;s|/|.|g' | sort); do
-  if ! java -Dpzopt.dev=true -Dpzopt.userOptionsFile="$NO_USER_OPTIONS" -cp "$OUT:$REPO/build/classes:$JAR" "$t"; then echo "FAILED: $t" >&2; fail=1; fi
+  # the game runs with -XX:-OmitStackTraceInFastThrow (launcher JSON): exception messages stay in hot code (LuaJitDiffTest)
+  if ! java -XX:-OmitStackTraceInFastThrow -Dpzopt.dev=true -Dpzopt.userOptionsFile="$NO_USER_OPTIONS" -cp "$OUT:$REPO/build/classes:$JAR" "$t"; then echo "FAILED: $t" >&2; fail=1; fi
 done
 exit $fail

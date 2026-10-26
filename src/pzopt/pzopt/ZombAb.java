@@ -12,7 +12,7 @@ public final class ZombAb {
 
    private static final String[] NAMES = {"zombNoop", "separateAsync", "postupdateMoveStream", "entityUpdateStream", "separateEdgeCache",
       "postupdateNoopSkip", "postupdateFuse", "luaSilentSkip", "frameThreadsAlt", "entityUpdateAlerted", "postupdateClean", "postupdateEligibleOnWorker", "postupdateVehicleOnWorker", "zombieLateApply", "zombieDrawLate", "randPerWorker", "animalLosSkip", "entityUpdateAnimalsInline", "coreFrameCpus", "playerLosParallel", "schedulerFillParallel", "playerLosFast", "workerQosMac", "joinSpinPark", "groundHexTiling", "groundMacroPct", "groundHeightBlend", "groundScatter", "glints",
-      "groundTracks", "grassBlades"};
+      "groundTracks", "grassBlades", "luaJit", "luaJitNew"};
 
    public static final long NOOP = 1L; // zombNoop: no code reads it (an alternation of it turns the timers on, both halves alike)
    public static final long SEP_ASYNC = 1L << 1; // separateAsync
@@ -39,6 +39,8 @@ public final class ZombAb {
    public static final long SPIN_PARK = 1L << 23; // joinSpinPark (f11-mac): the "off" half spins the old unbounded way
    public static final long GROUND_HEX = 1L << 24, GROUND_MACRO = 1L << 25, GROUND_HEIGHT = 1L << 26, GROUND_SCATTER = 1L << 27,
       GROUND_GLINTS = 1L << 28, GROUND_TRACKS = 1L << 29, GROUND_BLADES = 1L << 30; // ground and grass (2026-10-24): pzopt.Ground.on reads them
+   public static final long LUA_JIT = 1L << 31; // luaJit (Lua VM pass 2026-10-25): the "off" half interprets every Lua function (compiled code is kept, not entered), calls Java the stock way (luaJavaFast) and matches strings with the stock matcher and pool (luaPatternFast, luaStringFast)
+   public static final long LUA_JIT_NEW = 1L << 32; // luaJitNew (Lua VM pass 2026-10-26): the "off" half leaves out the Lua VM keys under test (LuaJit.newOn: luaJitNilCache, luaJitSlot2, luaPatternNoPool, luaJitSelfJava's fast part), everything else as configured
    public static final long CORE_FRAME = 1L << 18; // coreFrameCpus (f8-flip): the "on" half puts the frame workers on coreFrameCpus, the "off" half on the background class
 
    /** GtAb.parse: a name of this pass shares GtAb bit 40 (timers on); 0 for any other name. */

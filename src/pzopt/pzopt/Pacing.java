@@ -149,6 +149,7 @@ public final class Pacing {
       GtAb.frame(); // devGtAlternate: this frame's A/B phase
       TorchSource.frameStart(); // devTorchSourceCycle: this frame's variant
       VisBlink.frame(); // devVisBlinkTrace: the last frame's visibility blinks
+      LuaZombie.frameStart(); // luaZombieHz: this frame's OnZombieUpdate plan and rates (pzopt-luazombie.out row of the last)
       AnimalPreload.drain(); // animalPreload (tail pass): preloaded action groups into the game's map
       stepStartNs = nowNs;
       capIntervalNs = intervalNs;

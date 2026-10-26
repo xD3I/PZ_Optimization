@@ -350,11 +350,7 @@ implements Mover {
 
     public void collideWith(IsoObject obj) {
         pzopt.PostupdateBatch.hazard(pzopt.PostupdateBatch.H_COLLIDE_WITH); // pzopt: postupdateParallel — the collide hooks and their Lua events stay on the game thread
-        if (this instanceof IsoGameCharacter && obj instanceof IsoGameCharacter) {
-            LuaEventManager.triggerEvent("OnCharacterCollide", this, obj);
-        } else {
-            LuaEventManager.triggerEvent("OnObjectCollide", this, obj);
-        }
+        pzopt.LuaCollide.collide(this, obj); // pzopt: luaCollideDedupe -- OnCharacterCollide / OnObjectCollide, once per pair a frame with the key on (the stock two events otherwise)
     }
 
     public void doStairs() {

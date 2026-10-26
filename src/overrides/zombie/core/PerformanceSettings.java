@@ -179,6 +179,12 @@ public final class PerformanceSettings {
       return pzopt.ModCompat.details();
    }
 
+   // pzopt: the screen's "Mods' per-frame Lua" list (luaTickModsEveryFrame / luaTickModsCapped): one tab-separated line per
+   // mod with OnTick / OnPlayerUpdate / OnTickEvenPaused handlers (pzopt.LuaTick.modsReport)
+   public String getPzoptLuaTickMods() {
+      return pzopt.LuaTick.modsReport();
+   }
+
    /** "" removes the key (default on the next launch). */
    public void setPzoptOption(String key, String value) {
       if (pzopt.Config.knows(key)) {

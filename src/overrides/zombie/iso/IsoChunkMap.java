@@ -144,6 +144,7 @@ public final class IsoChunkMap {
    }
 
    public void Dispose() {
+      pzopt.LuaStream.reset(); // pzopt: luaLoadBudgetUs, the world is gone: a chunk still loading is dropped with it
       IsoChunk.loadGridSquare.clear();
       this.chunksSwapA = null;
       this.chunksSwapB = null;
@@ -161,6 +162,7 @@ public final class IsoChunkMap {
    }
 
    public void processAllLoadGridSquare() {
+      pzopt.LuaStream.finishAll("load all"); // pzopt: luaLoadBudgetUs, a chunk still loading square by square finishes before the queue is handed off at once
       // pzopt: centerFirstLoad, at world entry only the chunks around the player are handed over here (the rest go back
       // on the queue for update(), which hands chunks over a few per frame as it does while walking): 0.44 s of
       // boundary recalc on the main thread before the first world frame otherwise
@@ -227,6 +229,7 @@ public final class IsoChunkMap {
 
    private void updateInternal() {
       boolean bChanged = false;
+      pzopt.LuaStream.tick(); // pzopt: luaLoadBudgetUs, the per-frame record (LoadGridsquare / LoadChunk time; the benchmark's luastream csv), on or off
       pzopt.LootDefer.drain(); // pzopt: lootDefer, this frame's share of the queued far containers
       pzopt.PoolWarm.frame(); // pzopt: renderPoolMax (render-data pool caps) and devPoolLog
       pzopt.ChunkPace.frame(IsoChunk.loadGridSquare.size() + (pzoptStaged != null ? 1 : 0)); // pzopt: chunkHandoffPaceMs, this frame's hand-off credit
@@ -246,7 +249,14 @@ public final class IsoChunkMap {
             count = 0; // pzopt
          } // pzopt
       }
-      if (pzopt.Config.CHUNK_HANDOFF_SLACK_WORK && pzopt.Overrides.enabled() && pzopt.SlackWork.active()
+      boolean pzoptStream = pzopt.LuaStream.on(); // pzopt: luaLoadBudgetUs, pzopt.LuaStream hands the queued chunks off itself, square by square under its frame budget
+      if (pzoptStream) { // pzopt
+         count = 0; // pzopt
+         if (pzopt.LuaStream.frame(this)) { // pzopt
+            bChanged = true; // pzopt
+         } // pzopt
+      } // pzopt
+      if (pzopt.Config.CHUNK_HANDOFF_SLACK_WORK && pzopt.Overrides.enabled() && pzopt.SlackWork.active() && !pzoptStream // pzopt: luaLoadBudgetUs has its own slack producer
             && IsoChunk.loadGridSquare.size() < pzopt.Config.CHUNK_HANDOFF_SLACK_BACKLOG && !GameClient.client && !GameServer.server) { // pzopt: chunkHandoffSlackWork,
          count = 0; // pzopt: the chunks join in the step's slack, one at a time (a world load / teleport backlog goes as above)
          pzopt.SlackWork.register(PZOPT_HANDOFF); // pzopt
@@ -379,6 +389,11 @@ public final class IsoChunkMap {
          } // pzopt
       } // pzopt
       return Math.max(16, n); // pzopt
+   } // pzopt
+
+   /** pzopt: luaLoadBudgetUs, one chunk's hand-off for pzopt.LuaStream (true when the chunk joined the world). */
+   public boolean pzoptHandOff(IsoChunk chunk) { // pzopt
+      return this.pzoptHandOffChunk(chunk); // pzopt
    } // pzopt
 
    /** pzopt: one chunk's hand-off, the stock loop body of updateInternal (true when the chunk joined the world); also run from the frame's slack (chunkHandoffSlackWork). */

@@ -96,6 +96,8 @@ public final class GtAb {
             }
          }
          m |= ZombAb.bit(k); // zombie redesign (f8-zomb2): its keys on bits 40-47
+         m |= LuaZombieAb.bit(k); // mod Lua per-zombie pass (lua-zombie): its keys on bit 40 too
+         m |= LuaStreamAb.bit(k); // lua-stream (2026-10-26): its keys on bit 40 too
          if (k.equals("animalLosWalk")) { // tail pass: bits 56-63 by name
             m |= ANIMAL_WALK;
          }
@@ -158,6 +160,7 @@ public final class GtAb {
    private static final StringBuilder LOG = new StringBuilder(1 << 16);
    private static java.io.Writer out;
    private static int rows;
+   private static long lastFlushMs;
    public static int zombieUpdates; // IsoZombie.update calls since the last frame start (game thread)
 
    /**
@@ -197,7 +200,8 @@ public final class GtAb {
          }
          ZombTiming.append(LOG); // zombie redesign (f8-zomb2): its own columns after the sections
          LOG.append('\n');
-         if (++rows % 250 == 0) {
+         if (++rows % 250 == 0 || now - lastFlushMs > 2000L) { // every 2 s too (lua-zombie, 2026-10-25): a benchmark pass's process ends without a last flush
+            lastFlushMs = now;
             flush();
          }
       }
@@ -299,7 +303,7 @@ public final class GtAb {
       try {
          if (out == null) {
             java.io.File f = new java.io.File(zombie.ZomboidFileSystem.instance.getCacheDir(), "pzopt-gtab.out");
-            out = new java.io.BufferedWriter(new java.io.FileWriter(f));
+            out = new java.io.BufferedWriter(new java.io.FileWriter(f, Config.DEV_GT_APPEND)); // devGtAppend: the passes of a benchmark chain in one file
             out.write("# epoch_ms on(1)/off(0) game_thread_cpu_ns process_cpu_ns wall_ns zombie_updates, then ns per section: startFrame schedUpdate animalLos playerLos pplBeforeComposite renderMovingObjects performRenderTiles postupdate visPolyRenderMain aoFlush chunkMapUpdate popmanUpdate lightingUpdate logic finishAnimation renderInternal sceneCull atlases cellRender pu_loop pu_move pu_flush pu_zombies pu_moved pu_collided vzmUpdate chunkPos nativeUnload bake_t0 bake_t1 bake_t2 bake_t3 bake_offered tl_pass tl_record tl_splice rt_handoff rt_prepop rt_tilesInternal rt_renderlast rt_weather tl_floor runq_ns minflt majflt handoff batchWait rtGenTex newTex" + ZombTiming.HEADER + "  (per frame, devGtAlternate " + Config.DEV_GT_ALTERNATE + " ms, keys "
                + Config.DEV_GT_ALTERNATE_KEYS + ")\n");
          }

@@ -2175,7 +2175,113 @@ function PzoptHarnessUiCycleTick()
     end
 end
 
+-- unpause=1 (2026-10-26, the 650-mod list): a mod that pauses the game by itself stops the run, since pzopt.Harness
+-- runs from IsoChunk.update and a paused game never reaches the route (Spongie's Character Customisation opens its
+-- window ~200 player updates after join on a character without its mod data and sets speed 0: the run sat 30 min in
+-- its settle). The windows that exist at the first in-game tick are kept; when the game is found at speed 0 outside
+-- the escape menu, every window added since is closed through its own close() (Spongie's sets speed 1 there too),
+-- then speed 1. Opt-in: pause_at and the pause-menu / options rigs pause on purpose.
+-- The unpause / close_dialogs lines also go to Zomboid/Lua/pzopt-harness-events.txt: with hundreds of mods the game
+-- reloads them on the way back to the main menu and starts console.txt over, so the in-world log is lost.
+local function harnessEvent(line)
+    print(line)
+    local w = getFileWriter("pzopt-harness-events.txt", true, true)
+    if w then w:write(getTimestampMs() .. " " .. line .. "\n"); w:close() end
+end
+
+local unpause = nil
+local function unpauseTick()
+    if unpause == false then return end
+    if unpause == nil then
+        local flags = readFlags()
+        if not flags or not flags.mode or not (flags.unpause == "1" or flags.unpause == "true") then unpause = false; return end
+        if flags.pause_at and tonumber(flags.pause_at) and tonumber(flags.pause_at) > 0 then
+            harnessEvent("[pzopt-harness] unpause: off, pause_at pauses on purpose")
+            unpause = false
+            return
+        end
+        unpause = { base = {}, count = 0 }
+        local ui = UIManager.getUI()
+        for i = 0, ui:size() - 1 do unpause.base[ui:get(i)] = true end
+        harnessEvent("[pzopt-harness] unpause: on, " .. ui:size() .. " windows at the first in-game tick are kept")
+        return
+    end
+    local sc = UIManager.getSpeedControls()
+    if not sc or sc:getCurrentGameSpeed() ~= 0 then return end
+    if MainScreen.instance and MainScreen.instance:isVisible() then return end -- the escape menu: the player's own pause
+    local ui = UIManager.getUI()
+    local added = {}
+    for i = 0, ui:size() - 1 do
+        local e = ui:get(i)
+        if not unpause.base[e] and e:isVisible() then table.insert(added, e) end
+    end
+    local names = {}
+    for _, e in ipairs(added) do
+        local t = e:getTable()
+        table.insert(names, (t and t.Type) or tostring(e))
+        local ok, err
+        if t and t.close then
+            ok, err = pcall(t.close, t)
+        elseif t and t.removeFromUIManager then
+            ok, err = pcall(t.removeFromUIManager, t)
+        else
+            ok, err = pcall(function() e:setVisible(false) end)
+        end
+        if not ok then harnessEvent("[pzopt-harness] unpause: closing " .. names[#names] .. " failed: " .. tostring(err)) end
+    end
+    if sc:getCurrentGameSpeed() == 0 then sc:SetCurrentGameSpeed(1) end
+    unpause.count = unpause.count + 1
+    harnessEvent(string.format("[pzopt-harness] unpause: game found paused (#%d, t=%d), closed %d window(s): %s; speed %d",
+        unpause.count, getTimestampMs(), #added, table.concat(names, ", "), sc:getCurrentGameSpeed()))
+end
+
+-- close_dialogs=1 (2026-10-26, the 650-mod list): mods greet an existing save with OK dialogs (Horse mod, Companion
+-- Dogs, Dog Tired Armory's uninstall note) that stay in the middle of the screen through the whole recorded route.
+-- Twice a second every visible ISModalDialog / ISModalRichText / ISCollapsableModalRichText (the Horse mod's notice), or a
+-- class derived from one, is closed through its
+-- own destroy(), without pressing a button.
+local closeDialogs = nil
+local function isA(t, cls)
+    if not cls then return false end
+    local m = getmetatable(t)
+    while m do
+        if m == cls then return true end
+        m = getmetatable(m)
+    end
+    return false
+end
+local function closeDialogsTick()
+    if closeDialogs == false then return end
+    if closeDialogs == nil then
+        local flags = readFlags()
+        closeDialogs = (flags and flags.mode and (flags.close_dialogs == "1" or flags.close_dialogs == "true")) and { next = 0, n = 0 } or false
+        if not closeDialogs then return end
+        harnessEvent("[pzopt-harness] close_dialogs: on")
+    end
+    local now = getTimestampMs()
+    if now < closeDialogs.next then return end
+    closeDialogs.next = now + 500
+    local ui = UIManager.getUI()
+    local found = {}
+    for i = 0, ui:size() - 1 do
+        local e = ui:get(i)
+        local t = e:isVisible() and e:getTable()
+        if t and (isA(t, ISModalDialog) or isA(t, ISModalRichText) or isA(t, ISCollapsableModalRichText)) then table.insert(found, t) end
+    end
+    for _, t in ipairs(found) do
+        local text = tostring(t.text or ""):gsub("%s+", " "):sub(1, 80)
+        local ok, err = pcall(function() if t.destroy then t:destroy() else t:removeFromUIManager() end end)
+        closeDialogs.n = closeDialogs.n + 1
+        harnessEvent("[pzopt-harness] close_dialogs: #" .. closeDialogs.n .. " " .. tostring(t.Type) .. " \"" .. text .. "\""
+            .. (ok and "" or (" failed: " .. tostring(err))))
+    end
+end
+
 local function onTickEvenPaused()
+    local oku, erru = pcall(unpauseTick)
+    if not oku then harnessEvent("[pzopt-harness] unpause: rig error " .. tostring(erru)); unpause = false end
+    local okd, errd = pcall(closeDialogsTick)
+    if not okd then harnessEvent("[pzopt-harness] close_dialogs: rig error " .. tostring(errd)); closeDialogs = false end
     local okc, errc = pcall(PzoptHarnessUiCycleTick)
     if not okc then print("[pzopt-harness] ui_cycle: rig error " .. tostring(errc)); PzoptHarnessUiCycle = false end
     local okf, errf = pcall(finalTick)

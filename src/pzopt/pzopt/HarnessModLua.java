@@ -36,6 +36,9 @@ final class HarnessModLua {
 
    /** Harness, route start (game thread). */
    static void routeStart() {
+      if (!BenchPlan.active()) {
+         LuaTick.recordStart(); // luaTickStats: the mod tick rows over the route (pzopt-luatick.out / pzopt-luatick-handlers.out)
+      }
       try {
          if (!ON || armed || BenchPlan.active() || ModLuaProfile.active()) {
             return;
@@ -51,6 +54,14 @@ final class HarnessModLua {
 
    /** Harness, route end (game thread): the profile stopped and written into Zomboid/. Never throws. */
    static void routeEnd() {
+      if (!BenchPlan.active()) {
+         try {
+            File dir = new File(ZomboidFileSystem.instance.getCacheDir());
+            LuaTick.recordWrite(new File(dir, "pzopt-luatick.out"), new File(dir, "pzopt-luatick-handlers.out"));
+         } catch (Throwable t) {
+            Log.warn("luaTick (harness): could not write the rows: " + t);
+         }
+      }
       if (!armed) {
          return;
       }

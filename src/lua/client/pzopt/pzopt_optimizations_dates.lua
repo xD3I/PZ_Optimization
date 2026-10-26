@@ -963,7 +963,6 @@ PzoptOptionDates = {
     pplShadowDepthTest = "2026-09-26",
     pplShadowMaxSteps = "2026-09-30",
     pplShadows = "2026-09-25",
-    pplShadowFilter = "2026-10-26",
     pplShadowSquares = "2026-09-25",
     pplSmooth = "2026-09-25",
     pplSpecPct = "2026-09-25",

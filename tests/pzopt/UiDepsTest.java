@@ -427,6 +427,27 @@ public class UiDepsTest {
       UiDeps.reset();
       Check.check(!boom.verifiable() && validate(boom) == UiDeps.OPAQUE, "its next recording keeps the timer rules");
 
+      // a big table: addKey's hashed dedupe (from UiDeps.INDEX_AT keys on) keeps one entry per equal key, any instance
+      KahluaTableImpl big = table();
+      for (int i = 0; i < 300; i++) {
+         big.rawset("k" + i, (double)i);
+         big.rawset((double)i, "v" + i);
+      }
+      UiDeps.Log bl = new UiDeps.Log();
+      UiDeps.begin(bl, null);
+      for (int pass = 0; pass < 3; pass++) {
+         for (int i = 0; i < 300; i++) {
+            big.rawget(new String("k" + i)); // equal, never the same instance
+            big.rawget(Double.valueOf(i));
+         }
+      }
+      UiDeps.end(bl);
+      UiDeps.reset();
+      Check.check(bl.scount[0] == 600, "600 distinct keys read three times: 600 entries (got " + bl.scount[0] + ")");
+      Check.check(validate(bl) == UiDeps.VALID, "big table unchanged: valid");
+      big.rawset("k299", -1.0);
+      Check.check(validate(bl) == UiDeps.INVALID, "the last key read changed: invalid");
+
       Check.check(!UiDeps.on, "nothing records after reset");
       System.out.println("UiDepsTest ok");
    }

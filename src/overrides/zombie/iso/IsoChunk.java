@@ -3360,6 +3360,7 @@ public final class IsoChunk {
    }
 
    public void removeFromWorld() {
+      pzopt.LuaStream.finishIfCurrent(this, "unload"); // pzopt: luaLoadBudgetUs, a chunk still loading square by square finishes first (stock loaded it whole before any unload)
       long pzoptT0 = pzopt.GtAb.TIMING ? System.nanoTime() : 0L; // pzopt: Louisville 120 item 3 dev timers (phases of a chunk's removal)
       long pzoptT1 = 0L, pzoptT2 = 0L, pzoptT3 = 0L, pzoptT4 = 0L, pzoptT5 = 0L; // pzopt
       int pzoptZombies = 0, pzoptObjects = 0, pzoptSquares = 0; // pzopt
@@ -3915,6 +3916,30 @@ public final class IsoChunk {
    }
 
    public void doLoadGridsquare() {
+      this.pzoptLoadPre(); // pzopt: luaLoadBudgetUs (pzopt.LuaStream), doLoadGridsquare in parts: a streamed chunk's hand-off may stop here and LuaStream runs the rest over the next frames
+      if (pzopt.LuaStream.defer(this)) { // pzopt
+         return; // pzopt
+      } // pzopt
+      for (int zz = this.minLevel; zz <= this.maxLevel; zz++) { // pzopt: the stock square loop, its body in pzoptLoadSquare
+         for (int x = 0; x < 8; x++) { // pzopt
+            for (int y = 0; y < 8; y++) { // pzopt
+               this.pzoptLoadSquare(x, y, zz); // pzopt
+            } // pzopt
+         } // pzopt
+      } // pzopt
+      this.pzoptLoadMid(); // pzopt
+      for (int zz = this.minLevel; zz <= this.maxLevel; zz++) { // pzopt: the stock loot loop
+         for (int x = 0; x < 8; x++) { // pzopt
+            for (int y = 0; y < 8; y++) { // pzopt
+               this.loadGridSquareIfNeeded(this.getGridSquare(x, y, zz)); // pzopt
+            } // pzopt
+         } // pzopt
+      } // pzopt
+      this.pzoptLoadEnd(); // pzopt
+   }
+
+   /** pzopt: luaLoadBudgetUs, doLoadGridsquare up to its square loop (the stock lines). */
+   public void pzoptLoadPre() { // pzopt
       this.preventHotSave = true;
       pzopt.HandoffParts.start(); // pzopt: hand-off census (instrumented runs)
       if (this.jobType == IsoChunk.JobType.SoftReset) {
@@ -4023,58 +4048,65 @@ public final class IsoChunk {
       this.treeCount = 0;
       this.scavengeZone = null;
       this.numberOfWaterTiles = 0;
+      pzopt.LuaStreamDispatch.batchBegin(this); // pzopt: luaLoadBatch, the square loop's LoadGridsquare events held until it ends
+   } // pzopt
 
-      for (int zz = this.minLevel; zz <= this.maxLevel; zz++) {
-         for (int x = 0; x < 8; x++) {
-            for (int y = 0; y < 8; y++) {
-               IsoGridSquare square = this.getGridSquare(x, y, zz);
-               if (square != null && !square.getObjects().isEmpty()) {
-                  for (int i = 0; i < square.getObjects().size(); i++) {
-                     IsoObject obj = (IsoObject)square.getObjects().get(i);
-                     obj.addToWorld();
-                     if (obj.getSprite() != null && obj.getSprite().getProperties().has(IsoPropertyType.FUEL_AMOUNT)) {
-                        obj.getPipedFuelAmount();
-                     }
-
-                     if (zz == 0 && obj.getSprite() != null && obj.getSprite().getProperties().has(IsoFlagType.water)) {
-                        this.numberOfWaterTiles++;
-                     }
-                  }
-
-                  if (square.HasTree()) {
-                     this.treeCount++;
-                  }
-
-                  if (this.jobType != IsoChunk.JobType.SoftReset) {
-                     ErosionMain.LoadGridsquare(square);
-                  }
-
-                  if (this.addZombies) {
-                     MapObjects.newGridSquare(square);
-                  }
-
-                  MapObjects.loadGridSquare(square);
-                  if (this.isNewChunk()) {
-                     this.addRatsAfterLoading(square);
-                  }
-
-                  try {
-                     LuaEventManager.triggerEvent("LoadGridsquare", square);
-                  } catch (Throwable t) {
-                     ExceptionLogger.logException(t);
-                  }
-               }
-
-               if (square != null && !square.getStaticMovingObjects().isEmpty()) {
-                  for (int i = 0; i < square.getStaticMovingObjects().size(); i++) {
-                     IsoMovingObject obj = (IsoMovingObject)square.getStaticMovingObjects().get(i);
-                     obj.addToWorld();
-                  }
-               }
+   /** pzopt: luaLoadBudgetUs, one step of doLoadGridsquare's square loop (the stock loop body). */
+   public void pzoptLoadSquare(int x, int y, int zz) { // pzopt
+      IsoGridSquare square = this.getGridSquare(x, y, zz);
+      if (square != null && !square.getObjects().isEmpty()) {
+         for (int i = 0; i < square.getObjects().size(); i++) {
+            IsoObject obj = (IsoObject)square.getObjects().get(i);
+            obj.addToWorld();
+            if (obj.getSprite() != null && obj.getSprite().getProperties().has(IsoPropertyType.FUEL_AMOUNT)) {
+               obj.getPipedFuelAmount();
             }
+
+            if (zz == 0 && obj.getSprite() != null && obj.getSprite().getProperties().has(IsoFlagType.water)) {
+               this.numberOfWaterTiles++;
+            }
+         }
+
+         if (square.HasTree()) {
+            this.treeCount++;
+         }
+
+         if (this.jobType != IsoChunk.JobType.SoftReset) {
+            ErosionMain.LoadGridsquare(square);
+         }
+
+         if (this.addZombies && pzopt.LuaStreamMapObjects.mayCall(square, true)) { // pzopt: mapObjectsFast, the walk only where a callback can run
+            MapObjects.newGridSquare(square);
+         }
+
+         if (pzopt.LuaStreamMapObjects.mayCall(square, false)) { // pzopt: mapObjectsFast
+            MapObjects.loadGridSquare(square);
+         } // pzopt
+         if (this.isNewChunk()) {
+            this.addRatsAfterLoading(square);
+         }
+
+         long pzoptEv = pzopt.LuaStream.evBegin(); // pzopt: luaLoadBudgetUs, the LoadGridsquare time per frame (benchmark csv)
+         try {
+            pzopt.LuaStreamDispatch.loadGridsquare(square); // pzopt: luaLoadPrefilter / luaLoadNoopSkip / luaLoadBatch (the stock triggerEvent with every key off)
+         } catch (Throwable t) {
+            ExceptionLogger.logException(t);
+         }
+         pzopt.LuaStream.evEnd(pzopt.LuaStream.EV_SQUARE, pzoptEv); // pzopt
+      }
+
+      if (square != null && !square.getStaticMovingObjects().isEmpty()) {
+         for (int i = 0; i < square.getStaticMovingObjects().size(); i++) {
+            IsoMovingObject obj = (IsoMovingObject)square.getStaticMovingObjects().get(i);
+            obj.addToWorld();
          }
       }
 
+   } // pzopt
+
+   /** pzopt: luaLoadBudgetUs, doLoadGridsquare from its square loop to its loot loop (the stock lines). */
+   public void pzoptLoadMid() { // pzopt
+      pzopt.LuaStreamDispatch.batchFlushAll(); // pzopt: luaLoadBatch, the held events handler by handler
       pzopt.HandoffParts.mark(4); // pzopt: hand-off census, square loop: objects addToWorld, erosion, map objects, rats, LoadGridsquare events
       if (this.jobType != IsoChunk.JobType.SoftReset) {
          ErosionMain.ChunkLoaded(this);
@@ -4144,14 +4176,10 @@ public final class IsoChunk {
       }
 
       pzopt.HandoffParts.mark(7); // pzopt: hand-off census, room lights, randomized buildings, visibility polygon
-      for (int zz = this.minLevel; zz <= this.maxLevel; zz++) {
-         for (int x = 0; x < 8; x++) {
-            for (int y = 0; y < 8; y++) {
-               this.loadGridSquareIfNeeded(this.getGridSquare(x, y, zz));
-            }
-         }
-      }
+   } // pzopt
 
+   /** pzopt: luaLoadBudgetUs, doLoadGridsquare after its loot loop (the stock lines). */
+   public void pzoptLoadEnd() { // pzopt
       pzopt.HandoffParts.mark(8); // pzopt: hand-off census, loot fill (LoadGridsquarePerformanceWorkaround)
       this.checkAdjacentChunks();
 
@@ -4199,9 +4227,16 @@ public final class IsoChunk {
       this.renderFrame = this.loadedFrame + frameDelay;
       frameDelay = (frameDelay + 1) % 5;
       this.preventHotSave = false;
-      LuaEventManager.triggerEvent("LoadChunk", this);
+      long pzoptEv = pzopt.LuaStream.evBegin(); // pzopt: luaLoadBudgetUs, the LoadChunk time per frame (benchmark csv)
+      pzopt.LuaStreamDispatch.loadChunk(this); // pzopt: luaLoadChunkSplit, held for LuaStream's steps (the stock triggerEvent otherwise)
+      pzopt.LuaStream.evEnd(pzopt.LuaStream.EV_CHUNK, pzoptEv); // pzopt
       pzopt.HandoffParts.mark(9); // pzopt: hand-off census, adjacent chunks, MP state, LoadChunk event
    }
+
+   /** pzopt: luaLoadBudgetUs, one step of doLoadGridsquare's loot loop. */
+   public void pzoptLoadLoot(int x, int y, int zz) { // pzopt
+      this.loadGridSquareIfNeeded(this.getGridSquare(x, y, zz)); // pzopt
+   } // pzopt
 
    private void loadGridSquareIfNeeded(IsoGridSquare square) {
       if (square != null && !square.getObjects().isEmpty()) {
@@ -4500,6 +4535,7 @@ public final class IsoChunk {
    }
 
    public void Save(boolean bPreventChunkReuse) throws IOException {
+      pzopt.LuaStream.finishIfCurrent(this, "save"); // pzopt: luaLoadBudgetUs, a chunk still loading square by square finishes before it is saved (game thread only)
       this.requiresHotSave = false;
       if (!Core.getInstance().isNoSave() && !GameClient.client) {
          synchronized (WriteLock) {

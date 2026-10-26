@@ -46,6 +46,7 @@ public class ModCompatTest {
       ModCompat.scanClass("modA", bytes(FakePatch.class), shadowed, edited, hits);
       Check.check(hits.size() == 1 && hits.get(0).cls.equals("zombie/iso/WorldStreamer") && "stop".equals(hits.get(0).method)
             && hits.get(0).how.contains("@Patch"), "the @Patch target is read: " + hits.size());
+      Check.check("pzopt/ModCompatTest$FakePatch".equals(hits.get(0).patchClass), "the @Patch class is named: " + hits.get(0).patchClass);
       hits.clear();
       ModCompat.scanClass("modA", bytes(NotOurs.class), shadowed, edited, hits);
       Check.check(hits.isEmpty(), "a patch of a class we do not ship is no hit");

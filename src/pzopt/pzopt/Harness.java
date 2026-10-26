@@ -793,6 +793,7 @@ public final class Harness {
                Stats.mark("route-start");
                Benchmark.onRouteStart(); // built-in benchmark: the timed window opens
                HarnessModLua.routeStart(); // each mod's Lua per frame over the route (pzopt-luaprof.out)
+               LuaStream.harnessRouteStart(); // lua-stream: per-step LoadGridsquare / LoadChunk / hand-off, chunk waits, handler census
                state = RUN;
             }
          }
@@ -1119,6 +1120,7 @@ public final class Harness {
 
    private static void writeSummary(float secs, int chunks) {
       File f = new File(ZomboidFileSystem.instance.getCacheDir(), "pzopt-bench.out");
+      LuaStream.harnessRouteEnd(f.getParentFile()); // lua-stream: pzopt-luastream.out / -chunkready.out / -luahandlers.out
       try (FileWriter w = new FileWriter(f)) {
           Core core = Core.getInstance();
           int playerIndex = IsoPlayer.getInstance() == null ? 0 : IsoPlayer.getInstance().getIndex();

@@ -41,11 +41,14 @@ public final class UiDeps {
 
    /** True while some log on this (the game) thread records; the hooks test it first. */
    public static boolean on;
+   /** luaJitUiInline: the id of the log reads go to (stack[depth - 1].id), 0 when none (ids start at 1). */
+   public static int topId;
    private static Thread thread;
    private static final Log[] stack = new Log[64];
    private static int depth;
    private static int callDepth;
    private static int nextId = 1;
+   private static final Object NONE = new Object(); // Log.slast of a slot no key was read from yet
    /** Tables born while a top-level log recorded carry its epoch (KahluaTableImpl.pzoptDepBorn). */
    public static int epoch = 1;
 
@@ -73,6 +76,15 @@ public final class UiDeps {
       Object[][] skeys = new Object[16][];
       Object[][] svals = new Object[16][];
       int[] scount = new int[16];
+      /**
+       * Per table slot, once it holds INDEX_AT keys (kept, emptied, for the slot's next table): an open-addressing index (position + 1) of its String / Number / Boolean /
+       * Character keys, the ones safeEquals compares by equals (hashCode agrees with it), so addKey's dedupe is one probe
+       * instead of a scan of every key read so far (a recording render reading a big table was quadratic: 80 % of UiDeps'
+       * time, 12 % of the Lua time on the 54-mod list). Other keys keep the scan.
+       */
+      int[][] sidx = new int[16][];
+      /** Per table slot, the key addKey saw last (2026-10-26): the same key object read again is already logged. */
+      Object[] slast = new Object[16];
       int nt;
       Log[] subs = new Log[4];
       int ns;
@@ -227,23 +239,45 @@ public final class UiDeps {
             skeys = java.util.Arrays.copyOf(skeys, nt * 2);
             svals = java.util.Arrays.copyOf(svals, nt * 2);
             scount = java.util.Arrays.copyOf(scount, nt * 2);
+            sidx = java.util.Arrays.copyOf(sidx, nt * 2);
+            slast = java.util.Arrays.copyOf(slast, nt * 2);
          }
          if (skeys[nt] == null) {
             skeys[nt] = new Object[8];
             svals[nt] = new Object[8];
          }
          scount[nt] = 0;
+         slast[nt] = NONE;
+         if (sidx[nt] != null) {
+            java.util.Arrays.fill(sidx[nt], 0); // kept from an earlier recording: an empty index of the same size
+         }
          tables[nt] = t;
          return nt++;
       }
 
       /** One field the render read (ITER: it walked the table, LEN: its length), deduplicated per table. */
       void addKey(int slot, Object key, Object value) {
+         if (slast[slot] == key) {
+            return; // the same key object as the last read of this table: logged then (found or added)
+         }
+         slast[slot] = key;
          Object[] k = skeys[slot];
          int c = scount[slot];
-         for (int i = 0; i < c; i++) {
-            if (safeEquals(key, k[i])) {
-               return; // the first value read is what the render saw first; later reads of a key it set itself follow from it
+         int[] h = sidx[slot];
+         boolean plain = plainKey(key);
+         if (h != null && plain) {
+            // every key equal to a plain one is plain and of its class (safeEquals is its equals), so all are in the index
+            int mask = h.length - 1;
+            for (int i = mix(key.hashCode()) & mask, p; (p = h[i]) != 0; i = (i + 1) & mask) {
+               if (safeEquals(key, k[p - 1])) {
+                  return;
+               }
+            }
+         } else {
+            for (int i = 0; i < c; i++) {
+               if (safeEquals(key, k[i])) {
+                  return; // the first value read is what the render saw first; later reads of a key it set itself follow from it
+               }
             }
          }
          if (c == k.length) {
@@ -253,6 +287,11 @@ public final class UiDeps {
          k[c] = key;
          svals[slot][c] = value;
          scount[slot] = c + 1;
+         if (h == null ? c + 1 >= INDEX_AT && KEY_INDEX : 2 * (c + 1) > h.length) {
+            sidx[slot] = index(k, c + 1);
+         } else if (h != null && plain) {
+            insert(h, key, c);
+         }
       }
 
       void addSub(Log l) {
@@ -289,6 +328,39 @@ public final class UiDeps {
    }
 
    private static final Object[] NO_ARGS = new Object[0];
+
+   /** Log.addKey: a table slot's keys get a hash index from this many on. */
+   static final int INDEX_AT = 4;
+   static final boolean KEY_INDEX = Config.UI_DEPS_KEY_INDEX;
+
+   /** The keys safeEquals compares by their own equals (the index's hashCode agrees with it). */
+   static boolean plainKey(Object key) {
+      return key instanceof String || key instanceof Number || key instanceof Boolean || key instanceof Character;
+   }
+
+   static int mix(int h) {
+      return h ^ (h >>> 16);
+   }
+
+   /** An index of the plain keys among the first c (at most a quarter full). */
+   static int[] index(Object[] keys, int c) {
+      int[] h = new int[Integer.highestOneBit(Math.max(c, 8) * 4 - 1) << 1];
+      for (int i = 0; i < c; i++) {
+         if (plainKey(keys[i])) {
+            insert(h, keys[i], i);
+         }
+      }
+      return h;
+   }
+
+   static void insert(int[] h, Object key, int pos) {
+      int mask = h.length - 1;
+      int i = mix(key.hashCode()) & mask;
+      while (h[i] != 0) {
+         i = (i + 1) & mask;
+      }
+      h[i] = pos + 1;
+   }
 
    /** Validation skips the learned-noisy entries (the caller sets it per element: false when it is due at the stock rate). */
    public static boolean skipNoisy;
@@ -356,6 +428,7 @@ public final class UiDeps {
          log.markOpaque("java " + owner.getClass().getSimpleName());
       }
       stack[depth++] = log;
+      topId = log.id;
       on = true;
    }
 
@@ -370,6 +443,7 @@ public final class UiDeps {
       }
       depth--;
       stack[depth] = null;
+      topId = depth > 0 ? stack[depth - 1].id : 0;
       for (int i = 0; i < log.nt; i++) {
          log.writes[i] = log.tables[i].pzoptWrites;
          log.chain[i] = chainWrites(log.tables[i]);
@@ -412,6 +486,7 @@ public final class UiDeps {
          l.reentry = 0;
          l.markOpaque("unfinished");
       }
+      topId = 0;
       on = false;
       callDepth = 0;
    }
@@ -426,7 +501,40 @@ public final class UiDeps {
     * KahluaTableImpl: the recording render read key and got value (rawget's whole answer, its class chain included; ITER for
     * a walk, LEN for the length). A validation re-reads exactly these fields when the table or its classes changed.
     */
+   /**
+    * luaJitUiReadMemo: read() from a compiled read site of a constant key. The site remembers the table and the recording it
+    * last logged; the same table again in the same recording is already in the log (its key and its first value), so the
+    * site skips the log (a loop that reads self.x a hundred times logs it once, without a hundred addKey lookups).
+    */
+   /** luaJitNilCacheUi: this thread records a render now (reads go to the log topId names). */
+   public static boolean recording() {
+      return depth > 0 && Thread.currentThread() == thread;
+   }
+
+   public static void readSite(KahluaTableImpl t, Object key, Object value, LuaJitIc ic) {
+      if (!READ_MEMO) {
+         read(t, key, value);
+         return;
+      }
+      if (Thread.currentThread() != thread || t.pzoptDepBorn == epoch || depth == 0) {
+         return;
+      }
+      int id = stack[depth - 1].id;
+      if (ic.uiTable == t && ic.uiLog == id) {
+         return;
+      }
+      read(t, key, value);
+      ic.uiTable = t;
+      ic.uiLog = id;
+   }
+
+   static final boolean READ_MEMO = Config.LUA_JIT_UI_READ_MEMO;
+
    public static void read(KahluaTableImpl t, Object key, Object value) {
+      if (LuaEffects.recording) { // lua-stream: a recorded LoadGridsquare handler call (pzopt.LuaEffects)
+         LuaEffects.read(t, key, value);
+         return;
+      }
       if (Thread.currentThread() != thread || t.pzoptDepBorn == epoch || depth == 0) {
          return;
       }
@@ -444,7 +552,8 @@ public final class UiDeps {
 
    /** The write counts of a table's metatable chain, summed (a class change shows here). */
    static long chainWrites(KahluaTableImpl t) {
-      if (t.pzoptChainVer == KahluaTableImpl.pzoptMetaVersion) {
+      long ver = KahluaTableImpl.pzoptMetaVersion + KahluaTableImpl.pzoptMetaWrites + (KahluaTableImpl.pzoptMtSets << 32); // all only grow: any change of one moves it
+      if (t.pzoptChainVer == ver) {
          return t.pzoptChainSum; // no class table changed since it was computed
       }
       boolean wasOn = on;
@@ -452,7 +561,7 @@ public final class UiDeps {
       try {
          long sum = chainWrites0(t);
          t.pzoptChainSum = sum;
-         t.pzoptChainVer = KahluaTableImpl.pzoptMetaVersion;
+         t.pzoptChainVer = ver;
          return sum;
       } finally {
          on = wasOn;
@@ -470,8 +579,21 @@ public final class UiDeps {
       return sum;
    }
 
+   /** KahluaTableImpl.rawset: a value-changing write of {@code key} (to {@code value}, null: removed) while recording (lua-stream's order check keeps both). */
+   public static void write(KahluaTableImpl t, Object key, Object value) {
+      if (LuaEffects.recording) {
+         LuaEffects.write(t, key, value);
+         return;
+      }
+      write(t);
+   }
+
    /** KahluaTableImpl: a value-changing write while recording. */
    public static void write(KahluaTableImpl t) {
+      if (LuaEffects.recording) {
+         LuaEffects.write(t);
+         return;
+      }
       if (Thread.currentThread() != thread || t.pzoptDepBorn == epoch) {
          return;
       }
@@ -484,6 +606,10 @@ public final class UiDeps {
 
    /** KahluaTableImpl constructor while recording: a table local to the render. */
    public static void created(KahluaTableImpl t) {
+      if (LuaEffects.recording) {
+         LuaEffects.created(t);
+         return;
+      }
       if (Thread.currentThread() == thread) {
          t.pzoptDepBorn = epoch;
       }
@@ -491,6 +617,9 @@ public final class UiDeps {
 
    /** MethodCaller.call: before invoking; returns the depth to hand back to call / exit, -1 when not recording here. */
    public static int enter() {
+      if (LuaEffects.recording) {
+         return LuaEffects.enter();
+      }
       if (Thread.currentThread() != thread) {
          return -1;
       }
@@ -498,6 +627,10 @@ public final class UiDeps {
    }
 
    public static void exit(int d) {
+      if (LuaEffects.recording) {
+         LuaEffects.exit(d);
+         return;
+      }
       if (d >= 0) {
          callDepth = d;
       }
@@ -505,8 +638,12 @@ public final class UiDeps {
 
    /** MethodCaller.call: the call returned (the outermost one of a render's Java calls; nested ones are inside its result). */
    public static void call(int d, Method method, Object self, Object[] params, boolean hasResult, Object result) {
-      if (d != 0 || depth == 0) {
+      if (LuaEffects.recording) {
+         LuaEffects.call(d, method, self, params, hasResult, result);
          return;
+      }
+      if (d != 0 || depth == 0 || LuaJitDual.ON && LuaJitDual.inShadow()) {
+         return; // a devLuaJitDual shadow run's calls are not the render's (the real run logs its own)
       }
       Log c = stack[depth - 1];
       String name = method.getName();
@@ -557,7 +694,11 @@ public final class UiDeps {
 
    /** MethodCaller.call threw. */
    public static void threw(int d, Method method) {
-      if (d == 0 && depth > 0) {
+      if (LuaEffects.recording) {
+         LuaEffects.threw(d, method);
+         return;
+      }
+      if (d == 0 && depth > 0 && !(LuaJitDual.ON && LuaJitDual.inShadow())) {
          stack[depth - 1].markOpaque("throws " + method.getName());
       }
    }
