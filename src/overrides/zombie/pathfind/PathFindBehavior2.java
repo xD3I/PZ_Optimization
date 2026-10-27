@@ -805,21 +805,16 @@ implements IPathfinder {
         Vector2 tempVector2_2 = pzopt.UpdateBatch.pathScratch2(); // pzopt: entityUpdateParallel, shadows the static
         try { // pzopt: entityUpdateParallel, the assertion at the bottom of the method
         if (this.chr.getFinder().progress == AStarPathFinder.PathFindProgress.notrunning) {
-            if (PathfindNative.useNativeCode) {
-                PathFindRequest request = PathfindNative.instance.addRequest((IPathfinder)this, (Mover)this.chr, this.startX, this.startY, this.startZ, this.targetX, this.targetY, this.targetZ);
-                request.targetXyz.resetQuick();
-                request.targetXyz.addAll((TFloatCollection)this.targetXyz);
-            } else {
-                zombie.pathfind.PathFindRequest request = PolygonalMap2.instance.addRequest((IPathfinder)this, (Mover)this.chr, this.startX, this.startY, this.startZ, this.targetX, this.targetY, this.targetZ);
-                request.targetXyz.resetQuick();
-                request.targetXyz.addAll((TFloatCollection)this.targetXyz);
-            }
-            this.chr.getFinder().progress = AStarPathFinder.PathFindProgress.notyetfound;
-            this.walkingOnTheSpot.reset(this.chr.getX(), this.chr.getY());
+            this.initPathFindRequest(IsoPlayer.isPlayer(this.chr));
             this.updateWhileRunningPathfind();
             return BehaviorResult.Working;
         }
         if (this.chr.getFinder().progress == AStarPathFinder.PathFindProgress.notyetfound) {
+            this.updateWhileRunningPathfind();
+            return BehaviorResult.Working;
+        }
+        if (this.chr.getFinder().progress == AStarPathFinder.PathFindProgress.failed && this.chr.getFinder().avoidFarmingPlants) {
+            this.initPathFindRequest(false);
             this.updateWhileRunningPathfind();
             return BehaviorResult.Working;
         }
@@ -998,6 +993,21 @@ implements IPathfinder {
             } // pzopt: entityUpdateParallel
             throw e; // pzopt: entityUpdateParallel
         } // pzopt: entityUpdateParallel
+    }
+
+    private void initPathFindRequest(boolean avoidFarmingPlants) {
+        if (PathfindNative.useNativeCode) {
+            PathFindRequest request = PathfindNative.instance.addRequest(this, this.chr, this.startX, this.startY, this.startZ, this.targetX, this.targetY, this.targetZ, avoidFarmingPlants);
+            request.targetXyz.resetQuick();
+            request.targetXyz.addAll(this.targetXyz);
+        } else {
+            zombie.pathfind.PathFindRequest request = PolygonalMap2.instance.addRequest(this, this.chr, this.startX, this.startY, this.startZ, this.targetX, this.targetY, this.targetZ);
+            request.targetXyz.resetQuick();
+            request.targetXyz.addAll(this.targetXyz);
+        }
+        this.chr.getFinder().progress = AStarPathFinder.PathFindProgress.notyetfound;
+        this.chr.getFinder().avoidFarmingPlants = avoidFarmingPlants;
+        this.walkingOnTheSpot.reset(this.chr.getX(), this.chr.getY());
     }
 
     private void updateWhileRunningPathfind() {

@@ -133,9 +133,8 @@ public final class MapCollisionData {
          int minY = metaGrid.minY;
          int width = metaGrid.getWidth();
          int height = metaGrid.getHeight();
-         n_setGameState("Core.GameMode", Core.getInstance().getGameMode());
+         n_setGameState("Core.GameMode", Core.getInstance().getGameMode().toString());
          n_setGameState("Core.GameSaveWorld", Core.gameSaveWorld);
-         n_setGameState("Core.bLastStand", Core.lastStand);
          n_setGameState("Core.noSave", this.noSave = Core.getInstance().isNoSave());
          n_setGameState("GameWindow.CacheDir", ZomboidFileSystem.instance.getCacheDir());
          n_setGameState("GameWindow.GameModeCacheDir", ZomboidFileSystem.instance.getGameModeCacheDir() + File.separator);

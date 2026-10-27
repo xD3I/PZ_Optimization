@@ -42,11 +42,11 @@ public final class MultiTextureFBO2 {
    }
 
    public int getWidth(int playerIndex) {
-      return (int)(IsoCamera.getScreenWidth(playerIndex) * this.getDisplayZoom(playerIndex) * (Core.tileScale / 2.0F));
+      return (int)(IsoCamera.getScreenWidth(playerIndex) * this.getDisplayZoom(playerIndex) * 1.0F);
    }
 
    public int getHeight(int playerIndex) {
-      return (int)(IsoCamera.getScreenHeight(playerIndex) * this.getDisplayZoom(playerIndex) * (Core.tileScale / 2.0F));
+      return (int)(IsoCamera.getScreenHeight(playerIndex) * this.getDisplayZoom(playerIndex) * 1.0F);
    }
 
    public void setZoom(int playerIndex, float value) {
@@ -195,7 +195,7 @@ public final class MultiTextureFBO2 {
          return;
       }
 
-      float step = 0.004F * GameTime.instance.getMultiplier() / GameTime.instance.getTrueMultiplier() * (Core.tileScale == 2 ? 1.5F : 1.5F);
+      float step = 0.004F * GameTime.instance.getMultiplier() / GameTime.instance.getTrueMultiplier() * 1.5F;
       if (!this.autoZoom[playerIndex]) {
          step *= 5.0F;
       } else if (this.targetZoom[playerIndex] > this.zoom[playerIndex]) {

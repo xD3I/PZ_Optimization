@@ -46,8 +46,6 @@ public final class PNGDecoder {
    private int numPlays;
    private boolean defaultImageIsFirstFrame;
    private final APNGFrame apngFrame = new APNGFrame();
-   int maskM;
-   public int maskId;
    public BooleanGrid mask;
    public boolean doMask;
    public long readTotal;
@@ -216,7 +214,6 @@ public final class PNGDecoder {
       byte[] curLine = new byte[lineSize + 1];
       byte[] prevLine = new byte[lineSize + 1];
       byte[] palLine = this.bitdepth < 8 ? new byte[this.getCurrentFrameWidth() + 1] : null;
-      this.maskM = 0;
       Inflater inflater = new Inflater();
 
       try {
@@ -224,21 +221,21 @@ public final class PNGDecoder {
             this.readChunkUnzip(inflater, curLine, 0, curLine.length, inChunkType);
             this.unfilter(curLine, prevLine);
             buffer.position(offset + y * stride);
-            label84:
+            label93:
             switch (this.colorType) {
                case 0:
                   switch (fmt) {
                      case ALPHA:
                      case LUMINANCE:
                         this.copy(buffer, curLine);
-                        break label84;
+                        break label93;
                      case LUMINANCE_ALPHA:
                      case RGB:
                      default:
                         throw new UnsupportedOperationException("Unsupported format for this image");
                      case RGBA:
                         this.copyGREYtoRGBA(buffer, curLine);
-                        break label84;
+                        break label93;
                   }
                case 1:
                case 5:
@@ -248,16 +245,16 @@ public final class PNGDecoder {
                   switch (fmt) {
                      case RGB:
                         this.copy(buffer, curLine);
-                        break label84;
+                        break label93;
                      case RGBA:
                         this.copyRGBtoRGBA(buffer, curLine);
-                        break label84;
+                        break label93;
                      case BGRA:
                         this.copyRGBtoBGRA(buffer, curLine);
-                        break label84;
+                        break label93;
                      case ABGR:
                         this.copyRGBtoABGR(buffer, curLine);
-                        break label84;
+                        break label93;
                      default:
                         throw new UnsupportedOperationException("Unsupported format for this image");
                   }
@@ -285,13 +282,13 @@ public final class PNGDecoder {
                   switch (fmt) {
                      case RGBA:
                         this.copyPALtoRGBA(buffer, palLine);
-                        break label84;
+                        break label93;
                      case BGRA:
                         this.copyPALtoBGRA(buffer, palLine);
-                        break label84;
+                        break label93;
                      case ABGR:
                         this.copyPALtoABGR(buffer, palLine);
-                        break label84;
+                        break label93;
                      default:
                         throw new UnsupportedOperationException("Unsupported format for this image");
                   }
@@ -299,10 +296,10 @@ public final class PNGDecoder {
                   switch (fmt) {
                      case LUMINANCE_ALPHA:
                         this.copy(buffer, curLine);
-                        break label84;
+                        break label93;
                      case RGBA:
                         this.copyGREYALPHAtoRGBA(buffer, curLine);
-                        break label84;
+                        break label93;
                      default:
                         throw new UnsupportedOperationException("Unsupported format for this image");
                   }
@@ -323,6 +320,10 @@ public final class PNGDecoder {
                      default:
                         throw new UnsupportedOperationException("Unsupported format for this image");
                   }
+            }
+
+            if (this.doMask && fmt.numComponents == 4) {
+               this.markOpaquePixels(buffer, offset + y * stride, y, fmt);
             }
 
             byte[] tmp = curLine;
@@ -426,19 +427,18 @@ public final class PNGDecoder {
       }
    }
 
-   private void copy(ByteBuffer buffer, byte[] curLine) {
-      if (this.doMask) {
-         int i = 1;
+   private void markOpaquePixels(ByteBuffer buffer, int lineStart, int y, PNGDecoder.Format fmt) {
+      int alphaOffset = fmt == PNGDecoder.Format.ABGR ? 0 : 3;
+      int lineWidth = this.getCurrentFrameWidth();
 
-         for (int n = curLine.length; i < n; i += 4) {
-            if (curLine[i + 3] % 255 != 0) {
-               this.mask.setValue(this.maskM % this.width, this.maskM / this.width, true);
-            }
-
-            this.maskM++;
+      for (int x = 0; x < lineWidth; x++) {
+         if (buffer.get(lineStart + x * 4 + alphaOffset) != 0) {
+            this.mask.setValue(x, y, true);
          }
       }
+   }
 
+   private void copy(ByteBuffer buffer, byte[] curLine) {
       buffer.put(curLine, 1, curLine.length - 1);
    }
 
@@ -483,11 +483,6 @@ public final class PNGDecoder {
             byte a = -1;
             if (r == tr && g == tg && b == tb) {
                a = 0;
-            }
-
-            if (this.doMask && a == 0) {
-               this.mask.setValue(this.maskId % this.width, this.maskId / this.width, true);
-               this.maskId++;
             }
 
             buffer.put(r).put(g).put(b).put(a);

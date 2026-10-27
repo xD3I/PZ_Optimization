@@ -43,7 +43,6 @@ import zombie.core.textures.Texture;
 import zombie.core.textures.TextureDraw;
 import zombie.debug.DebugOptions;
 import zombie.debug.LineDrawer;
-import zombie.entity.util.TimSort;
 import zombie.gameStates.DebugChunkState;
 import zombie.input.GameKeyboard;
 import zombie.input.JoypadManager;
@@ -113,7 +112,6 @@ import zombie.tileDepth.TileSeamModifier;
 import zombie.tileDepth.TileSeamManager.Tiles;
 import zombie.ui.UIManager;
 import zombie.util.Type;
-import zombie.util.list.PZArrayList;
 import zombie.util.list.PZArrayUtil;
 import zombie.vehicles.BaseVehicle;
 import zombie.vispoly.VisibilityPolygon2;
@@ -142,14 +140,13 @@ public final class FBORenderCell {
    private float wetGroundValue;
    private long puddlesRedrawTimeMs;
    private float snowFracTarget;
-   private final TimSort timSort = new TimSort();
    private final int maxChunksPerFrame = 5;
    private final ColorInfo defColorInfo = new ColorInfo(1.0F, 1.0F, 1.0F, 1.0F);
    private final ArrayList<ArrayList<IsoFloorBloodSplat>> splatByType = new ArrayList<>();
-   private final PZArrayList<IsoWorldInventoryObject> tempWorldInventoryObjects = new PZArrayList(IsoWorldInventoryObject.class, 16);
-   private final PZArrayList<IsoGridSquare> tempSquares = new PZArrayList(IsoGridSquare.class, 64);
-   private final ArrayList<Location> tempLocations = new ArrayList<>();
-   private final ObjectPool<Location> locationPool = new ObjectPool(Location::new, "FBORenderCell.locationPool");
+   private final ArrayList<IsoWorldInventoryObject> tempWorldInventoryObjects = new ArrayList<>(16);
+   private final ArrayList<IsoGridSquare> tempSquares = new ArrayList<>(64);
+   private final ArrayList<IsoGameCharacter.Location> tempLocations = new ArrayList<>();
+   private final ObjectPool<IsoGameCharacter.Location> locationPool = new ObjectPool(IsoGameCharacter.Location::new, "FBORenderCell.locationPool");
    private long delayedLoadingTimerMs;
    private boolean invalidateDelayedLoadingLevels;
    public static final PerformanceProfileProbe calculateRenderInfo = new PerformanceProfileProbe("FBORenderCell.calculateRenderInfo");
@@ -173,7 +170,7 @@ public final class FBORenderCell {
    public static final boolean FIX_CORPSE_CLIPPING = true;
    public static final boolean FIX_ITEM_CLIPPING = true;
    public static final boolean FIX_JUMBO_CLIPPING = true;
-   private final PZArrayList<IsoChunk> sortedChunks = new PZArrayList(IsoChunk.class, 121);
+   private final ArrayList<IsoChunk> sortedChunks = new ArrayList<>(121);
    private static final float ALPHA_ADJACENT_TO_CUTAWAY_WALL = 0.25F;
    private static final float ALPHA_OCCLUDING_CEILING = 0.25F;
    private static final float ALPHA_OCCLUDING_EAVE = 0.05F;
@@ -886,10 +883,10 @@ public final class FBORenderCell {
       float playerZ = IsoCamera.frameState.camCharacterZ;
       perPlayerData1.playerBoundsX = IsoUtils.XToScreen(playerX, playerY, playerZ, 0);
       perPlayerData1.playerBoundsY = IsoUtils.YToScreen(playerX, playerY, playerZ, 0);
-      perPlayerData1.playerBoundsX = perPlayerData1.playerBoundsX - 32 * Core.tileScale;
-      perPlayerData1.playerBoundsY = perPlayerData1.playerBoundsY - 112 * Core.tileScale;
-      perPlayerData1.playerBoundsW = 64 * Core.tileScale;
-      perPlayerData1.playerBoundsH = 128 * Core.tileScale;
+      perPlayerData1.playerBoundsX -= 64.0F;
+      perPlayerData1.playerBoundsY -= 224.0F;
+      perPlayerData1.playerBoundsW = 128.0F;
+      perPlayerData1.playerBoundsH = 256.0F;
    }
 
    private boolean isPotentiallyObscuringObject(IsoObject object) {
@@ -970,7 +967,7 @@ public final class FBORenderCell {
             IsoGridSquare square = chunkMap.getGridSquare(location.x, location.y, location.z);
             if (square != null) {
                for (int j = 0; j < square.getObjects().size(); j++) {
-                  IsoObject object = (IsoObject)square.getObjects().get(j);
+                  IsoObject object = square.getObjects().get(j);
                   if (this.isPotentiallyObscuringObject(object)) {
                      this.addObscuringStairObjects(locations, square, object);
                      IsoSprite sprite = object.getSprite();
@@ -1101,7 +1098,7 @@ public final class FBORenderCell {
       }
 
       for (int i = 0; i < square.getObjects().size(); i++) {
-         IsoObject object = (IsoObject)square.getObjects().get(i);
+         IsoObject object = square.getObjects().get(i);
          if (this.isPotentiallyObscuringObject(object) && object.getAlpha(playerIndex) < 1.0F) {
             return true;
          }
@@ -1165,11 +1162,10 @@ public final class FBORenderCell {
       FBORenderCell.PerPlayerData perPlayerData1 = this.perPlayerData[playerIndex];
 
       for (int i = 0; i < square.getObjects().size(); i++) {
-         IsoObject object = (IsoObject)square.getObjects().get(i);
+         IsoObject object = square.getObjects().get(i);
          if (this.isPotentiallyObscuringObject(object)) {
             Texture texture = object.sprite.getTextureForCurrentFrame(object.getForwardIsoDirection(), object);
-            if (texture != null
-               && perPlayerData1.isObjectObscuringPlayer(square, texture, object.offsetX, object.offsetY + object.getRenderYOffset() * Core.tileScale)) {
+            if (texture != null && perPlayerData1.isObjectObscuringPlayer(square, texture, object.offsetX, object.offsetY + object.getRenderYOffset() * 2.0F)) {
                return true;
             }
          }
@@ -2333,10 +2329,10 @@ public final class FBORenderCell {
             continue; // pzopt
          } // pzopt
          boolean rendered = levelData.shouldRenderSquare(playerIndex, square) && !pzoptIsOccluded(square.x, square.y, square.z); // pzopt
-         IsoObject[] objects = (IsoObject[])square.getObjects().getElements(); // pzopt
+         List<IsoObject> objects = square.getObjects(); // pzopt
          int numObjects = square.getObjects().size(); // pzopt
          for (int j = 0; j < numObjects; j++) { // pzopt
-            IsoObject object = objects[j]; // pzopt
+            IsoObject object = objects.get(j); // pzopt
             ObjectRenderInfo ri = object.getRenderInfo(playerIndex); // pzopt
             ObjectRenderLayer layer = ri.layer; // pzopt
             float target = ri.targetAlpha, renderAlpha = ri.renderAlpha, w = ri.renderWidth, h = ri.renderHeight; // pzopt
@@ -2479,11 +2475,11 @@ public final class FBORenderCell {
                   boolean bHasAttachedSpritesOnWater = false;
                   boolean bHasAnimatedAttachments = false;
                   boolean bHasItems = false;
-                  IsoObject[] objects = (IsoObject[])square.getObjects().getElements();
+                  List<IsoObject> objects = square.getObjects();
                   int numObjects = square.getObjects().size();
 
                   for (int j = 0; j < numObjects; j++) {
-                     IsoObject object = objects[j];
+                     IsoObject object = objects.get(j);
                      ObjectRenderInfo renderInfo = object.getRenderInfo(playerIndex);
                      switch (renderInfo.layer) {
                         case Floor:
@@ -3377,12 +3373,11 @@ public final class FBORenderCell {
       }
    }
 
-   private void calculateObjectRenderInfo(int playerIndex, IsoGridSquare square, PZArrayList<IsoObject> objectList) {
-      IsoObject[] objects = (IsoObject[])objectList.getElements();
+   private void calculateObjectRenderInfo(int playerIndex, IsoGridSquare square, List<IsoObject> objectList) {
       int numObjects = objectList.size();
 
       for (int i = 0; i < numObjects; i++) {
-         IsoObject object = objects[i];
+         IsoObject object = objectList.get(i);
          this.calculateObjectRenderInfo(playerIndex, square, object);
       }
    }
@@ -3415,11 +3410,11 @@ public final class FBORenderCell {
    private void setNotRendered(IsoGridSquare square) {
       if (square != null) {
          int playerIndex = IsoCamera.frameState.playerIndex;
-         IsoObject[] objects = (IsoObject[])square.getObjects().getElements();
-         int numObjects = square.getObjects().size();
+         List<IsoObject> objects = square.getObjects();
+         int size = objects.size();
 
-         for (int i = 0; i < numObjects; i++) {
-            IsoObject object = objects[i];
+         for (int i = 0; i < size; i++) {
+            IsoObject object = objects.get(i);
             ObjectRenderInfo renderInfo = object.getRenderInfo(playerIndex);
             renderInfo.layer = ObjectRenderLayer.None;
             renderInfo.targetAlpha = 0.0F;
@@ -4402,11 +4397,11 @@ public final class FBORenderCell {
    private boolean hasSeenDoorW(int playerIndex, IsoGridSquare square) {
       boolean bCouldSee = true;
       boolean bHasSeenDoorW = false;
-      IsoObject[] objectArray = (IsoObject[])square.getObjects().getElements();
-      int numObjects = square.getObjects().size();
+      List<IsoObject> objects = square.getObjects();
+      int size = objects.size();
 
-      for (int i = 0; i < numObjects; i++) {
-         IsoObject obj = objectArray[i];
+      for (int i = 0; i < size; i++) {
+         IsoObject obj = objects.get(i);
          IsoSprite sprite = obj.sprite;
          IsoObjectType type = sprite == null ? IsoObjectType.MAX : sprite.getTileType();
          if (type == IsoObjectType.doorFrW || type == IsoObjectType.doorW) {
@@ -4421,11 +4416,11 @@ public final class FBORenderCell {
    private boolean hasSeenDoorN(int playerIndex, IsoGridSquare square) {
       boolean bCouldSee = true;
       boolean bHasSeenDoorN = false;
-      IsoObject[] objectArray = (IsoObject[])square.getObjects().getElements();
-      int numObjects = square.getObjects().size();
+      List<IsoObject> objects = square.getObjects();
+      int size = objects.size();
 
-      for (int i = 0; i < numObjects; i++) {
-         IsoObject obj = objectArray[i];
+      for (int i = 0; i < size; i++) {
+         IsoObject obj = objects.get(i);
          IsoSprite sprite = obj.sprite;
          IsoObjectType type = sprite == null ? IsoObjectType.MAX : sprite.getTileType();
          if (type == IsoObjectType.doorFrN || type == IsoObjectType.doorN) {
@@ -4440,11 +4435,11 @@ public final class FBORenderCell {
    private boolean hasSeenWindowW(int playerIndex, IsoGridSquare square) {
       boolean bCouldSee = true;
       boolean bHasSeenWindowW = false;
-      IsoObject[] objectArray = (IsoObject[])square.getObjects().getElements();
-      int numObjects = square.getObjects().size();
+      List<IsoObject> objects = square.getObjects();
+      int size = objects.size();
 
-      for (int i = 0; i < numObjects; i++) {
-         IsoObject obj = objectArray[i];
+      for (int i = 0; i < size; i++) {
+         IsoObject obj = objects.get(i);
          if (square.isWindowOrWindowFrame(obj, false)) {
             IsoGridSquare toWest = square.getAdjacentSquare(IsoDirections.W);
             bHasSeenWindowW |= true;
@@ -4457,11 +4452,11 @@ public final class FBORenderCell {
    private boolean hasSeenWindowN(int playerIndex, IsoGridSquare square) {
       boolean bCouldSee = true;
       boolean bHasSeenWindowN = false;
-      IsoObject[] objectArray = (IsoObject[])square.getObjects().getElements();
-      int numObjects = square.getObjects().size();
+      List<IsoObject> objects = square.getObjects();
+      int size = objects.size();
 
-      for (int i = 0; i < numObjects; i++) {
-         IsoObject obj = objectArray[i];
+      for (int i = 0; i < size; i++) {
+         IsoObject obj = objects.get(i);
          if (square.isWindowOrWindowFrame(obj, true)) {
             IsoGridSquare toNorth = square.getAdjacentSquare(IsoDirections.N);
             bHasSeenWindowN |= true;
@@ -4497,9 +4492,9 @@ public final class FBORenderCell {
       boolean bCutawayNorth = (cutawaySelf & 1) != 0;
       boolean bCutawayWest = (cutawaySelf & 2) != 0;
       if (object instanceof IsoWindowFrame windowFrame) {
-         return this.calculateWindowTargetAlpha(playerIndex, object, windowFrame.getOppositeSquare(), windowFrame.getNorth());
+         return this.calculateWindowTargetAlpha(playerIndex, object, windowFrame.getOppositeSquare(), windowFrame.isNorth());
       } else if (object instanceof IsoWindow window) {
-         return this.calculateWindowTargetAlpha(playerIndex, object, window.getOppositeSquare(), window.getNorth());
+         return this.calculateWindowTargetAlpha(playerIndex, object, window.getOppositeSquare(), window.isNorth());
       } else {
          boolean bIsRoof = t == IsoObjectType.WestRoofB || t == IsoObjectType.WestRoofM || t == IsoObjectType.WestRoofT;
          boolean bIsValidOverhang = bIsRoof && PZMath.fastfloor(IsoCamera.frameState.camCharacterZ) == square.getZ() && square.getBuilding() == null;
@@ -4568,11 +4563,11 @@ public final class FBORenderCell {
 
    public void renderFloor(IsoGridSquare square) {
       int playerIndex = IsoCamera.frameState.playerIndex;
-      IsoObject[] objects = (IsoObject[])square.getObjects().getElements();
-      int numObjects = square.getObjects().size();
+      List<IsoObject> objects = square.getObjects();
+      int size = objects.size();
 
-      for (int i = 0; i < numObjects; i++) {
-         IsoObject object = objects[i];
+      for (int i = 0; i < size; i++) {
+         IsoObject object = objects.get(i);
          ObjectRenderInfo renderInfo = object.getRenderInfo(playerIndex);
          if (renderInfo.layer == ObjectRenderLayer.Floor) {
             this.renderFloor(object);
@@ -4676,11 +4671,11 @@ public final class FBORenderCell {
 
    private void renderVegetation(IsoGridSquare square) {
       int playerIndex = IsoCamera.frameState.playerIndex;
-      IsoObject[] objects = (IsoObject[])square.getObjects().getElements();
-      int numObjects = square.getObjects().size();
+      List<IsoObject> objects = square.getObjects();
+      int size = objects.size();
 
-      for (int i = 0; i < numObjects; i++) {
-         IsoObject object = objects[i];
+      for (int i = 0; i < size; i++) {
+         IsoObject object = objects.get(i);
          ObjectRenderInfo renderInfo = object.getRenderInfo(playerIndex);
          if (renderInfo.layer == ObjectRenderLayer.Vegetation) {
             this.renderVegetation(object);
@@ -4782,15 +4777,14 @@ public final class FBORenderCell {
       this.renderMinusFloor(chunk, square, square.getObjects());
    }
 
-   private void renderMinusFloor(IsoChunk chunk, IsoGridSquare square, PZArrayList<IsoObject> objectList) {
+   private void renderMinusFloor(IsoChunk chunk, IsoGridSquare square, List<IsoObject> objectList) {
       int playerIndex = IsoCamera.frameState.playerIndex;
       boolean bForceRender = FBORenderCutaways.getInstance().isForceRenderSquare(playerIndex, square);
-      IsoObject[] objects = (IsoObject[])objectList.getElements();
       int numObjects = objectList.size();
 
       boolean pzoptTreePass = pzoptTreePassActive(); // pzopt: baked trees are drawn by pzoptBakeTrees at the end of the texture
       for (int i = 0; i < numObjects; i++) {
-         IsoObject object = objects[i];
+         IsoObject object = objectList.get(i);
          ObjectRenderInfo renderInfo = object.getRenderInfo(playerIndex);
          if (renderInfo.layer == ObjectRenderLayer.MinusFloor) {
             if (pzoptTreePass && object instanceof IsoTree) {
@@ -4886,11 +4880,11 @@ public final class FBORenderCell {
       boolean bCouldSee = square.lighting[playerIndex].bCouldSee();
       IsoObject pzoptLowN = null; // pzopt: tileRecordParallel, the thread's own copy
       IsoObject pzoptLowW = null; // pzopt: tileRecordParallel, the thread's own copy
-      IsoObject[] objects = (IsoObject[])square.getObjects().getElements();
-      int numObjects = square.getObjects().size();
+      List<IsoObject> objects = square.getObjects();
+      int numObjects = objects.size();
 
       for (int i = 0; i < numObjects; i++) {
-         IsoObject obj = objects[i];
+         IsoObject obj = objects.get(i);
          IsoObjectType t2 = obj.sprite == null ? IsoObjectType.MAX : obj.sprite.getTileType();
          if (pzoptLowN == null && square.isWindowOrWindowFrame(obj, true) && (cutawaySelf & 1) != 0) { // pzopt: tileRecordParallel, the thread's own copy
             IsoGridSquare toNorth = square.getAdjacentSquare(IsoDirections.N);
@@ -5015,13 +5009,13 @@ public final class FBORenderCell {
          boolean bHasSeenDoorW = false;
          boolean bHasSeenWindowN = false;
          boolean bHasSeenWindowW = false;
-         if (window.getNorth() && object == square.getWall(true)) {
+         if (window.isNorth() && object == square.getWall(true)) {
             IsoGridSquare.pzoptSetCircleStencil(false); // pzopt: tileRecordParallel
             square.DoWallLightingN(object, 0, cutawaySelf, cutawayN, cutawayS, cutawayW, cutawayE, false, false, wallRenderShader);
             return;
          }
 
-         if (!window.getNorth() && object == square.getWall(false)) {
+         if (!window.isNorth() && object == square.getWall(false)) {
             IsoGridSquare.pzoptSetCircleStencil(false); // pzopt: tileRecordParallel
             square.DoWallLightingW(object, 0, cutawaySelf, cutawayN, cutawayS, cutawayW, cutawayE, false, false, wallRenderShader);
             return;
@@ -5104,10 +5098,10 @@ public final class FBORenderCell {
       if (j == null) { // pzopt
          return false; // pzopt
       } // pzopt
-      IsoObject[] objects = (IsoObject[])j.getObjects().getElements(); // pzopt
+      List<IsoObject> objects = j.getObjects(); // pzopt
       int k = j.getObjects().size(); // pzopt
       for (int i = 0; i < k; i++) { // pzopt
-         IsoSprite s = objects[i].sprite; // pzopt
+         IsoSprite s = objects.get(i).sprite; // pzopt
          if (s == null) { // pzopt
             continue; // pzopt
          } // pzopt
@@ -5178,7 +5172,7 @@ public final class FBORenderCell {
          IsoGridSquare square = object.getSquare();
 
          for (int i = 0; i < square2.getObjects().size(); i++) {
-            IsoObject object2 = (IsoObject)square2.getObjects().get(i);
+            IsoObject object2 = square2.getObjects().get(i);
             if (square.z == square2.z
                ? this.areRoofTilesJoinedSameLevel(object.sprite, object2.sprite, dir)
                : this.areRoofTilesJoinedLevelBelow(object.sprite, object2.sprite, dir)) {
@@ -5219,19 +5213,11 @@ public final class FBORenderCell {
       if (this.shouldRenderSquare(renderSquare)) {
          this.tempWorldInventoryObjects.clear();
          PZArrayUtil.addAll(this.tempWorldInventoryObjects, square.getWorldObjects());
-         this.timSort.doSort(this.tempWorldInventoryObjects.getElements(), (java.util.Comparator<IsoWorldInventoryObject>) (o1, o2) -> { // pzopt: decompiler fix (explicit lambda types)
-            float d1 = o1.xoff * o1.xoff + o1.yoff * o1.yoff;
-            float d2 = o2.xoff * o2.xoff + o2.yoff * o2.yoff;
-            if (d1 == d2) {
-               return 0;
-            } else {
-               return d1 > d2 ? 1 : -1;
-            }
-         }, 0, this.tempWorldInventoryObjects.size());
+         this.tempWorldInventoryObjects.sort(Comparator.comparingDouble(o -> o.xoff * o.xoff + o.yoff * o.yoff));
          int playerIndex = IsoCamera.frameState.playerIndex;
 
          for (int i = 0; i < this.tempWorldInventoryObjects.size(); i++) {
-            IsoWorldInventoryObject object = (IsoWorldInventoryObject)this.tempWorldInventoryObjects.get(i);
+            IsoWorldInventoryObject object = this.tempWorldInventoryObjects.get(i);
             ObjectRenderInfo renderInfo = object.getRenderInfo(playerIndex);
             if (renderInfo.layer == ObjectRenderLayer.WorldInventoryObject && (!bChunkTexture || renderSquare == object.getRenderSquare())) {
                this.renderWorldInventoryObject(object, bChunkTexture);
@@ -5314,11 +5300,11 @@ public final class FBORenderCell {
 
    private void renderMinusFloorSE(IsoGridSquare square) {
       int playerIndex = IsoCamera.frameState.playerIndex;
-      IsoObject[] objects = (IsoObject[])square.getObjects().getElements();
-      int numObjects = square.getObjects().size();
+      List<IsoObject> objects = square.getObjects();
+      int size = objects.size();
 
-      for (int i = 0; i < numObjects; i++) {
-         IsoObject object = objects[i];
+      for (int i = 0; i < size; i++) {
+         IsoObject object = objects.get(i);
          ObjectRenderInfo renderInfo = object.getRenderInfo(playerIndex);
          if (renderInfo.layer == ObjectRenderLayer.MinusFloorSE) {
             this.renderMinusFloorSE(object);
@@ -5332,11 +5318,11 @@ public final class FBORenderCell {
 
    private void renderTranslucentFloor(IsoGridSquare square) {
       int playerIndex = IsoCamera.frameState.playerIndex;
-      IsoObject[] objects = (IsoObject[])square.getObjects().getElements();
-      int numObjects = square.getObjects().size();
+      List<IsoObject> objects = square.getObjects();
+      int size = objects.size();
 
-      for (int i = 0; i < numObjects; i++) {
-         IsoObject object = objects[i];
+      for (int i = 0; i < size; i++) {
+         IsoObject object = objects.get(i);
          ObjectRenderInfo renderInfo = object.getRenderInfo(playerIndex);
          if (renderInfo.layer == ObjectRenderLayer.TranslucentFloor) {
             this.renderTranslucent(object);
@@ -5355,11 +5341,11 @@ public final class FBORenderCell {
 
    private void renderTranslucent(IsoGridSquare square, ObjectRenderLayer renderLayer) {
       int playerIndex = IsoCamera.frameState.playerIndex;
-      IsoObject[] objects = (IsoObject[])square.getObjects().getElements();
-      int numObjects = square.getObjects().size();
+      List<IsoObject> objects = square.getObjects();
+      int size = objects.size();
 
-      for (int i = 0; i < numObjects; i++) {
-         IsoObject object = objects[i];
+      for (int i = 0; i < size; i++) {
+         IsoObject object = objects.get(i);
          ObjectRenderInfo renderInfo = object.getRenderInfo(playerIndex);
          if (renderInfo.layer == renderLayer) {
             if (!(object instanceof IsoTree) && pzopt.DrawRecorder.recording && pzopt.TileRecord.treeFlushPoint()) { // pzopt: tileRecordParallel, the flush happens at splice time
@@ -5956,11 +5942,11 @@ public final class FBORenderCell {
 
    private void renderCutawayOutline(IsoGridSquare square, boolean bAttachedSE) {
       int playerIndex = IsoCamera.frameState.playerIndex;
-      IsoObject[] objects = (IsoObject[])square.getObjects().getElements();
-      int numObjects = square.getObjects().size();
+      List<IsoObject> objects = square.getObjects();
+      int size = objects.size();
 
-      for (int i = 0; i < numObjects; i++) {
-         IsoObject object = objects[bAttachedSE ? numObjects - 1 - i : i];
+      for (int i = 0; i < size; i++) {
+         IsoObject object = objects.get(bAttachedSE ? size - 1 - i : i);
          ObjectRenderInfo renderInfo = object.getRenderInfo(playerIndex);
          if (renderInfo.cutawayOutline) {
             this.renderTranslucent(object);
@@ -6011,11 +5997,11 @@ public final class FBORenderCell {
    private void renderAnimatedAttachments(IsoGridSquare square) {
       this.renderAnimatedAttachments = true;
       int playerIndex = IsoCamera.frameState.playerIndex;
-      IsoObject[] objects = (IsoObject[])square.getObjects().getElements();
-      int numObjects = square.getObjects().size();
+      List<IsoObject> objects = square.getObjects();
+      int size = objects.size();
 
-      for (int i = 0; i < numObjects; i++) {
-         IsoObject object = objects[i];
+      for (int i = 0; i < size; i++) {
+         IsoObject object = objects.get(i);
          ObjectRenderLayer renderLayer = object.getRenderInfo(playerIndex).layer;
          if (renderLayer != ObjectRenderLayer.None
             && renderLayer != ObjectRenderLayer.Translucent
@@ -6142,10 +6128,10 @@ public final class FBORenderCell {
                int chunkLevelCount = 0;
                this.sortedChunks.clear();
                PZArrayUtil.addAll(this.sortedChunks, perPlayerData1.onScreenChunks);
-               this.timSort.doSort(this.sortedChunks.getElements(), (java.util.Comparator) Comparator.comparingInt((IsoChunk a) -> a.lightingUpdateCounter), 0, this.sortedChunks.size()); // pzopt: decompiler fix
+               this.sortedChunks.sort(Comparator.comparingInt(a -> a.lightingUpdateCounter));
 
                for (int i = 0; i < this.sortedChunks.size(); i++) {
-                  IsoChunk chunk = (IsoChunk)this.sortedChunks.get(i);
+                  IsoChunk chunk = this.sortedChunks.get(i);
                   boolean updated = false;
 
                   for (int z = chunk.minLevel; z <= chunk.maxLevel; z++) {
@@ -6180,7 +6166,7 @@ public final class FBORenderCell {
          perPlayerData1.lightingUpdateCounter = LightingJNI.getUpdateCounter(playerIndex);
          this.sortedChunks.clear();
          PZArrayUtil.addAll(this.sortedChunks, perPlayerData1.onScreenChunks);
-         this.timSort.doSort(this.sortedChunks.getElements(), (java.util.Comparator) Comparator.comparingInt((IsoChunk a) -> a.lightingUpdateCounter), 0, this.sortedChunks.size()); // pzopt: decompiler fix
+         this.sortedChunks.sort(Comparator.comparingInt((IsoChunk a) -> a.lightingUpdateCounter)); // pzopt: decompiler fix
 
          for (int i = 0; i < this.sortedChunks.size(); i++) {
             IsoChunk chunk = (IsoChunk)this.sortedChunks.get(i);
@@ -6673,10 +6659,10 @@ public final class FBORenderCell {
             if (square.getLightInfo(playerIndex) == null) {
                continue;
             }
-            IsoObject[] objects = (IsoObject[])square.getObjects().getElements();
+            List<IsoObject> objects = square.getObjects();
             int n = square.getObjects().size();
             for (int k = 0; k < n; k++) {
-               IsoObject object = objects[k];
+               IsoObject object = objects.get(k);
                IsoSprite sp = object.sprite;
                if (sp == null || !(sp.isBush || sp.canBeRemoved || sp.attachedFloor) || object instanceof IsoTree
                      || object.getRenderInfo(playerIndex).layer != ObjectRenderLayer.MinusFloor) {
@@ -7184,8 +7170,8 @@ public final class FBORenderCell {
 
    /** pzopt: tileRecordParallel, a recording thread's own copies of the pass's instance temporaries (null on any other thread). */
    private static final class PzoptCellScratch { // pzopt
-      final TimSort timSort = new TimSort(); // pzopt
-      final PZArrayList<IsoGridSquare> tempSquares = new PZArrayList(IsoGridSquare.class, 64); // pzopt
+      // (42.22: the per-thread TimSort went with PZArrayList; List.sort allocates its own) // pzopt
+      final ArrayList<IsoGridSquare> tempSquares = new ArrayList<>(64); // pzopt
       final ColorInfo light = new ColorInfo(); // pzopt
       final ColorInfo floorCol = new ColorInfo(); // pzopt: tileRecordFloors / bakeRecordParallel, the floor draw's colour (defColorInfo is the game thread's)
    } // pzopt
@@ -7362,7 +7348,7 @@ public final class FBORenderCell {
          List<IsoGridSquare> squaresItems = renderLevels.getCachedSquares_Items(level);
          if (squaresObjects.size() + squaresItems.size() + squaresCutawayOutlines.size() != 0) {
             FBORenderCell.PzoptCellScratch pzoptCs = this.pzoptCellScratch(); // pzopt: tileRecordParallel, a recording thread sorts in its own list
-            PZArrayList<IsoGridSquare> sorted = pzoptCs == null ? this.tempSquares : pzoptCs.tempSquares; // pzopt
+            ArrayList<IsoGridSquare> sorted = pzoptCs == null ? this.tempSquares : pzoptCs.tempSquares; // pzopt
             boolean pzoptOrder = pzopt.TranslucentOrder.enabled(); // pzopt: translucentOrderCache
             if (!pzoptOrder || !pzopt.TranslucentOrder.reuse(c, playerIndex, level, squaresItems, squaresCutawayOutlines, squaresObjects, sorted)) { // pzopt: the kept order when the three lists are unchanged
             sorted.clear();
@@ -7400,12 +7386,8 @@ public final class FBORenderCell {
                i.close();
             }
 
-            (pzoptCs == null ? this.timSort : pzoptCs.timSort).doSort(sorted.getElements(), (java.util.Comparator<IsoGridSquare>) (o1, o2) -> { // pzopt: decompiler fix; tileRecordParallel, the thread's own sorter
-               int worldRight = IsoWorld.instance.getMetaGrid().getMaxX() * 256;
-               int i1 = o1.x + o1.y * worldRight;
-               int i2 = o2.x + o2.y * worldRight;
-               return i1 - i2;
-            }, 0, sorted.size());
+            int worldRight = IsoWorld.instance.getMetaGrid().getMaxX() * 256;
+            sorted.sort(Comparator.comparingInt(o -> o.x + o.y * worldRight)); // pzopt: tileRecordParallel, List.sort keeps no shared scratch (42.22 dropped the TimSort)
             if (pzoptOrder) { // pzopt: translucentOrderCache
                pzopt.TranslucentOrder.store(c, playerIndex, level, squaresItems, squaresCutawayOutlines, squaresObjects, sorted); // pzopt
             } // pzopt
@@ -7722,11 +7704,11 @@ public final class FBORenderCell {
 
                for (int i = 0; i < (this.pzoptWaterOnly ? 0 : this.waterAttachSquares.size()); i++) { // pzopt: HDR glint-only pass draws no sprites
                   IsoGridSquare square = this.waterAttachSquares.get(i);
-                  IsoObject[] objects = (IsoObject[])square.getObjects().getElements();
-                  int numObjects = square.getObjects().size();
+                  List<IsoObject> objects = square.getObjects();
+                  int size = objects.size();
 
-                  for (int j = 0; j < numObjects; j++) {
-                     IsoObject object = objects[j];
+                  for (int j = 0; j < size; j++) {
+                     IsoObject object = objects.get(j);
                      if (object != null
                         && object.getRenderInfo(playerIndex).layer == ObjectRenderLayer.None
                         && object.getAttachedAnimSprite() != null
@@ -7809,11 +7791,11 @@ public final class FBORenderCell {
 
                   for (int i = 0; i < this.waterAttachSquares.size(); i++) {
                      IsoGridSquare square = this.waterAttachSquares.get(i);
-                     IsoObject[] objects = (IsoObject[])square.getObjects().getElements();
-                     int numObjects = square.getObjects().size();
+                     List<IsoObject> objects = square.getObjects();
+                     int size = objects.size();
 
-                     for (int j = 0; j < numObjects; j++) {
-                        IsoObject object = objects[j];
+                     for (int j = 0; j < size; j++) {
+                        IsoObject object = objects.get(j);
                         if (object != null
                            && object.getRenderInfo(playerIndex).layer == ObjectRenderLayer.None
                            && object.getAttachedAnimSprite() != null
@@ -7909,13 +7891,10 @@ public final class FBORenderCell {
                               int sqy = square.getY();
                               float sx = IsoUtils.XToScreen(sqx, sqy, z, 0) - IsoCamera.frameState.offX;
                               float sy = IsoUtils.YToScreen(sqx, sqy, z, 0) - IsoCamera.frameState.offY;
-                              sx -= tex.getWidth() / 2.0F * Core.tileScale;
-                              sy -= tex.getHeight() / 2.0F * Core.tileScale;
+                              sx -= tex.getWidth() / 2.0F * 2.0F;
+                              sy -= tex.getHeight() / 2.0F * 2.0F;
                               float opacity = PZMath.clamp(0.1F + level, 0.2F, 1.0F);
-                              SpriteRenderer.instance
-                                 .render(
-                                    tex, sx, sy, tex.getWidth() * Core.tileScale, tex.getHeight() * Core.tileScale, opacity, opacity, opacity, opacity, null
-                                 );
+                              SpriteRenderer.instance.render(tex, sx, sy, tex.getWidth() * 2, tex.getHeight() * 2, opacity, opacity, opacity, opacity, null);
                            }
                         }
                      }
@@ -8053,11 +8032,11 @@ public final class FBORenderCell {
                            for (int j = 0; j < squares.length; j++) {
                               IsoGridSquare square = squares[j];
                               if (levelData.shouldRenderSquare(playerIndex, square)) {
-                                 IsoObject[] objects = (IsoObject[])square.getObjects().getElements();
-                                 int numObjects = square.getObjects().size();
+                                 List<IsoObject> objects = square.getObjects();
+                                 int size = objects.size();
 
-                                 for (int k = 0; k < numObjects; k++) {
-                                    IsoObject object = objects[k];
+                                 for (int k = 0; k < size; k++) {
+                                    IsoObject object = objects.get(k);
                                     ObjectRenderInfo renderInfo = object.getRenderInfo(playerIndex);
                                     if (renderInfo.layer == ObjectRenderLayer.MinusFloor) {
                                        ProfileArea var17 = GameProfiler.getInstance().profile("ImprovedFog");
@@ -8199,7 +8178,7 @@ public final class FBORenderCell {
                   z,
                   object.getForwardIsoDirection(),
                   object.offsetX + 5.0F,
-                  object.offsetY + object.getRenderYOffset() * Core.tileScale - 5.0F,
+                  object.offsetY + object.getRenderYOffset() * 2.0F - 5.0F,
                   stCol,
                   !object.isBlink(),
                   texdModifier
@@ -8217,7 +8196,7 @@ public final class FBORenderCell {
                   z,
                   object.getForwardIsoDirection(),
                   object.offsetX - 5.0F,
-                  object.offsetY + object.getRenderYOffset() * Core.tileScale - 5.0F,
+                  object.offsetY + object.getRenderYOffset() * 2.0F - 5.0F,
                   stCol,
                   !object.isBlink(),
                   texdModifier
@@ -8258,7 +8237,7 @@ public final class FBORenderCell {
                      z,
                      object.getForwardIsoDirection(),
                      object.offsetX + 6.0F,
-                     object.offsetY + object.getRenderYOffset() * Core.tileScale - 3.0F,
+                     object.offsetY + object.getRenderYOffset() * 2.0F - 3.0F,
                      stCol,
                      !object.isBlink(),
                      texdModifier
@@ -8289,7 +8268,7 @@ public final class FBORenderCell {
                      z,
                      object.getForwardIsoDirection(),
                      object.offsetX - 6.0F,
-                     object.offsetY + object.getRenderYOffset() * Core.tileScale - 3.0F,
+                     object.offsetY + object.getRenderYOffset() * 2.0F - 3.0F,
                      stCol,
                      !object.isBlink(),
                      texdModifier
@@ -8313,7 +8292,7 @@ public final class FBORenderCell {
                   z,
                   object.getForwardIsoDirection(),
                   object.offsetX,
-                  object.offsetY + object.getRenderYOffset() * Core.tileScale,
+                  object.offsetY + object.getRenderYOffset() * 2.0F,
                   stCol,
                   !object.isBlink(),
                   texdModifier
@@ -8338,7 +8317,7 @@ public final class FBORenderCell {
                   z,
                   object.getForwardIsoDirection(),
                   object.offsetX - 2.0F,
-                  object.offsetY - 1.0F + object.getRenderYOffset() * Core.tileScale,
+                  object.offsetY - 1.0F + object.getRenderYOffset() * 2.0F,
                   stCol,
                   !object.isBlink(),
                   texdModifier
@@ -8361,7 +8340,7 @@ public final class FBORenderCell {
                   z,
                   object.getForwardIsoDirection(),
                   object.offsetX - 6.0F,
-                  object.offsetY + object.getRenderYOffset() * Core.tileScale - 3.0F,
+                  object.offsetY + object.getRenderYOffset() * 2.0F - 3.0F,
                   stCol,
                   !object.isBlink(),
                   texdModifier
@@ -8387,7 +8366,7 @@ public final class FBORenderCell {
                   z,
                   object.getForwardIsoDirection(),
                   object.offsetX,
-                  object.offsetY + object.getRenderYOffset() * Core.tileScale,
+                  object.offsetY + object.getRenderYOffset() * 2.0F,
                   stCol,
                   !object.isBlink(),
                   texdModifier
@@ -8406,7 +8385,7 @@ public final class FBORenderCell {
                   z,
                   object.getForwardIsoDirection(),
                   object.offsetX,
-                  object.offsetY + object.getRenderYOffset() * Core.tileScale,
+                  object.offsetY + object.getRenderYOffset() * 2.0F,
                   stCol,
                   !object.isBlink(),
                   texdModifier
@@ -8439,7 +8418,7 @@ public final class FBORenderCell {
                               z,
                               IsoDirections.NW,
                               object.offsetX + 6.0F,
-                              object.offsetY + object.getRenderYOffset() * Core.tileScale - 3.0F,
+                              object.offsetY + object.getRenderYOffset() * 2.0F - 3.0F,
                               stCol,
                               !object.isBlink(),
                               texdModifier
@@ -8464,7 +8443,7 @@ public final class FBORenderCell {
                               z,
                               IsoDirections.NW,
                               object.offsetX - 6.0F,
-                              object.offsetY + object.getRenderYOffset() * Core.tileScale - 3.0F,
+                              object.offsetY + object.getRenderYOffset() * 2.0F - 3.0F,
                               stCol,
                               !object.isBlink(),
                               texdModifier
@@ -8490,7 +8469,7 @@ public final class FBORenderCell {
                               z,
                               IsoDirections.W,
                               object.offsetX + 6.0F,
-                              object.offsetY + object.getRenderYOffset() * Core.tileScale - 3.0F,
+                              object.offsetY + object.getRenderYOffset() * 2.0F - 3.0F,
                               stCol,
                               !object.isBlink(),
                               texdModifier
@@ -8516,7 +8495,7 @@ public final class FBORenderCell {
                               z,
                               IsoDirections.N,
                               object.offsetX - 6.0F,
-                              object.offsetY + object.getRenderYOffset() * Core.tileScale - 3.0F,
+                              object.offsetY + object.getRenderYOffset() * 2.0F - 3.0F,
                               stCol,
                               !object.isBlink(),
                               texdModifier

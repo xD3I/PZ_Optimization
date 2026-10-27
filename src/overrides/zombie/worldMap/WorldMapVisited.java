@@ -439,7 +439,7 @@ public class WorldMapVisited {
    }
 
    private void saveHeader(ByteBuffer output) {
-      output.putInt(249);
+      output.putInt(251);
       output.putInt(2);
       output.putInt(this.minX);
       output.putInt(this.minY);
@@ -628,6 +628,10 @@ public class WorldMapVisited {
             }
          } finally {
             inflater.end();
+         }
+
+         if (SandboxOptions.getInstance().map.mapAllKnown.getValue()) {
+            this.setKnownInCells(this.minX, this.minY, this.maxX, this.maxY);
          }
       }
    }

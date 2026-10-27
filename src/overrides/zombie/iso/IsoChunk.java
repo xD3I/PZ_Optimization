@@ -89,7 +89,6 @@ import zombie.iso.SpriteDetails.IsoObjectType;
 import zombie.iso.areas.IsoBuilding;
 import zombie.iso.areas.IsoRoom;
 import zombie.iso.enums.ChunkGenerationStatus;
-import zombie.iso.fboRenderChunk.FBORenderChunk;
 import zombie.iso.fboRenderChunk.FBORenderChunkManager;
 import zombie.iso.fboRenderChunk.FBORenderLevels;
 import zombie.iso.fboRenderChunk.FBORenderOcclusion;
@@ -391,8 +390,8 @@ public final class IsoChunk {
       minY -= FBORenderLevels.extraHeightForJumboTrees(this.minLevel, this.maxLevel);
       if (this.minLevel == 0) {
          x1 = IsoUtils.YToScreen(this.wx * 8, this.wy * 8, this.minLevel, 0);
-         x1 += FBORenderChunk.FLOOR_HEIGHT;
-         x1 -= FBORenderChunk.JUMBO_XXL_HEIGHT;
+         x1 += 64.0F;
+         x1 -= 1024.0F;
          minY = PZMath.min(minY, x1);
       }
 
@@ -498,7 +497,7 @@ public final class IsoChunk {
    }
 
    public void AddCorpses(int wx, int wy) {
-      if (!IsoWorld.getZombiesDisabled() && !"Tutorial".equals(Core.gameMode)) {
+      if (!IsoWorld.getZombiesDisabled() && !Core.getInstance().isTutorial()) {
          IsoMetaChunk ch = IsoWorld.instance.getMetaChunk(wx, wy);
          if (ch != null) {
             float nz = ch.getZombieIntensity();
@@ -2090,7 +2089,7 @@ public final class IsoChunk {
             boolean isColumn = false;
 
             for (int i = 0; i < sq.getObjects().size(); i++) {
-               IsoObject o = (IsoObject)sq.getObjects().get(i);
+               IsoObject o = sq.getObjects().get(i);
                if (!o.hasProperty("PhysicsShape")
                   && o.sprite != null
                   && o.sprite.name != null
@@ -3453,7 +3452,7 @@ public final class IsoChunk {
                mov.clear();
 
                for (int i = 0; i < sq.getObjects().size(); i++) {
-                  IsoObject obj = (IsoObject)sq.getObjects().get(i);
+                  IsoObject obj = sq.getObjects().get(i);
                   obj.removeFromWorldToMeta();
                }
 
@@ -3582,7 +3581,7 @@ public final class IsoChunk {
                LuaEventManager.triggerEvent("ReuseGridsquare", sq);
 
                for (int a = 0; a < sq.getObjects().size(); a++) {
-                  IsoObject o = (IsoObject)sq.getObjects().get(a);
+                  IsoObject o = sq.getObjects().get(a);
                   if (o instanceof IsoTree tree) {
                      o.reset();
                      cacheListTree.add(tree);
@@ -3703,7 +3702,7 @@ public final class IsoChunk {
             DebugLog.log("WorldVersion = " + worldVersion + ", debug = " + isDebugSave);
          }
 
-         if (worldVersion > 249) {
+         if (worldVersion > 251) {
             throw new RuntimeException("unknown world version " + worldVersion + " while reading chunk " + this.wx + "," + this.wy);
          }
 
@@ -3830,7 +3829,7 @@ public final class IsoChunk {
                         }
 
                         for (int m = 0; m < gs.getObjects().size(); m++) {
-                           IsoObject o = (IsoObject)gs.getObjects().get(m);
+                           IsoObject o = gs.getObjects().get(m);
                            o.softReset();
                            if (o.getObjectIndex() == -1) {
                               m--;
@@ -4028,7 +4027,7 @@ public final class IsoChunk {
                IsoGridSquare square = this.getGridSquare(x, y, zz);
                if (square != null && !square.getObjects().isEmpty()) {
                   for (int i = 0; i < square.getObjects().size(); i++) {
-                     IsoObject obj = (IsoObject)square.getObjects().get(i);
+                     IsoObject obj = square.getObjects().get(i);
                      obj.addToWorld();
                      if (obj.getSprite() != null && obj.getSprite().getProperties().has(IsoPropertyType.FUEL_AMOUNT)) {
                         obj.getPipedFuelAmount();
@@ -4114,7 +4113,7 @@ public final class IsoChunk {
       this.roomLights.clear();
       if (this.jobType != IsoChunk.JobType.SoftReset) {
          tempBuildingDefs.clear();
-         IsoWorld.instance.metaGrid.getBuildingsIntersecting(this.wx * 8 - 1, this.wy * 8 - 1, 10, 10, tempBuildingDefs);
+         IsoWorld.instance.metaGrid.getBuildingsIntersecting(this.wx * 8 - 1, this.wy * 8 - 1, 10, 10, true, tempBuildingDefs);
          tempBuildings.clear();
 
          for (int i = 0; i < tempBuildingDefs.size(); i++) {
@@ -4630,7 +4629,7 @@ public final class IsoChunk {
       bb = ensureCapacity(bb);
       bb.clear();
       bb.put((byte)(IsDebugSave() ? 1 : 0));
-      bb.putInt(249);
+      bb.putInt(251);
       bb.putInt(0);
       bb.putLong(-1L);
       bb.put((byte)(this.blendingDoneFull ? 1 : 0));
@@ -4769,11 +4768,11 @@ public final class IsoChunk {
             for (int x = 0; x < 8; x++) {
                IsoGridSquare square = this.getGridSquare(x, y, z);
                if (square != null) {
-                  int numObjects = square.getObjects().size();
-                  IsoObject[] objects = (IsoObject[])square.getObjects().getElements();
+                  List<IsoObject> objects = square.getObjects();
+                  int numObjects = objects.size();
 
                   for (int i = 0; i < numObjects; i++) {
-                     IsoObject obj = objects[i];
+                     IsoObject obj = objects.get(i);
                      int pos1 = bb.position();
                      bb.position(pos1 + 2 + 2 + 4 + 2);
                      int pos2 = bb.position();
@@ -4817,7 +4816,7 @@ public final class IsoChunk {
          int pos1 = bb.position();
          IsoGridSquare square = this.getGridSquare(x, y, z);
          if (square != null && index >= 0 && index < square.getObjects().size()) {
-            IsoObject obj = (IsoObject)square.getObjects().get(index);
+            IsoObject obj = square.getObjects().get(index);
             if (hashCode == obj.getObjectName().hashCode()) {
                obj.loadState(bb);
                assert bb.position() == pos1 + dataLen;
@@ -5844,7 +5843,22 @@ public final class IsoChunk {
       return false;
    }
 
-   private static class ChunkGetter implements GetSquare {
+   public BaseVehicle getVehicleWithSqlId(int sqlId) {
+      for (int i = 0; i < this.vehicles.size(); i++) {
+         BaseVehicle vehicle = this.vehicles.get(i);
+         if (vehicle.sqlId == sqlId) {
+            return vehicle;
+         }
+      }
+
+      return null;
+   }
+
+   public boolean hasVehicleWithSqlId(int sqlId) {
+      return this.getVehicleWithSqlId(sqlId) != null;
+   }
+
+   private static class ChunkGetter implements IsoGridSquare.GetSquare {
       private IsoChunk chunk;
 
       public IsoGridSquare getGridSquare(int x, int y, int z) {

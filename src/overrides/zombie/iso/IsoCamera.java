@@ -28,7 +28,7 @@ public class IsoCamera {
    public static int playerOffsetY;
 
    public static void init() {
-      playerOffsetY = -56 / (2 / Core.tileScale);
+      playerOffsetY = -56;
    }
 
    public static void update() {
@@ -120,7 +120,7 @@ public class IsoCamera {
    }
 
    public static float getCameraCharacterZ() {
-      return isoCameraGameCharacter.getZ();
+      return isoCameraGameCharacter.isHeadCameraZ() ? isoCameraGameCharacter.getZ() + 0.6F : isoCameraGameCharacter.getZ();
    }
 
    public static boolean setCameraCharacter(IsoGameCharacter isoGameCharacter) {
@@ -199,7 +199,7 @@ public class IsoCamera {
          cameras[i] = new PlayerCamera(i);
       }
 
-      playerOffsetY = -56 / (2 / Core.tileScale);
+      playerOffsetY = -56;
    }
 
    public static final class FrameState {
@@ -238,10 +238,14 @@ public class IsoCamera {
       public float calculateCameraZ(IsoGameCharacter character) {
          if (character == null) {
             return 0.0F;
+         } else {
+            BaseVehicle vehicle = character.getVehicle();
+            if (vehicle != null) {
+               return vehicle.jniTransform.origin.y / 2.44949F;
+            } else {
+               return character.isHeadCameraZ() ? character.getZ() + 0.6F : character.getZ();
+            }
          }
-
-         BaseVehicle vehicle = character.getVehicle();
-         return vehicle == null ? character.getZ() : vehicle.jniTransform.origin.y / 2.44949F;
       }
 
       public void updateUnPausedAccumulator() {

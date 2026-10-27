@@ -4,6 +4,7 @@ import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Stack;
@@ -185,7 +186,6 @@ import zombie.ui.UIFont;
 import zombie.util.StringUtils;
 import zombie.util.Type;
 import zombie.util.lambda.PZOptional;
-import zombie.util.list.PZArrayList;
 import zombie.util.list.PZArrayUtil;
 import zombie.vehicles.AttackVehicleState;
 import zombie.vehicles.BaseVehicle;
@@ -510,6 +510,8 @@ public final class IsoZombie extends IsoGameCharacter implements IHumanVisual {
    private float eatSpeed = 1.0F;
    private boolean sitAgainstWall;
    private static final int CHECK_FOR_CORPSE_TIMER_MAX = 10000;
+   public static final int SHEET_ROPE_DAMAGE_MIN = 5;
+   public static final int SHEET_ROPE_DAMAGE_MAX = 15;
    private float checkForCorpseTimer = 10000.0F;
    public IsoDeadBody bodyToEat;
    public IsoMovingObject eatBodyTarget;
@@ -1952,7 +1954,7 @@ public final class IsoZombie extends IsoGameCharacter implements IHumanVisual {
       float sy = IsoUtils.YToScreen(renderX, renderY, this.getZ(), 0);
       sx = sx - IsoCamera.getOffX() - this.offsetX;
       sy = sy - IsoCamera.getOffY() - this.offsetY;
-      sy -= 128.0F / (2.0F / Core.tileScale);
+      sy -= 128.0F;
       Texture tex = Texture.getSharedTexture(textureName);
       float zoom = Core.getInstance().getZoom(IsoCamera.frameState.playerIndex);
       zoom = Math.max(zoom, 1.0F);
@@ -2391,10 +2393,10 @@ public final class IsoZombie extends IsoGameCharacter implements IHumanVisual {
          return null;
       }
 
-      PZArrayList<IsoObject> list = sq.getObjects();
+      List<IsoObject> list = sq.getObjects();
 
       for (int i = 0; i < list.size(); i++) {
-         IsoSprite sprite = ((IsoObject)list.get(i)).getSprite();
+         IsoSprite sprite = list.get(i).getSprite();
          if (sprite != null
             && sprite.getName() != null
             && temporaryMapCloseSneakBonusDir.containsKey(sprite.getName())
@@ -3770,6 +3772,9 @@ public final class IsoZombie extends IsoGameCharacter implements IHumanVisual {
 
       if (GameServer.server || GameClient.client && !this.isRemoteZombie()) {
          GameStatistic.getInstance().zombiesUpdated.increase();
+         if (this.getCurrentState() == this.getDefaultState() && !this.isUseless()) {
+            this.getNetworkCharacterAI().mindSync.zombieIdleUpdate();
+         }
       }
 
       if (this.crawling) {
@@ -3845,170 +3850,149 @@ public final class IsoZombie extends IsoGameCharacter implements IHumanVisual {
                this.updateMovementStatistics();
                this.setCollidable(true);
                LuaEventManager.triggerEvent("OnZombieUpdate", this);
-               if (Core.lastStand
-                  && this.getStateMachine().getCurrent() != ThumpState.instance()
-                  && this.getStateMachine().getCurrent() != AttackState.instance()
-                  && this.timeSinceSeenFlesh > 120.0F
-                  && Rand.Next(36000) == 0) {
-                  IsoPlayer lowest = null;
-                  float lowestDst = 1000000.0F;
+               // pzopt: physicsDefer. The second Bullet escape from a batched entity's update, and the same
+               // hazard as the hitbox one: vehicleCollision reaches setRagdollBodyDynamics /
+               // resetRagdollBodyDynamics with a STATIC parameter array and runs BaseVehicle.testTouchingVehicle
+               // against a vehicle the game thread may be updating that instant. It needs a ragdolling zombie in
+               // contact with a car, which is why it had not crashed yet. On a batch task the call is queued with
+               // this vehicle (the field is nulled a few lines down, so the reference has to travel) and the game
+               // thread makes it at the join, by when the vehicles have finished updating.
+               if (this.isRagdoll() && !pzopt.UpdateBatch.deferRagdollVehicle(this, this.vehicle4testCollision)) { // pzopt: physicsDefer
+                  RagdollController ragdollController = this.getRagdollController();
+                  ragdollController.vehicleCollision(this, this.vehicle4testCollision);
+               }
 
-                  for (int n = 0; n < IsoPlayer.numPlayers; n++) {
-                     if (IsoPlayer.players[n] != null && IsoPlayer.players[n].DistTo(this) < lowestDst && !IsoPlayer.players[n].isDead()) {
-                        lowestDst = IsoPlayer.players[n].DistTo(this);
-                        lowest = IsoPlayer.players[n];
-                     }
+               if (!this.isLocal()) {
+                  this.setVehicleCollision(this.vehicle4testCollision != null && this.vehicle4testCollision.updateNetworkHitByVehicle(this));
+               } else if (this.vehicle4testCollision != null && !pzopt.UpdateBatch.deferVehicleHit(this, this.vehicle4testCollision)) { // pzopt: vehicleHitDefer, on a batch task the hit test (hitCharacter -> onHitByVehicle -> slideAwayFromWalls -> CollideWithObstacles' shared scratch) runs on the game thread at the join
+                  HitVars hitVars = this.vehicle4testCollision.checkNetworkCollision(this);
+                  this.setVehicleCollision(hitVars != null);
+                  if (this.isVehicleCollision()) {
+                     this.doNetworkHitByVehicle(this.vehicle4testCollision, hitVars);
                   }
+               }
 
-                  if (lowest != null) {
-                     this.allowRepathDelay = -1.0F;
-                     this.pathToCharacter(lowest);
-                  }
-               } else {
-                  // pzopt: physicsDefer. The second Bullet escape from a batched entity's update, and the same
-                  // hazard as the hitbox one: vehicleCollision reaches setRagdollBodyDynamics /
-                  // resetRagdollBodyDynamics with a STATIC parameter array and runs BaseVehicle.testTouchingVehicle
-                  // against a vehicle the game thread may be updating that instant. It needs a ragdolling zombie in
-                  // contact with a car, which is why it had not crashed yet. On a batch task the call is queued with
-                  // this vehicle (the field is nulled a few lines down, so the reference has to travel) and the game
-                  // thread makes it at the join, by when the vehicles have finished updating.
-                  if (this.isRagdoll() && !pzopt.UpdateBatch.deferRagdollVehicle(this, this.vehicle4testCollision)) { // pzopt: physicsDefer
-                     RagdollController ragdollController = this.getRagdollController();
-                     ragdollController.vehicleCollision(this, this.vehicle4testCollision);
-                  }
+               this.vehicle4testCollision = null;
+               if (this.bonusSpotTime > 0.0F && this.spottedLast != null && !((IsoGameCharacter)this.spottedLast).isDead()) {
+                  this.spotted(this.spottedLast, true);
+               }
 
-                  if (!this.isLocal()) {
-                     this.setVehicleCollision(this.vehicle4testCollision != null && this.vehicle4testCollision.updateNetworkHitByVehicle(this));
-                  } else if (this.vehicle4testCollision != null && !pzopt.UpdateBatch.deferVehicleHit(this, this.vehicle4testCollision)) { // pzopt: vehicleHitDefer, on a batch task the hit test (hitCharacter -> onHitByVehicle -> slideAwayFromWalls -> CollideWithObstacles' shared scratch) runs on the game thread at the join
-                     HitVars hitVars = this.vehicle4testCollision.checkNetworkCollision(this);
-                     this.setVehicleCollision(hitVars != null);
-                     if (this.isVehicleCollision()) {
-                        this.doNetworkHitByVehicle(this.vehicle4testCollision, hitVars);
-                     }
-                  }
+               if (GameServer.server && this.getStateMachine().getCurrent() == BurntToDeath.instance()) {
+                  DebugLog.log(DebugType.Zombie, "Zombie is burning " + this.onlineId);
+               }
 
-                  this.vehicle4testCollision = null;
-                  if (this.bonusSpotTime > 0.0F && this.spottedLast != null && !((IsoGameCharacter)this.spottedLast).isDead()) {
-                     this.spotted(this.spottedLast, true);
-                  }
+               super.update();
+               if (VirtualZombieManager.instance.isReused(this)) {
+                  DebugLog.log(DebugType.Zombie, "Zombie added to ReusableZombies after super.update - RETURNING " + this);
+               } else if (this.getStateMachine().getCurrent() != ClimbThroughWindowState.instance()
+                  && this.getStateMachine().getCurrent() != ClimbOverFenceState.instance()
+                  && this.getStateMachine().getCurrent() != CrawlingZombieTurnState.instance()) {
+                  this.ensureOnTile();
+                  State cur = this.getStateMachine().getCurrent();
+                  if (cur != StaggerBackState.instance()
+                     && cur != BurntToDeath.instance()
+                     && cur != FakeDeadZombieState.instance()
+                     && cur != ZombieFallDownState.instance()
+                     && cur != ZombieOnGroundState.instance()
+                     && cur != ZombieHitReactionState.instance()
+                     && cur != ZombieGetUpState.instance()) {
+                     if (GameServer.server && this.onlineId == -1) {
+                        this.onlineId = ServerMap.instance.getUniqueZombieId();
+                     } else if (cur == PathFindState.instance() && this.finder.progress == PathFindProgress.notyetfound) {
+                        if (this.crawling) {
+                           this.PlayAnim("ZombieCrawl");
+                           this.def.animFrameIncrease = 0.0F;
+                        } else {
+                           this.PlayAnim("ZombieIdle");
+                           this.def.animFrameIncrease = 0.08F + Rand.Next(1000) / 8000.0F;
+                           this.def.animFrameIncrease *= 0.5F;
+                        }
+                     } else if (cur != AttackState.instance()
+                        && cur != AttackVehicleState.instance()
+                        && (this.getNextX() != this.getX() || this.getNextY() != this.getY())) {
+                        if (this.walkVariantUse == null || cur != LungeState.instance() && cur != LungeNetworkState.instance()) {
+                           this.walkVariantUse = this.walkVariant;
+                        }
 
-                  if (GameServer.server && this.getStateMachine().getCurrent() == BurntToDeath.instance()) {
-                     DebugLog.log(DebugType.Zombie, "Zombie is burning " + this.onlineId);
-                  }
+                        if (this.crawling) {
+                           this.walkVariantUse = "ZombieCrawl";
+                        }
 
-                  super.update();
-                  if (VirtualZombieManager.instance.isReused(this)) {
-                     DebugLog.log(DebugType.Zombie, "Zombie added to ReusableZombies after super.update - RETURNING " + this);
-                  } else if (this.getStateMachine().getCurrent() != ClimbThroughWindowState.instance()
-                     && this.getStateMachine().getCurrent() != ClimbOverFenceState.instance()
-                     && this.getStateMachine().getCurrent() != CrawlingZombieTurnState.instance()) {
-                     this.ensureOnTile();
-                     State cur = this.getStateMachine().getCurrent();
-                     if (cur != StaggerBackState.instance()
-                        && cur != BurntToDeath.instance()
-                        && cur != FakeDeadZombieState.instance()
-                        && cur != ZombieFallDownState.instance()
-                        && cur != ZombieOnGroundState.instance()
-                        && cur != ZombieHitReactionState.instance()
-                        && cur != ZombieGetUpState.instance()) {
-                        if (GameServer.server && this.onlineId == -1) {
-                           this.onlineId = ServerMap.instance.getUniqueZombieId();
-                        } else if (cur == PathFindState.instance() && this.finder.progress == PathFindProgress.notyetfound) {
-                           if (this.crawling) {
-                              this.PlayAnim("ZombieCrawl");
-                              this.def.animFrameIncrease = 0.0F;
+                        if (cur != ZombieIdleState.instance()
+                           && cur != StaggerBackState.instance()
+                           && cur != ThumpState.instance()
+                           && cur != FakeDeadZombieState.instance()) {
+                           if (this.running) {
+                              this.PlayAnim("Run");
+                              this.def.setFrameSpeedPerFrame(0.33F);
                            } else {
-                              this.PlayAnim("ZombieIdle");
-                              this.def.animFrameIncrease = 0.08F + Rand.Next(1000) / 8000.0F;
-                              this.def.animFrameIncrease *= 0.5F;
-                           }
-                        } else if (cur != AttackState.instance()
-                           && cur != AttackVehicleState.instance()
-                           && (this.getNextX() != this.getX() || this.getNextY() != this.getY())) {
-                           if (this.walkVariantUse == null || cur != LungeState.instance() && cur != LungeNetworkState.instance()) {
-                              this.walkVariantUse = this.walkVariant;
+                              this.PlayAnim(this.walkVariantUse);
+                              this.def.setFrameSpeedPerFrame(0.26F);
+                              this.def.animFrameIncrease = this.def.animFrameIncrease * this.speedMod;
                            }
 
-                           if (this.crawling) {
-                              this.walkVariantUse = "ZombieCrawl";
-                           }
-
-                           if (cur != ZombieIdleState.instance()
-                              && cur != StaggerBackState.instance()
-                              && cur != ThumpState.instance()
-                              && cur != FakeDeadZombieState.instance()) {
-                              if (this.running) {
-                                 this.PlayAnim("Run");
-                                 this.def.setFrameSpeedPerFrame(0.33F);
-                              } else {
-                                 this.PlayAnim(this.walkVariantUse);
-                                 this.def.setFrameSpeedPerFrame(0.26F);
-                                 this.def.animFrameIncrease = this.def.animFrameIncrease * this.speedMod;
-                              }
-
-                              this.setShootable(true);
-                           }
+                           this.setShootable(true);
                         }
+                     }
 
-                        this.shootable = true;
-                        this.solid = true;
-                        if (pzopt.Config.ZOMBIE_CHECK_SPREAD <= 1 || !pzopt.Overrides.enabled()
-                           || (pzopt.FrameTick.frame() + this.getID()) % pzopt.Config.ZOMBIE_CHECK_SPREAD == 1) {
-                           this.tryThump(null); // pzopt: zombieCheckSpread, the "is something thumpable in front of me"
-                                                // grid probe spread over N frames (a thump starts at most N-1 frames late)
-                        }
-                        this.damageSheetRope();
-                        this.allowRepathDelay = PZMath.clamp(this.allowRepathDelay - GameTime.instance.getMultiplier(), 0.0F, Float.MAX_VALUE);
-                        if (this.timeSinceSeenFlesh > this.memory && this.target != null) {
-                           this.setTarget(null);
-                        }
+                     this.shootable = true;
+                     this.solid = true;
+                     if (pzopt.Config.ZOMBIE_CHECK_SPREAD <= 1 || !pzopt.Overrides.enabled()
+                        || (pzopt.FrameTick.frame() + this.getID()) % pzopt.Config.ZOMBIE_CHECK_SPREAD == 1) {
+                        this.tryThump(null); // pzopt: zombieCheckSpread, the "is something thumpable in front of me"
+                                             // grid probe spread over N frames (a thump starts at most N-1 frames late)
+                     }
+                     this.damageSheetRope();
+                     this.allowRepathDelay = PZMath.clamp(this.allowRepathDelay - GameTime.instance.getMultiplier(), 0.0F, Float.MAX_VALUE);
+                     if (this.timeSinceSeenFlesh > this.memory && this.target != null) {
+                        this.setTarget(null);
+                     }
 
-                        if (this.target instanceof IsoGameCharacter isoGameCharacter && isoGameCharacter.reanimatedCorpse != null) {
-                           this.setTarget(null);
-                        }
+                     if (this.target instanceof IsoGameCharacter isoGameCharacter && isoGameCharacter.reanimatedCorpse != null) {
+                        this.setTarget(null);
+                     }
 
-                        if (this.target != null) {
-                           this.vectorToTarget.x = this.target.getX();
-                           this.vectorToTarget.y = this.target.getY();
-                           this.vectorToTarget.x = this.vectorToTarget.x - this.getX();
-                           this.vectorToTarget.y = this.vectorToTarget.y - this.getY();
-                           this.updateZombieTripping();
-                        }
+                     if (this.target != null) {
+                        this.vectorToTarget.x = this.target.getX();
+                        this.vectorToTarget.y = this.target.getY();
+                        this.vectorToTarget.x = this.vectorToTarget.x - this.getX();
+                        this.vectorToTarget.y = this.vectorToTarget.y - this.getY();
+                        this.updateZombieTripping();
+                     }
 
-                        if (this.getSquare() != null && this.getSquare().hasFarmingPlant()) {
-                           int chance = (int)(100.0F / GameTime.getInstance().getTrueMultiplier());
-                           chance = Math.max(1, chance);
-                           if (Rand.NextBool(chance)) {
-                              this.getSquare().destroyFarmingPlant();
-                           }
+                     if (this.getSquare() != null && this.getSquare().hasFarmingPlant()) {
+                        int chance = (int)(100.0F / GameTime.getInstance().getTrueMultiplier());
+                        chance = Math.max(1, chance);
+                        if (Rand.NextBool(chance)) {
+                           this.getSquare().destroyFarmingPlant();
                         }
+                     }
 
-                        if (this.getSquare() != null && this.getSquare().hasLitCampfire() && this.isMoving()) {
-                           int chance = (int)(10000.0F / GameTime.getInstance().getTrueMultiplier());
-                           chance = Math.max(1, chance);
-                           if (Rand.NextBool(chance)) {
-                              this.getSquare().putOutCampfire();
-                           }
+                     if (this.getSquare() != null && this.getSquare().hasLitCampfire() && this.isMoving()) {
+                        int chance = (int)(10000.0F / GameTime.getInstance().getTrueMultiplier());
+                        chance = Math.max(1, chance);
+                        if (Rand.NextBool(chance)) {
+                           this.getSquare().putOutCampfire();
                         }
+                     }
 
-                        if (this.getCurrentState() != PathFindState.instance()
-                           && this.getCurrentState() != WalkTowardState.instance()
-                           && this.getCurrentState() != ClimbThroughWindowState.instance()) {
-                           this.setLastHeardSound(-1, -1, -1);
-                        }
+                     if (this.getCurrentState() != PathFindState.instance()
+                        && this.getCurrentState() != WalkTowardState.instance()
+                        && this.getCurrentState() != ClimbThroughWindowState.instance()) {
+                        this.setLastHeardSound(-1, -1, -1);
+                     }
 
-                        if (this.timeSinceSeenFlesh > 240.0F && this.timeSinceRespondToSound > 5.0F) {
-                           this.RespondToSound();
-                        }
+                     if (this.timeSinceSeenFlesh > 240.0F && this.timeSinceRespondToSound > 5.0F) {
+                        this.RespondToSound();
+                     }
 
-                        this.timeSinceRespondToSound = this.timeSinceRespondToSound + GameTime.getInstance().getThirtyFPSMultiplier();
-                        NetworkZombieAI networkAi = this.getNetworkCharacterAI();
-                        networkAi.wasSeparated = false;
-                        this.separate();
-                        this.updateSearchForCorpse();
-                        if (this.timeSinceSeenFlesh > 2000.0F && this.timeSinceRespondToSound > 2000.0F) {
-                           ZombieGroupManager.instance.update(this);
-                        }
+                     this.timeSinceRespondToSound = this.timeSinceRespondToSound + GameTime.getInstance().getThirtyFPSMultiplier();
+                     NetworkZombieAI networkAi = this.getNetworkCharacterAI();
+                     networkAi.wasSeparated = false;
+                     this.separate();
+                     this.updateSearchForCorpse();
+                     if (this.timeSinceSeenFlesh > 2000.0F && this.timeSinceRespondToSound > 2000.0F) {
+                        ZombieGroupManager.instance.update(this);
                      }
                   }
                }
@@ -4281,7 +4265,7 @@ public final class IsoZombie extends IsoGameCharacter implements IHumanVisual {
                return false;
             }
 
-            IsoDirections dir = this.getCardinalDirectionTo(door.getSquare(), door.getNorth());
+            IsoDirections dir = this.getCardinalDirectionTo(door.getSquare(), door.isNorth());
             this.climbOverFence(dir);
             return true;
          } else {
@@ -4358,7 +4342,7 @@ public final class IsoZombie extends IsoGameCharacter implements IHumanVisual {
                   return false;
                }
 
-               IsoDirections dir = this.getCardinalDirectionTo(thumpable.getSquare(), thumpable.getNorth());
+               IsoDirections dir = this.getCardinalDirectionTo(thumpable.getSquare(), thumpable.isNorth());
                this.climbOverFence(dir);
                return true;
             }
@@ -4650,10 +4634,6 @@ public final class IsoZombie extends IsoGameCharacter implements IHumanVisual {
                spn = 1;
             }
 
-            if (Core.lastStand) {
-               spn *= 3;
-            }
-
             switch (SandboxOptions.instance.bloodLevel.getValue()) {
                case 2:
                   spn /= 2;
@@ -4842,10 +4822,6 @@ public final class IsoZombie extends IsoGameCharacter implements IHumanVisual {
       }
 
       if (this.isCrawling()) {
-         return false;
-      }
-
-      if (Core.lastStand) {
          return false;
       }
 
@@ -5547,7 +5523,7 @@ public final class IsoZombie extends IsoGameCharacter implements IHumanVisual {
    }
 
    public void addRandomVisualBandages() {
-      if (!"Tutorial".equals(Core.getInstance().getGameMode())) {
+      if (!Core.getInstance().isTutorial()) {
          for (int i = 0; i < 5; i++) {
             if (OutfitRNG.Next(10) == 0) {
                BodyPartType bodyPart = BodyPartType.getRandom();

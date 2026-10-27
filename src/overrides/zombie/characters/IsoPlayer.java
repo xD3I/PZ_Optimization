@@ -43,10 +43,11 @@ import zombie.Lua.LuaManager.GlobalObject;
 import zombie.ai.State;
 import zombie.ai.sadisticAIDirector.SleepingEvent;
 import zombie.ai.states.BumpedState;
-import zombie.ai.states.ClimbDownSheetRopeState;
+import zombie.ai.states.ClimbDownState;
 import zombie.ai.states.ClimbOverFenceState;
 import zombie.ai.states.ClimbOverWallState;
-import zombie.ai.states.ClimbSheetRopeState;
+import zombie.ai.states.ClimbState;
+import zombie.ai.states.ClimbSystem;
 import zombie.ai.states.ClimbThroughWindowPositioningParams;
 import zombie.ai.states.ClimbThroughWindowState;
 import zombie.ai.states.CloseWindowState;
@@ -54,6 +55,7 @@ import zombie.ai.states.CollideWithWallState;
 import zombie.ai.states.FakeDeadZombieState;
 import zombie.ai.states.FishingState;
 import zombie.ai.states.FitnessState;
+import zombie.ai.states.ForceOpenState;
 import zombie.ai.states.IdleState;
 import zombie.ai.states.LungeState;
 import zombie.ai.states.OpenWindowState;
@@ -79,6 +81,7 @@ import zombie.ai.states.StaggerBackState;
 import zombie.ai.states.StateManager;
 import zombie.ai.states.SwipeStatePlayer;
 import zombie.ai.states.WalkTowardState;
+import zombie.ai.states.ClimbState.LadderDirection;
 import zombie.ai.states.animals.AnimalAlertedState;
 import zombie.ai.states.animals.AnimalEatState;
 import zombie.ai.states.player.PlayerMilkAnimalState;
@@ -214,6 +217,7 @@ import zombie.iso.areas.NonPvpZone;
 import zombie.iso.areas.SafeHouse;
 import zombie.iso.fboRenderChunk.FBORenderChunkManager;
 import zombie.iso.objects.GridSquareEdgeFacingDirection;
+import zombie.iso.objects.IForceablePortal;
 import zombie.iso.objects.IsoBarricade;
 import zombie.iso.objects.IsoCurtain;
 import zombie.iso.objects.IsoDeadBody;
@@ -226,7 +230,6 @@ import zombie.iso.sprite.IsoReticle;
 import zombie.iso.sprite.IsoReticleMode;
 import zombie.iso.weather.ClimateManager;
 import zombie.iso.zones.Zone;
-import zombie.network.BodyDamageSync;
 import zombie.network.GameClient;
 import zombie.network.GameServer;
 import zombie.network.PassengerMap;
@@ -267,7 +270,6 @@ import zombie.util.Type;
 import zombie.util.flags.ShortFlags;
 import zombie.util.lambda.PZOptional;
 import zombie.util.lambda.Invokers.Params1.ICallback;
-import zombie.util.list.PZArrayList;
 import zombie.util.list.PZArrayUtil;
 import zombie.vehicles.BaseVehicle;
 import zombie.vehicles.VehiclePart;
@@ -488,8 +490,8 @@ public class IsoPlayer extends IsoLivingCharacter implements IAnimalVisual, IHum
    private boolean hasObstacleOnPath;
    private LuaTimedActionNew timedActionToRetrigger;
    private boolean pathfindRun;
-   private static final PZArrayList<HitInfo> s_targetsProne = new PZArrayList(HitInfo.class, 8);
-   private static final PZArrayList<HitInfo> s_targetsStanding = new PZArrayList(HitInfo.class, 8);
+   private static final List<HitInfo> s_targetsProne = new ArrayList<>(8);
+   private static final List<HitInfo> s_targetsStanding = new ArrayList<>(8);
    private final ArrayList<ContextualAction> contextualActions = new ArrayList<>();
    private String weaponT;
    private final ParameterCharacterMoving parameterCharacterMoving = new ParameterCharacterMoving(this);
@@ -597,10 +599,6 @@ public class IsoPlayer extends IsoLivingCharacter implements IAnimalVisual, IHum
          }
       }
 
-      if (Core.gameMode.equals("LastStand")) {
-         this.characterTraits.set(CharacterTrait.STRONG, true);
-      }
-
       if (this.characterTraits.get(CharacterTrait.STRONG)) {
          this.maxWeightDelta = 1.5F;
       } else if (this.characterTraits.get(CharacterTrait.WEAK)) {
@@ -674,10 +672,6 @@ public class IsoPlayer extends IsoLivingCharacter implements IAnimalVisual, IHum
                DebugType.General.printException(e, LogSeverity.Error);
             }
          }
-      }
-
-      if (Core.gameMode.equals("LastStand")) {
-         this.characterTraits.set(CharacterTrait.STRONG, true);
       }
 
       if (this.characterTraits.get(CharacterTrait.STRONG)) {
@@ -774,6 +768,7 @@ public class IsoPlayer extends IsoLivingCharacter implements IAnimalVisual, IHum
       this.setVariable(
          "sneakLimpSpeedScale", 1.0F, this::getSneakLimpSpeedScale, this::setSneakLimpSpeedScale, owner -> "Get the character Limp speed scale while sneaking."
       );
+      this.setVariable("isClimbLoop", this::isClimbLoop, owner -> "The character has started climbing.");
    }
 
    private void registerAnimEventCallbacks() {
@@ -937,6 +932,10 @@ public class IsoPlayer extends IsoLivingCharacter implements IAnimalVisual, IHum
       } else {
          return true;
       }
+   }
+
+   public static boolean isPlayer(Object obj) {
+      return obj instanceof IsoPlayer && !(obj instanceof IsoAnimal);
    }
 
    public static int getPlayerIndex() {
@@ -1148,9 +1147,11 @@ public class IsoPlayer extends IsoLivingCharacter implements IAnimalVisual, IHum
          this.registerAIState("aim-strafe", PlayerStrafeState.instance());
          this.registerAIState("bumped", BumpedState.instance());
          this.registerAIState("bumped-bump", BumpedState.instance());
-         this.registerAIState("climbdownrope", ClimbDownSheetRopeState.instance());
+         this.registerAIState("climbdownrope", ClimbDownState.instance());
          this.registerAIState("climbfence", ClimbOverFenceState.instance());
-         this.registerAIState("climbrope", ClimbSheetRopeState.instance());
+         this.registerAIState("climbrope", ClimbState.instance());
+         this.registerAIState("climbLadder", ClimbState.instance());
+         this.registerAIState("climbLadderDown", ClimbDownState.instance());
          this.registerAIState("climbwall", ClimbOverWallState.instance());
          this.registerAIState("climbwindow", ClimbThroughWindowState.instance());
          this.registerAIState("closewindow", CloseWindowState.instance());
@@ -1161,6 +1162,10 @@ public class IsoPlayer extends IsoLivingCharacter implements IAnimalVisual, IHum
          this.registerAIState("falling", PlayerFallingState.instance());
          this.registerAIState("fishing", FishingState.instance());
          this.registerAIState("fitness", FitnessState.instance());
+         this.registerAIState("forceopengaragedoor", ForceOpenState.instance());
+         this.registerAIState("forceopendoorleft", ForceOpenState.instance());
+         this.registerAIState("forceopendoorright", ForceOpenState.instance());
+         this.registerAIState("forceopenwindow", ForceOpenState.instance());
          this.registerAIState("getup", PlayerGetUpState.instance());
          this.registerAIState("hitreaction", PlayerHitReactionState.instance());
          this.registerAIState("hitreaction-bite", PlayerHitReactionState.instance());
@@ -1296,12 +1301,12 @@ public class IsoPlayer extends IsoLivingCharacter implements IAnimalVisual, IHum
       this.onWornItemsChanged();
       short index = input.getShort();
       if (index >= 0 && index < items.size()) {
-         this.leftHandItem = items.get(index);
+         this.primaryHandItem = items.get(index);
       }
 
       index = input.getShort();
       if (index >= 0 && index < items.size()) {
-         this.rightHandItem = items.get(index);
+         this.secondaryHandItem = items.get(index);
       }
 
       this.setVariable("Weapon", WeaponType.getWeaponType(this).getType());
@@ -1534,7 +1539,7 @@ public class IsoPlayer extends IsoLivingCharacter implements IAnimalVisual, IHum
          output.put((byte)76);
          output.put((byte)89);
          output.put((byte)82);
-         output.putInt(249);
+         output.putInt(251);
          GameWindow.WriteString(output, this.multiplayer ? ServerOptions.instance.serverPlayerId.getValue() : "");
          output.putInt(PZMath.fastfloor(this.getX() / 8.0F));
          output.putInt(PZMath.fastfloor(this.getY() / 8.0F));
@@ -1563,7 +1568,7 @@ public class IsoPlayer extends IsoLivingCharacter implements IAnimalVisual, IHum
       this.saveFileName = fileName;
       synchronized (SliceY.SliceBufferLock) {
          SliceY.SliceBuffer.clear();
-         SliceY.SliceBuffer.putInt(249);
+         SliceY.SliceBuffer.putInt(251);
          GameWindow.WriteString(SliceY.SliceBuffer, this.multiplayer ? ServerOptions.instance.serverPlayerId.getValue() : "");
          this.save(SliceY.SliceBuffer);
          File outFile = new File(fileName).getAbsoluteFile();
@@ -3042,8 +3047,8 @@ public class IsoPlayer extends IsoLivingCharacter implements IAnimalVisual, IHum
          }
 
          CombatManager.getInstance().calcValidTargets(this, weapon, s_targetsProne, s_targetsStanding);
-         HitInfo bestStanding = s_targetsStanding.isEmpty() ? null : (HitInfo)s_targetsStanding.get(0);
-         HitInfo bestProne = s_targetsProne.isEmpty() ? null : (HitInfo)s_targetsProne.get(0);
+         HitInfo bestStanding = s_targetsStanding.isEmpty() ? null : s_targetsStanding.get(0);
+         HitInfo bestProne = s_targetsProne.isEmpty() ? null : s_targetsProne.get(0);
          if (CombatManager.getInstance().isProneTargetBetter(this, bestStanding, bestProne)) {
             bestStanding = null;
          }
@@ -3565,10 +3570,6 @@ public class IsoPlayer extends IsoLivingCharacter implements IAnimalVisual, IHum
       if (this.isNpc()) {
          GameTime gameTime = GameTime.getInstance();
          float time = 1.0F / gameTime.getMinutesPerDay() / 60.0F * gameTime.getMultiplier() / 2.0F;
-         if (Core.lastStand) {
-            time = 1.0F / gameTime.getMinutesPerDay() / 60.0F * gameTime.getUnmoddedMultiplier() / 2.0F;
-         }
-
          this.setHoursSurvived(this.getHoursSurvived() + time);
       }
 
@@ -3820,18 +3821,6 @@ public class IsoPlayer extends IsoLivingCharacter implements IAnimalVisual, IHum
       return this.attackVariationY;
    }
 
-   public boolean canPerformHandToHandCombat() {
-      return this.primaryHandModel != null
-            && !StringUtils.isNullOrEmpty(this.primaryHandModel.maskVariableValue)
-            && this.secondaryHandModel != null
-            && !StringUtils.isNullOrEmpty(this.secondaryHandModel.maskVariableValue)
-         ? false
-         : this.getPrimaryHandItem() == null
-            || this.getPrimaryHandItem().getItemReplacementPrimaryHand() == null
-            || this.getSecondaryHandItem() == null
-            || this.getSecondaryHandItem().getItemReplacementSecondHand() == null;
-   }
-
    public void clearHandToHandAttack() {
       super.clearHandToHandAttack();
       this.setInitiateAttack(false);
@@ -3868,7 +3857,7 @@ public class IsoPlayer extends IsoLivingCharacter implements IAnimalVisual, IHum
          float baseChance = 35.0F;
          if (target instanceof IsoPlayer plyr) {
             baseChance = 20.0F;
-            if (GameClient.client && !plyr.isLocalPlayer()) {
+            if (GameServer.server || GameClient.client && !plyr.isLocalPlayer()) {
                double weight = plyr instanceof IsoAnimal isoAnimal ? isoAnimal.getData().getWeight() : plyr.getNutrition().getWeight();
                baseChance -= plyr.remoteStrLvl * 1.5F;
                if (weight < 80.0) {
@@ -3944,7 +3933,7 @@ public class IsoPlayer extends IsoLivingCharacter implements IAnimalVisual, IHum
                }
 
                var14 += skill * 3.0F;
-               if (target instanceof IsoPlayer plyr && !plyr.isAnimal() && GameClient.client && !plyr.isLocalPlayer()) {
+               if (target instanceof IsoPlayer plyr && !plyr.isAnimal() && (GameServer.server || GameClient.client && !plyr.isLocalPlayer())) {
                   var14 -= plyr.remoteStrLvl * 1.5F;
                   if (plyr.getNutrition().getWeight() < 80.0) {
                      var14 += (float)Math.abs((plyr.getNutrition().getWeight() - 80.0) / 2.0);
@@ -4118,10 +4107,6 @@ public class IsoPlayer extends IsoLivingCharacter implements IAnimalVisual, IHum
          this.setHitReaction("HitReaction");
       } else {
          String hitReaction = wielder.getVariableString("ZombieHitReaction");
-         if ("Shot".equals(hitReaction)) {
-            wielder.setCriticalHit(Rand.Next(100) < ((IsoPlayer)wielder).calculateCritChance(this));
-         }
-
          if (wielder instanceof IsoPlayer && (GameServer.server || GameClient.client)) {
             if (ServerOptions.getInstance().knockedDownAllowed.getValue()) {
                this.setKnockedDown(wielder.isCriticalHit());
@@ -4733,6 +4718,12 @@ public class IsoPlayer extends IsoLivingCharacter implements IAnimalVisual, IHum
          case ClimbSheetRope:
             this.triggerContextualAction("ClimbSheetRope", ca.square, false);
             break;
+         case ClimbLadder:
+            this.triggerContextualAction("ClimbLadder", ca.square, false, ca.object);
+            break;
+         case ClimbLadderDown:
+            this.triggerContextualAction("ClimbLadder", ca.square, true, ca.object);
+            break;
          case ClimbThroughWindow:
             this.triggerContextualAction("ClimbThroughWindow", ca.object);
             break;
@@ -4909,7 +4900,7 @@ public class IsoPlayer extends IsoLivingCharacter implements IAnimalVisual, IHum
          return false;
       }
 
-      if (this.doContextClimbSheetRope(assumedDir)) {
+      if (this.doContextClimb(assumedDir)) {
          return true;
       }
 
@@ -5070,23 +5061,35 @@ public class IsoPlayer extends IsoLivingCharacter implements IAnimalVisual, IHum
       }
    }
 
-   private boolean doContextClimbSheetRope(IsoDirections assumedDir) {
+   private boolean doContextClimb(IsoDirections assumedDir) {
       if (this.isGrappling()) {
          return false;
-      } else if (assumedDir == IsoDirections.N && this.current.has(IsoFlagType.climbSheetN) && this.canClimbSheetRope(this.current)) {
-         this.addContextualAction(Action.ClimbSheetRope, assumedDir, this.current, null);
-         return true;
-      } else if (assumedDir == IsoDirections.S && this.current.has(IsoFlagType.climbSheetS) && this.canClimbSheetRope(this.current)) {
-         this.addContextualAction(Action.ClimbSheetRope, assumedDir, this.current, null);
-         return true;
-      } else if (assumedDir == IsoDirections.W && this.current.has(IsoFlagType.climbSheetW) && this.canClimbSheetRope(this.current)) {
-         this.addContextualAction(Action.ClimbSheetRope, assumedDir, this.current, null);
-         return true;
-      } else if (assumedDir == IsoDirections.E && this.current.has(IsoFlagType.climbSheetE) && this.canClimbSheetRope(this.current)) {
-         this.addContextualAction(Action.ClimbSheetRope, assumedDir, this.current, null);
-         return true;
       } else {
-         return false;
+         IsoObject ladder = this.getClimbLadder(this.getCurrentSquare());
+         if (ladder != null) {
+            this.addContextualAction(Action.ClimbLadder, assumedDir, this.current, ladder);
+            return true;
+         } else {
+            ladder = this.getClimbLadderDown(this.getCurrentSquare());
+            if (ladder != null) {
+               this.addContextualAction(Action.ClimbLadderDown, assumedDir, this.current, ladder);
+               return true;
+            } else if (assumedDir == IsoDirections.N && this.current.has(IsoFlagType.climbSheetN) && this.canClimbSheetRope(this.current)) {
+               this.addContextualAction(Action.ClimbSheetRope, assumedDir, this.current, null);
+               return true;
+            } else if (assumedDir == IsoDirections.S && this.current.has(IsoFlagType.climbSheetS) && this.canClimbSheetRope(this.current)) {
+               this.addContextualAction(Action.ClimbSheetRope, assumedDir, this.current, null);
+               return true;
+            } else if (assumedDir == IsoDirections.W && this.current.has(IsoFlagType.climbSheetW) && this.canClimbSheetRope(this.current)) {
+               this.addContextualAction(Action.ClimbSheetRope, assumedDir, this.current, null);
+               return true;
+            } else if (assumedDir == IsoDirections.E && this.current.has(IsoFlagType.climbSheetE) && this.canClimbSheetRope(this.current)) {
+               this.addContextualAction(Action.ClimbSheetRope, assumedDir, this.current, null);
+               return true;
+            } else {
+               return false;
+            }
+         }
       }
    }
 
@@ -6214,8 +6217,11 @@ public class IsoPlayer extends IsoLivingCharacter implements IAnimalVisual, IHum
    public void updateLOS() {
       this.spottedList.clear();
       this.stats.numVisibleZombies = 0;
-      this.stats.setLastNumberChasingZombies(this.stats.numChasingZombies);
-      this.stats.numChasingZombies = 0;
+      if (!GameServer.server) {
+         this.stats.setLastNumberChasingZombies(this.stats.numChasingZombies);
+         this.stats.numChasingZombies = 0;
+      }
+
       this.stats.musicZombiesTargetingDistantNotMoving = 0;
       this.stats.musicZombiesTargetingNearbyNotMoving = 0;
       this.stats.musicZombiesTargetingDistantMoving = 0;
@@ -6616,7 +6622,7 @@ public class IsoPlayer extends IsoLivingCharacter implements IAnimalVisual, IHum
                int j = 0;
 
                while (j < sqTestCover.getObjects().size()) {
-                  IsoObject obj = (IsoObject)sqTestCover.getObjects().get(j);
+                  IsoObject obj = sqTestCover.getObjects().get(j);
                   if (!obj.getSprite().getProperties().has(IsoFlagType.solidtrans) && !obj.getSprite().getProperties().has(IsoFlagType.solid)) {
                      if (!obj.getSprite().getProperties().has(IsoFlagType.windowN) && !obj.getSprite().getProperties().has(IsoFlagType.windowW)) {
                         j++;
@@ -6738,9 +6744,9 @@ public class IsoPlayer extends IsoLivingCharacter implements IAnimalVisual, IHum
    }
 
    public boolean IsUsingAimWeapon() {
-      if (this.leftHandItem == null) {
+      if (this.primaryHandItem == null) {
          return false;
-      } else if (this.leftHandItem instanceof HandWeapon handWeapon) {
+      } else if (this.primaryHandItem instanceof HandWeapon handWeapon) {
          return !this.isAiming() ? false : handWeapon.isAimedFirearm;
       } else {
          return false;
@@ -6748,9 +6754,9 @@ public class IsoPlayer extends IsoLivingCharacter implements IAnimalVisual, IHum
    }
 
    private boolean IsUsingAimHandWeapon() {
-      if (this.leftHandItem == null) {
+      if (this.primaryHandItem == null) {
          return false;
-      } else if (this.leftHandItem instanceof HandWeapon handWeapon) {
+      } else if (this.primaryHandItem instanceof HandWeapon handWeapon) {
          return !this.isAiming() ? false : handWeapon.isAimedHandWeapon;
       } else {
          return false;
@@ -6841,12 +6847,12 @@ public class IsoPlayer extends IsoLivingCharacter implements IAnimalVisual, IHum
    }
 
    public InventoryItem getActiveLightItem() {
-      if (this.rightHandItem != null && this.rightHandItem.isEmittingLight()) {
-         return this.rightHandItem;
+      if (this.secondaryHandItem != null && this.secondaryHandItem.isEmittingLight()) {
+         return this.secondaryHandItem;
       }
 
-      if (this.leftHandItem != null && this.leftHandItem.isEmittingLight()) {
-         return this.leftHandItem;
+      if (this.primaryHandItem != null && this.primaryHandItem.isEmittingLight()) {
+         return this.primaryHandItem;
       }
 
       AttachedItems attachedItems = this.getAttachedItems();
@@ -7218,13 +7224,13 @@ public class IsoPlayer extends IsoLivingCharacter implements IAnimalVisual, IHum
    public void startReceivingBodyDamageUpdates(IsoPlayer other) {
       if (GameClient.client && other != null && other != this && this.isLocalPlayer() && !other.isLocalPlayer()) {
          other.resetBodyDamageRemote();
-         BodyDamageSync.instance.startReceivingUpdates(other);
+         INetworkPacket.send(PacketType.BodyDamageUpdate, new Object[]{this, other, zombie.network.packets.BodyDamageUpdatePacket.Type.START_UPDATING});
       }
    }
 
    public void stopReceivingBodyDamageUpdates(IsoPlayer other) {
-      if (GameClient.client && other != null && other != this && !other.isLocalPlayer()) {
-         BodyDamageSync.instance.stopReceivingUpdates(other);
+      if (GameClient.client && other != null && other != this && this.isLocalPlayer() && !other.isLocalPlayer()) {
+         INetworkPacket.send(PacketType.BodyDamageUpdate, new Object[]{this, other, zombie.network.packets.BodyDamageUpdatePacket.Type.STOP_UPDATING});
       }
    }
 
@@ -7351,6 +7357,13 @@ public class IsoPlayer extends IsoLivingCharacter implements IAnimalVisual, IHum
          } else {
             this.slowFactor = 0.0F;
          }
+
+         LadderDirection ladderDirection = (LadderDirection)this.getVariableEnum("ladderDirection", LadderDirection.IDLE);
+         if (LadderDirection.UP == ladderDirection) {
+            this.addBothArmMuscleStrain(ClimbSystem.getClimbingMuscleStrain(this, 0.02F));
+         } else if (LadderDirection.DOWN == ladderDirection) {
+            this.addBothArmMuscleStrain(ClimbSystem.getClimbingMuscleStrain(this, 0.007F));
+         }
       }
 
       if (GameClient.client) {
@@ -7402,7 +7415,9 @@ public class IsoPlayer extends IsoLivingCharacter implements IAnimalVisual, IHum
 
          if (this.getCurrentState() == ClimbOverFenceState.instance()
             || this.getCurrentState() == ClimbThroughWindowState.instance()
-            || this.getCurrentState() == ClimbOverWallState.instance()) {
+            || this.getCurrentState() == ClimbOverWallState.instance()
+            || this.isCurrentState(ClimbState.instance())
+            || this.isCurrentState(ClimbDownState.instance())) {
             networkAi.forcePathFinder = false;
          }
 
@@ -7422,9 +7437,31 @@ public class IsoPlayer extends IsoLivingCharacter implements IAnimalVisual, IHum
             if (this.getCurrentState() != ClimbOverWallState.instance()
                && this.getCurrentState() != ClimbOverFenceState.instance()
                && this.getCurrentState() != PlayerSitOnFurnitureState.instance()
-               && this.getCurrentState() != ClimbSheetRopeState.instance()
-               && this.getCurrentState() != ClimbDownSheetRopeState.instance()
+               && (this.getCurrentState() != ClimbDownState.instance() || this.getVariableBoolean("climbLadderLoop"))
+               && (this.getCurrentState() != ClimbState.instance() || !this.getVariableBoolean("climbLadderEnd"))
                && !this.isThrowingGrappledCorpse()) {
+               if (networkAi.predictionType == 11 && !this.isCurrentState(ClimbState.instance())) {
+                  this.setVariableEnum("ladderDirection", LadderDirection.UP);
+                  this.climbRemote("EventClimbLadder");
+                  return true;
+               }
+
+               if (networkAi.predictionType == 12 && !this.isCurrentState(ClimbDownState.instance())) {
+                  this.setVariableEnum("ladderDirection", LadderDirection.DOWN);
+                  this.climbRemote("EventClimbDownLadder");
+                  return true;
+               }
+
+               if (networkAi.predictionType == 9 && !this.isCurrentState(ClimbState.instance())) {
+                  this.climbRemote("EventClimbRope");
+                  return true;
+               }
+
+               if (networkAi.predictionType == 10 && !this.isCurrentState(ClimbDownState.instance())) {
+                  this.climbRemote("EventClimbDownRope");
+                  return true;
+               }
+
                pfb2.moveToPoint(target.x, target.y, this.getNetworkSpeedMul());
             } else {
                this.moveUnmoddedRemotePlayer();
@@ -7547,16 +7584,16 @@ public class IsoPlayer extends IsoLivingCharacter implements IAnimalVisual, IHum
    }
 
    private void moveUnmoddedRemotePlayer() {
-      if (this.getAlpha() > 0.0F) {
-         this.getDeferredMovement(tempVector2_2);
-         this.moveUnmodded(tempVector2_2.x, tempVector2_2.y);
-      } else {
+      if (!(this.getAlpha() > 0.0F) && !this.isCurrentState(ClimbDownState.instance())) {
          this.setX(this.realx);
          this.setY(this.realy);
          this.setZ(this.realz);
          this.setLastX(this.realx);
          this.setLastY(this.realy);
          this.setLastZ(this.realz);
+      } else {
+         this.getDeferredMovement(tempVector2_2);
+         this.moveUnmodded(tempVector2_2.x, tempVector2_2.y);
       }
    }
 
@@ -7576,6 +7613,11 @@ public class IsoPlayer extends IsoLivingCharacter implements IAnimalVisual, IHum
       this.setVariable("bPathfind", false);
       this.setMoving(false);
       this.isPlayerMoving = false;
+      if (!GameClient.client && this.isClimbing()) {
+         this.setbClimbing(false);
+         this.DoLand(FallingConstants.lethalFallThreshold);
+      }
+
       if (this.getVehicle() != null) {
          this.getVehicle().exit(this);
       }
@@ -8604,10 +8646,6 @@ public class IsoPlayer extends IsoLivingCharacter implements IAnimalVisual, IHum
       }
    }
 
-   public boolean isTimedActionInstant() {
-      return (GameClient.client || GameServer.server) && this.isAccessLevel("None") ? false : super.isTimedActionInstant();
-   }
-
    public boolean isSkeleton() {
       return false;
    }
@@ -9084,10 +9122,8 @@ public class IsoPlayer extends IsoLivingCharacter implements IAnimalVisual, IHum
    public void lureAnimal(InventoryItem item) {
       DesignationZoneAnimal dZone = DesignationZoneAnimal.getZoneF(this.getX(), this.getY(), this.getZ());
       if (dZone != null) {
-         ArrayList<IsoAnimal> animals = dZone.getAnimals();
-
-         for (int i = 0; i < animals.size(); i++) {
-            animals.get(i).tryLure(this, item);
+         for (IsoAnimal animal : dZone.getAnimalsInZone()) {
+            animal.tryLure(this, item);
          }
       }
 
@@ -9470,6 +9506,15 @@ public class IsoPlayer extends IsoLivingCharacter implements IAnimalVisual, IHum
       }
    }
 
+   public void syncClothing() {
+      if (GameServer.server) {
+         INetworkPacket.sendToAll(PacketType.SyncClothing, new Object[]{this});
+         INetworkPacket.sendToAll(PacketType.SyncVisuals, new Object[]{this});
+      } else if (GameClient.client && GameClient.connection.isReady() && this.isLocalPlayer() && this.onlineId != -1) {
+         INetworkPacket.send(PacketType.SyncClothing, new Object[]{this});
+      }
+   }
+
    @UsedFromLua
    public IsoDeadBody findClosestCorpseOnGroundToPickup() {
       return this.isDraggingCorpse()
@@ -9488,6 +9533,55 @@ public class IsoPlayer extends IsoLivingCharacter implements IAnimalVisual, IHum
       } else {
          return false;
       }
+   }
+
+   public void forceOpenWindowOrDoor(IsoObject openableObject) {
+      if (openableObject instanceof IForceablePortal forceable) {
+         forceable.tryForceOpen(this);
+      } else {
+         DebugType.General.warn("Object is not a forceable.");
+      }
+   }
+
+   public static <C1, C2> IsoPlayer findPlayerMP(C1 compareParam1, C2 compareParam2, IsoPlayer.PlayerMPPredicate<C1, C2> predicate) {
+      for (IsoPlayer player : players) {
+         if (player != null && predicate.test(player, null, compareParam1, compareParam2)) {
+            return player;
+         }
+      }
+
+      if (GameServer.udpEngine != null) {
+         for (int n = 0; n < GameServer.udpEngine.connections.size(); n++) {
+            UdpConnection connection = (UdpConnection)GameServer.udpEngine.connections.get(n);
+
+            for (IsoPlayer player : connection.players) {
+               if (player != null && predicate.test(player, connection, compareParam1, compareParam2)) {
+                  return player;
+               }
+            }
+         }
+      }
+
+      return null;
+   }
+
+   public static <C1, C2> boolean anyPlayerMP(C1 compareParam1, C2 compareParam2, IsoPlayer.PlayerMPPredicate<C1, C2> predicate) {
+      return findPlayerMP(compareParam1, compareParam2, predicate) != null;
+   }
+
+   public boolean isClimbLoop() {
+      return (this.isCurrentState(ClimbState.instance()) || this.isCurrentState(ClimbDownState.instance())) && this.getVariableBoolean("climbLadderLoop");
+   }
+
+   private void climbRemote(String event) {
+      this.setX(this.realx);
+      this.setY(this.realy);
+      this.setZ(this.realz);
+      this.setbFalling(false);
+      this.setbClimbing(true);
+      this.setMoving(false);
+      this.reportEvent(event);
+      this.getNetworkCharacterAI().predictionType = 0;
    }
 
    private final class GrapplerGruntChance {
@@ -9540,6 +9634,10 @@ public class IsoPlayer extends IsoLivingCharacter implements IAnimalVisual, IHum
       public float strafeX;
       public float strafeY;
       public IsoDirections newFacing;
+   }
+
+   public interface PlayerMPPredicate<C1, C2> {
+      boolean test(IsoPlayer var1, UdpConnection var2, C1 var3, C2 var4);
    }
 
    private static class VehicleContainer {

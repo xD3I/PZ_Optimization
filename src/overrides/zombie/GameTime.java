@@ -315,13 +315,9 @@ public final class GameTime {
     }
 
     public String getGameModeText() {
-        Object s;
-        String mode;
-        String string = mode = StringUtils.isNullOrEmpty(Core.challengeId) ? Translator.getTextOrNull("UI_NewGame_" + Core.gameMode, new Object[0]) : Translator.getTextOrNull("Challenge_%s_name".formatted(Core.challengeId), new Object[0]);
-        if (mode == null) {
-            mode = Core.gameMode;
-        }
-        if ((s = Translator.getTextOrNull("IGUI_Gametime_GameMode", mode)) == null) {
+        String mode = StringUtils.isNullOrEmpty(Core.challengeId) ? Translator.getTextOrNull(Core.getInstance().getGameMode().getTitle(), new Object[0]) : Translator.getTextOrNull("Challenge_%s_name".formatted(Core.challengeId), new Object[0]);
+        Object s = Translator.getTextOrNull("IGUI_Gametime_GameMode", mode);
+        if (s == null) {
             s = "Game mode: " + mode;
         }
         if (Core.debug) {
@@ -483,9 +479,6 @@ public final class GameTime {
         if (!GameTime.isGamePaused()) {
             IsoPlayer player;
             float time = 1.0f / this.getMinutesPerDay() / 60.0f * this.getMultiplier() / 2.0f;
-            if (Core.lastStand) {
-                time = 1.0f / this.getMinutesPerDay() / 60.0f * this.getUnmoddedMultiplier() / 2.0f;
-            }
             if (DebugOptions.instance.freezeTimeOfDay.getValue()) {
                 time = 0.0f;
             }
@@ -546,6 +539,7 @@ public final class GameTime {
             this.advanceOneDay();
             if (GameServer.server) {
                 serverSyncClock = true;
+                IsoWorld.instance.transmitWeather();
             }
         }
         if (!ClimateManager.getInstance().getThunderStorm().isModifyingNight()) {
@@ -639,8 +633,8 @@ public final class GameTime {
         return ClimateManager.getInstance().getAmbient();
     }
 
-    public int getSkyLightLevel() {
-        RenderSettings.PlayerRenderSettings aa = RenderSettings.getInstance().getPlayerSettings(IsoPlayer.getPlayerIndex());
+    public int getSkyLightLevel(int playerIndex) {
+        RenderSettings.PlayerRenderSettings aa = RenderSettings.getInstance().getPlayerSettings(playerIndex);
         float b = aa.getBmod();
         float g = aa.getGmod();
         float r = aa.getRmod();
@@ -655,7 +649,7 @@ public final class GameTime {
             a = 15000000;
         }
         if (a != this.lastSkyLight) {
-            LightingJNI.doInvalidateGlobalLights(IsoPlayer.getPlayerIndex());
+            LightingJNI.doInvalidateGlobalLights(playerIndex);
             this.lastSkyLight = a;
         }
         return a;
@@ -1022,7 +1016,7 @@ public final class GameTime {
         output.writeByte(77);
         output.writeByte(84);
         output.writeByte(77);
-        output.writeInt(249);
+        output.writeInt(251);
         output.writeFloat(this.multiplier);
         output.writeInt(this.nightsSurvived);
         output.writeInt(this.targetZombies);
@@ -1071,7 +1065,7 @@ public final class GameTime {
     public void load(DataInputStream input) throws IOException {
         int worldVersion = IsoWorld.savedWorldVersion;
         if (worldVersion == -1) {
-            worldVersion = 249;
+            worldVersion = 251;
         }
         input.mark(0);
         byte b1 = input.readByte();
@@ -1112,7 +1106,7 @@ public final class GameTime {
     }
 
     public void load(ByteBufferReader input) throws IOException {
-        int worldVersion = 249;
+        int worldVersion = 251;
         this.multiplier = input.getFloat();
         this.nightsSurvived = input.getInt();
         this.targetZombies = input.getInt();
@@ -1128,7 +1122,7 @@ public final class GameTime {
             if (this.table == null) {
                 this.table = LuaManager.platform.newTable();
             }
-            this.table.load(input.bb, 249);
+            this.table.load(input.bb, 251);
         }
         this.setMinutesStamp();
     }

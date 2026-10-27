@@ -414,7 +414,7 @@ public final class DeadBodyAtlas {
    public void renderUI() {
       if (Core.debug && DebugOptions.instance.deadBodyAtlas.render.getValue()) {
          boolean bDepth = false;
-         int d = 512 / Core.tileScale;
+         int d = 256;
          int x = 0;
          int y = 0;
          this.updateAtlasList();
@@ -422,33 +422,33 @@ public final class DeadBodyAtlas {
          for (int i = 0; i < this.atlasListMain.size(); i++) {
             DeadBodyAtlas.Atlas atlas = this.atlasListMain.get(i);
             Texture tex = atlas.tex;
-            SpriteRenderer.instance.renderi(null, x, y, d, d, 1.0F, 1.0F, 1.0F, 0.75F, null);
-            SpriteRenderer.instance.renderi(tex, x, y, d, d, 1.0F, 1.0F, 1.0F, 1.0F, null);
-            float scale = (float)d / tex.getWidth();
+            SpriteRenderer.instance.renderi(null, x, y, 256, 256, 1.0F, 1.0F, 1.0F, 0.75F, null);
+            SpriteRenderer.instance.renderi(tex, x, y, 256, 256, 1.0F, 1.0F, 1.0F, 1.0F, null);
+            float scale = 256.0F / tex.getWidth();
 
             for (int xx = 0; xx <= tex.getWidth() / atlas.entryWidth; xx++) {
                SpriteRenderer.instance
-                  .renderline(null, (int)(x + xx * atlas.entryWidth * scale), y, (int)(x + xx * atlas.entryWidth * scale), y + d, 0.5F, 0.5F, 0.5F, 1.0F);
+                  .renderline(null, (int)(x + xx * atlas.entryWidth * scale), y, (int)(x + xx * atlas.entryWidth * scale), y + 256, 0.5F, 0.5F, 0.5F, 1.0F);
             }
 
             for (int yy = 0; yy <= tex.getHeight() / atlas.entryHeight; yy++) {
                SpriteRenderer.instance
                   .renderline(
-                     null, x, (int)(y + d - yy * atlas.entryHeight * scale), x + d, (int)(y + d - yy * atlas.entryHeight * scale), 0.5F, 0.5F, 0.5F, 1.0F
+                     null, x, (int)(y + 256 - yy * atlas.entryHeight * scale), x + 256, (int)(y + 256 - yy * atlas.entryHeight * scale), 0.5F, 0.5F, 0.5F, 1.0F
                   );
             }
 
-            y += d + 4;
-            if (y + d > Core.getInstance().getScreenHeight()) {
+            y += 260;
+            if (y + 256 > Core.getInstance().getScreenHeight()) {
                y = 0;
-               x += d + 4;
+               x += 260;
             }
          }
 
          TextureFBO fbo1 = ModelManager.instance.bitmap;
          ITexture tex = fbo1.getTexture();
-         SpriteRenderer.instance.renderi(null, x, y, d, d, 1.0F, 1.0F, 1.0F, 1.0F, null);
-         SpriteRenderer.instance.renderi((Texture)tex, x, y, d, d, 1.0F, 1.0F, 1.0F, 1.0F, null);
+         SpriteRenderer.instance.renderi(null, x, y, 256, 256, 1.0F, 1.0F, 1.0F, 1.0F, null);
+         SpriteRenderer.instance.renderi((Texture)tex, x, y, 256, 256, 1.0F, 1.0F, 1.0F, 1.0F, null);
       }
    }
 
@@ -509,8 +509,8 @@ public final class DeadBodyAtlas {
       }
 
       TextureFBO mmBitmap = ModelManager.instance.bitmap;
-      int w = mmBitmap.getTexture().getWidth() / 8 * Core.tileScale;
-      int h = mmBitmap.getTexture().getHeight() / 8 * Core.tileScale;
+      int w = mmBitmap.getTexture().getWidth() / 8 * 2;
+      int h = mmBitmap.getTexture().getHeight() / 8 * 2;
       int x = job.entry.x - (w - job.entry.atlas.entryWidth) / 2;
       int y = job.entry.y - (h - job.entry.atlas.entryHeight) / 2;
       if (deadBodyAtlasShader == null) {
@@ -1140,8 +1140,8 @@ public final class DeadBodyAtlas {
                float jy = camera.fixJigglyModelsSquareY;
                float offsetX = entry.offsetX;
                float offsetY = entry.offsetY;
-               float wx = -(offsetX + 2.0F * offsetY) / (64.0F * Core.tileScale);
-               float wy = -(offsetX - 2.0F * offsetY) / (-64.0F * Core.tileScale);
+               float wx = -(offsetX + 2.0F * offsetY) / 128.0F;
+               float wy = -(offsetX - 2.0F * offsetY) / -128.0F;
                float f = 4.4F;
                float depthNear = IsoDepthHelper.getSquareDepthData(
                      PZMath.fastfloor(playerX), PZMath.fastfloor(playerY), this.ox + jx + wx + 2.2F, this.oy + jy + wy + 2.2F, this.oz + 1.0F
@@ -1665,8 +1665,8 @@ public final class DeadBodyAtlas {
          offset[0] = offsetX;
          offset[1] = 0.0F;
          offset[2] = offsetY;
-         this.entry.offsetX = (uiX - minX) / (8.0F / Core.tileScale);
-         this.entry.offsetY = (uiY - minY) / (8.0F / Core.tileScale);
+         this.entry.offsetX = (uiX - minX) / 4.0F;
+         this.entry.offsetY = (uiY - minY) / 4.0F;
       }
 
       void calcEntrySize() {
@@ -1685,8 +1685,8 @@ public final class DeadBodyAtlas {
          maxX = org.joml.Math.ceil(maxX / 128.0F) * 128.0F;
          minY = org.joml.Math.floor(minY / 128.0F) * 128.0F;
          maxY = org.joml.Math.ceil(maxY / 128.0F) * 128.0F;
-         this.entryW = PZMath.min((int)(maxX - minX) / (8 / Core.tileScale), 1024);
-         this.entryH = PZMath.min((int)(maxY - minY) / (8 / Core.tileScale), 1024);
+         this.entryW = PZMath.min((int)(maxX - minX) / 4, 1024);
+         this.entryH = PZMath.min((int)(maxY - minY) / 4, 1024);
       }
 
       Ray getCameraRay(float uiX, float uiY, Matrix4f projection, Matrix4f modelView, Ray cameraRay) {

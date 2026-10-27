@@ -8473,3 +8473,42 @@ decision) from the level's last preparation, whatever had changed since.
   also refreshes the shared occupancy when voxel lighting wants it (`pzopt.VoxelLight.wantsOccupancy()`), as it already did
   for god rays and entity shadows. Voxel lighting traces its lamp, room and sky light through that occupancy
   (`docs/findings-voxel-lighting-2026-10-18.md`). No other override changes.
+
+## Port to Build 42.22 (2026-10-27, pre-release, revision `e013dbb529`)
+
+Made on top of origin/master `adef1841` (the `d1bbdcf` release) in worktree `~/pzopt-wt/port4222`, for the day 42.22 leaves the
+unstable branch. Method as for 42.21: Vineflower of the overridden classes from the 42.21 jar (base, copy kept in
+`/games/pz-42.21-stable/`) and from 42.22, `git merge-file` of our sources onto the 42.22 output; the seven CFR-derived classes
+(GameTime, IsoMovingObject, PathFindBehavior2, ...) merged on the two CFR trees. 57 of the 139 classes changed bytes; 54 changed
+code, 43 of them merged without a conflict. Checks: the build's bytecode audit (9,229 unedited methods, 0 mismatches) and, for the
+82 methods 42.22 changed that we edit, a fingerprint delta: 42.22's change of the stock method against the change between our
+42.21 release build and this build. 72 carry exactly 42.22's change; the other 10 are the list-type change below, edits on purpose
+(`updateEmitter`, `setForwardDirectionFromIsoDirection`) and methods whose stock body lives in a `pzopt*` helper (`startFrame`,
+`RoomDef.isKidsRoom`, `IsoChunk.loadInWorldStreamerThread`, `FBORenderCell.renderOneLevel`, `LightingJNI.update`), where 42.22's
+change was checked by hand.
+
+What 42.22 changed under our edits:
+- **`PZArrayList` is gone**: `IsoGridSquare.getObjects()` / `getSpecialObjects()` return `java.util.List`, `getMovingObjects()` /
+  `getWorldObjects()` an `ArrayList`, and the game's `TimSort` users sort with `List.sort`. Our loops over `getElements()` read
+  the list (`FBORenderCell`, `pzopt.ChunkAo`, `BloodDecals`, `CapsuleShadow`, `GodRays`, `OccludedOutline`, `EdgeFast`,
+  `TranslucentOrder`); `IsoWorld.pzoptSortZombiesByScore` writes the sorted order back with `set` (`zombieWithModel` is a
+  `List`); the translucent pass's per-thread `TimSort` in `PzoptCellScratch` is gone (`List.sort` allocates its own).
+- **`Core.tileScale` is a constant 2** and the 1x tile packs are gone: `GameWindow.loadTilePacks` (earlyTilePacks) is 42.22's
+  `enter()` block; `getOptionTexture2x` no longer exists.
+- **Last Stand removed, game modes are `zombie.core.GameMode`**: the click-to-start conditions in `GameLoadingState`
+  (`noClickToStart`, `NO_INTRO_WAIT`) use `Core.getInstance().isTutorial()`. `IsoWorld.setGameMode(String)` still resolves
+  "Sandbox" through the registry, so `pzopt_benchmark.lua` is unchanged.
+- **Client loading is guarded** (`if (!isClient || GameClient.client)`) in `GameLoadingState`'s loader thread and
+  `IsoWorld.init`: both tails are 42.22's code with our edits (hotsaveWarmup, the chat-icon / shared-texture hand-off to the
+  main thread, BootPump around the asset wait; the `pzoptX/pzoptY` decompiler fix) put back in.
+- **`IsoZombie.updateInternal`**: the Last Stand repath branch is gone, the vehicle-collision block un-nested; physicsDefer,
+  vehicleHitDefer and zombieCheckSpread re-applied to 42.22's block.
+- **`IsoGameCharacter`**: `updateEmitter` ticks a sound listener (a player-controlled animal) every frame; emitterIdleSkip now
+  skips only when `!isSoundListener()`. `faceThisObject` returns early while climbing; the per-thread `tempo` scratch is kept.
+  `setForwardDirectionFromIsoDirection` allocates a fresh `Vector2` in the jar now (thread-safe); the override keeps the
+  per-thread vector (no allocation, same result) and `ForwardDirectionScratchTest` accepts either jar form.
+- **`GameTime.getSkyLightLevel(int playerIndex)`**: per player; `LightingJNI`'s LightDirt hook passes the player index.
+- **Tile definitions moved to `media/tile_definitions/`**: `IsoWorld`'s stock fallback after `TileDefPreload.install` and our
+  boot-thread copy `pzoptPreloadTileDefs` (tileDefPreload) read them there; the merge could not see the copy, whose old paths
+  would have loaded no vanilla tiles. Mods' `.tiles` still resolve under `media/`.
+- `IsoWorld.savedWorldVersion` 249 -> 251, the `OnElectricityChanged` Lua event, `IsoChunk.getVehicleWithSqlId`: 42.22's code.

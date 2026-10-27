@@ -67,8 +67,8 @@ public class WeatherFxMask {
    public static final int BIT_OBJECTS = 16;
    public static final int BIT_WALL_SE = 32;
    public static final int BIT_DOOR = 64;
-   public static float offsetX = 32 * Core.tileScale;
-   public static float offsetY = 96 * Core.tileScale;
+   public static float offsetX = 64.0F;
+   public static float offsetY = 192.0F;
    public static ColorInfo defColorInfo = new ColorInfo();
    private static int diamondRows = 1000;
    public int x;
@@ -242,12 +242,12 @@ public class WeatherFxMask {
       float sy = (int)IsoUtils.YToScreenInt(x, y, z, 0);
       sx -= (int)IsoCamera.frameState.offX;
       sy -= (int)IsoCamera.frameState.offY;
-      if (sx + 32 * Core.tileScale <= 0.0F) {
+      if (sx + 64.0F <= 0.0F) {
          return false;
-      } else if (sy + 32 * Core.tileScale <= 0.0F) {
+      } else if (sy + 64.0F <= 0.0F) {
          return false;
       } else {
-         return sx - 32 * Core.tileScale >= IsoCamera.frameState.offscreenWidth ? false : !(sy - 96 * Core.tileScale >= IsoCamera.frameState.offscreenHeight);
+         return sx - 64.0F >= IsoCamera.frameState.offscreenWidth ? false : !(sy - 192.0F >= IsoCamera.frameState.offscreenHeight);
       }
    }
 

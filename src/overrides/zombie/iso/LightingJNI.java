@@ -643,7 +643,7 @@ public final class LightingJNI {
 
                               boolean isOpenAir = sq.getOpenAir();
                               if (isOpenAir) {
-                                 sq.lightLevel = GameTime.getInstance().getSkyLightLevel();
+                                 sq.lightLevel = GameTime.getInstance().getSkyLightLevel(playerIndex);
                               }
 
                               boolean hasElevatedFloor = sq.has(IsoObjectType.stairsTN)
@@ -772,7 +772,7 @@ public final class LightingJNI {
 
                                     squareAddDoor(door.north, door.isOpen(), trans);
                                     if (!door.isOpen() && door.HasCurtains() == null) {
-                                       if (door.getNorth()) {
+                                       if (door.isNorth()) {
                                           intensityN = PZMath.min(intensityN, 0.15F);
                                        } else {
                                           intensityW = PZMath.min(intensityW, 0.15F);
@@ -784,7 +784,7 @@ public final class LightingJNI {
                                        float curtainG = 0.0F;
                                        float curtainB = 0.0F;
                                        float curtainIntensity = 0.33F;
-                                       if (door.getNorth()) {
+                                       if (door.isNorth()) {
                                           intensityN = PZMath.min(intensityN, 0.33F);
                                           ltN.setRGB(0.0F, 0.0F, 0.0F);
                                        } else {
@@ -804,7 +804,7 @@ public final class LightingJNI {
                                     IsoBarricade barricade2 = thump.getBarricadeOnOppositeSquare();
                                     if (barricade1 != null) {
                                        opaque |= barricade1.isBlockVision();
-                                       if (thump.getNorth()) {
+                                       if (thump.isNorth()) {
                                           intensityN = PZMath.min(intensityN, barricade1.getLightTransmission());
                                        } else {
                                           intensityW = PZMath.min(intensityW, barricade1.getLightTransmission());
@@ -813,7 +813,7 @@ public final class LightingJNI {
 
                                     if (barricade2 != null) {
                                        opaque |= barricade2.isBlockVision();
-                                       if (thump.getNorth()) {
+                                       if (thump.isNorth()) {
                                           intensityS = PZMath.min(intensityS, barricade2.getLightTransmission());
                                        } else {
                                           intensityE = PZMath.min(intensityE, barricade2.getLightTransmission());
@@ -827,7 +827,7 @@ public final class LightingJNI {
                                     IsoBarricade barricade2 = window.getBarricadeOnOppositeSquare();
                                     if (barricade1 != null) {
                                        opaque |= barricade1.isBlockVision();
-                                       if (window.getNorth()) {
+                                       if (window.isNorth()) {
                                           intensityN = PZMath.min(intensityN, barricade1.getLightTransmission());
                                        } else {
                                           intensityW = PZMath.min(intensityW, barricade1.getLightTransmission());
@@ -836,7 +836,7 @@ public final class LightingJNI {
 
                                     if (barricade2 != null) {
                                        opaque |= barricade2.isBlockVision();
-                                       if (window.getNorth()) {
+                                       if (window.isNorth()) {
                                           intensityS = PZMath.min(intensityS, barricade2.getLightTransmission());
                                        } else {
                                           intensityE = PZMath.min(intensityE, barricade2.getLightTransmission());
@@ -997,7 +997,7 @@ public final class LightingJNI {
                try {
                   updatePlayer(playerIndex);
                   if (playerIndex == 0) {
-                     pzopt.LightDirt.globalLight(IsoWorld.instance.getFrameNo(), plrSettings.getRmod(), plrSettings.getGmod(), plrSettings.getBmod(), plrSettings.getAmbient(), plrSettings.getNight(), GameTime.getInstance().getSkyLightLevel()); // pzopt: a flash or a fast dusk keeps the lighting re-bake spread on (pzopt.LightDirt)
+                     pzopt.LightDirt.globalLight(IsoWorld.instance.getFrameNo(), plrSettings.getRmod(), plrSettings.getGmod(), plrSettings.getBmod(), plrSettings.getAmbient(), plrSettings.getNight(), GameTime.getInstance().getSkyLightLevel(playerIndex)); // pzopt: a flash or a fast dusk keeps the lighting re-bake spread on (pzopt.LightDirt)
                   }
                   stateEndFrame(
                      plrSettings.getRmod(),
@@ -1009,7 +1009,7 @@ public final class LightingJNI {
                      gameTime.getViewDistMax(),
                      LosUtil.cachecleared[playerIndex],
                      gameTime.lightSourceUpdate,
-                     GameTime.getInstance().getSkyLightLevel()
+                     GameTime.getInstance().getSkyLightLevel(playerIndex)
                   );
                   if (LosUtil.cachecleared[playerIndex]) {
                      LosUtil.cachecleared[playerIndex] = false;

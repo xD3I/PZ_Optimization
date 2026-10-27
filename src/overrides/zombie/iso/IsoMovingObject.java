@@ -59,6 +59,7 @@ import zombie.inventory.types.WeaponType;
 import zombie.iso.BentFences;
 import zombie.iso.IsoCamera;
 import zombie.iso.IsoCell;
+import zombie.iso.IsoChunk;
 import zombie.iso.IsoChunkMap;
 import zombie.iso.IsoDirections;
 import zombie.iso.IsoGridSquare;
@@ -1529,7 +1530,7 @@ implements Mover {
             }
         } else if (this.getNextX() != this.getLastX() || this.getNextY() != this.getLastY()) {
             PathFindBehavior2 pfb2;
-            if (this instanceof IsoZombie && Core.gameMode.equals("Tutorial")) {
+            if (this instanceof IsoZombie && Core.getInstance().isTutorial()) {
                 return true;
             }
             if (this.current == null) {
@@ -2253,6 +2254,30 @@ implements Mover {
             return (int)this.getCurrentSquare().getCell().getZombieList().stream().filter(z -> IsoUtils.DistanceTo(this.getX(), this.getY(), z.getX(), z.getY()) < 1.5f).count();
         }
         return 1;
+    }
+
+    public float getFallZ() {
+        float fallZ = this.getZ();
+        IsoGridSquare isoGridSquare = this.getCurrentSquare();
+        if (isoGridSquare == null) {
+            return fallZ;
+        }
+        IsoChunk isoChunk = isoGridSquare.getChunk();
+        if (isoChunk == null) {
+            return fallZ;
+        }
+        for (int i = isoGridSquare.getZ(); i >= isoChunk.getMinLevel(); --i) {
+            IsoGridSquare below = this.getCell().getGridSquare(isoGridSquare.getX(), isoGridSquare.getY(), i);
+            if (below == null) continue;
+            if (below.HasStairs() || below.hasSlopedSurface()) {
+                fallZ = below.getApparentZ(this.getX() - (float)this.getXi(), this.getY() - (float)this.getYi());
+                break;
+            }
+            if (!below.TreatAsSolidFloor()) continue;
+            fallZ = below.getZ();
+            break;
+        }
+        return fallZ;
     }
 
     static {

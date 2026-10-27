@@ -809,7 +809,7 @@ public final class ZombiePopulationManager {
       if (!isStaleRecord(persistentId)) {
          IsoGridSquare sq = IsoWorld.instance.currentCell.getGridSquare(PZMath.fastfloor(x), PZMath.fastfloor(y), PZMath.fastfloor(z));
          if (sq != null && (sq.solidFloorCached ? sq.solidFloor : sq.TreatAsSolidFloor())) {
-            if (!Core.lastStand && !this.playerSpawns.allowZombie(sq)) {
+            if (!this.playerSpawns.allowZombie(sq)) {
                noise("removed zombie near player spawn " + PZMath.fastfloor(x) + "," + PZMath.fastfloor(y) + "," + PZMath.fastfloor(z));
             } else {
                VirtualZombieManager.instance.choices.clear();
@@ -944,7 +944,7 @@ public final class ZombiePopulationManager {
       if (!isStaleRecord(persistentId)) {
          IsoGridSquare sq = IsoWorld.instance.currentCell.getGridSquare(PZMath.fastfloor(x), PZMath.fastfloor(y), PZMath.fastfloor(z));
          if (sq != null && (sq.solidFloorCached ? sq.solidFloor : sq.TreatAsSolidFloor())) {
-            if (!Core.lastStand && !this.playerSpawns.allowZombie(sq)) {
+            if (!this.playerSpawns.allowZombie(sq)) {
                noise("removed zombie near player spawn " + PZMath.fastfloor(x) + "," + PZMath.fastfloor(y) + "," + PZMath.fastfloor(z));
             } else {
                VirtualZombieManager.instance.choices.clear();

@@ -47,8 +47,8 @@ public final class IsoCursor {
                      float zoom = 1.0F / Core.getInstance().getZoom(playerIndex);
                      int screenX = IsoCamera.getScreenLeft(playerIndex);
                      int screenY = IsoCamera.getScreenTop(playerIndex);
-                     int width = (int)(this.shader.textureCursor.getWidth() * Core.tileScale / 2.0F * zoom);
-                     int height = (int)(this.shader.textureCursor.getHeight() * Core.tileScale / 2.0F * zoom);
+                     int width = (int)(this.shader.textureCursor.getWidth() * 2 / 2.0F * zoom);
+                     int height = (int)(this.shader.textureCursor.getHeight() * 2 / 2.0F * zoom);
                      this.shader.screenX = screenX + AimingReticle.getXA(playerIndex) - width / 2;
                      this.shader.screenY = screenY + AimingReticle.getYA(playerIndex) - height / 2;
                      this.shader.setWidth(width);

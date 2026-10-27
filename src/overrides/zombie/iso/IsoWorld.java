@@ -74,6 +74,7 @@ import zombie.characters.animals.IsoAnimal;
 import zombie.characters.professions.CharacterProfessionDefinition;
 import zombie.characters.traits.CharacterTraitDefinition;
 import zombie.core.Core;
+import zombie.core.GameMode;
 import zombie.core.ImportantAreaManager;
 import zombie.core.PZForkJoinPool;
 import zombie.core.PerformanceSettings;
@@ -102,7 +103,6 @@ import zombie.debug.LineDrawer;
 import zombie.debug.LogSeverity;
 import zombie.entity.GameEntityManager;
 import zombie.entity.components.spriteconfig.SpriteConfigManager;
-import zombie.entity.util.TimSort;
 import zombie.erosion.ErosionGlobals;
 import zombie.gameStates.GameLoadingState;
 import zombie.gizmo.Gizmos;
@@ -264,6 +264,7 @@ import zombie.savefile.PlayerDBHelper;
 import zombie.savefile.ServerPlayerDB;
 import zombie.scripting.ScriptManager;
 import zombie.scripting.objects.CharacterTrait;
+import zombie.scripting.objects.ResourceLocation;
 import zombie.spriteModel.SpriteModelManager;
 import zombie.statistics.StatisticsManager;
 import zombie.text.templating.TemplateText;
@@ -273,7 +274,6 @@ import zombie.ui.TutorialManager;
 import zombie.util.AddCoopPlayer;
 import zombie.util.SharedStrings;
 import zombie.util.StringUtils;
-import zombie.util.list.PZArrayList;
 import zombie.vehicles.BaseVehicle;
 import zombie.vehicles.VehicleIDMap;
 import zombie.vehicles.VehicleManager;
@@ -296,6 +296,14 @@ public final class IsoWorld {
       pzopt.Overrides.onClassLoadedQuiet("zombie.iso.IsoWorld");
    }
 
+   public static final String TILE_DEF_FOLDER = "tile_definitions/";
+   public static final String TILE_DEFINITIONS_B42_CHUNK_CACHING = "tile_definitions/tiledefinitions_b42chunkcaching.tiles";
+   public static final String TILE_DEFINITIONS_EROSION = "tile_definitions/tiledefinitions_erosion.tiles";
+   public static final String TILE_DEFINITIONS_JUMBO = "tile_definitions/jumbo_trees.tiles";
+   public static final String TILE_DEFINITIONS_JUMBO_BIG = "tile_definitions/jumbo_trees_big.tiles";
+   public static final String TILE_DEFINITIONS_NEW = "tile_definitions/newtiledefinitions.tiles";
+   public static final String TILE_DEFINITIONS_NOISEWORKS_PATCH = "tile_definitions/tiledefinitions_noiseworks.patch.tiles";
+   public static final String TILE_DEFINITIONS_OVERLAYS = "tile_definitions/tiledefinitions_overlays.tiles";
    private static final int TILESETS_PER_FILE_1 = 1024;
    private static final int TILES_PER_TILESET_1 = 1024;
    private static final int TILES_PER_FILE_1 = 1048576;
@@ -358,7 +366,7 @@ public final class IsoWorld {
    private int luaPosY = -1;
    private int luaPosZ = -1;
    private String spawnRegionName = "";
-   public static final int WorldVersion = 249;
+   public static final int WorldVersion = 251;
    public static final int WorldVersion_PreviouslyMoved = 196;
    public static final int WorldVersion_DesignationZone = 197;
    public static final int WorldVersion_PlayerExtraInfoFlags = 198;
@@ -413,11 +421,12 @@ public final class IsoWorld {
    public static final int WorldVersion_AnimalOnlineId = 247;
    public static final int WorldVersion_BuildMaterials = 248;
    public static final int WorldVersion_ThermalDuration = 249;
+   public static final int WorldVersion_VehicleTowedByID = 250;
+   public static final int WorldVersion_AttemptedKeyDrop = 251;
    public static int savedWorldVersion = -1;
    private boolean drawWorld = true;
-   private final PZArrayList<IsoZombie> zombieWithModel = new PZArrayList(IsoZombie.class, 128);
-   private final PZArrayList<IsoZombie> zombieWithoutModel = new PZArrayList(IsoZombie.class, 128);
-   private final TimSort timSort = new TimSort();
+   private final List<IsoZombie> zombieWithModel = new ArrayList<>(128);
+   private final List<IsoZombie> zombieWithoutModel = new ArrayList<>(128);
    private final ArrayList<IsoAnimal> animalWithModel = new ArrayList<>();
    private final ArrayList<IsoAnimal> animalWithoutModel = new ArrayList<>();
    private final Vector2 coneTempo1 = new Vector2();
@@ -546,14 +555,17 @@ public final class IsoWorld {
    }
 
    public void setGameMode(String mode) {
+      this.setGameMode(GameMode.get(ResourceLocation.of(mode)));
+   }
+
+   public void setGameMode(GameMode mode) {
       Core.getInstance().setGameMode(mode);
-      Core.lastStand = "LastStand".equals(mode);
       Core.getInstance().setChallenge(false);
       Core.challengeId = null;
    }
 
-   public String getGameMode() {
-      return Core.gameMode;
+   public GameMode getGameMode() {
+      return Core.getInstance().getGameMode();
    }
 
    public void setPreset(String mode) {
@@ -1608,25 +1620,25 @@ public final class IsoWorld {
       try {
          this.tileImages.clear();
          ZomboidFileSystem zfs = ZomboidFileSystem.instance;
-         this.LoadTileDefinitionsPropertyStrings(pm, zfs.getMediaPath("newtiledefinitions.tiles"), 1);
-         this.LoadTileDefinitionsPropertyStrings(pm, zfs.getMediaPath("tiledefinitions_erosion.tiles"), 2);
-         this.LoadTileDefinitionsPropertyStrings(pm, zfs.getMediaPath("tiledefinitions_overlays.tiles"), 4);
-         this.LoadTileDefinitionsPropertyStrings(pm, zfs.getMediaPath("tiledefinitions_b42chunkcaching.tiles"), 5);
-         this.LoadTileDefinitionsPropertyStrings(pm, zfs.getMediaPath("tiledefinitions_noiseworks.patch.tiles"), -1);
-         this.LoadTileDefinitionsPropertyStrings(pm, zfs.getMediaPath("jumbo_trees_big.tiles"), 6);
-         this.LoadTileDefinitionsPropertyStrings(pm, zfs.getMediaPath("jumbo_trees.tiles"), 8);
+         this.LoadTileDefinitionsPropertyStrings(pm, zfs.getMediaPath("tile_definitions/newtiledefinitions.tiles"), 1);
+         this.LoadTileDefinitionsPropertyStrings(pm, zfs.getMediaPath("tile_definitions/tiledefinitions_erosion.tiles"), 2);
+         this.LoadTileDefinitionsPropertyStrings(pm, zfs.getMediaPath("tile_definitions/tiledefinitions_overlays.tiles"), 4);
+         this.LoadTileDefinitionsPropertyStrings(pm, zfs.getMediaPath("tile_definitions/tiledefinitions_b42chunkcaching.tiles"), 5);
+         this.LoadTileDefinitionsPropertyStrings(pm, zfs.getMediaPath("tile_definitions/tiledefinitions_noiseworks.patch.tiles"), -1);
+         this.LoadTileDefinitionsPropertyStrings(pm, zfs.getMediaPath("tile_definitions/jumbo_trees_big.tiles"), 6);
+         this.LoadTileDefinitionsPropertyStrings(pm, zfs.getMediaPath("tile_definitions/jumbo_trees.tiles"), 8);
          for (int i = 0; i < modTileFiles.size(); i++) {
             this.LoadTileDefinitionsPropertyStrings(pm, modTileFiles.get(i), modFileNumbers.get(i));
          }
          this.SetCustomPropertyValues();
          this.GenerateTilePropertyLookupTables();
-         this.LoadTileDefinitions(pm, zfs.getMediaPath("newtiledefinitions.tiles"), 1);
-         this.LoadTileDefinitions(pm, zfs.getMediaPath("tiledefinitions_erosion.tiles"), 2);
-         this.LoadTileDefinitions(pm, zfs.getMediaPath("tiledefinitions_overlays.tiles"), 4);
-         this.LoadTileDefinitions(pm, zfs.getMediaPath("tiledefinitions_b42chunkcaching.tiles"), 5);
-         this.LoadTileDefinitions(pm, zfs.getMediaPath("tiledefinitions_noiseworks.patch.tiles"), -1);
-         this.LoadTileDefinitions(pm, zfs.getMediaPath("jumbo_trees_big.tiles"), 6);
-         this.LoadTileDefinitions(pm, zfs.getMediaPath("jumbo_trees.tiles"), 8);
+         this.LoadTileDefinitions(pm, zfs.getMediaPath("tile_definitions/newtiledefinitions.tiles"), 1);
+         this.LoadTileDefinitions(pm, zfs.getMediaPath("tile_definitions/tiledefinitions_erosion.tiles"), 2);
+         this.LoadTileDefinitions(pm, zfs.getMediaPath("tile_definitions/tiledefinitions_overlays.tiles"), 4);
+         this.LoadTileDefinitions(pm, zfs.getMediaPath("tile_definitions/tiledefinitions_b42chunkcaching.tiles"), 5);
+         this.LoadTileDefinitions(pm, zfs.getMediaPath("tile_definitions/tiledefinitions_noiseworks.patch.tiles"), -1);
+         this.LoadTileDefinitions(pm, zfs.getMediaPath("tile_definitions/jumbo_trees_big.tiles"), 6);
+         this.LoadTileDefinitions(pm, zfs.getMediaPath("tile_definitions/jumbo_trees.tiles"), 8);
          this.registerFakeJumboTree(pm, 7);
          for (int i = 0; i < modTileFiles.size(); i++) {
             this.LoadTileDefinitions(pm, modTileFiles.get(i), modFileNumbers.get(i));
@@ -1747,6 +1759,7 @@ public final class IsoWorld {
    }
 
    public void init() throws FileNotFoundException, IOException, WorldDictionaryException {
+      boolean isClient = GameClient.client;
       if (!Core.tutorial) {
          this.randomizedBuildingList.add(new RBSafehouse());
          this.randomizedBuildingList.add(new RBBurnt());
@@ -1877,7 +1890,7 @@ public final class IsoWorld {
             if (!GameClient.client) {
                Core.gameMap = mapDir;
             }
-         } catch (FileNotFoundException var38) {
+         } catch (FileNotFoundException var39) {
          }
       }
 
@@ -1890,7 +1903,7 @@ public final class IsoWorld {
          ) {
             int worldVersion = input.readInt();
             ObjectIDManager.getInstance().load(input, worldVersion);
-         } catch (FileNotFoundException var30) {
+         } catch (FileNotFoundException var31) {
          }
       }
 
@@ -1909,7 +1922,7 @@ public final class IsoWorld {
                int worldVersion = SliceY.SliceBuffer.getInt();
                ImportantAreaManager.getInstance().load(SliceY.SliceBuffer, worldVersion);
             }
-         } catch (FileNotFoundException var25) {
+         } catch (FileNotFoundException var26) {
          }
       }
 
@@ -2004,23 +2017,23 @@ public final class IsoWorld {
       DebugType.General.println("LoadTileDefinitions start");
       ZomboidFileSystem zfs = ZomboidFileSystem.instance;
       if (!pzopt.TileDefPreload.install(spriteManager, this.tileImages)) { // pzopt: tileDefPreload, the sprites built at boot (stock below otherwise)
-      this.LoadTileDefinitionsPropertyStrings(spriteManager, zfs.getMediaPath("newtiledefinitions.tiles"), 1);
-      this.LoadTileDefinitionsPropertyStrings(spriteManager, zfs.getMediaPath("tiledefinitions_erosion.tiles"), 2);
-      this.LoadTileDefinitionsPropertyStrings(spriteManager, zfs.getMediaPath("tiledefinitions_overlays.tiles"), 4);
-      this.LoadTileDefinitionsPropertyStrings(spriteManager, zfs.getMediaPath("tiledefinitions_b42chunkcaching.tiles"), 5);
-      this.LoadTileDefinitionsPropertyStrings(spriteManager, zfs.getMediaPath("tiledefinitions_noiseworks.patch.tiles"), -1);
-      this.LoadTileDefinitionsPropertyStrings(spriteManager, zfs.getMediaPath("jumbo_trees_big.tiles"), 6);
-      this.LoadTileDefinitionsPropertyStrings(spriteManager, zfs.getMediaPath("jumbo_trees.tiles"), 8);
+      this.LoadTileDefinitionsPropertyStrings(spriteManager, zfs.getMediaPath("tile_definitions/newtiledefinitions.tiles"), 1);
+      this.LoadTileDefinitionsPropertyStrings(spriteManager, zfs.getMediaPath("tile_definitions/tiledefinitions_erosion.tiles"), 2);
+      this.LoadTileDefinitionsPropertyStrings(spriteManager, zfs.getMediaPath("tile_definitions/tiledefinitions_overlays.tiles"), 4);
+      this.LoadTileDefinitionsPropertyStrings(spriteManager, zfs.getMediaPath("tile_definitions/tiledefinitions_b42chunkcaching.tiles"), 5);
+      this.LoadTileDefinitionsPropertyStrings(spriteManager, zfs.getMediaPath("tile_definitions/tiledefinitions_noiseworks.patch.tiles"), -1);
+      this.LoadTileDefinitionsPropertyStrings(spriteManager, zfs.getMediaPath("tile_definitions/jumbo_trees_big.tiles"), 6);
+      this.LoadTileDefinitionsPropertyStrings(spriteManager, zfs.getMediaPath("tile_definitions/jumbo_trees.tiles"), 8);
       ZomboidFileSystem.instance.loadModTileDefPropertyStrings();
       this.SetCustomPropertyValues();
       this.GenerateTilePropertyLookupTables();
-      this.LoadTileDefinitions(spriteManager, zfs.getMediaPath("newtiledefinitions.tiles"), 1);
-      this.LoadTileDefinitions(spriteManager, zfs.getMediaPath("tiledefinitions_erosion.tiles"), 2);
-      this.LoadTileDefinitions(spriteManager, zfs.getMediaPath("tiledefinitions_overlays.tiles"), 4);
-      this.LoadTileDefinitions(spriteManager, zfs.getMediaPath("tiledefinitions_b42chunkcaching.tiles"), 5);
-      this.LoadTileDefinitions(spriteManager, zfs.getMediaPath("tiledefinitions_noiseworks.patch.tiles"), -1);
-      this.LoadTileDefinitions(spriteManager, zfs.getMediaPath("jumbo_trees_big.tiles"), 6);
-      this.LoadTileDefinitions(spriteManager, zfs.getMediaPath("jumbo_trees.tiles"), 8);
+      this.LoadTileDefinitions(spriteManager, zfs.getMediaPath("tile_definitions/newtiledefinitions.tiles"), 1);
+      this.LoadTileDefinitions(spriteManager, zfs.getMediaPath("tile_definitions/tiledefinitions_erosion.tiles"), 2);
+      this.LoadTileDefinitions(spriteManager, zfs.getMediaPath("tile_definitions/tiledefinitions_overlays.tiles"), 4);
+      this.LoadTileDefinitions(spriteManager, zfs.getMediaPath("tile_definitions/tiledefinitions_b42chunkcaching.tiles"), 5);
+      this.LoadTileDefinitions(spriteManager, zfs.getMediaPath("tile_definitions/tiledefinitions_noiseworks.patch.tiles"), -1);
+      this.LoadTileDefinitions(spriteManager, zfs.getMediaPath("tile_definitions/jumbo_trees_big.tiles"), 6);
+      this.LoadTileDefinitions(spriteManager, zfs.getMediaPath("tile_definitions/jumbo_trees.tiles"), 8);
       this.registerFakeJumboTree(spriteManager, 7);
       ZomboidFileSystem.instance.loadModTileDefs();
       } // pzopt: end of the stock tile definition load
@@ -2101,10 +2114,7 @@ public final class IsoWorld {
          ClimateManager.getInstance().init(this.metaGrid);
          SafeHouse.init();
          VirtualZombieManager.instance.init();
-         if (!GameClient.client) {
-            StashSystem.init();
-         }
-
+         StashSystem.init();
          Basements.getInstance().beforeOnLoadMapZones();
          pzopt.LoadTrace.step("OnLoadMapZones start");
          LuaEventManager.triggerEvent("OnLoadMapZones");
@@ -2276,182 +2286,72 @@ public final class IsoWorld {
          while (WorldStreamer.instance.isBusy() && !pzopt.CenterFirstLoad.nearLoaded()) { // pzopt: centerFirstLoad, enter once the chunks around the player are in
             try {
                Thread.sleep(pzoptPollMs);
-            } catch (InterruptedException var17) {
+            } catch (InterruptedException var18) {
             }
          }
 
          DebugType.General.println("WorldStreamer.isBusy() loop end");
-         ArrayList<IsoChunk> loaded = new ArrayList<>();
-         IsoChunk.loadGridSquare.copyTo(loaded);
+         if (!isClient || GameClient.client) {
+            ArrayList<IsoChunk> loaded = new ArrayList<>();
+            IsoChunk.loadGridSquare.copyTo(loaded);
 
-         for (IsoChunk chunk : loaded) {
-            this.currentCell.chunkMap[0].setChunkDirect(chunk, false);
-         }
-
-         this.currentCell.chunkMap[0].calculateZExtentsForChunkMap();
-         IsoChunk.doServerRequests = true;
-         if (bLoadCharacter && SystemDisabler.doPlayerCreation) {
-            this.currentCell.LoadPlayer(savedWorldVersion);
-            if (GameClient.client) {
-               IsoPlayer.getInstance().setUsername(GameClient.username);
+            for (IsoChunk chunk : loaded) {
+               this.currentCell.chunkMap[0].setChunkDirect(chunk, false);
             }
 
-            ZomboidRadio.getInstance().getRecordedMedia().handleLegacyListenedLines(IsoPlayer.getInstance());
-         } else if (GameClient.client) {
-            ZomboidRadio.getInstance().getRecordedMedia().handleLegacyListenedLines(null);
-            LuaManager.thread.debugOwnerThread = GameWindow.gameThread;
-            LuaManager.debugthread.debugOwnerThread = GameWindow.gameThread;
-            GameClient.sendCreatePlayer((byte)0);
-            DebugType.General.println("Waiting for the server to send player data");
-            long currentTime = System.currentTimeMillis();
-            boolean playerLoaded = false;
-
-            while (true) {
-               try {
-                  if (IsoPlayer.players[0] != null) {
-                     playerLoaded = true;
-                  }
-
-                  if (System.currentTimeMillis() - currentTime > 30000L || playerLoaded) {
-                     break;
-                  }
-
-                  Thread.sleep(100L);
-               } catch (InterruptedException var33) {
-               }
-            }
-
-            LuaManager.thread.debugOwnerThread = GameLoadingState.loader;
-            LuaManager.debugthread.debugOwnerThread = GameLoadingState.loader;
-            if (!playerLoaded) {
-               throw new RuntimeException("Timed out waiting for the server to send player data");
-            }
-
-            DebugType.General.println("Player data received from the server");
-            IsoPlayer playerObj = IsoPlayer.players[0];
-            IsoChunkMap.worldXa = playerObj.getXi();
-            IsoChunkMap.worldYa = playerObj.getYi();
-            IsoChunkMap.worldZa = playerObj.getZi();
-            IsoGridSquare sq = this.currentCell.getGridSquare(IsoChunkMap.worldXa, IsoChunkMap.worldYa, IsoChunkMap.worldZa);
-            if (sq != null && sq.getRoom() != null) {
-               if (SandboxOptions.instance.lore.playerSpawnZombieRemoval.getValue() < 4) {
-                  sq.getRoom().def.setExplored(true);
-               } else if (SandboxOptions.instance.lore.playerSpawnZombieRemoval.getValue() < 3) {
-                  sq.getRoom().building.setAllExplored(true, sq.getRoom());
-                  this.setBasementAllExplored(sq.getRoom().building);
+            this.currentCell.chunkMap[0].calculateZExtentsForChunkMap();
+            IsoChunk.doServerRequests = true;
+            if (bLoadCharacter && SystemDisabler.doPlayerCreation) {
+               this.currentCell.LoadPlayer(savedWorldVersion);
+               if (GameClient.client) {
+                  IsoPlayer.getInstance().setUsername(GameClient.username);
                }
 
-               if (!GameServer.server && !GameClient.client) {
-                  ZombiePopulationManager.instance.playerSpawnedAt(sq.getX(), sq.getY(), sq.getZ());
-               }
-            }
+               ZomboidRadio.getInstance().getRecordedMedia().handleLegacyListenedLines(IsoPlayer.getInstance());
+            } else if (GameClient.client) {
+               ZomboidRadio.getInstance().getRecordedMedia().handleLegacyListenedLines(null);
+               LuaManager.thread.debugOwnerThread = GameWindow.gameThread;
+               LuaManager.debugthread.debugOwnerThread = GameWindow.gameThread;
+               GameClient.sendCreatePlayer((byte)0);
+               DebugType.General.println("Waiting for the server to send player data");
+               long currentTime = System.currentTimeMillis();
+               boolean playerLoaded = false;
 
-            if (!GameClient.client) {
-               Core.getInstance().initPoisonousBerry();
-               Core.getInstance().initPoisonousMushroom();
-            }
-
-            LuaEventManager.triggerEvent("OnNewGame", playerObj, sq);
-         } else {
-            ZomboidRadio.getInstance().getRecordedMedia().handleLegacyListenedLines(null);
-            if (IsoPlayer.numPlayers == 0) {
-               IsoPlayer.numPlayers = 1;
-            }
-
-            int xa = IsoChunkMap.worldXa;
-            int ya = IsoChunkMap.worldYa;
-            int za = IsoChunkMap.worldZa;
-            if (GameClient.client && !ServerOptions.instance.spawnPoint.getValue().isEmpty()) {
-               String[] spawnPoint = ServerOptions.instance.spawnPoint.getValue().split(",");
-               if (spawnPoint.length != 3) {
-                  DebugType.Moveable.println("ERROR: SpawnPoint must be x,y,z, got \"" + ServerOptions.instance.spawnPoint.getValue() + "\"");
-               } else {
+               while (true) {
                   try {
-                     int yAb = Integer.parseInt(spawnPoint[1].trim());
-                     int xAb = Integer.parseInt(spawnPoint[0].trim());
-                     int zAb = Integer.parseInt(spawnPoint[2].trim());
-                     if (GameClient.client && ServerOptions.instance.safehouseAllowRespawn.getValue()) {
-                        for (int i = 0; i < SafeHouse.getSafehouseList().size(); i++) {
-                           SafeHouse safe = (SafeHouse)SafeHouse.getSafehouseList().get(i);
-                           if (safe.getPlayers().contains(GameClient.username) && safe.isRespawnInSafehouse(GameClient.username)) {
-                              xAb = safe.getX() + safe.getH() / 2;
-                              yAb = safe.getY() + safe.getW() / 2;
-                              zAb = 0;
-                           }
-                        }
+                     if (IsoPlayer.players[0] != null) {
+                        playerLoaded = true;
                      }
 
-                     if (this.currentCell.getGridSquare(xAb, yAb, zAb) != null) {
-                        xa = xAb;
-                        ya = yAb;
-                        za = zAb;
+                     if (System.currentTimeMillis() - currentTime > 30000L || playerLoaded) {
+                        break;
                      }
-                  } catch (NumberFormatException ex) {
-                     DebugType.Moveable.println("ERROR: SpawnPoint must be x,y,z, got \"" + ServerOptions.instance.spawnPoint.getValue() + "\"");
-                  }
-               }
-            }
 
-            IsoGridSquare sq = this.currentCell.getGridSquare(xa, ya, za);
-            if (SystemDisabler.doPlayerCreation && !GameServer.server) {
-               if (sq != null && sq.isFree(false) && sq.getRoom() != null) {
-                  IsoGridSquare last = sq;
-                  sq = sq.getRoom().getFreeTile();
-                  if (sq == null) {
-                     sq = last;
+                     Thread.sleep(100L);
+                  } catch (InterruptedException var34) {
                   }
                }
 
-               IsoPlayer player = null;
-               if (this.getLuaPlayerDesc() != null) {
-                  if (GameClient.client && ServerOptions.instance.safehouseAllowRespawn.getValue()) {
-                     sq = this.currentCell.getGridSquare(IsoChunkMap.worldXa, IsoChunkMap.worldYa, IsoChunkMap.worldZa);
-                     if (sq != null && sq.isFree(false) && sq.getRoom() != null) {
-                        IsoGridSquare last = sq;
-                        sq = sq.getRoom().getFreeTile();
-                        if (sq == null) {
-                           sq = last;
-                        }
-                     }
-                  }
-
-                  if (sq == null) {
-                     throw new RuntimeException("can't create player at x,y,z=" + xa + "," + ya + "," + za + " because the square is null");
-                  }
-
-                  WorldSimulation.instance.create();
-                  player = new IsoPlayer(instance.currentCell, this.getLuaPlayerDesc(), sq.getX(), sq.getY(), sq.getZ());
-                  if (GameClient.client) {
-                     player.setUsername(GameClient.username);
-                  }
-
-                  player.setDir(IsoDirections.SE);
-                  player.sqlId = 1;
-                  IsoPlayer.players[0] = player;
-                  IsoPlayer.setInstance(player);
-                  IsoCamera.setCameraCharacter(player);
+               LuaManager.thread.debugOwnerThread = GameLoadingState.loader;
+               LuaManager.debugthread.debugOwnerThread = GameLoadingState.loader;
+               if (!playerLoaded) {
+                  throw new RuntimeException("Timed out waiting for the server to send player data");
                }
 
-               IsoPlayer playerObj = IsoPlayer.getInstance();
-               playerObj.applyTraits(this.getLuaTraits());
-               CharacterProfessionDefinition characterProfessionDefinition = CharacterProfessionDefinition.getCharacterProfessionDefinition(
-                  playerObj.getDescriptor().getCharacterProfession()
-               );
-               if (characterProfessionDefinition.hasGrantedRecipes()) {
-                  playerObj.getKnownRecipes().addAll(characterProfessionDefinition.getGrantedRecipes());
-               }
-
-               for (CharacterTrait characterTrait : this.getLuaTraits()) {
-                  CharacterTraitDefinition characterTraitDefinition = CharacterTraitDefinition.getCharacterTraitDefinition(characterTrait);
-                  if (characterTraitDefinition.hasGrantedRecipes()) {
-                     playerObj.getKnownRecipes().addAll(characterTraitDefinition.getGrantedRecipes());
-                  }
-               }
-
+               DebugType.General.println("Player data received from the server");
+               IsoPlayer playerObj = IsoPlayer.players[0];
+               IsoChunkMap.worldXa = playerObj.getXi();
+               IsoChunkMap.worldYa = playerObj.getYi();
+               IsoChunkMap.worldZa = playerObj.getZi();
+               IsoGridSquare sq = this.currentCell.getGridSquare(IsoChunkMap.worldXa, IsoChunkMap.worldYa, IsoChunkMap.worldZa);
                if (sq != null && sq.getRoom() != null) {
-                  sq.getRoom().def.setExplored(true);
-                  sq.getRoom().building.setAllExplored(true);
-                  this.setBasementAllExplored(sq.getRoom().getBuilding());
+                  if (SandboxOptions.instance.lore.playerSpawnZombieRemoval.getValue() < 4) {
+                     sq.getRoom().def.setExplored(true);
+                  } else if (SandboxOptions.instance.lore.playerSpawnZombieRemoval.getValue() < 3) {
+                     sq.getRoom().building.setAllExplored(true, sq.getRoom());
+                     this.setBasementAllExplored(sq.getRoom().building);
+                  }
+
                   if (!GameServer.server && !GameClient.client) {
                      ZombiePopulationManager.instance.playerSpawnedAt(sq.getX(), sq.getY(), sq.getZ());
                   }
@@ -2462,56 +2362,168 @@ public final class IsoWorld {
                   Core.getInstance().initPoisonousMushroom();
                }
 
-               LuaEventManager.triggerEvent("OnNewGame", player, sq);
-            }
-         }
+               LuaEventManager.triggerEvent("OnNewGame", playerObj, sq);
+            } else {
+               ZomboidRadio.getInstance().getRecordedMedia().handleLegacyListenedLines(null);
+               if (IsoPlayer.numPlayers == 0) {
+                  IsoPlayer.numPlayers = 1;
+               }
 
-         if (PlayerDB.isAllow()) {
-            PlayerDB.getInstance().canSavePlayers = true;
-         }
+               int xa = IsoChunkMap.worldXa;
+               int ya = IsoChunkMap.worldYa;
+               int za = IsoChunkMap.worldZa;
+               if (GameClient.client && !ServerOptions.instance.spawnPoint.getValue().isEmpty()) {
+                  String[] spawnPoint = ServerOptions.instance.spawnPoint.getValue().split(",");
+                  if (spawnPoint.length != 3) {
+                     DebugType.Moveable.println("ERROR: SpawnPoint must be x,y,z, got \"" + ServerOptions.instance.spawnPoint.getValue() + "\"");
+                  } else {
+                     try {
+                        int yAb = Integer.parseInt(spawnPoint[1].trim());
+                        int xAb = Integer.parseInt(spawnPoint[0].trim());
+                        int zAb = Integer.parseInt(spawnPoint[2].trim());
+                        if (GameClient.client && ServerOptions.instance.safehouseAllowRespawn.getValue()) {
+                           for (int i = 0; i < SafeHouse.getSafehouseList().size(); i++) {
+                              SafeHouse safe = (SafeHouse)SafeHouse.getSafehouseList().get(i);
+                              if (safe.getPlayers().contains(GameClient.username) && safe.isRespawnInSafehouse(GameClient.username)) {
+                                 xAb = safe.getX() + safe.getH() / 2;
+                                 yAb = safe.getY() + safe.getW() / 2;
+                                 zAb = 0;
+                              }
+                           }
+                        }
 
-         TutorialManager.instance.activeControlZombies = false;
-         ReanimatedPlayers.instance.loadReanimatedPlayers();
-         if (IsoPlayer.getInstance() != null) {
-            if (GameClient.client) {
-               int pzoptX = PZMath.fastfloor(IsoPlayer.getInstance().getX()); // pzopt: Vineflower reused the boolean slots here (regen fix)
-               int pzoptY = PZMath.fastfloor(IsoPlayer.getInstance().getY());
-               int z = PZMath.fastfloor(IsoPlayer.getInstance().getZ());
+                        if (this.currentCell.getGridSquare(xAb, yAb, zAb) != null) {
+                           xa = xAb;
+                           ya = yAb;
+                           za = zAb;
+                        }
+                     } catch (NumberFormatException ex) {
+                        DebugType.Moveable.println("ERROR: SpawnPoint must be x,y,z, got \"" + ServerOptions.instance.spawnPoint.getValue() + "\"");
+                     }
+                  }
+               }
 
-               while (z > 0) {
-                  IsoGridSquare sq = this.currentCell.getGridSquare(pzoptX, pzoptY, PZMath.fastfloor(z));
-                  if (sq != null && sq.TreatAsSolidFloor()) {
-                     break;
+               IsoGridSquare sq = this.currentCell.getGridSquare(xa, ya, za);
+               if (SystemDisabler.doPlayerCreation && !GameServer.server) {
+                  if (sq != null && sq.isFree(false) && sq.getRoom() != null) {
+                     IsoGridSquare last = sq;
+                     sq = sq.getRoom().getFreeTile();
+                     if (sq == null) {
+                        sq = last;
+                     }
                   }
 
-                  IsoPlayer.getInstance().setZ(--z);
+                  IsoPlayer player = null;
+                  if (this.getLuaPlayerDesc() != null) {
+                     if (GameClient.client && ServerOptions.instance.safehouseAllowRespawn.getValue()) {
+                        sq = this.currentCell.getGridSquare(IsoChunkMap.worldXa, IsoChunkMap.worldYa, IsoChunkMap.worldZa);
+                        if (sq != null && sq.isFree(false) && sq.getRoom() != null) {
+                           IsoGridSquare last = sq;
+                           sq = sq.getRoom().getFreeTile();
+                           if (sq == null) {
+                              sq = last;
+                           }
+                        }
+                     }
+
+                     if (sq == null) {
+                        throw new RuntimeException("can't create player at x,y,z=" + xa + "," + ya + "," + za + " because the square is null");
+                     }
+
+                     WorldSimulation.instance.create();
+                     player = new IsoPlayer(instance.currentCell, this.getLuaPlayerDesc(), sq.getX(), sq.getY(), sq.getZ());
+                     if (GameClient.client) {
+                        player.setUsername(GameClient.username);
+                     }
+
+                     player.setDir(IsoDirections.SE);
+                     player.sqlId = 1;
+                     IsoPlayer.players[0] = player;
+                     IsoPlayer.setInstance(player);
+                     IsoCamera.setCameraCharacter(player);
+                  }
+
+                  IsoPlayer playerObj = IsoPlayer.getInstance();
+                  playerObj.applyTraits(this.getLuaTraits());
+                  CharacterProfessionDefinition characterProfessionDefinition = CharacterProfessionDefinition.getCharacterProfessionDefinition(
+                     playerObj.getDescriptor().getCharacterProfession()
+                  );
+                  if (characterProfessionDefinition.hasGrantedRecipes()) {
+                     playerObj.getKnownRecipes().addAll(characterProfessionDefinition.getGrantedRecipes());
+                  }
+
+                  for (CharacterTrait characterTrait : this.getLuaTraits()) {
+                     CharacterTraitDefinition characterTraitDefinition = CharacterTraitDefinition.getCharacterTraitDefinition(characterTrait);
+                     if (characterTraitDefinition.hasGrantedRecipes()) {
+                        playerObj.getKnownRecipes().addAll(characterTraitDefinition.getGrantedRecipes());
+                     }
+                  }
+
+                  if (sq != null && sq.getRoom() != null) {
+                     sq.getRoom().def.setExplored(true);
+                     sq.getRoom().building.setAllExplored(true);
+                     this.setBasementAllExplored(sq.getRoom().getBuilding());
+                     if (!GameServer.server && !GameClient.client) {
+                        ZombiePopulationManager.instance.playerSpawnedAt(sq.getX(), sq.getY(), sq.getZ());
+                     }
+                  }
+
+                  if (!GameClient.client) {
+                     Core.getInstance().initPoisonousBerry();
+                     Core.getInstance().initPoisonousMushroom();
+                  }
+
+                  LuaEventManager.triggerEvent("OnNewGame", player, sq);
                }
             }
 
-            ScriptManager.instance.checkAutoLearn(IsoPlayer.getInstance());
-            ScriptManager.instance.checkMetaRecipes(IsoPlayer.getInstance());
-            ScriptManager.instance.VerifyAllCraftRecipesAreLearnable();
-            IsoPlayer.getInstance().setCurrentSquareFromPosition();
-         }
+            if (PlayerDB.isAllow()) {
+               PlayerDB.getInstance().canSavePlayers = true;
+            }
 
-         this.PopulateCellWithSurvivors();
-         if (IsoPlayer.players[0] != null && !this.currentCell.getObjectList().contains(IsoPlayer.players[0])) {
-            this.currentCell.getObjectList().add(IsoPlayer.players[0]);
-         }
+            TutorialManager.instance.activeControlZombies = false;
+            ReanimatedPlayers.instance.loadReanimatedPlayers();
+            if (IsoPlayer.getInstance() != null) {
+               if (GameClient.client) {
+                  int pzoptX = PZMath.fastfloor(IsoPlayer.getInstance().getX()); // pzopt: Vineflower reused the boolean slots here (regen fix)
+                  int pzoptY = PZMath.fastfloor(IsoPlayer.getInstance().getY());
+                  int z = PZMath.fastfloor(IsoPlayer.getInstance().getZ());
 
-         LightingThread.instance.create();
-         DebugType.General.println("MetaTracker.load() start");
-         MetaTracker.load();
-         DebugType.General.println("MetaTracker.load() end");
-         StatisticsManager.getInstance().load();
-         GameLoadingState.gameLoadingString = "";
-         AnimationPlayerRecorder.initMessaging();
-         WorldDictionary.onWorldLoaded();
-         this.currentCell.initWeatherFx();
-         if (ScriptManager.instance.hasLoadErrors(!Core.debug) || SpriteConfigManager.HasLoadErrors()) {
-            DebugType.Moveable
-               .println("script error = " + ScriptManager.instance.hasLoadErrors(!Core.debug) + ", sprite error = " + SpriteConfigManager.HasLoadErrors());
-            throw new WorldDictionaryException("World loading could not proceed, there are script load errors. (Actual error may be printed earlier in log)");
+                  while (z > 0) {
+                     IsoGridSquare sq = this.currentCell.getGridSquare(pzoptX, pzoptY, PZMath.fastfloor(z));
+                     if (sq != null && sq.TreatAsSolidFloor()) {
+                        break;
+                     }
+
+                     IsoPlayer.getInstance().setZ(--z);
+                  }
+               }
+
+               ScriptManager.instance.checkAutoLearn(IsoPlayer.getInstance());
+               ScriptManager.instance.checkMetaRecipes(IsoPlayer.getInstance());
+               ScriptManager.instance.VerifyAllCraftRecipesAreLearnable();
+               IsoPlayer.getInstance().setCurrentSquareFromPosition();
+            }
+
+            this.PopulateCellWithSurvivors();
+            if (IsoPlayer.players[0] != null && !this.currentCell.getObjectList().contains(IsoPlayer.players[0])) {
+               this.currentCell.getObjectList().add(IsoPlayer.players[0]);
+            }
+
+            LightingThread.instance.create();
+            DebugType.General.println("MetaTracker.load() start");
+            MetaTracker.load();
+            DebugType.General.println("MetaTracker.load() end");
+            StatisticsManager.getInstance().load();
+            GameLoadingState.gameLoadingString = "";
+            AnimationPlayerRecorder.initMessaging();
+            WorldDictionary.onWorldLoaded();
+            this.currentCell.initWeatherFx();
+            if (ScriptManager.instance.hasLoadErrors(!Core.debug) || SpriteConfigManager.HasLoadErrors()) {
+               DebugType.Moveable
+                  .println("script error = " + ScriptManager.instance.hasLoadErrors(!Core.debug) + ", sprite error = " + SpriteConfigManager.HasLoadErrors());
+               throw new WorldDictionaryException("World loading could not proceed, there are script load errors. (Actual error may be printed earlier in log)");
+            }
          }
       }
    }
@@ -2660,7 +2672,7 @@ public final class IsoWorld {
       if (pzopt.Overrides.enabled() && pzopt.Config.ZOMBIE_CULL_SORT_FAST) {
          this.pzoptSortZombiesByScore(); // pzopt: one score per zombie and a primitive sort, the same order as the stable sort below
       } else {
-         this.timSort.doSort(this.zombieWithModel.getElements(), compScoreToPlayer, 0, this.zombieWithModel.size());
+         this.zombieWithModel.sort(compScoreToPlayer);
       }
 
       int c = 0;
@@ -2692,7 +2704,7 @@ public final class IsoWorld {
       long pzoptAddT0 = 0L; // pzopt
 
       for (int n = 0; n < this.zombieWithModel.size(); n++) {
-         IsoZombie z = (IsoZombie)this.zombieWithModel.get(n);
+         IsoZombie z = this.zombieWithModel.get(n);
          if (tcount < 510 && (tcount < tcountMax || pzoptLodKeep > 0 && tcount < tcountMax + pzoptLodKeep && pzopt.ZombieLod.drawnIn3d(z))) { // pzopt: zombieLodDynamic's cap (510 without it); zombieLodHysteresis, a zombie drawn in 3D keeps its model within that many places past the cap
             if (pzoptAddBudget && !z.ghost && !z.hasActiveModel()) { // pzopt: zombieModelAddBudgetUs, a zombie that would get its model now
                if (pzoptAdds > 0 && System.nanoTime() - pzoptAddT0 > (pzopt.Pacing.heavyStep() ? Math.min(pzopt.Config.ZOMBIE_MODEL_ADD_BUDGET_US, pzopt.Config.ZOMBIE_MODEL_ADD_BURST_US) : pzopt.Config.ZOMBIE_MODEL_ADD_BUDGET_US) * 1000L // pzopt: past the frame's budget (burstGovernor: a heavy step's smaller one)
@@ -2757,7 +2769,7 @@ public final class IsoWorld {
       }
 
       for (int n = 0; n < this.zombieWithoutModel.size(); n++) {
-         IsoZombie z = (IsoZombie)this.zombieWithoutModel.get(n);
+         IsoZombie z = this.zombieWithoutModel.get(n);
          if (z.hasActiveModel()) {
             z.setSceneCulled(true);
          }
@@ -3167,8 +3179,8 @@ public final class IsoWorld {
                }
 
                Texture t = Texture.getSharedTexture("media/ui/isocursor.png");
-               int width = (int)(t.getWidth() * Core.tileScale / 2.0F);
-               int height = (int)(t.getHeight() * Core.tileScale / 2.0F);
+               int width = (int)(t.getWidth() * 2 / 2.0F);
+               int height = (int)(t.getHeight() * 2 / 2.0F);
                SpriteRenderer.instance.setDoAdditive(true);
                SpriteRenderer.instance.renderi(t, Mouse.getX() - width / 2, Mouse.getY() - height / 2, width, height, alpha, alpha, alpha, alpha, null);
                SpriteRenderer.instance.setDoAdditive(false);
@@ -3686,7 +3698,7 @@ public final class IsoWorld {
    }
 
    public static int getWorldVersion() {
-      return 249;
+      return 251;
    }
 
    public HashMap<String, ArrayList<UUID>> getSpawnedZombieZone() {
@@ -3827,21 +3839,24 @@ public final class IsoWorld {
          this.pzoptCullTemp = new IsoZombie[this.pzoptCullKeys.length];
       }
 
-      IsoZombie[] elements = this.zombieWithModel.getElements();
+      List<IsoZombie> elements = this.zombieWithModel; // pzopt: a List since 42.22 (a PZArrayList before)
       long[] keys = this.pzoptCullKeys;
 
       for (int i = 0; i < n; i++) {
-         keys[i] = pzopt.SortKeys.descending(compScoreToPlayer.getScore(elements[i]), i);
+         keys[i] = pzopt.SortKeys.descending(compScoreToPlayer.getScore(elements.get(i)), i);
       }
 
       Arrays.sort(keys, 0, n);
       IsoZombie[] temp = this.pzoptCullTemp;
 
       for (int i = 0; i < n; i++) {
-         temp[i] = elements[pzopt.SortKeys.index(keys[i])];
+         temp[i] = elements.get(pzopt.SortKeys.index(keys[i]));
       }
 
-      System.arraycopy(temp, 0, elements, 0, n);
+      for (int i = 0; i < n; i++) {
+         elements.set(i, temp[i]);
+      }
+
       Arrays.fill(temp, 0, n, null);
    }
 

@@ -298,7 +298,7 @@ public final class PlayerCamera {
       screenY = pzopt.DriveCamera.isoScreen(screenY); // pzopt: driveLookSmooth / cameraScreenPixels
       float px = screenX + this.getOffX();
       float py = screenY + this.getOffY();
-      float tx = (px + 2.0F * py) / (64.0F * Core.tileScale);
+      float tx = (px + 2.0F * py) / 128.0F;
       return tx + 3.0F * floor;
    }
 
@@ -307,7 +307,7 @@ public final class PlayerCamera {
       screenY = pzopt.DriveCamera.isoScreen(screenY); // pzopt: driveLookSmooth / cameraScreenPixels
       float px = screenX + this.getOffX();
       float py = screenY + this.getOffY();
-      float ty = (px - 2.0F * py) / (-64.0F * Core.tileScale);
+      float ty = (px - 2.0F * py) / -128.0F;
       return ty + 3.0F * floor;
    }
 
@@ -380,7 +380,7 @@ public final class PlayerCamera {
       this.projection
          .setOrtho(-((float)screenWidth) / 2.0F, (float)screenWidth / 2.0F, -((float)screenHeight) / 2.0F, (float)screenHeight / 2.0F, -10.0F, 10.0F);
       this.modelview.scaling(Core.scale);
-      this.modelview.scale(Core.tileScale / 2.0F);
+      this.modelview.scale(1.0F);
       this.modelview.rotate((float) (Math.PI / 6), 1.0F, 0.0F, 0.0F);
       this.modelview.rotate((float) (Math.PI * 3.0 / 4.0), 0.0F, 1.0F, 0.0F);
       double difX = ox - x;
@@ -413,8 +413,8 @@ public final class PlayerCamera {
          this.fixJigglyModelsY = y2 - y1;
          float jx = this.fixJigglyModelsX * this.zoom;
          float jy = this.fixJigglyModelsY * this.zoom;
-         this.fixJigglyModelsSquareX = (jx + 2.0F * jy) / (64.0F * Core.tileScale);
-         this.fixJigglyModelsSquareY = (jx - 2.0F * jy) / (-64.0F * Core.tileScale);
+         this.fixJigglyModelsSquareX = (jx + 2.0F * jy) / 128.0F;
+         this.fixJigglyModelsSquareY = (jx - 2.0F * jy) / -128.0F;
       }
    }
 

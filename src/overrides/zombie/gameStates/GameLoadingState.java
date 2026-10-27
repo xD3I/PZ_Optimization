@@ -22,6 +22,7 @@ import zombie.characters.ecs.ECSEntity;
 import zombie.chat.ChatManager;
 import zombie.chat.ChatUtility;
 import zombie.core.Core;
+import zombie.core.GameMode;
 import zombie.core.PerformanceSettings;
 import zombie.core.SpriteRenderer;
 import zombie.core.ThreadGroups;
@@ -228,7 +229,7 @@ public final class GameLoadingState extends GameState {
       GameWindow.serverDisconnected = false;
       if (GameClient.client && !GameClient.instance.connected) {
          GameClient.instance.init();
-         Core.getInstance().setGameMode("Multiplayer");
+         Core.getInstance().setGameMode(GameMode.MULTIPLAYER);
 
          for (; GameClient.instance.id == -1; GameClient.instance.update()) {
             try {
@@ -275,7 +276,7 @@ public final class GameLoadingState extends GameState {
       }
 
       try {
-         if (!GameClient.client && !GameServer.server && !Core.tutorial && !Core.isLastStand() && !"Multiplayer".equals(Core.gameMode)) {
+         if (!GameClient.client && !GameServer.server && !Core.tutorial && GameMode.MULTIPLAYER != Core.getInstance().getGameMode()) {
             FileWriter fw = new FileWriter(new File(ZomboidFileSystem.instance.getCacheDir() + File.separator + "latestSave.ini"));
             fw.write(IsoWorld.instance.getWorld() + "\r\n");
             fw.write(Core.getInstance().getGameMode() + "\r\n");
@@ -343,12 +344,13 @@ public final class GameLoadingState extends GameState {
          }
 
          private void runInner() throws Exception {
+            boolean isClient = GameClient.client;
             GameLoadingState.this.waitForAssetLoadingToFinish1 = true;
             synchronized (GameLoadingState.this.assetLock1) {
                while (GameLoadingState.this.waitForAssetLoadingToFinish1) {
                   try {
                      GameLoadingState.this.assetLock1.wait();
-                  } catch (InterruptedException var9) {
+                  } catch (InterruptedException var10) {
                   }
                }
             }
@@ -368,86 +370,89 @@ public final class GameLoadingState extends GameState {
             DebugOptions.testThreadCrash(0);
             IsoWorld.instance.init();
             pzopt.HotsaveWarmup.run(); // pzopt: hotsaveWarmup, the first hot save runs compiled serialisers
-            if (GameWindow.serverDisconnected) {
-               GameLoadingState.done = true;
-            } else if (!GameLoadingState.playerWrongIP) {
-               if (!GameLoadingState.worldVersionError) {
-                  DebugType.General.println("triggerEvent OnGameTimeLoaded");
-                  LuaEventManager.triggerEvent("OnGameTimeLoaded");
-                  DebugType.General.println("GlobalObjects.initSystems() start");
-                  SGlobalObjects.initSystems();
-                  CGlobalObjects.initSystems();
-                  DebugType.General.println("GlobalObjects.initSystems() end");
-                  IsoObjectPicker.Instance.Init();
-                  TutorialManager.instance.init();
-                  TutorialManager.instance.CreateQuests();
-                  File inFilex = ZomboidFileSystem.instance.getFileInCurrentSave("map_t.bin");
-                  if (inFilex.exists()) {
-                  }
+            if (!isClient || GameClient.client) {
+               if (GameWindow.serverDisconnected) {
+                  GameLoadingState.done = true;
+               } else if (!GameLoadingState.playerWrongIP) {
+                  if (!GameLoadingState.worldVersionError) {
+                     DebugType.General.println("triggerEvent OnGameTimeLoaded");
+                     LuaEventManager.triggerEvent("OnGameTimeLoaded");
+                     DebugType.General.println("GlobalObjects.initSystems() start");
+                     SGlobalObjects.initSystems();
+                     CGlobalObjects.initSystems();
+                     DebugType.General.println("GlobalObjects.initSystems() end");
+                     IsoObjectPicker.Instance.Init();
+                     TutorialManager.instance.init();
+                     TutorialManager.instance.CreateQuests();
+                     File inFilex = ZomboidFileSystem.instance.getFileInCurrentSave("map_t.bin");
+                     if (inFilex.exists()) {
+                     }
 
-                  if (!GameServer.server) {
-                     inFilex = ZomboidFileSystem.instance.getFileInCurrentSave("map_ver.bin");
-                     boolean newGame = !inFilex.exists();
-                     if (newGame || IsoWorld.savedWorldVersion != 249) {
-                        if (!newGame) {
-                           GameLoadingState.gameLoadingString = "Saving converted world.";
-                        }
+                     if (!GameServer.server) {
+                        inFilex = ZomboidFileSystem.instance.getFileInCurrentSave("map_ver.bin");
+                        boolean newGame = !inFilex.exists();
+                        if (newGame || IsoWorld.savedWorldVersion != 251) {
+                           if (!newGame) {
+                              GameLoadingState.gameLoadingString = "Saving converted world.";
+                           }
 
-                        try {
-                           DebugType.General.println("GameWindow.save() start");
-                           GameWindow.save(true);
-                           DebugType.General.println("GameWindow.save() end");
-                        } catch (Throwable t) {
-                           ExceptionLogger.logException(t);
+                           try {
+                              DebugType.General.println("GameWindow.save() start");
+                              GameWindow.save(true);
+                              DebugType.General.println("GameWindow.save() end");
+                           } catch (Throwable t) {
+                              ExceptionLogger.logException(t);
+                           }
                         }
                      }
-                  }
 
-                  // pzopt: with centerFirstLoad the main thread already loads chunks, and registers their textures in the
-                  // shared texture table (an unsynchronised HashMap), while this thread finishes; the steps that read or
-                  // write that table run on the main thread (pzoptOnMain; a ConcurrentModificationException stopped 2 of 3
-                  // Dell loads on the error screen)
-                  GameLoadingState.this.pzoptOnMain(GameLoadingState::pzoptInitChatIcons); // pzopt: on the main thread and retried: other threads still register textures (2026-09-23, a Dell load stopped on the error with the hand-off alone)
-                  ChatManager.getInstance().init(true, IsoPlayer.getInstance());
-                  Bullet.startLoadingPhysicsMeshes();
-                  GameLoadingState.this.pzoptOnMain(() -> { // pzopt: the shared texture table, see above
-                     Texture.getSharedTexture("media/textures/NewShadow.png");
-                     Texture.getSharedTexture("media/wallcutaways.png", 3);
-                     Texture.getSharedTexture("media/windowframe_cutaways.png", 3);
-                     Texture.getSharedTexture("media/windowframe_cutaways_2.png", 3);
-                     Texture.getSharedTexture("media/windowframe_cutaways_3.png", 3);
-                  }); // pzopt
-                  DebugType.General.println("bWaitForAssetLoadingToFinish2 start");
-                  GameLoadingState.this.waitForAssetLoadingToFinish2 = true;
-                  java.util.concurrent.ExecutorService pzoptPool = GameWindow.fileSystem instanceof zombie.fileSystem.FileSystemImpl pzoptFs
-                     ? pzoptFs.pzoptExecutor() : null; // pzopt
-                  pzopt.BootPump.onAssetWait(pzoptPool, true); // pzopt: every core decodes while nothing else runs
-                  synchronized (GameLoadingState.this.assetLock2) {
-                     while (GameLoadingState.this.waitForAssetLoadingToFinish2) {
-                        try {
-                           GameLoadingState.this.assetLock2.wait();
-                        } catch (InterruptedException var7) {
+
+                     // pzopt: with centerFirstLoad the main thread already loads chunks, and registers their textures in the
+                     // shared texture table (an unsynchronised HashMap), while this thread finishes; the steps that read or
+                     // write that table run on the main thread (pzoptOnMain; a ConcurrentModificationException stopped 2 of 3
+                     // Dell loads on the error screen)
+                     GameLoadingState.this.pzoptOnMain(GameLoadingState::pzoptInitChatIcons); // pzopt: on the main thread and retried: other threads still register textures (2026-09-23, a Dell load stopped on the error with the hand-off alone)
+                     ChatManager.getInstance().init(true, IsoPlayer.getInstance());
+                     Bullet.startLoadingPhysicsMeshes();
+                     GameLoadingState.this.pzoptOnMain(() -> { // pzopt: the shared texture table, see above
+                        Texture.getSharedTexture("media/textures/NewShadow.png");
+                        Texture.getSharedTexture("media/wallcutaways.png", 3);
+                        Texture.getSharedTexture("media/windowframe_cutaways.png", 3);
+                        Texture.getSharedTexture("media/windowframe_cutaways_2.png", 3);
+                        Texture.getSharedTexture("media/windowframe_cutaways_3.png", 3);
+                     }); // pzopt
+                     DebugType.General.println("bWaitForAssetLoadingToFinish2 start");
+                     GameLoadingState.this.waitForAssetLoadingToFinish2 = true;
+                     java.util.concurrent.ExecutorService pzoptPool = GameWindow.fileSystem instanceof zombie.fileSystem.FileSystemImpl pzoptFs
+                        ? pzoptFs.pzoptExecutor() : null; // pzopt
+                     pzopt.BootPump.onAssetWait(pzoptPool, true); // pzopt: every core decodes while nothing else runs
+                     synchronized (GameLoadingState.this.assetLock2) {
+                        while (GameLoadingState.this.waitForAssetLoadingToFinish2) {
+                           try {
+                              GameLoadingState.this.assetLock2.wait();
+                           } catch (InterruptedException var8) {
+                           }
                         }
                      }
-                  }
-                  pzopt.BootPump.onAssetWait(pzoptPool, false); // pzopt
-                  pzopt.Log.info(pzopt.FileTaskStats.summary()); // pzopt: the whole boot + load, per task class
+                     pzopt.BootPump.onAssetWait(pzoptPool, false); // pzopt
+                     pzopt.Log.info(pzopt.FileTaskStats.summary()); // pzopt: the whole boot + load, per task class
 
-                  DebugType.General.println("bWaitForAssetLoadingToFinish2 end");
-                  if (PerformanceSettings.fboRenderChunk) {
-                     DebugType.General.println("FBORenderChunkManager.gameLoaded() start");
-                     FBORenderChunkManager.instance.gameLoaded();
-                     DebugType.General.println("FBORenderChunkManager.gameLoaded() end");
-                  }
+                     DebugType.General.println("bWaitForAssetLoadingToFinish2 end");
+                     if (PerformanceSettings.fboRenderChunk) {
+                        DebugType.General.println("FBORenderChunkManager.gameLoaded() start");
+                        FBORenderChunkManager.instance.gameLoaded();
+                        DebugType.General.println("FBORenderChunkManager.gameLoaded() end");
+                     }
 
-                  DebugType.General.println("Bullet.initPhysicsMeshes() start");
-                  Bullet.initPhysicsMeshes();
-                  DebugType.General.println("Bullet.initPhysicsMeshes() end");
-                  RBTableStoryBase.initStories();
-                  IsoPlayer.visitAllPlayers(ECSEntity::onGameLoadingStateEnter);
-                  GameLoadingState.playerCreated = true;
-                  GameLoadingState.gameLoadingString = "";
-                  GameLoadingState.SendDone();
+                     DebugType.General.println("Bullet.initPhysicsMeshes() start");
+                     Bullet.initPhysicsMeshes();
+                     DebugType.General.println("Bullet.initPhysicsMeshes() end");
+                     RBTableStoryBase.initStories();
+                     IsoPlayer.visitAllPlayers(ECSEntity::onGameLoadingStateEnter);
+                     GameLoadingState.playerCreated = true;
+                     GameLoadingState.gameLoadingString = "";
+                     GameLoadingState.SendDone();
+                  }
                }
             }
          }
@@ -541,7 +546,7 @@ public final class GameLoadingState extends GameState {
          activeModsFile.write(path, activeMods);
       }
 
-      DebugLog.log("Game Mode: " + Core.gameMode);
+      DebugLog.log("Game Mode: " + Core.getInstance().getGameMode());
       DebugLog.log("Sandbox Options:");
       SandboxOptions options = GlobalObject.getSandboxOptions();
 
@@ -825,7 +830,7 @@ public final class GameLoadingState extends GameState {
                         1.0
                      );
                }
-            } else if (!playerCreated && newGame && !Core.isLastStand()) {
+            } else if (!playerCreated && newGame) {
                TextManager.instance
                   .DrawStringCentre(
                      UIFont.NewSmall,
@@ -875,7 +880,7 @@ public final class GameLoadingState extends GameState {
                showedClickToSkip = true;
             }
 
-            if (done && playerCreated && (!newGame || this.time >= 33.0F || Core.isLastStand() || "Tutorial".equals(Core.gameMode) || (pzopt.Config.NO_INTRO_WAIT && pzopt.Overrides.enabled()))) { // pzopt: new game: click-to-start as soon as the world is loaded, not after the 33 s intro
+            if (done && playerCreated && (!newGame || this.time >= 33.0F || Core.getInstance().isTutorial() || (pzopt.Config.NO_INTRO_WAIT && pzopt.Overrides.enabled()))) { // pzopt: new game: click-to-start as soon as the world is loaded, not after the 33 s intro
                if (this.clickToSkipFadeIn) {
                   this.clickToSkipAlpha = this.clickToSkipAlpha + GameTime.getInstance().getThirtyFPSMultiplierInMenu() / 30.0F;
                   if (this.clickToSkipAlpha > 1.0F) {
@@ -1094,7 +1099,7 @@ public final class GameLoadingState extends GameState {
          }
 
          if (pzopt.Config.NO_CLICK_TO_START && pzopt.Overrides.enabled() && playerCreated
-            && (!newGame || this.time >= 33.0F || Core.isLastStand() || "Tutorial".equals(Core.gameMode) || pzopt.Config.NO_INTRO_WAIT)) {
+            && (!newGame || this.time >= 33.0F || Core.getInstance().isTutorial() || pzopt.Config.NO_INTRO_WAIT)) {
             showedClickToSkip = true; // pzopt: noClickToStart, enter the world the moment it is loaded (same point a click would)
             this.forceDone = false;
             return StateAction.Continue;

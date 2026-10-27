@@ -414,7 +414,7 @@ public final class BuildingRoomsEditor {
             }
 
             for (int i = 0; i < square.getObjects().size(); i++) {
-               IsoObject object = (IsoObject)square.getObjects().get(i);
+               IsoObject object = square.getObjects().get(i);
                if (object instanceof IsoLightSwitch lightSwitch && !room.lightSwitches.contains(lightSwitch)) {
                   room.lightSwitches.add(lightSwitch);
                }

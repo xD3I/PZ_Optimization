@@ -1342,7 +1342,7 @@ public final class CapsuleShadow {
       IsoFlagType window = north ? IsoFlagType.WindowN : IsoFlagType.WindowW;
       IsoFlagType door = north ? IsoFlagType.doorN : IsoFlagType.doorW, doorWall = north ? IsoFlagType.DoorWallN : IsoFlagType.DoorWallW;
       float h = 0F;
-      zombie.util.list.PZArrayList<zombie.iso.IsoObject> objs = sq.getObjects();
+      java.util.List<zombie.iso.IsoObject> objs = sq.getObjects();
       for (int i = 0; i < objs.size(); i++) {
          zombie.iso.IsoObject obj = objs.get(i);
          zombie.iso.sprite.IsoSprite sp = obj == null ? null : obj.getSprite();

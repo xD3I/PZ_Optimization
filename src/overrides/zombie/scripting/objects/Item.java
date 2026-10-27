@@ -351,6 +351,7 @@ public final class Item extends GameEntityScript {
    public String clothingItem;
    private ClothingItem clothingItemAsset;
    private String staticModel;
+   private String staticModelOn;
    public String primaryAnimMask;
    public String secondaryAnimMask;
    public String primaryAnimMaskAttachment;
@@ -1080,6 +1081,10 @@ public final class Item extends GameEntityScript {
 
    public String getStaticModel() {
       return this.staticModel;
+   }
+
+   public String getStaticModelOn() {
+      return this.staticModelOn;
    }
 
    public String getWorldStaticModel() {
@@ -2858,6 +2863,8 @@ public final class Item extends GameEntityScript {
             }
          } else if (param.trim().equalsIgnoreCase("StaticModel")) {
             this.staticModel = val.trim();
+         } else if (param.trim().equalsIgnoreCase("StaticModelOn")) {
+            this.staticModelOn = val.trim();
          } else if (param.trim().equalsIgnoreCase("worldStaticModel")) {
             this.worldStaticModel = val.trim();
          } else if (param.trim().equalsIgnoreCase("primaryAnimMask")) {
