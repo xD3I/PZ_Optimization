@@ -279,7 +279,7 @@ public final class IsoMetaCell {
       }
    }
 
-   public void getBuildingsIntersecting(int x, int y, int w, int h, ArrayList<BuildingDef> result) {
+   public void getBuildingsIntersecting(int x, int y, int w, int h, boolean includeEmptyOutside, ArrayList<BuildingDef> result) {
       int xmax = (x + w) / 8;
       if ((x + w) % 8 == 0) {
          xmax--;
@@ -298,7 +298,37 @@ public final class IsoMetaCell {
             if (xx >= cellX / 8 && xx < (cellX + 256) / 8 && yy >= cellY / 8 && yy < (cellY + 256) / 8) {
                int i = xx - cellX / 8 + (yy - cellY / 8) * 32;
                if (this.hasChunk(i)) {
-                  this.getChunk(i).getBuildingsIntersecting(x, y, w, h, result);
+                  this.getChunk(i).getBuildingsIntersecting(x, y, w, h, includeEmptyOutside, result);
+               }
+            }
+         }
+      }
+   }
+
+   public void getBuildingsIntersecting(int x, int y, int w, int h, ArrayList<BuildingDef> result) {
+      this.getBuildingsIntersecting(x, y, w, h, false, result);
+   }
+
+   public void getRoomsIntersecting(int x, int y, int w, int h, boolean includeEmptyOutside, ArrayList<RoomDef> result) {
+      int xmax = (x + w) / 8;
+      if ((x + w) % 8 == 0) {
+         xmax--;
+      }
+
+      int ymax = (y + h) / 8;
+      if ((y + h) % 8 == 0) {
+         ymax--;
+      }
+
+      int cellX = this.wx * 256;
+      int cellY = this.wy * 256;
+
+      for (int yy = y / 8; yy <= ymax; yy++) {
+         for (int xx = x / 8; xx <= xmax; xx++) {
+            if (xx >= cellX / 8 && xx < (cellX + 256) / 8 && yy >= cellY / 8 && yy < (cellY + 256) / 8) {
+               int i = xx - cellX / 8 + (yy - cellY / 8) * 32;
+               if (this.hasChunk(i)) {
+                  this.getChunk(i).getRoomsIntersecting(x, y, w, h, includeEmptyOutside, result);
                }
             }
          }
@@ -306,29 +336,7 @@ public final class IsoMetaCell {
    }
 
    public void getRoomsIntersecting(int x, int y, int w, int h, ArrayList<RoomDef> result) {
-      int xmax = (x + w) / 8;
-      if ((x + w) % 8 == 0) {
-         xmax--;
-      }
-
-      int ymax = (y + h) / 8;
-      if ((y + h) % 8 == 0) {
-         ymax--;
-      }
-
-      int cellX = this.wx * 256;
-      int cellY = this.wy * 256;
-
-      for (int yy = y / 8; yy <= ymax; yy++) {
-         for (int xx = x / 8; xx <= xmax; xx++) {
-            if (xx >= cellX / 8 && xx < (cellX + 256) / 8 && yy >= cellY / 8 && yy < (cellY + 256) / 8) {
-               int i = xx - cellX / 8 + (yy - cellY / 8) * 32;
-               if (this.hasChunk(i)) {
-                  this.getChunk(i).getRoomsIntersecting(x, y, w, h, result);
-               }
-            }
-         }
-      }
+      this.getRoomsIntersecting(x, y, w, h, false, result);
    }
 
    public void checkAnimalZonesGenerated(int chunkX, int chunkY) {

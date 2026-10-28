@@ -215,7 +215,7 @@ public final class OccludedOutline {
 
    /** 0 = floors only (or, not near, nothing as tall as a tree), 1 = grass / bushes, 2 = anything else that stands up. */
    private static int objects(IsoGridSquare s, boolean near) {
-      zombie.util.list.PZArrayList<IsoObject> objects = s.getObjects();
+      java.util.List<IsoObject> objects = s.getObjects();
       int what = 0;
       for (int j = 0; j < objects.size(); j++) {
          IsoObject o = objects.get(j);

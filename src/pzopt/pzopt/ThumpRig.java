@@ -121,7 +121,7 @@ final class ThumpRig {
             if (d == null || d.isOpen() || d.isDestroyed()) {
                continue;
             }
-            IsoGridSquare other = d.getNorth() ? cell.getGridSquare(x, y - 1, 0) : cell.getGridSquare(x - 1, y, 0);
+            IsoGridSquare other = d.isNorth() ? cell.getGridSquare(x, y - 1, 0) : cell.getGridSquare(x - 1, y, 0);
             if (other == null || (sq.getRoom() == null) == (other.getRoom() == null)) {
                continue; // exterior doors only: one side in a room, the other outside
             }
@@ -157,7 +157,7 @@ final class ThumpRig {
       for (IsoZombie z : spawned) {
          z.setThumpTarget(door);
       }
-      Log.info("harness: thump: door at " + door.getSquare().getX() + "," + door.getSquare().getY() + (door.getNorth() ? " (north edge)" : " (west edge)")
+      Log.info("harness: thump: door at " + door.getSquare().getX() + "," + door.getSquare().getY() + (door.isNorth() ? " (north edge)" : " (west edge)")
             + ", zombies on " + outside.getX() + "," + outside.getY() + ", " + spawned.size() + " spawned, distance " + String.format(java.util.Locale.ROOT, "%.1f", Math.hypot(outside.getX() - px, outside.getY() - py))
             + ", " + (nowNs - startNs) / 1_000_000L + " ms after the rig start");
    }

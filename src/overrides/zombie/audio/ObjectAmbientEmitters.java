@@ -4,9 +4,11 @@ import fmod.fmod.FMODManager;
 import fmod.fmod.FMODSoundEmitter;
 import fmod.fmod.FMOD_STUDIO_PARAMETER_DESCRIPTION;
 import gnu.trove.map.hash.THashMap;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.List;
 import zombie.AmbientStreamManager;
 import zombie.GameSounds;
 import zombie.GameTime;
@@ -20,7 +22,6 @@ import zombie.core.properties.IsoPropertyType;
 import zombie.core.random.Rand;
 import zombie.debug.DebugOptions;
 import zombie.debug.LineDrawer;
-import zombie.entity.util.TimSort;
 import zombie.inventory.ItemContainer;
 import zombie.iso.IsoCamera;
 import zombie.iso.IsoChunk;
@@ -38,7 +39,6 @@ import zombie.network.GameServer;
 import zombie.popman.ObjectPool;
 import zombie.scripting.objects.SoundKey;
 import zombie.util.Type;
-import zombie.util.list.PZArrayList;
 import zombie.util.list.PZArrayUtil;
 
 public final class ObjectAmbientEmitters {
@@ -55,8 +55,7 @@ public final class ObjectAmbientEmitters {
    private final ObjectPool<ObjectAmbientEmitters.ObjectWithDistance> objectPool = new ObjectPool(
       ObjectAmbientEmitters.ObjectWithDistance::new, "ObjectAmbientEmitters.objectPool"
    );
-   private final PZArrayList<ObjectAmbientEmitters.ObjectWithDistance> objects = new PZArrayList(ObjectAmbientEmitters.ObjectWithDistance.class, 16);
-   private final TimSort timSort = new TimSort();
+   private final List<ObjectAmbientEmitters.ObjectWithDistance> objects = new ArrayList<>(16);
    private final ObjectAmbientEmitters.Slot[] slots;
    private final Comparator<ObjectAmbientEmitters.ObjectWithDistance> comp = new Comparator<ObjectAmbientEmitters.ObjectWithDistance>() {
       public int compare(ObjectAmbientEmitters.ObjectWithDistance a, ObjectAmbientEmitters.ObjectWithDistance b) {
@@ -162,9 +161,9 @@ public final class ObjectAmbientEmitters {
             this.stopNotPlaying();
          } else {
             for (int i = 0; i < this.objects.size(); i++) {
-               ObjectAmbientEmitters.ObjectWithDistance owd = (ObjectAmbientEmitters.ObjectWithDistance)this.objects.get(i);
+               ObjectAmbientEmitters.ObjectWithDistance owd = this.objects.get(i);
                IsoObject object = owd.object;
-               ObjectAmbientEmitters.PerObjectLogic logic = ((ObjectAmbientEmitters.ObjectWithDistance)this.objects.get(i)).logic;
+               ObjectAmbientEmitters.PerObjectLogic logic = this.objects.get(i).logic;
                if (!this.shouldPlay(object, logic)) {
                   this.added.remove(object);
                   this.objects.remove(i--);
@@ -175,12 +174,12 @@ public final class ObjectAmbientEmitters {
                }
             }
 
-            this.timSort.doSort(this.objects.getElements(), this.comp, 0, this.objects.size());
+            this.objects.sort(this.comp);
             int count = Math.min(this.objects.size(), this.slots.length);
 
             for (int i = 0; i < count; i++) {
-               IsoObject object = ((ObjectAmbientEmitters.ObjectWithDistance)this.objects.get(i)).object;
-               ObjectAmbientEmitters.PerObjectLogic logic = ((ObjectAmbientEmitters.ObjectWithDistance)this.objects.get(i)).logic;
+               IsoObject object = this.objects.get(i).object;
+               ObjectAmbientEmitters.PerObjectLogic logic = this.objects.get(i).logic;
                if (this.shouldPlay(object, logic)) {
                   int j = this.getExistingSlot(object);
                   if (j != -1) {
@@ -190,8 +189,8 @@ public final class ObjectAmbientEmitters {
             }
 
             for (int i = 0; i < count; i++) {
-               IsoObject object = ((ObjectAmbientEmitters.ObjectWithDistance)this.objects.get(i)).object;
-               ObjectAmbientEmitters.PerObjectLogic logic = ((ObjectAmbientEmitters.ObjectWithDistance)this.objects.get(i)).logic;
+               IsoObject object = this.objects.get(i).object;
+               ObjectAmbientEmitters.PerObjectLogic logic = this.objects.get(i).logic;
                if (this.shouldPlay(object, logic)) {
                   int j = this.getExistingSlot(object);
                   if (j == -1) {
@@ -493,7 +492,7 @@ public final class ObjectAmbientEmitters {
 
          IsoDoor door1 = (IsoDoor)Type.tryCastTo(this.object, IsoDoor.class);
          IsoThumpable door2 = (IsoThumpable)Type.tryCastTo(this.object, IsoThumpable.class);
-         boolean north = door1 == null ? door2.getNorth() : door1.getNorth();
+         boolean north = door1 == null ? door2.isNorth() : door1.isNorth();
          return ParameterInside.isAdjacentToReachableSquare(this.object.getSquare(), north);
       }
    }

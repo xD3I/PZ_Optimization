@@ -955,6 +955,7 @@ public final class LuaEventManager implements JavaFunction {
       LuaEventManager.AddEvent("OnSteamRefreshInternetServers");
       LuaEventManager.AddEvent("OptionControllerButtonStyleChanged");
       LuaEventManager.AddEvent("OptionGamepadBindingPresetChanged");
+      LuaEventManager.AddEvent("OnElectricityChanged");
    }
 
    public static void clear() {

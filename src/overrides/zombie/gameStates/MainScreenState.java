@@ -34,7 +34,6 @@ import zombie.HiddenFromLua;
 import zombie.IndieGL;
 import zombie.LocaleManager;
 import zombie.SoundManager;
-import zombie.UnitTests;
 import zombie.UsedFromLua;
 import zombie.ZomboidFileSystem;
 import zombie.Lua.LuaEventManager;
@@ -296,8 +295,6 @@ public final class MainScreenState extends GameState {
          Attribute.init();
       }
 
-      UnitTests.runIfEnabled();
-
       try {
          RenderThread.init();
          AssetManagers assetManagers = GameWindow.assetManagers;
@@ -323,9 +320,9 @@ public final class MainScreenState extends GameState {
    }
 
    private static void writeOutCurrentVersion() {
-      String versionStr = "revision=%s pzbullet=%s".formatted("4a0e9546ec", Bullet.getPZBulletVersion());
+      String versionStr = "revision=%s pzbullet=%s".formatted("e013dbb529", Bullet.getPZBulletVersion());
       DebugType.General.println("version=" + Core.getInstance().getVersion() + " demo=false");
-      if (!"4a0e9546ec".isEmpty()) {
+      if (!"e013dbb529".isEmpty()) {
          DebugType.General.println(versionStr);
       }
 
@@ -333,7 +330,7 @@ public final class MainScreenState extends GameState {
          String versionFileName = ZomboidFileSystem.instance.getCacheDirSub("version.txt");
          FileWriter versionFileWriter = new FileWriter(versionFileName, false);
          versionFileWriter.write(Core.getInstance().getVersion() + "");
-         if (!"4a0e9546ec".isEmpty()) {
+         if (!"e013dbb529".isEmpty()) {
             versionFileWriter.write(10);
             versionFileWriter.write(versionStr);
          }

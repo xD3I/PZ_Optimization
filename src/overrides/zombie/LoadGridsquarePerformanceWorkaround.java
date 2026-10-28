@@ -1,5 +1,6 @@
 package zombie;
 
+import java.util.List;
 import zombie.characters.IsoPlayer;
 import zombie.inventory.ItemContainer;
 import zombie.inventory.ItemPickerJava;
@@ -26,11 +27,11 @@ public final class LoadGridsquarePerformanceWorkaround {
 
    public static void LoadGridsquare(IsoGridSquare sq) {
       if (LoadGridsquarePerformanceWorkaround.ItemPicker.instance.begin(sq)) {
-         IsoObject[] objects = (IsoObject[])sq.getObjects().getElements();
-         int size = sq.getObjects().size();
+         List<IsoObject> objects = sq.getObjects();
+         int size = objects.size();
 
          for (int i = 0; i < size; i++) {
-            IsoObject object = objects[i];
+            IsoObject object = objects.get(i);
             if (!(object instanceof IsoWorldInventoryObject)) {
                if (!GameClient.client) {
                   LoadGridsquarePerformanceWorkaround.ItemPicker.instance.checkObject(object);

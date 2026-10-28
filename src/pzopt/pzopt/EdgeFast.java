@@ -11,7 +11,7 @@ import zombie.iso.objects.GridSquareEdgeFacingDirection;
 import zombie.iso.objects.IsoDoor;
 import zombie.iso.objects.IsoThumpable;
 import zombie.iso.objects.IsoWindow;
-import zombie.util.list.PZArrayList;
+
 
 /**
  * edgeTestFast. Build 42.21 rewrote IsoGridSquare's wall / window / door tests round edge objects: isBlockedTo ->
@@ -94,7 +94,7 @@ public final class EdgeFast {
          return north ? p.has(IsoFlagType.collideN) && !p.has(IsoFlagType.windowN) : p.has(IsoFlagType.collideW) && !p.has(IsoFlagType.windowW);
       }
       GridSquareEdgeFacingDirection dir = north ? GridSquareEdgeFacingDirection.NORTH_SOUTH : GridSquareEdgeFacingDirection.EAST_WEST;
-      PZArrayList<IsoObject> objects = sq.getObjects();
+      java.util.List<IsoObject> objects = sq.getObjects();
       for (int i = 0; i < objects.size(); i++) {
          IsoObject o = objects.get(i);
          if (kind == WINDOW) {

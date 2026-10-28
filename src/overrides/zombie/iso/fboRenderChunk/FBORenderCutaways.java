@@ -7,6 +7,7 @@ import java.awt.Rectangle;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashSet;
+import java.util.List;
 import zombie.characters.IsoPlayer;
 import zombie.core.Core;
 import zombie.core.PerformanceSettings;
@@ -717,6 +718,14 @@ public final class FBORenderCutaways {
          return true;
       }
 
+      IsoPlayer player = IsoPlayer.players[playerIndex];
+      if (player.isClimbing()) {
+         long roomID = player.getClimbData().targetGridSquare.getRoomID();
+         if (wall.occludedRoomIds.contains(roomID)) {
+            return true;
+         }
+      }
+
       for (int i = 0; i < tempPlayerCutawayRoomIDs.size(); i++) {
          long roomID = tempPlayerCutawayRoomIDs.get(i);
          if (wall.occludedRoomIds.contains(roomID)) {
@@ -1035,11 +1044,11 @@ public final class FBORenderCutaways {
          return null;
       }
 
-      IsoObject[] objects = (IsoObject[])square.getObjects().getElements();
-      int i = 0;
+      List<IsoObject> objects = square.getObjects();
+      int size = objects.size();
 
-      for (int n = square.getObjects().size(); i < n; i++) {
-         IsoObject object = objects[i];
+      for (int i = 0; i < size; i++) {
+         IsoObject object = objects.get(i);
          IsoSpriteGrid spriteGrid = object.getSpriteGrid();
          if (spriteGrid != null && spriteGrid.getLevels() > 1) {
             return object;
@@ -1183,9 +1192,15 @@ public final class FBORenderCutaways {
       int playerIndex = IsoCamera.frameState.playerIndex;
       IsoPlayer player = IsoPlayer.players[playerIndex];
       this.AddPointOfInterest(player.getX(), player.getY(), player.getZ());
+      if (player.isClimbing()) {
+         this.AddPointOfInterest(
+            player.getClimbData().targetGridSquare.getX(), player.getClimbData().targetGridSquare.getY(), player.getClimbData().targetGridSquare.getZ()
+         );
+      }
+
       if (playerIndex == 0 && player.isAiming() && player.getJoypadBind() == -1) {
          int mx = Mouse.getX();
-         int my = Mouse.getY() + 52 * Core.tileScale;
+         int my = Mouse.getY() + 104;
          float ix = IsoUtils.XToIso(mx, my, player.getZi());
          float iy = IsoUtils.YToIso(mx, my, player.getZi());
          this.AddPointOfInterest(ix, iy, player.getZ(), true);

@@ -316,11 +316,7 @@ public final class VirtualZombieManager {
             zombie.setStateMachineLocked(false);
             zombie.setDoRender(true);
             zombie.clearDiedBody();
-            Vector2 temp = zombie.getForwardIsoDirection().ToVector();
-            temp.x = temp.x + (Rand.Next(200) / 100.0F - 0.5F);
-            temp.y = temp.y + (Rand.Next(200) / 100.0F - 0.5F);
-            temp.normalize();
-            zombie.setForwardDirection(temp);
+            zombie.setDirectionAngle(Rand.Next(360));
             IsoWorld.instance.currentCell.getObjectList().add(zombie);
             zombie.walkVariant = "ZombieWalk";
             zombie.speedType = -1;
@@ -532,7 +528,7 @@ public final class VirtualZombieManager {
 
    public ArrayList<IsoZombie> addZombiesToMap(int nSize, RoomDef room, boolean bAllowDead) {
       ArrayList<IsoZombie> result = new ArrayList<>();
-      if ("Tutorial".equals(Core.gameMode)) {
+      if (Core.getInstance().isTutorial()) {
          return result;
       }
 
@@ -806,10 +802,6 @@ public final class VirtualZombieManager {
       }
 
       if (GameClient.client) {
-         return 0;
-      }
-
-      if (Core.lastStand) {
          return 0;
       }
 

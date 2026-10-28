@@ -373,8 +373,7 @@ public class UiDepsTest {
       // every frame, ~3 fps). Two receivers of the same method; the noise learned on one must not compare the other with
       // equals, and a real change of the other must still count.
       noisyListReceivers(new NoIterList(), new NoIterList(), "a list whose iterators throw");
-      noisyListReceivers(new zombie.util.list.PZArrayList<>(Object.class, 4), new zombie.util.list.PZArrayList<>(Object.class, 4),
-         "the game's PZArrayList");
+      // (the game's own PZArrayList case went with the class in 42.22: object lists are plain Lists there)
       // same content, other list: still the same receiver for learned noise (AbstractList.equals' semantics, by index)
       UiDeps.Log same = new UiDeps.Log();
       NoIterList la = new NoIterList();

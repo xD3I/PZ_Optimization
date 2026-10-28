@@ -746,8 +746,8 @@ public final class IsoObjectModelDrawer extends GenericDrawer {
          float rcy = cam.rightClickY;
          float defx = cam.deferedX;
          float defy = cam.deferedY;
-         float tx = (rcx + 2.0F * rcy) / (64.0F * Core.tileScale);
-         float ty = (rcx - 2.0F * rcy) / (-64.0F * Core.tileScale);
+         float tx = (rcx + 2.0F * rcy) / 128.0F;
+         float ty = (rcx - 2.0F * rcy) / -128.0F;
          x += tx;
          y += ty;
          x += defx;
@@ -759,7 +759,7 @@ public final class IsoObjectModelDrawer extends GenericDrawer {
          Core.getInstance().projectionMatrixStack.push(projection);
          Matrix4f modelView = Core.getInstance().modelViewMatrixStack.alloc();
          modelView.scaling(Core.scale);
-         modelView.scale(Core.tileScale / 2.0F);
+         modelView.scale(1.0F);
          modelView.rotate((float) (Math.PI / 6), 1.0F, 0.0F, 0.0F);
          modelView.rotate((float) (Math.PI * 3.0 / 4.0), 0.0F, 1.0F, 0.0F);
          double difX = this.x - x;

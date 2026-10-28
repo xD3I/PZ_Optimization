@@ -494,9 +494,9 @@ final class MirrorGeometry {
                   PropertyContainer pp = s.getProperties();
                   boolean edge;
                   if (obj instanceof IsoDoor door) {
-                     edge = door.getNorth() == (k.axis == 0) && !door.IsOpen();
+                     edge = door.isNorth() == (k.axis == 0) && !door.IsOpen();
                   } else if (obj instanceof IsoWindow win) {
-                     edge = win.getNorth() == (k.axis == 0);
+                     edge = win.isNorth() == (k.axis == 0);
                   } else {
                      edge = k.axis == 1 ? pp.has(IsoFlagType.DoorWallW) || pp.has(IsoFlagType.WindowW) : pp.has(IsoFlagType.DoorWallN) || pp.has(IsoFlagType.WindowN);
                   }

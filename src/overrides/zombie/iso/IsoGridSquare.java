@@ -85,7 +85,6 @@ import zombie.inventory.InventoryItemFactory;
 import zombie.inventory.ItemContainer;
 import zombie.inventory.types.AnimalInventoryItem;
 import zombie.inventory.types.Food;
-import zombie.inventory.types.HandWeapon;
 import zombie.iso.IsoDepthHelper.Results;
 import zombie.iso.LightingJNI.JNILighting;
 import zombie.iso.LosUtil.TestResults;
@@ -101,7 +100,6 @@ import zombie.iso.areas.isoregion.IsoRegions;
 import zombie.iso.areas.isoregion.regions.IWorldRegion;
 import zombie.iso.areas.isoregion.regions.IsoWorldRegion;
 import zombie.iso.fboRenderChunk.FBORenderCell;
-import zombie.iso.fboRenderChunk.FBORenderChunk;
 import zombie.iso.fboRenderChunk.FBORenderChunkManager;
 import zombie.iso.fboRenderChunk.ObjectRenderLayer;
 import zombie.iso.objects.GridSquareEdge;
@@ -156,7 +154,6 @@ import zombie.network.ServerMap;
 import zombie.network.ServerOptions;
 import zombie.network.PacketTypes.PacketType;
 import zombie.network.ServerLOS.ServerLighting;
-import zombie.network.packets.AddExplosiveTrapPacket;
 import zombie.network.packets.INetworkPacket;
 import zombie.network.packets.actions.AddCorpseToMapPacket;
 import zombie.network.packets.service.ReceiveModDataPacket;
@@ -185,7 +182,6 @@ import zombie.util.io.BitHeader.HeaderSize;
 import zombie.util.lambda.TriFunction;
 import zombie.util.lambda.TriPredicate;
 import zombie.util.lambda.Invokers.Params2.Boolean.ICallback;
-import zombie.util.list.PZArrayList;
 import zombie.util.list.PZArrayUtil;
 import zombie.vehicles.BaseVehicle;
 
@@ -332,7 +328,7 @@ public final class IsoGridSquare {
    private int deferredCharacterTick = -1;
    private final ArrayList<IsoMovingObject> staticMovingObjects = new ArrayList<>(0);
    private final ArrayList<IsoMovingObject> movingObjects = new ArrayList<>(0);
-   protected final PZArrayList<IsoObject> objects = new PZArrayList(IsoObject.class, 2);
+   protected final List<IsoObject> objects = new ArrayList<>(2);
    private final ArrayList<IsoWorldInventoryObject> worldObjects = new ArrayList<>();
    public long hasTypes;
    private final PropertyContainer properties = new PropertyContainer();
@@ -342,7 +338,7 @@ public final class IsoGridSquare {
    private boolean hasFlies;
    private IBiome biome;
    private IsoGridOcclusionData occlusionDataCache;
-   private static final PZArrayList<IsoWorldInventoryObject> tempWorldInventoryObjects = new PZArrayList(IsoWorldInventoryObject.class, 16);
+   private static final List<IsoWorldInventoryObject> tempWorldInventoryObjects = new ArrayList<>(16);
    public static final CappedConcurrentQueue<IsoGridSquare> isoGridSquareCache = new CappedConcurrentQueue(16384);
    public static ArrayDeque<IsoGridSquare> loadGridSquareCache;
    private boolean overlayDone;
@@ -542,7 +538,7 @@ public final class IsoGridSquare {
 
    public <T, U> T findObject(Class<? extends T> returnType, BiPredicate<T, U> checkPredicate, U comparisonParam) {
       for (int i = 0; i < this.objects.size(); i++) {
-         IsoObject object = (IsoObject)this.objects.get(i);
+         IsoObject object = this.objects.get(i);
          T objectOfType;
          if ((objectOfType = (T)Type.tryCastTo(object, returnType)) != null && checkPredicate.test(objectOfType, comparisonParam)) {
             return objectOfType;
@@ -659,10 +655,10 @@ public final class IsoGridSquare {
    }
 
    public void removeUnderground() {
-      IsoObject[] elements = (IsoObject[])this.objects.getElements();
+      int size = this.objects.size();
 
-      for (int i = 0; i < elements.length; i++) {
-         IsoObject element = elements[i];
+      for (int i = 0; i < size; i++) {
+         IsoObject element = this.objects.get(i);
          if (element != null && element.getTile() != null && element.getTile().startsWith("underground")) {
             this.getObjects().remove(element);
             return;
@@ -849,7 +845,7 @@ public final class IsoGridSquare {
       return switch (edgeDirection) {
          case NORTH_SOUTH -> this.getNorth();
          case EAST_WEST -> this.getWest();
-         default -> null;
+         default -> throw new MatchException(null, null);
       };
    }
 
@@ -1333,7 +1329,7 @@ public final class IsoGridSquare {
                         this.z,
                         obj.getForwardIsoDirection(),
                         obj.offsetX,
-                        obj.offsetY + obj.getRenderYOffset() * Core.tileScale,
+                        obj.offsetY + obj.getRenderYOffset() * 2.0F,
                         pzw.defColorInfo, // pzopt: tileRecordParallel, the thread's own wall scratch
                         true,
                         texdModifier
@@ -1354,7 +1350,7 @@ public final class IsoGridSquare {
                         this.z,
                         obj.getForwardIsoDirection(),
                         obj.offsetX,
-                        obj.offsetY + obj.getRenderYOffset() * Core.tileScale,
+                        obj.offsetY + obj.getRenderYOffset() * 2.0F,
                         pzw.defColorInfo // pzopt: tileRecordParallel, the thread's own wall scratch
                      );
                      s.update();
@@ -1832,7 +1828,6 @@ public final class IsoGridSquare {
          IsoGridSquare squareS = this.getAdjacentSquare(IsoDirections.S);
          IsoGridSquare squareW = this.getAdjacentSquare(IsoDirections.W);
          IsoGridSquare squareE = this.getAdjacentSquare(IsoDirections.E);
-         int tileScale = 2 / Core.tileScale;
 
          try {
             Texture texture = sprite.getTextureForCurrentFrame(dir);
@@ -1840,14 +1835,14 @@ public final class IsoGridSquare {
                float xOffset = 0.0F;
                float offsetY = texture.getOffsetY();
                int wOffset = 0;
-               int hOffset = 226 - texture.getHeight() * tileScale;
+               int hOffset = 226 - texture.getHeight();
                if (dir != IsoDirections.NW) {
-                  wOffset = 66 - texture.getWidth() * tileScale;
+                  wOffset = 66 - texture.getWidth();
                }
 
                if (sprite.isWallSE()) {
-                  wOffset = 6 - texture.getWidth() * tileScale;
-                  hOffset = 196 - texture.getHeight() * tileScale;
+                  wOffset = 6 - texture.getWidth();
+                  hOffset = 196 - texture.getHeight();
                }
 
                if (sprite.name.contains("fencing_01_11")) {
@@ -2699,7 +2694,7 @@ public final class IsoGridSquare {
 
    public IsoObject getObjectWithSprite(String spriteName) {
       for (int i = 0; i < this.objects.size(); i++) {
-         IsoObject obj = (IsoObject)this.objects.get(i);
+         IsoObject obj = this.objects.get(i);
          if (obj != null && obj.getSprite() != null && spriteName.equals(obj.getSprite().getName())) {
             return obj;
          }
@@ -2839,8 +2834,8 @@ public final class IsoGridSquare {
 
    public IsoObject getStump() {
       for (int i = 0; i < this.objects.size(); i++) {
-         if (this.objects.get(i) != null && ((IsoObject)this.objects.get(i)).isStump()) {
-            return (IsoObject)this.objects.get(i);
+         if (this.objects.get(i) != null && this.objects.get(i).isStump()) {
+            return this.objects.get(i);
          }
       }
 
@@ -2849,8 +2844,8 @@ public final class IsoGridSquare {
 
    public IsoObject getOre() {
       for (int i = 0; i < this.objects.size(); i++) {
-         if (this.objects.get(i) != null && ((IsoObject)this.objects.get(i)).isOre()) {
-            return (IsoObject)this.objects.get(i);
+         if (this.objects.get(i) != null && this.objects.get(i).isOre()) {
+            return this.objects.get(i);
          }
       }
 
@@ -2863,8 +2858,8 @@ public final class IsoGridSquare {
 
    public IsoObject getBush() {
       for (int i = 0; i < this.objects.size(); i++) {
-         if (this.objects.get(i) != null && ((IsoObject)this.objects.get(i)).isBush()) {
-            return (IsoObject)this.objects.get(i);
+         if (this.objects.get(i) != null && this.objects.get(i).isBush()) {
+            return this.objects.get(i);
          }
       }
 
@@ -2875,7 +2870,7 @@ public final class IsoGridSquare {
       List<IsoObject> objects = new ArrayList<>();
 
       for (int i = 0; i < this.objects.size(); i++) {
-         IsoObject object = (IsoObject)this.objects.get(i);
+         IsoObject object = this.objects.get(i);
          if (object.isBush()) {
             objects.add(object);
          }
@@ -2886,8 +2881,8 @@ public final class IsoGridSquare {
 
    public IsoObject getGrass() {
       for (int i = 0; i < this.objects.size(); i++) {
-         if (this.objects.get(i) != null && ((IsoObject)this.objects.get(i)).isGrass()) {
-            return (IsoObject)this.objects.get(i);
+         if (this.objects.get(i) != null && this.objects.get(i).isGrass()) {
+            return this.objects.get(i);
          }
       }
 
@@ -2902,8 +2897,8 @@ public final class IsoGridSquare {
       List<IsoObject> objects = new ArrayList<>();
 
       for (int i = 0; i < this.objects.size(); i++) {
-         if (((IsoObject)this.objects.get(i)).isGrassLike()) {
-            objects.add((IsoObject)this.objects.get(i));
+         if (this.objects.get(i).isGrassLike()) {
+            objects.add(this.objects.get(i));
          }
       }
 
@@ -2914,8 +2909,8 @@ public final class IsoGridSquare {
       List<IsoObject> objects = new ArrayList<>();
 
       for (int i = 0; i < this.objects.size(); i++) {
-         if (((IsoObject)this.objects.get(i)).isOres()) {
-            objects.add((IsoObject)this.objects.get(i));
+         if (this.objects.get(i).isOres()) {
+            objects.add(this.objects.get(i));
          }
       }
 
@@ -2924,7 +2919,7 @@ public final class IsoGridSquare {
 
    public IsoObject getCountertopObject() {
       for (int i = this.getObjects().size() - 1; i >= 0; i--) {
-         IsoObject obj = (IsoObject)this.getObjects().get(i);
+         IsoObject obj = this.getObjects().get(i);
          if (obj.hasProperty(IsoPropertyType.COUNTERTOP)) {
             return obj;
          }
@@ -2935,7 +2930,7 @@ public final class IsoGridSquare {
 
    public IsoObject getCountertopAttachObject() {
       for (int i = this.getObjects().size() - 1; i >= 0; i--) {
-         IsoObject obj = (IsoObject)this.getObjects().get(i);
+         IsoObject obj = this.getObjects().get(i);
          if (obj.hasProperty(IsoPropertyType.COUNTERTOP_ATTACH)) {
             return obj;
          }
@@ -2991,10 +2986,10 @@ public final class IsoGridSquare {
 
             output.put(flagsObj);
             if (isDebugSave) {
-               GameWindow.WriteString(output, ((IsoObject)this.objects.get(n)).getClass().getName());
+               GameWindow.WriteString(output, this.objects.get(n).getClass().getName());
             }
 
-            ((IsoObject)this.objects.get(n)).save(output, isDebugSave);
+            this.objects.get(n).save(output, isDebugSave);
             if (isDebugSave) {
                int position2 = output.position();
                output.position(position1);
@@ -3002,7 +2997,7 @@ public final class IsoGridSquare {
                output.position(position2);
             }
 
-            if (GameServer.server && !GameEntityManager.needSave && ((IsoObject)this.objects.get(n)).hasComponent(ComponentType.MetaTag)) {
+            if (GameServer.server && !GameEntityManager.needSave && this.objects.get(n).hasComponent(ComponentType.MetaTag)) {
                GameEntityManager.needSave = true;
             }
          }
@@ -3112,7 +3107,7 @@ public final class IsoGridSquare {
          return false;
       }
 
-      IsoObject o = (IsoObject)this.objects.get(0);
+      IsoObject o = this.objects.get(0);
       return o.sprite.getProperties().has(IsoFlagType.solidfloor) && ("TileFloorExt_3".equals(o.getTile()) || "TileFloorExt_4".equals(o.getTile()));
    }
 
@@ -3478,13 +3473,13 @@ public final class IsoGridSquare {
       System.out.println("objects");
 
       for (int n = 0; n < this.objects.size(); n++) {
-         ((IsoObject)this.objects.get(n)).debugPrintout();
+         this.objects.get(n).debugPrintout();
       }
 
       System.out.println("staticmovingobjects");
 
       for (int n = 0; n < this.staticMovingObjects.size(); n++) {
-         ((IsoObject)this.objects.get(n)).debugPrintout();
+         this.objects.get(n).debugPrintout();
       }
    }
 
@@ -3909,7 +3904,7 @@ public final class IsoGridSquare {
 
    public boolean hasWindowOrWindowFrame() {
       for (int n = 0; n < this.objects.size(); n++) {
-         IsoObject obj = (IsoObject)this.objects.get(n);
+         IsoObject obj = this.objects.get(n);
          if (!(obj instanceof IsoWorldInventoryObject) && (this.isWindowOrWindowFrame(obj, true) || this.isWindowOrWindowFrame(obj, false))) {
             return true;
          }
@@ -3954,7 +3949,7 @@ public final class IsoGridSquare {
 
    public IsoObject getSheetRope() {
       for (int i = 0; i < this.getObjects().size(); i++) {
-         IsoObject obj = (IsoObject)this.getObjects().get(i);
+         IsoObject obj = this.getObjects().get(i);
          if (obj.sheetRope) {
             return obj;
          }
@@ -3994,7 +3989,7 @@ public final class IsoGridSquare {
 
             while (sq != null) {
                for (int i = 0; i < sq.getObjects().size(); i++) {
-                  IsoObject o = (IsoObject)sq.getObjects().get(i);
+                  IsoObject o = sq.getObjects().get(i);
                   if (o.getProperties() != null && o.getProperties().has(type2)) {
                      int index = Integer.parseInt(o.getSprite().getName().split("_")[2]);
                      if (index > 14) {
@@ -4040,7 +4035,7 @@ public final class IsoGridSquare {
             String tile = "crafted_01_4";
 
             for (int i = 0; i < sq.getObjects().size(); i++) {
-               IsoObject o = (IsoObject)sq.getObjects().get(i);
+               IsoObject o = sq.getObjects().get(i);
                if (o.sprite != null && o.sprite.getName() != null && o.sprite.getName().equals(tile)) {
                   sq.transmitRemoveItemFromSquare(o);
                   break;
@@ -4060,7 +4055,7 @@ public final class IsoGridSquare {
          String tile = "crafted_01_3";
 
          for (int i = 0; i < sq.getObjects().size(); i++) {
-            IsoObject o = (IsoObject)sq.getObjects().get(i);
+            IsoObject o = sq.getObjects().get(i);
             if (o.sprite != null && o.sprite.getName() != null && o.sprite.getName().equals(tile)) {
                sq.transmitRemoveItemFromSquare(o);
                break;
@@ -4073,7 +4068,7 @@ public final class IsoGridSquare {
 
       while (sq != null) {
          for (int i = 0; i < sq.getObjects().size(); i++) {
-            IsoObject o = (IsoObject)sq.getObjects().get(i);
+            IsoObject o = sq.getObjects().get(i);
             if (o.getProperties() != null && (o.getProperties().has(type1) || o.getProperties().has(type2))) {
                previousSq = sq;
                find = true;
@@ -4098,7 +4093,7 @@ public final class IsoGridSquare {
          }
 
          for (int i = 0; i < topSq.getObjects().size(); i++) {
-            IsoObject o = (IsoObject)topSq.getObjects().get(i);
+            IsoObject o = topSq.getObjects().get(i);
             if (o.getProperties() != null && (o.getProperties().has(type1) || o.getProperties().has(type2))) {
                topSq.transmitRemoveItemFromSquare(o);
                break;
@@ -4120,7 +4115,7 @@ public final class IsoGridSquare {
       }
 
       for (int i = 0; i < this.objects.size(); i++) {
-         IsoObject obj = (IsoObject)this.objects.get(i);
+         IsoObject obj = this.objects.get(i);
          if (obj.isMovedThumpable()) {
             if (!this.isAdjacentToWindow() && !this.isAdjacentToHoppable()) {
                return obj;
@@ -4467,7 +4462,7 @@ public final class IsoGridSquare {
       h = (int)(h + this.getHashCodeObjects());
 
       for (int n = 0; n < this.objects.size(); n++) {
-         h = h * 2 + ((IsoObject)this.objects.get(n)).hashCode();
+         h = h * 2 + this.objects.get(n).hashCode();
       }
 
       int bodyCount = 0;
@@ -4565,7 +4560,7 @@ public final class IsoGridSquare {
 
    public IsoObject getWall() {
       for (int n = 0; n < this.objects.size(); n++) {
-         IsoObject obj = (IsoObject)this.objects.get(n);
+         IsoObject obj = this.objects.get(n);
          if (obj != null && obj.sprite != null && (obj.sprite.cutW || obj.sprite.cutN)) {
             return obj;
          }
@@ -4581,7 +4576,7 @@ public final class IsoGridSquare {
 
    public IsoObject getHoppableWall(boolean bNorth) {
       for (int n = 0; n < this.objects.size(); n++) {
-         IsoObject obj = (IsoObject)this.objects.get(n);
+         IsoObject obj = this.objects.get(n);
          if (obj != null && obj.sprite != null) {
             PropertyContainer properties = obj.getProperties();
             boolean bTallHoppableW = properties.has(IsoFlagType.TallHoppableW) && !properties.has(IsoFlagType.WallWTrans);
@@ -4609,7 +4604,7 @@ public final class IsoGridSquare {
 
    public Boolean getWallFull() {
       for (int n = 0; n < this.objects.size(); n++) {
-         IsoObject obj = (IsoObject)this.objects.get(n);
+         IsoObject obj = this.objects.get(n);
          if (obj != null
             && obj.sprite != null
             && (obj.sprite.cutN || obj.sprite.cutW || obj.sprite.getProperties().has(IsoFlagType.WallN) || obj.sprite.getProperties().has(IsoFlagType.WallW))) {
@@ -4622,9 +4617,9 @@ public final class IsoGridSquare {
 
    public boolean hasNonHoppableWall(boolean isNorth) {
       for (int n = 0; n < this.objects.size(); n++) {
-         IsoObject obj = (IsoObject)this.objects.get(n);
+         IsoObject obj = this.objects.get(n);
          if (obj != null && obj.sprite != null && !obj.isWallSE()) {
-            if (obj instanceof IsoWindow window && window.getNorth() == isNorth) {
+            if (obj instanceof IsoWindow window && window.isNorth() == isNorth) {
                return true;
             }
 
@@ -4701,7 +4696,7 @@ public final class IsoGridSquare {
 
    IsoObject getWallExcludingList(boolean bNorth, ArrayList<String> excluded) {
       for (int n = 0; n < this.objects.size(); n++) {
-         IsoObject obj = (IsoObject)this.objects.get(n);
+         IsoObject obj = this.objects.get(n);
          if (obj != null
             && obj.sprite != null
             && !excluded.contains(obj.sprite.name)
@@ -4718,7 +4713,7 @@ public final class IsoGridSquare {
 
    public IsoObject getWallExcludingObject(boolean bNorth, IsoObject exclude) {
       for (int n = 0; n < this.objects.size(); n++) {
-         IsoObject obj = (IsoObject)this.objects.get(n);
+         IsoObject obj = this.objects.get(n);
          if (obj != null
             && obj.sprite != null
             && obj != exclude
@@ -4736,7 +4731,7 @@ public final class IsoGridSquare {
 
    public IsoObject getWall(boolean bNorth) {
       for (int n = 0; n < this.objects.size(); n++) {
-         IsoObject obj = (IsoObject)this.objects.get(n);
+         IsoObject obj = this.objects.get(n);
          if (obj != null && obj.sprite != null && !obj.isWallSE() && (obj.sprite.cutN && bNorth || obj.sprite.cutW && !bNorth)) {
             return obj;
          }
@@ -4747,7 +4742,7 @@ public final class IsoGridSquare {
 
    public IsoObject getWallSE() {
       for (int n = 0; n < this.objects.size(); n++) {
-         IsoObject obj = (IsoObject)this.objects.get(n);
+         IsoObject obj = this.objects.get(n);
          if (obj != null && obj.sprite != null && obj.isWallSE()) {
             return obj;
          }
@@ -4758,7 +4753,7 @@ public final class IsoGridSquare {
 
    public IsoObject getWallNW() {
       for (int n = 0; n < this.objects.size(); n++) {
-         IsoObject obj = (IsoObject)this.objects.get(n);
+         IsoObject obj = this.objects.get(n);
          if (obj != null && obj.sprite != null && obj.sprite.getProperties().has(IsoFlagType.WallNW)) {
             return obj;
          }
@@ -4769,9 +4764,9 @@ public final class IsoGridSquare {
 
    public IsoObject getGarageDoor(boolean bNorth) {
       for (int n = 0; n < this.objects.size(); n++) {
-         IsoObject obj = (IsoObject)this.objects.get(n);
+         IsoObject obj = this.objects.get(n);
          if (IsoDoor.getGarageDoorIndex(obj) != -1) {
-            boolean bNorth2 = obj instanceof IsoDoor isoDoor ? isoDoor.getNorth() : ((IsoThumpable)obj).getNorth();
+            boolean bNorth2 = obj instanceof IsoDoor isoDoor ? isoDoor.isNorth() : ((IsoThumpable)obj).isNorth();
             if (bNorth == bNorth2) {
                return obj;
             }
@@ -4783,7 +4778,7 @@ public final class IsoGridSquare {
 
    public IsoObject getFloor() {
       for (int n = 0; n < this.objects.size(); n++) {
-         IsoObject obj = (IsoObject)this.objects.get(n);
+         IsoObject obj = this.objects.get(n);
          if (obj.sprite != null && obj.sprite.getProperties().has(IsoFlagType.solidfloor)) {
             return obj;
          }
@@ -4798,7 +4793,7 @@ public final class IsoGridSquare {
 
    public IsoObject getWaterObject() {
       for (int n = 0; n < this.objects.size(); n++) {
-         IsoObject obj = (IsoObject)this.objects.get(n);
+         IsoObject obj = this.objects.get(n);
          if (obj.sprite != null && obj.sprite.getProperties().has(IsoFlagType.water)) {
             return obj;
          }
@@ -4877,7 +4872,7 @@ public final class IsoGridSquare {
       boolean hasRug = false;
 
       for (int nn = 0; nn < this.getObjects().size(); nn++) {
-         IsoObject o = (IsoObject)this.getObjects().get(nn);
+         IsoObject o = this.getObjects().get(nn);
          IsoSprite ss = o.sprite;
          if (ss != null
             && (
@@ -4891,7 +4886,9 @@ public final class IsoGridSquare {
                hasRug = true;
             } else {
                this.transmitRemoveItemFromSquare(o);
-               nn--;
+               if (this.isRemovedAt(nn, o)) {
+                  nn--;
+               }
             }
          }
       }
@@ -4969,7 +4966,7 @@ public final class IsoGridSquare {
          return false;
       }
 
-      IsoObject object = (IsoObject)this.getObjects().get(0);
+      IsoObject object = this.getObjects().get(0);
       return object != null && object.getSprite() != null && object.getSprite().getName() != null && object.getSprite().getName().startsWith("underground_01");
    }
 
@@ -5236,7 +5233,7 @@ public final class IsoGridSquare {
 
    void RemoveAllWith(IsoFlagType propertyType) {
       for (int n = 0; n < this.objects.size(); n++) {
-         IsoObject o = (IsoObject)this.objects.get(n);
+         IsoObject o = this.objects.get(n);
          if (o.sprite != null && o.sprite.getProperties().has(propertyType)) {
             this.objects.remove(o);
             this.specialObjects.remove(o);
@@ -5252,7 +5249,7 @@ public final class IsoGridSquare {
       IsoGridSquare e = this.getCell().getGridSquare(this.x + 1, this.y, this.z);
 
       for (int n = 0; n < this.objects.size(); n++) {
-         IsoObject o = (IsoObject)this.objects.get(n);
+         IsoObject o = this.objects.get(n);
          if (o.sprite != null
             && (
                o.sprite.getProperties().has(IsoFlagType.solid)
@@ -5537,7 +5534,7 @@ public final class IsoGridSquare {
       }
 
       for (int i = 0; i < this.getObjects().size(); i++) {
-         IsoObject obj = (IsoObject)this.getObjects().get(i);
+         IsoObject obj = this.getObjects().get(i);
          if (obj.wallBloodSplats != null && !obj.wallBloodSplats.isEmpty()) {
             return true;
          }
@@ -5564,7 +5561,7 @@ public final class IsoGridSquare {
       }
 
       for (int i = 0; i < this.getObjects().size(); i++) {
-         IsoObject obj = (IsoObject)this.getObjects().get(i);
+         IsoObject obj = this.getObjects().get(i);
          if (obj.wallBloodSplats != null && !obj.wallBloodSplats.isEmpty()) {
             return true;
          }
@@ -5592,7 +5589,7 @@ public final class IsoGridSquare {
 
    public boolean haveGrime() {
       for (int i = 0; i < this.getObjects().size(); i++) {
-         IsoObject obj = (IsoObject)this.getObjects().get(i);
+         IsoObject obj = this.getObjects().get(i);
          if (obj != null && obj.getAttachedAnimSprite() != null) {
             ArrayList<IsoSpriteInstance> sprites = obj.getAttachedAnimSprite();
 
@@ -5613,7 +5610,7 @@ public final class IsoGridSquare {
 
    public boolean haveGrimeWall() {
       for (int i = 0; i < this.getObjects().size(); i++) {
-         IsoObject obj = (IsoObject)this.getObjects().get(i);
+         IsoObject obj = this.getObjects().get(i);
          if (obj != null && !obj.isFloor() && obj.getAttachedAnimSprite() != null) {
             ArrayList<IsoSpriteInstance> sprites = obj.getAttachedAnimSprite();
 
@@ -5634,7 +5631,7 @@ public final class IsoGridSquare {
 
    public boolean haveGrimeFloor() {
       for (int i = 0; i < this.getObjects().size(); i++) {
-         IsoObject obj = (IsoObject)this.getObjects().get(i);
+         IsoObject obj = this.getObjects().get(i);
          if (obj != null && obj.isFloor() && obj.getAttachedAnimSprite() != null) {
             ArrayList<IsoSpriteInstance> sprites = obj.getAttachedAnimSprite();
 
@@ -5655,7 +5652,7 @@ public final class IsoGridSquare {
 
    public boolean haveGraffiti() {
       for (int i = 0; i < this.getObjects().size(); i++) {
-         IsoObject obj = (IsoObject)this.getObjects().get(i);
+         IsoObject obj = this.getObjects().get(i);
          if (obj != null && obj.getAttachedAnimSprite() != null) {
             ArrayList<IsoSpriteInstance> sprites = obj.getAttachedAnimSprite();
 
@@ -5682,7 +5679,7 @@ public final class IsoGridSquare {
       IsoObject graff = null;
 
       for (int i = 0; i < this.getObjects().size(); i++) {
-         IsoObject obj = (IsoObject)this.getObjects().get(i);
+         IsoObject obj = this.getObjects().get(i);
          if (obj != null && obj.getAttachedAnimSprite() != null) {
             ArrayList<IsoSpriteInstance> sprites = obj.getAttachedAnimSprite();
 
@@ -5712,7 +5709,7 @@ public final class IsoGridSquare {
    public void removeGrime() {
       while (this.haveGrime()) {
          for (int i = 0; i < this.getObjects().size(); i++) {
-            IsoObject obj = (IsoObject)this.getObjects().get(i);
+            IsoObject obj = this.getObjects().get(i);
             if (obj != null && obj.getAttachedAnimSprite() != null) {
                boolean clean = false;
                ArrayList<IsoSpriteInstance> sprites = obj.getAttachedAnimSprite();
@@ -5740,7 +5737,7 @@ public final class IsoGridSquare {
    public void removeGraffiti() {
       while (this.haveGraffiti()) {
          for (int i = 0; i < this.getObjects().size(); i++) {
-            IsoObject obj = (IsoObject)this.getObjects().get(i);
+            IsoObject obj = this.getObjects().get(i);
             if (obj != null && obj.getAttachedAnimSprite() != null) {
                boolean clean = false;
                ArrayList<IsoSpriteInstance> sprites = obj.getAttachedAnimSprite();
@@ -5771,7 +5768,7 @@ public final class IsoGridSquare {
 
    public void removeBlood(boolean remote, boolean onlyWall) {
       for (int i = 0; i < this.getObjects().size(); i++) {
-         IsoObject obj = (IsoObject)this.getObjects().get(i);
+         IsoObject obj = this.getObjects().get(i);
          if (obj.wallBloodSplats != null) {
             obj.wallBloodSplats.clear();
          }
@@ -5800,7 +5797,7 @@ public final class IsoGridSquare {
 
    public void DoSplat(String id, boolean bFlip, IsoFlagType prop, float offX, float offZ, float alpha) {
       for (int i = 0; i < this.getObjects().size(); i++) {
-         IsoObject obj = (IsoObject)this.getObjects().get(i);
+         IsoObject obj = this.getObjects().get(i);
          if (obj.sprite != null && obj.sprite.getProperties().has(prop) && (!(obj instanceof IsoWindow) || !obj.isDestroyed())) {
             IsoSprite spr = IsoSprite.getSprite(IsoSpriteManager.instance, id, 0);
             if (spr == null) {
@@ -5828,7 +5825,7 @@ public final class IsoGridSquare {
 
    public void ClearTileObjectsExceptFloor() {
       for (int n = 0; n < this.objects.size(); n++) {
-         IsoObject o = (IsoObject)this.objects.get(n);
+         IsoObject o = this.objects.get(n);
          if (o.sprite == null || !o.sprite.getProperties().has(IsoFlagType.solidfloor)) {
             this.objects.remove(o);
             n--;
@@ -5857,7 +5854,7 @@ public final class IsoGridSquare {
       if (obj != null && this.objects.contains(obj)) {
          if (obj.isTableSurface()) {
             for (int i = this.objects.indexOf(obj) + 1; i < this.objects.size(); i++) {
-               IsoObject object = (IsoObject)this.objects.get(i);
+               IsoObject object = this.objects.get(i);
                if (object.isTableTopObject() || object.isTableSurface() && !object.hasProperty(IsoPropertyType.COUNTERTOP)) {
                   object.setRenderYOffset(object.getRenderYOffset() - obj.getSurfaceOffset());
                   object.sx = 0.0F;
@@ -5910,6 +5907,10 @@ public final class IsoGridSquare {
       PolygonalMap2.instance.squareChanged(this);
       IsoRegions.squareChanged(this, true);
       return index;
+   }
+
+   private boolean isRemovedAt(int n, IsoObject obj) {
+      return n >= this.objects.size() || this.objects.get(n) != obj;
    }
 
    public int RemoveTileObjectErosionNoRecalc(IsoObject obj) {
@@ -6021,7 +6022,7 @@ public final class IsoGridSquare {
             && (obj.sprite.cutW || obj.sprite.cutN || t == IsoObjectType.doorFrN || t == IsoObjectType.doorFrW || obj.sprite.treatAsWallOrder);
          if (findDoors || findWalls) {
             for (int i = 0; i < this.objects.size(); i++) {
-               IsoObject other = (IsoObject)this.objects.get(i);
+               IsoObject other = this.objects.get(i);
                if (other.sprite != null) {
                   t = other.sprite.getTileType();
                   if (findDoors && (t == IsoObjectType.doorN || t == IsoObjectType.doorW)) {
@@ -6310,7 +6311,7 @@ public final class IsoGridSquare {
    public void restackSheetRope() {
       if (this.has(IsoFlagType.climbSheetW) || this.has(IsoFlagType.climbSheetN) || this.has(IsoFlagType.climbSheetE) || this.has(IsoFlagType.climbSheetS)) {
          for (int i = 0; i < this.getObjects().size() - 1; i++) {
-            IsoObject sheetRope = (IsoObject)this.getObjects().get(i);
+            IsoObject sheetRope = this.getObjects().get(i);
             if (sheetRope.getProperties() != null
                && (
                   sheetRope.getProperties().has(IsoFlagType.climbSheetW)
@@ -6404,14 +6405,14 @@ public final class IsoGridSquare {
          if (!this.getProperties().has(IsoFlagType.burntOut)) {
             if (recursive) {
                for (int n = 0; n < this.objects.size(); n++) {
-                  ((IsoObject)this.objects.get(n)).handleBurning();
+                  this.objects.get(n).handleBurning();
                }
             }
 
             int power = 0;
 
             for (int n = 0; n < this.objects.size(); n++) {
-               IsoObject obj = (IsoObject)this.objects.get(n);
+               IsoObject obj = this.objects.get(n);
                boolean replaceIt = false;
                if (recursive) {
                   IsoObjectUtils.safelyBurnTileObjectFromSquare(obj);
@@ -6456,7 +6457,9 @@ public final class IsoGridSquare {
                                  this.RemoveTileObject(obj);
                               }
 
-                              n--;
+                              if (this.isRemovedAt(n, obj)) {
+                                 n--;
+                              }
                            } else if (!"Campfire".equalsIgnoreCase(obj.getName())) {
                               if (obj.getType() == IsoObjectType.wall
                                  && !obj.getProperties().has(IsoFlagType.DoorWallW)
@@ -6486,7 +6489,9 @@ public final class IsoGridSquare {
                                        removedTileObject = true;
                                     }
 
-                                    n--;
+                                    if (this.isRemovedAt(n, obj)) {
+                                       n--;
+                                    }
                                     continue;
                                  }
 
@@ -6510,7 +6515,9 @@ public final class IsoGridSquare {
                                           removedTileObject = true;
                                        }
 
-                                       n--;
+                                       if (this.isRemovedAt(n, obj)) {
+                                          n--;
+                                       }
                                        continue;
                                     }
 
@@ -6573,7 +6580,9 @@ public final class IsoGridSquare {
                                                 removedTileObject = true;
                                              }
 
-                                             n--;
+                                             if (this.isRemovedAt(n, obj)) {
+                                                n--;
+                                             }
                                              continue;
                                           }
 
@@ -6624,7 +6633,9 @@ public final class IsoGridSquare {
                               this.objects.remove(obj);
                            }
 
-                           n--;
+                           if (this.isRemovedAt(n, obj)) {
+                              n--;
+                           }
                         }
                      }
                   } else {
@@ -6675,7 +6686,7 @@ public final class IsoGridSquare {
 
    public void BurnWallsTCOnly() {
       for (int n = 0; n < this.objects.size(); n++) {
-         IsoObject obj = (IsoObject)this.objects.get(n);
+         IsoObject obj = this.objects.get(n);
          if (obj.sprite == null) {
          }
       }
@@ -7407,10 +7418,9 @@ public final class IsoGridSquare {
       boolean nonTransparentCutW = false;
       boolean forceRender = false;
       int numObjects = this.objects.size();
-      IsoObject[] objectArray = (IsoObject[])this.objects.getElements();
 
       for (int n = 0; n < numObjects; n++) {
-         IsoObject obj = objectArray[n];
+         IsoObject obj = this.objects.get(n);
          if (obj != null) {
             PropertyContainer spriteProps = obj.getProperties();
             if (spriteProps != null && !spriteProps.has(IsoFlagType.blueprint)) {
@@ -7986,7 +7996,7 @@ public final class IsoGridSquare {
             sx -= IsoCamera.frameState.offX;
             sy -= IsoCamera.frameState.offY;
             IndieGL.glColorMask(false, false, false, false);
-            Texture.getWhite().renderwallnw(sx, sy, 64 * Core.tileScale, 32 * Core.tileScale, -1, -1, -1, -1, -1, -1);
+            Texture.getWhite().renderwallnw(sx, sy, 128.0F, 64.0F, -1, -1, -1, -1, -1, -1);
             IndieGL.glColorMask(true, true, true, true);
             IndieGL.enableAlphaTest();
             IndieGL.glAlphaFunc(516, 0.0F);
@@ -8011,7 +8021,7 @@ public final class IsoGridSquare {
 
    public void switchLight(boolean active) {
       for (int n = 0; n < this.objects.size(); n++) {
-         IsoObject o = (IsoObject)this.objects.get(n);
+         IsoObject o = this.objects.get(n);
          if (o instanceof IsoLightSwitch isoLightSwitch) {
             isoLightSwitch.setActive(active);
          }
@@ -8019,12 +8029,12 @@ public final class IsoGridSquare {
    }
 
    public void removeGlassAttachments(IsoWindow window) {
-      IsoDirections[] windowSides = window.getNorth()
+      IsoDirections[] windowSides = window.isNorth()
          ? new IsoDirections[]{IsoDirections.N, IsoDirections.S}
          : new IsoDirections[]{IsoDirections.W, IsoDirections.E};
 
       for (int n = this.objects.size() - 1; n >= 0; n--) {
-         IsoObject o = (IsoObject)this.objects.get(n);
+         IsoObject o = this.objects.get(n);
          if (o.sprite != null) {
             boolean isAttachedToGlass = o.getProperties().has(IsoPropertyType.ATTACHED_TO_GLASS);
             boolean isWallObject = o.getProperties().has(IsoPropertyType.IS_MOVE_ABLE)
@@ -8042,35 +8052,33 @@ public final class IsoGridSquare {
    }
 
    public boolean IsOnScreen(boolean halfTileBorder) {
-      if (this.cachedScreenValue != Core.tileScale) {
+      if (this.cachedScreenValue != 2) {
          this.cachedScreenX = IsoUtils.XToScreen(this.x, this.y, this.z, 0);
          this.cachedScreenY = IsoUtils.YToScreen(this.x, this.y, this.z, 0);
-         this.cachedScreenValue = Core.tileScale;
+         this.cachedScreenValue = 2;
       }
 
       float sx = this.cachedScreenX;
       float sy = this.cachedScreenY;
       sx -= IsoCamera.frameState.offX;
       sy -= IsoCamera.frameState.offY;
-      int border = halfTileBorder ? 32 * Core.tileScale : 0;
+      int border = halfTileBorder ? 64 : 0;
       if (this.hasTree) {
-         int offsetX = (FBORenderChunk.JUMBO_XXL_WIDTH - FBORenderChunk.FLOOR_WIDTH) / 2;
-         int offsetY = FBORenderChunk.JUMBO_XXL_HEIGHT - FBORenderChunk.FLOOR_HEIGHT;
-         if (sx + offsetX <= 0 - border) {
+         int offsetX = 384;
+         int offsetY = 960;
+         if (sx + 384.0F <= 0 - border) {
             return false;
-         } else if (sy + FBORenderChunk.FLOOR_HEIGHT <= 0 - border) {
+         } else if (sy + 64.0F <= 0 - border) {
             return false;
          } else {
-            return sx - offsetX >= IsoCamera.frameState.offscreenWidth + border ? false : !(sy - offsetY >= IsoCamera.frameState.offscreenHeight + border);
+            return sx - 384.0F >= IsoCamera.frameState.offscreenWidth + border ? false : !(sy - 960.0F >= IsoCamera.frameState.offscreenHeight + border);
          }
-      } else if (sx + FBORenderChunk.FLOOR_WIDTH / 2.0F <= 0 - border) {
+      } else if (sx + 64.0F <= 0 - border) {
          return false;
-      } else if (sy + FBORenderChunk.FLOOR_HEIGHT <= 0 - border) {
+      } else if (sy + 64.0F <= 0 - border) {
          return false;
       } else {
-         return sx - FBORenderChunk.FLOOR_WIDTH / 2.0F >= IsoCamera.frameState.offscreenWidth + border
-            ? false
-            : !(sy - FBORenderChunk.PIXELS_PER_LEVEL >= IsoCamera.frameState.offscreenHeight + border);
+         return sx - 64.0F >= IsoCamera.frameState.offscreenWidth + border ? false : !(sy - 192.0F >= IsoCamera.frameState.offscreenHeight + border);
       }
    }
 
@@ -8111,7 +8119,7 @@ public final class IsoGridSquare {
          return false;
       }
 
-      IsoObject object = (IsoObject)this.objects.get(0);
+      IsoObject object = this.objects.get(0);
       return object.attachedAnimSprite != null && !object.attachedAnimSprite.isEmpty()
          ? false
          : this.chunk != null && this.isCouldSee(playerIndex) && this.waterSplashData.isSplashNow();
@@ -8193,11 +8201,10 @@ public final class IsoGridSquare {
       float depth3 = water == null ? 0.0F : water.depth[1];
       setBlendFunc();
       int flags = 0;
-      int size = this.objects.size();
-      IsoObject[] objectArray = (IsoObject[])this.objects.getElements();
+      int numObjects = this.objects.size();
 
-      for (int n = 0; n < size; n++) {
-         IsoObject obj = objectArray[n];
+      for (int n = 0; n < numObjects; n++) {
+         IsoObject obj = this.objects.get(n);
          if (showHighlightColors && !obj.isHighlighted(playerIndex)) {
             obj.setHighlighted(playerIndex, true);
             if (NonPvpZone.getNonPvpZone(this.x, this.y) != null) {
@@ -8332,22 +8339,13 @@ public final class IsoGridSquare {
             if (tex != null) {
                float sx = IsoUtils.XToScreen(this.x + this.splashX, this.y + this.splashY, this.z, 0) - IsoCamera.frameState.offX;
                float sy = IsoUtils.YToScreen(this.x + this.splashX, this.y + this.splashY, this.z, 0) - IsoCamera.frameState.offY;
-               sx -= tex.getWidth() / 2 * Core.tileScale;
-               sy -= tex.getHeight() / 2 * Core.tileScale;
+               sx -= tex.getWidth() / 2 * 2;
+               sy -= tex.getHeight() / 2 * 2;
                float alpha = 0.6F * (this.getCell().rainIntensity > 0 ? 1.0F : RainManager.rainIntensity);
                float shaderMod = SceneShaderStore.weatherShader != null ? 0.6F : 1.0F;
                SpriteRenderer.instance
                   .render(
-                     tex,
-                     sx,
-                     sy,
-                     tex.getWidth() * Core.tileScale,
-                     tex.getHeight() * Core.tileScale,
-                     0.8F * lightInfo.r,
-                     0.9F * lightInfo.g,
-                     1.0F * lightInfo.b,
-                     alpha * shaderMod,
-                     null
+                     tex, sx, sy, tex.getWidth() * 2, tex.getHeight() * 2, 0.8F * lightInfo.r, 0.9F * lightInfo.g, 1.0F * lightInfo.b, alpha * shaderMod, null
                   );
             }
 
@@ -8385,8 +8383,8 @@ public final class IsoGridSquare {
 
                   float sx = IsoUtils.XToScreen(this.x + this.splashX, this.y + this.splashY, this.z, 0) - IsoCamera.frameState.offX;
                   float sy = IsoUtils.YToScreen(this.x + this.splashX, this.y + this.splashY, this.z, 0) - IsoCamera.frameState.offY;
-                  sx -= tex.getWidth() / 2 * Core.tileScale;
-                  sy -= tex.getHeight() / 2 * Core.tileScale;
+                  sx -= tex.getWidth() / 2 * 2;
+                  sy -= tex.getHeight() / 2 * 2;
                   if (PerformanceSettings.fboRenderChunk) {
                      TextureDraw.nextZ = IsoDepthHelper.getSquareDepthData(
                                  PZMath.fastfloor(IsoCamera.frameState.camCharacterX),
@@ -8409,16 +8407,7 @@ public final class IsoGridSquare {
                   float shaderMod = 1.0F;
                   SpriteRenderer.instance
                      .render(
-                        tex,
-                        sx,
-                        sy,
-                        tex.getWidth() * Core.tileScale,
-                        tex.getHeight() * Core.tileScale,
-                        0.8F * lightInfo.r,
-                        0.9F * lightInfo.g,
-                        1.0F * lightInfo.b,
-                        alpha * 1.0F,
-                        null
+                        tex, sx, sy, tex.getWidth() * 2, tex.getHeight() * 2, 0.8F * lightInfo.r, 0.9F * lightInfo.g, 1.0F * lightInfo.b, alpha * 1.0F, null
                      );
                }
             }
@@ -8479,14 +8468,13 @@ public final class IsoGridSquare {
 
    public void RenderOpenDoorOnly() {
       int numObjects = this.objects.size();
-      IsoObject[] objectArray = (IsoObject[])this.objects.getElements();
 
       try {
          int start = 0;
          int end = numObjects - 1;
 
          for (int n = 0; n <= end; n++) {
-            IsoObject obj = objectArray[n];
+            IsoObject obj = this.objects.get(n);
             if (obj.sprite != null && (obj.sprite.getProperties().has(IsoFlagType.attachedN) || obj.sprite.getProperties().has(IsoFlagType.attachedW))) {
                obj.renderFxMask(this.x, this.y, this.z, false);
             }
@@ -8499,7 +8487,6 @@ public final class IsoGridSquare {
    public boolean RenderMinusFloorFxMask(int maxZ, boolean doSE, boolean vegitationRender) {
       boolean hasSE = false;
       int numObjects = this.objects.size();
-      IsoObject[] objectArray = (IsoObject[])this.objects.getElements();
       long currentTimeMillis = System.currentTimeMillis();
 
       try {
@@ -8507,7 +8494,7 @@ public final class IsoGridSquare {
          int end = doSE ? 0 : numObjects - 1;
 
          for (int n = start; doSE ? n >= end : n <= end; n += doSE ? -1 : 1) {
-            IsoObject obj = objectArray[n];
+            IsoObject obj = this.objects.get(n);
             if (obj.sprite != null) {
                boolean bDoIt = true;
                IsoObjectType t = obj.sprite.getTileType();
@@ -8586,9 +8573,9 @@ public final class IsoGridSquare {
          } else {
             IsoThumpable thumpable = (IsoThumpable)Type.tryCastTo(obj, IsoThumpable.class);
             if (thumpable != null && thumpable.isWindow()) {
-               return north == thumpable.getNorth();
+               return north == thumpable.isNorth();
             } else {
-               return obj instanceof IsoWindowFrame windowFrame ? windowFrame.getNorth() == north : false;
+               return obj instanceof IsoWindowFrame windowFrame ? windowFrame.isNorth() == north : false;
             }
          }
       } else {
@@ -8628,7 +8615,6 @@ public final class IsoGridSquare {
       boolean bInStencilRect = cell.isInStencil(sx, sy);
       boolean hasSE = false;
       int numObjects = this.objects.size();
-      IsoObject[] objectArray = (IsoObject[])this.objects.getElements();
       tempWorldInventoryObjects.clear();
       int start = doSE ? numObjects - 1 : 0;
       int end = doSE ? 0 : numObjects - 1;
@@ -8638,7 +8624,7 @@ public final class IsoGridSquare {
       boolean bHasSeenWindowW = false;
       if (!doSE) {
          for (int n = start; n <= end; n++) {
-            IsoObject obj = objectArray[n];
+            IsoObject obj = this.objects.get(n);
             if (this.isWindowOrWindowFrame(obj, true) && (cutawaySelf & 1) != 0) {
                IsoGridSquare toNorth = this.nav[IsoDirections.N.ordinal()];
                bHasSeenWindowN = bCouldSee || toNorth != null && toNorth.isCouldSee(playerIndex);
@@ -8670,7 +8656,7 @@ public final class IsoGridSquare {
       pzw.wallCutawayW = false; // pzopt: tileRecordParallel, the thread's own wall scratch
 
       for (int n = start; doSE ? n >= end : n <= end; n += doSE ? -1 : 1) {
-         IsoObject obj = objectArray[n];
+         IsoObject obj = this.objects.get(n);
          boolean bDoIt = true;
          IsoObjectType t = IsoObjectType.MAX;
          if (obj.sprite != null) {
@@ -8986,25 +8972,10 @@ public final class IsoGridSquare {
          }
       }
 
-      Arrays.sort(
-         (IsoWorldInventoryObject[])tempWorldInventoryObjects.getElements(),
-         0,
-         tempWorldInventoryObjects.size(),
-         (o1, o2) -> {
-            float d1 = ((IsoWorldInventoryObject)o1).xoff * ((IsoWorldInventoryObject)o1).xoff
-               + ((IsoWorldInventoryObject)o1).yoff * ((IsoWorldInventoryObject)o1).yoff;
-            float d2 = ((IsoWorldInventoryObject)o2).xoff * ((IsoWorldInventoryObject)o2).xoff
-               + ((IsoWorldInventoryObject)o2).yoff * ((IsoWorldInventoryObject)o2).yoff;
-            if (d1 == d2) {
-               return 0;
-            } else {
-               return d1 > d2 ? 1 : -1;
-            }
-         }
-      );
+      tempWorldInventoryObjects.sort(Comparator.comparingDouble(o -> o.xoff * o.xoff + o.yoff * o.yoff));
 
       for (int i = 0; i < tempWorldInventoryObjects.size(); i++) {
-         IsoWorldInventoryObject worldObj = (IsoWorldInventoryObject)tempWorldInventoryObjects.get(i);
+         IsoWorldInventoryObject worldObj = tempWorldInventoryObjects.get(i);
          worldObj.render(this.x, this.y, this.z, lightInfo, true, false, null);
       }
 
@@ -9013,7 +8984,7 @@ public final class IsoGridSquare {
 
    void RereouteWallMaskTo(IsoObject obj) {
       for (int n = 0; n < this.objects.size(); n++) {
-         IsoObject objTest = (IsoObject)this.objects.get(n);
+         IsoObject objTest = this.objects.get(n);
          if (objTest.sprite.getProperties().has(IsoFlagType.collideW) || objTest.sprite.getProperties().has(IsoFlagType.collideN)) {
             objTest.rerouteMask = obj;
          }
@@ -9143,10 +9114,9 @@ public final class IsoGridSquare {
 
    public IsoObject getContainerItem(String type) {
       int numObjects = this.getObjects().size();
-      IsoObject[] objectArray = (IsoObject[])this.getObjects().getElements();
 
       for (int i = 0; i < numObjects; i++) {
-         IsoObject o = objectArray[i];
+         IsoObject o = this.objects.get(i);
          if (o.getContainer() != null && type.equals(o.getContainer().getType())) {
             return o;
          }
@@ -9541,7 +9511,7 @@ public final class IsoGridSquare {
       this.n = n;
    }
 
-   public PZArrayList<IsoObject> getObjects() {
+   public List<IsoObject> getObjects() {
       return this.objects;
    }
 
@@ -9793,7 +9763,7 @@ public final class IsoGridSquare {
 
    public IsoObject getDoorOrWindowOrWindowFrame(IsoDirections dir, boolean ignoreOpen) {
       for (int i = this.objects.size() - 1; i >= 0; i--) {
-         IsoObject obj = (IsoObject)this.objects.get(i);
+         IsoObject obj = this.objects.get(i);
          IsoDoor door = (IsoDoor)Type.tryCastTo(obj, IsoDoor.class);
          IsoThumpable thumpable = (IsoThumpable)Type.tryCastTo(obj, IsoThumpable.class);
          IsoWindow window = (IsoWindow)Type.tryCastTo(obj, IsoWindow.class);
@@ -9816,11 +9786,11 @@ public final class IsoGridSquare {
          }
 
          if (obj instanceof IsoWindowFrame windowFrame) {
-            if (windowFrame.getNorth() && dir == IsoDirections.N) {
+            if (windowFrame.isNorth() && dir == IsoDirections.N) {
                return obj;
             }
 
-            if (!windowFrame.getNorth() && dir == IsoDirections.W) {
+            if (!windowFrame.isNorth() && dir == IsoDirections.W) {
                return obj;
             }
          }
@@ -9870,7 +9840,7 @@ public final class IsoGridSquare {
 
    public int getNextNonItemObjectIndex(int index) {
       for (int i = index; i < this.getObjects().size(); i++) {
-         IsoObject object = (IsoObject)this.getObjects().get(i);
+         IsoObject object = this.getObjects().get(i);
          if (!(object instanceof IsoWorldInventoryObject)) {
             return i;
          }
@@ -9960,15 +9930,6 @@ public final class IsoGridSquare {
       }
    }
 
-   public void syncIsoTrap(HandWeapon weapon, IsoPlayer attacker) {
-      AddExplosiveTrapPacket packet = new AddExplosiveTrapPacket();
-      packet.set(weapon, attacker, this);
-      ByteBufferWriter b = GameClient.connection.startPacket();
-      PacketType.AddExplosiveTrap.doPacket(b);
-      packet.write(b);
-      PacketType.AddExplosiveTrap.send(GameClient.connection);
-   }
-
    public int getTrapPositionX() {
       return this.trapPositionX;
    }
@@ -10004,7 +9965,7 @@ public final class IsoGridSquare {
       if (this.getObjects() != null) {
          for (int i = 0; i < this.getObjects().size(); i++) {
             if (this.getObjects().get(i) instanceof IsoLightSwitch) {
-               ((IsoObject)this.getObjects().get(i)).update();
+               this.getObjects().get(i).update();
             }
          }
       }
@@ -10055,7 +10016,7 @@ public final class IsoGridSquare {
       IsoObject table = null;
 
       for (int i = 0; i < this.objects.size(); i++) {
-         IsoObject obj = (IsoObject)this.objects.get(i);
+         IsoObject obj = this.objects.get(i);
          if (!(obj instanceof IsoWorldInventoryObject) && obj.sprite != null) {
             PropertyContainer props = obj.getProperties();
             if (props.getStackReplaceTileOffset() != 0) {
@@ -10131,12 +10092,11 @@ public final class IsoGridSquare {
    }
 
    public void fixPlacedItemRenderOffsets() {
-      IsoObject[] objects = (IsoObject[])this.objects.getElements();
       int nObjects = this.objects.size();
       int nOffsets = 0;
 
       for (int i = 0; i < nObjects; i++) {
-         IsoObject obj = objects[i];
+         IsoObject obj = this.objects.get(i);
          int surfaceOffset = PZMath.roundToInt(obj.getSurfaceOffsetNoTable());
          if (!(surfaceOffset <= 0.0F) && !PZArrayUtil.contains(SURFACE_OFFSETS, nOffsets, surfaceOffset)) {
             SURFACE_OFFSETS[nOffsets++] = surfaceOffset;
@@ -10148,7 +10108,8 @@ public final class IsoGridSquare {
       }
 
       for (int i = 0; i < nObjects; i++) {
-         if (objects[i] instanceof IsoWorldInventoryObject worldObj && !worldObj.isExtendedPlacement()) {
+         IsoObject obj = this.objects.get(i);
+         if (obj instanceof IsoWorldInventoryObject worldObj && !worldObj.isExtendedPlacement()) {
             int renderOffset = PZMath.roundToInt(worldObj.zoff * 96.0F);
             int newOffset = 0;
 
@@ -10280,42 +10241,36 @@ public final class IsoGridSquare {
       return null;
    }
 
-   public <T> PZArrayList<ItemContainer> getAllContainers(
-      T paramToCompare, ICallback<T, ItemContainer> isValidPredicate, PZArrayList<ItemContainer> containerList
-   ) {
+   public <T> List<ItemContainer> getAllContainers(T paramToCompare, ICallback<T, ItemContainer> isValidPredicate, List<ItemContainer> containerList) {
       this.getObjectContainers(paramToCompare, isValidPredicate, containerList);
       this.getVehicleItemContainers(paramToCompare, isValidPredicate, containerList);
       return containerList;
    }
 
-   public <T> PZArrayList<ItemContainer> getAllContainersFromAdjacentSquare(
-      IsoDirections dir, T paramToCompare, ICallback<T, ItemContainer> isValidPredicate, PZArrayList<ItemContainer> containerList
+   public <T> List<ItemContainer> getAllContainersFromAdjacentSquare(
+      IsoDirections dir, T paramToCompare, ICallback<T, ItemContainer> isValidPredicate, List<ItemContainer> containerList
    ) {
       IsoGridSquare adjSquare = this.getAdjacentSquare(dir);
       return adjSquare.getAllContainers(paramToCompare, isValidPredicate, containerList);
    }
 
-   public <T> PZArrayList<ItemContainer> getObjectContainers(
-      T paramToCompare, ICallback<T, ItemContainer> isValidPredicate, PZArrayList<ItemContainer> containerList
-   ) {
-      PZArrayList<IsoObject> adjObj = this.getObjects();
+   public <T> List<ItemContainer> getObjectContainers(T paramToCompare, ICallback<T, ItemContainer> isValidPredicate, List<ItemContainer> containerList) {
+      int size = this.objects.size();
 
-      for (int i = 0; i < adjObj.size(); i++) {
-         IsoObject obj = (IsoObject)adjObj.get(i);
+      for (int i = 0; i < size; i++) {
+         IsoObject obj = this.objects.get(i);
          obj.getContainers(paramToCompare, isValidPredicate, containerList);
       }
 
       return containerList;
    }
 
-   public <T> PZArrayList<ItemContainer> getVehicleItemContainers(T paramToCompare, ICallback<T, ItemContainer> isValidPredicate) {
-      PZArrayList<ItemContainer> containerList = new PZArrayList(ItemContainer.class, 10);
+   public <T> List<ItemContainer> getVehicleItemContainers(T paramToCompare, ICallback<T, ItemContainer> isValidPredicate) {
+      List<ItemContainer> containerList = new ArrayList<>(10);
       return this.getVehicleItemContainers(paramToCompare, isValidPredicate, containerList);
    }
 
-   public <T> PZArrayList<ItemContainer> getVehicleItemContainers(
-      T paramToCompare, ICallback<T, ItemContainer> isValidPredicate, PZArrayList<ItemContainer> containerList
-   ) {
+   public <T> List<ItemContainer> getVehicleItemContainers(T paramToCompare, ICallback<T, ItemContainer> isValidPredicate, List<ItemContainer> containerList) {
       BaseVehicle vehicle = this.getVehicleContainer();
       boolean hasVehicle = vehicle != null;
       return !hasVehicle ? containerList : vehicle.getVehicleItemContainers(paramToCompare, isValidPredicate, containerList);
@@ -10394,7 +10349,7 @@ public final class IsoGridSquare {
       }
 
       for (int i = 0; i < this.getObjects().size(); i++) {
-         IsoObject obj = (IsoObject)this.getObjects().get(i);
+         IsoObject obj = this.getObjects().get(i);
          if (obj.attachedAnimSprite != null) {
             for (int j = 0; j < obj.attachedAnimSprite.size(); j++) {
                IsoSprite attached = obj.attachedAnimSprite.get(j).parentSprite;
@@ -10421,10 +10376,9 @@ public final class IsoGridSquare {
 
    public boolean haveFire() {
       int size = this.objects.size();
-      IsoObject[] objectArray = (IsoObject[])this.objects.getElements();
 
       for (int n = 0; n < size; n++) {
-         IsoObject obj = objectArray[n];
+         IsoObject obj = this.objects.get(n);
          if (obj instanceof IsoFire) {
             return true;
          }
@@ -10765,7 +10719,7 @@ public final class IsoGridSquare {
          removed = true;
 
          for (int i = 0; i < this.getObjects().size(); i++) {
-            IsoObject obj = (IsoObject)this.getObjects().get(i);
+            IsoObject obj = this.getObjects().get(i);
             if (obj.getSprite().getProperties().has(IsoFlagType.canBeRemoved)) {
                if (GameServer.server) {
                   this.transmitRemoveItemFromSquare(obj);
@@ -10841,7 +10795,7 @@ public final class IsoGridSquare {
 
    public boolean containsVegetation() {
       for (int i = 0; i < this.getObjects().size(); i++) {
-         IsoObject obj = (IsoObject)this.getObjects().get(i);
+         IsoObject obj = this.getObjects().get(i);
          if (obj != null && obj.getSprite() != null && obj.getSprite().getName() != null && obj.getSprite().getName().contains("vegetation")) {
             return true;
          }
@@ -10852,7 +10806,7 @@ public final class IsoGridSquare {
 
    public IsoAnimalTrack getAnimalTrack() {
       for (int i = 0; i < this.getObjects().size(); i++) {
-         IsoObject obj = (IsoObject)this.getObjects().get(i);
+         IsoObject obj = this.getObjects().get(i);
          if (obj instanceof IsoAnimalTrack isoAnimalTrack) {
             return isoAnimalTrack;
          }
@@ -10863,7 +10817,7 @@ public final class IsoGridSquare {
 
    public boolean hasTrashReceptacle() {
       for (int i = 0; i < this.getObjects().size(); i++) {
-         IsoObject obj = (IsoObject)this.getObjects().get(i);
+         IsoObject obj = this.getObjects().get(i);
          if (obj != null && obj.getSprite() != null && obj.getSprite().getProperties() != null && obj.getSprite().getProperties().has("IsTrashCan")) {
             return true;
          }
@@ -10874,7 +10828,7 @@ public final class IsoGridSquare {
 
    public boolean hasTrash() {
       for (int i = 0; i < this.getObjects().size(); i++) {
-         IsoObject obj = (IsoObject)this.getObjects().get(i);
+         IsoObject obj = this.getObjects().get(i);
          if (obj != null
             && obj.getSprite() != null
             && (
@@ -10890,7 +10844,7 @@ public final class IsoGridSquare {
 
    public IsoObject getTrashReceptacle() {
       for (int i = 0; i < this.getObjects().size(); i++) {
-         IsoObject obj = (IsoObject)this.getObjects().get(i);
+         IsoObject obj = this.getObjects().get(i);
          if (obj != null
             && obj.getSprite() != null
             && obj.getSprite().getProperties() != null
@@ -11142,7 +11096,7 @@ public final class IsoGridSquare {
 
    public boolean hasFireObject() {
       for (int i = 0; i < this.getObjects().size(); i++) {
-         IsoObject obj = (IsoObject)this.getObjects().get(i);
+         IsoObject obj = this.getObjects().get(i);
          if (obj != null) {
             if (obj instanceof IsoFireplace && obj.isLit()) {
                return true;
@@ -11610,7 +11564,7 @@ public final class IsoGridSquare {
 
    public boolean hasGrave() {
       for (int i = 0; i < this.getObjects().size(); i++) {
-         IsoObject obj = (IsoObject)this.getObjects().get(i);
+         IsoObject obj = this.getObjects().get(i);
          if (obj != null && obj.isGrave()) {
             return true;
          }
@@ -11965,7 +11919,7 @@ public final class IsoGridSquare {
 
    public IsoButcherHook getButcherHook() {
       for (int i = 0; i < this.getObjects().size(); i++) {
-         IsoObject obj = (IsoObject)this.getObjects().get(i);
+         IsoObject obj = this.getObjects().get(i);
          if (obj instanceof IsoButcherHook isoButcherHook) {
             return isoButcherHook;
          }
@@ -11980,7 +11934,7 @@ public final class IsoGridSquare {
 
    public boolean hasFireplace() {
       for (int i = 0; i < this.getObjects().size(); i++) {
-         IsoObject obj = (IsoObject)this.getObjects().get(i);
+         IsoObject obj = this.getObjects().get(i);
          if (obj.getContainer() != null && obj.getContainer().getType() != null && obj.getContainer().getType().equals("fireplace")) {
             return true;
          }
@@ -12080,7 +12034,7 @@ public final class IsoGridSquare {
 
    public IsoObject getBed() {
       for (int i = 0; i < this.getObjects().size(); i++) {
-         IsoObject test = (IsoObject)this.getObjects().get(i);
+         IsoObject test = this.getObjects().get(i);
          if (test.getSprite() != null && test.getSprite().getProperties() != null && test.getSprite().getProperties().has(IsoFlagType.bed)) {
             return test;
          }
@@ -12091,7 +12045,7 @@ public final class IsoGridSquare {
 
    public IsoObject getPuddleFloor() {
       for (int i = 0; i < this.getObjects().size(); i++) {
-         IsoObject obj = (IsoObject)this.getObjects().get(i);
+         IsoObject obj = this.getObjects().get(i);
          if (obj.hasWater()
             && obj.getSprite() != null
             && obj.getSprite().getProperties() != null
@@ -12135,7 +12089,7 @@ public final class IsoGridSquare {
 
    public boolean hasFence() {
       for (int i = 0; i < this.getObjects().size(); i++) {
-         IsoObject obj = (IsoObject)this.getObjects().get(i);
+         IsoObject obj = this.getObjects().get(i);
          if (obj.isHoppable()) {
             return true;
          }
@@ -12208,6 +12162,44 @@ public final class IsoGridSquare {
          || this.getAdjacentSquare(IsoDirections.N) != null && this.getAdjacentSquare(IsoDirections.N).canStand();
    }
 
+   public IsoObject getLadder() {
+      int size = this.getObjects().size();
+
+      for (int i = 0; i < size; i++) {
+         IsoObject obj = this.getObjects().get(i);
+         if (obj != null
+            && obj.getProperties() != null
+            && obj.getProperties().has(IsoPropertyType.LADDER_N, IsoPropertyType.LADDER_S, IsoPropertyType.LADDER_E, IsoPropertyType.LADDER_W)) {
+            return obj;
+         }
+      }
+
+      return null;
+   }
+
+   public IsoObject getLadderUnder() {
+      for (IsoDirections direction : IsoDirections.values()) {
+         IsoGridSquare adjacentSquare = this.getAdjacentSquare(direction);
+         if (adjacentSquare != null) {
+            IsoGridSquare squareBelow = adjacentSquare.getSquareBelow();
+            if (squareBelow != null) {
+               IsoObject ladder = squareBelow.getLadder();
+               if (ladder != null) {
+                  PropertyContainer properties = ladder.getProperties();
+                  if (IsoDirections.N == direction && properties.has(IsoPropertyType.LADDER_S)
+                     || IsoDirections.S == direction && properties.has(IsoPropertyType.LADDER_N)
+                     || IsoDirections.W == direction && properties.has(IsoPropertyType.LADDER_E)
+                     || IsoDirections.E == direction && properties.has(IsoPropertyType.LADDER_W)) {
+                     return ladder;
+                  }
+               }
+            }
+         }
+      }
+
+      return null;
+   }
+
    public void addAshes() {
       String spriteName = "floors_burnt_01_" + Rand.Next(1, 2);
       IsoObject burntRemains = new IsoObject(this, spriteName);
@@ -12268,6 +12260,26 @@ public final class IsoGridSquare {
       if (leftStairs == IsoObjectType.stairsTW && leftSquare.z == upSquare.z - 1) {
          IsoDirections connectionDirection = leftStairs == upStairs ? IsoDirections.S : IsoDirections.N;
          return this.hasAdjacentStairs(leftSquare, connectionDirection, IsoObjectType.stairsTW);
+      } else {
+         return false;
+      }
+   }
+
+   public static boolean isWithinReachOfCharacter(IsoGameCharacter character, GridSquareEdgeElement edgeElement) {
+      if (character != null && edgeElement != null) {
+         IsoGridSquare playerSquare = character.getCurrentSquare();
+         IsoGridSquare squareFacingChar = edgeElement.getSquareFacingCharacter(character);
+         return playerSquare != null && squareFacingChar != null && (playerSquare == squareFacingChar || squareFacingChar.isAdjacentTo(playerSquare));
+      } else {
+         return false;
+      }
+   }
+
+   public static boolean isCharacterInSameRoom(IsoGameCharacter character, GridSquareEdgeElement edgeElement) {
+      if (character != null && edgeElement != null) {
+         IsoGridSquare playerSquare = character.getCurrentSquare();
+         IsoGridSquare squareFacingChar = edgeElement.getSquareFacingCharacter(character);
+         return playerSquare != null && squareFacingChar != null && playerSquare.getRoom() != null && playerSquare.getRoom() == squareFacingChar.getRoom();
       } else {
          return false;
       }

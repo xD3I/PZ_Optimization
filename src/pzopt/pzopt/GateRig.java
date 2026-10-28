@@ -73,7 +73,7 @@ final class GateRig {
                if (!(o instanceof IsoDoor d) || d.isOpen() || IsoDoor.getDoubleDoorIndex(o) != 1) {
                   continue;
                }
-               boolean north = d.getNorth();
+               boolean north = d.isNorth();
                String name = o.getSprite() == null ? "?" : o.getSprite().getName();
                boolean chain = name != null && name.startsWith("fencing");
                boolean crosses = north ? (x >> 3) != ((x + 3) >> 3) : (y >> 3) != ((y - 3) >> 3);

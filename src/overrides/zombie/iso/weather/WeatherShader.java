@@ -76,7 +76,7 @@ public class WeatherShader extends Shader {
          texd.vars[12] = camera.rightClickX;
          texd.vars[13] = camera.rightClickY;
          texd.vars[14] = Core.getInstance().getZoom(playerIndex);
-         texd.vars[15] = Core.tileScale == 2 ? 64.0F : 32.0F;
+         texd.vars[15] = 64.0F;
          texd.vars[16] = searchMode.getShaderGradientWidth() * texd.vars[15] / 2.0F;
          texd.vars[17] = searchMode.getShaderDesat();
          texd.vars[18] = searchMode.isShaderEnabled() ? 1.0F : 0.0F;

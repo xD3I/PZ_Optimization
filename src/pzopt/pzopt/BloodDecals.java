@@ -1150,7 +1150,7 @@ public final class BloodDecals {
                return FOOT_UNSAFE;
             }
             boolean plants = false, other = false;
-            zombie.util.list.PZArrayList<zombie.iso.IsoObject> objects = sq.getObjects();
+            java.util.List<zombie.iso.IsoObject> objects = sq.getObjects();
             for (int i = 0; i < objects.size(); i++) {
                zombie.iso.IsoObject o = objects.get(i);
                zombie.iso.sprite.IsoSprite sp = o.sprite;

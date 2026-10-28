@@ -442,7 +442,7 @@ public final class RoomDef {
             IsoGridSquare sq = GlobalObject.getCell().getGridSquare(x, y, this.level);
             if (sq != null) {
                for (int i = 0; i < sq.getObjects().size(); i++) {
-                  IsoObject obj = (IsoObject)sq.getObjects().get(i);
+                  IsoObject obj = sq.getObjects().get(i);
                   if (obj != null && obj.getSprite() != null && obj.getSprite().name != null && tiles.contains(obj.getSprite().name)) {
                      return true;
                   }

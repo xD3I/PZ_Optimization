@@ -842,56 +842,35 @@ public final class GameWindow {
 
    /** pzopt: the tile-pack block of enter(), callable from initShared (earlyTilePacks). */
    private static void loadTilePacks() {
-      Core.tileScale = Core.getInstance().getOptionTexture2x() ? 2 : 1;
+      // pzopt: 42.22's enter() block (2x tiles only; Core.tileScale is a constant 2 since 42.22)
       int flags = TextureID.useCompression ? 4 : 0;
       flags |= 64;
-      if (Core.tileScale == 1) {
-         LoadTexturePack("Tiles1x", flags);
-         LoadTexturePack("Overlays1x", flags);
-         LoadTexturePack("JumboTrees1x", flags);
-         LoadTexturePack("Tiles1x.floor", flags & -5);
-      }
-
-      if (Core.tileScale == 2) {
-         LoadTexturePack("Tiles2x", flags);
-         LoadTexturePack("Overlays2x", flags);
-         LoadTexturePack("JumboTrees2x", flags);
-         LoadTexturePack("JumboTreesBigs2x", flags);
-         LoadTexturePack("Tiles2x.floor", flags & -5);
-         LoadTexturePack("B42ChunkCaching2x", flags);
-         LoadTexturePack("B42ChunkCaching2x.floor", flags & -5);
-         LoadTexturePack("Clock2x", flags);
-      }
-
+      LoadTexturePack("Tiles2x", flags);
+      LoadTexturePack("Overlays2x", flags);
+      LoadTexturePack("JumboTrees2x", flags);
+      LoadTexturePack("JumboTreesBigs2x", flags);
+      LoadTexturePack("Tiles2x.floor", flags & -5);
+      LoadTexturePack("B42ChunkCaching2x", flags);
+      LoadTexturePack("B42ChunkCaching2x.floor", flags & -5);
+      LoadTexturePack("Clock2x", flags);
       setTexturePackLookup();
    }
 
    private static void enter() {
-      Core.tileScale = Core.getInstance().getOptionTexture2x() ? 2 : 1;
       IsoCamera.init();
       if (pzoptTilePacksLoaded) { // pzopt: earlyTilePacks, registered in initShared already
          setTexturePackLookup();
       } else {
       int flags = TextureID.useCompression ? 4 : 0;
       flags |= 64;
-      if (Core.tileScale == 1) {
-         LoadTexturePack("Tiles1x", flags);
-         LoadTexturePack("Overlays1x", flags);
-         LoadTexturePack("JumboTrees1x", flags);
-         LoadTexturePack("Tiles1x.floor", flags & -5);
-      }
-
-      if (Core.tileScale == 2) {
-         LoadTexturePack("Tiles2x", flags);
-         LoadTexturePack("Overlays2x", flags);
-         LoadTexturePack("JumboTrees2x", flags);
-         LoadTexturePack("JumboTreesBigs2x", flags);
-         LoadTexturePack("Tiles2x.floor", flags & -5);
-         LoadTexturePack("B42ChunkCaching2x", flags);
-         LoadTexturePack("B42ChunkCaching2x.floor", flags & -5);
-         LoadTexturePack("Clock2x", flags);
-      }
-
+      LoadTexturePack("Tiles2x", flags);
+      LoadTexturePack("Overlays2x", flags);
+      LoadTexturePack("JumboTrees2x", flags);
+      LoadTexturePack("JumboTreesBigs2x", flags);
+      LoadTexturePack("Tiles2x.floor", flags & -5);
+      LoadTexturePack("B42ChunkCaching2x", flags);
+      LoadTexturePack("B42ChunkCaching2x.floor", flags & -5);
+      LoadTexturePack("Clock2x", flags);
       setTexturePackLookup();
       } // pzopt: end of the stock tile-pack block
       Texture.getSharedTexture("animated_clock_01_0");
@@ -1365,9 +1344,7 @@ public final class GameWindow {
 
    public static void save(boolean bDoChars) throws IOException {
       if (!Core.getInstance().isNoSave()) {
-         if (IsoWorld.instance.currentCell != null
-            && !"LastStand".equals(Core.getInstance().getGameMode())
-            && !"Tutorial".equals(Core.getInstance().getGameMode())) {
+         if (IsoWorld.instance.currentCell != null && !Core.getInstance().isTutorial()) {
             if (GameClient.clientSave) {
                GameClient.clientSave = GameClient.client;
                MapItem.SaveWorldMap();
@@ -1380,7 +1357,7 @@ public final class GameWindow {
                   FileOutputStream fos = new FileOutputStream(outFile);
                   DataOutputStream output = new DataOutputStream(fos);
                ) {
-                  output.writeInt(249);
+                  output.writeInt(251);
                   WriteString(output, Core.gameMap);
                }
 

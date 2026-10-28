@@ -51,6 +51,8 @@ public final class KahluaTableImpl implements KahluaTable {
    private static final byte SBYT_DOUBLE = 1;
    private static final byte SBYT_TABLE = 2;
    private static final byte SBYT_BOOLEAN = 3;
+   public static final int MAX_NESTING = 256;
+   public static final String NESTING_EXCEEDED_MESSAGE = "lua table nesting exceeded";
 
    public KahluaTableImpl(Map<Object, Object> delegate) {
       if (pzopt.LuaJitDual.ON && pzopt.LuaJitDual.on) { // pzopt: devLuaJitDual, a table made during a recorded run
@@ -586,36 +588,50 @@ public final class KahluaTableImpl implements KahluaTable {
    }
 
    public void load(ByteBuffer input, int WorldVersion) {
+      this.load(input, WorldVersion, 0);
+   }
+
+   public void load(ByteBuffer input, int WorldVersion, int depth) {
       int count = input.getInt();
       this.wipe();
       if (WorldVersion >= 25) {
          for (int n = 0; n < count; n++) {
             byte keyByte = input.get();
-            Object key = this.load(input, WorldVersion, keyByte);
+            Object key = this.load(input, WorldVersion, keyByte, depth);
             byte valueByte = input.get();
-            Object value = this.load(input, WorldVersion, valueByte);
+            Object value = this.load(input, WorldVersion, valueByte, depth);
             this.rawset(key, value);
          }
       } else {
          for (int n = 0; n < count; n++) {
             byte valueByte = input.get();
             String key = GameWindow.ReadString(input);
-            Object value = this.load(input, WorldVersion, valueByte);
+            Object value = this.load(input, WorldVersion, valueByte, depth);
             this.rawset(key, value);
          }
       }
    }
 
-   public Object load(ByteBuffer input, int WorldVersion, byte sbyt) throws RuntimeException {
+   public Object load(ByteBuffer input, int WorldVersion, byte sbyt, int depth) throws RuntimeException {
       if (sbyt == 0) {
          return GameWindow.ReadString(input);
-      } else if (sbyt == 1) {
+      }
+
+      if (sbyt == 1) {
          return input.getDouble();
-      } else if (sbyt == 3) {
+      }
+
+      if (sbyt == 3) {
          return input.get() != 0;
-      } else if (sbyt == 2) {
+      }
+
+      if (sbyt == 2) {
+         if (depth + 1 >= 256) {
+            throw new RuntimeException("lua table nesting exceeded");
+         }
+
          KahluaTableImpl v = (KahluaTableImpl)LuaManager.platform.newTable();
-         v.load(input, WorldVersion);
+         v.load(input, WorldVersion, depth + 1);
          return v;
       } else {
          throw new RuntimeException("invalid lua table type " + sbyt);
@@ -623,35 +639,49 @@ public final class KahluaTableImpl implements KahluaTable {
    }
 
    public void load(DataInputStream input, int WorldVersion) throws IOException {
+      this.load(input, WorldVersion, 0);
+   }
+
+   public void load(DataInputStream input, int WorldVersion, int depth) throws IOException {
       int count = input.readInt();
       if (WorldVersion >= 25) {
          for (int n = 0; n < count; n++) {
             byte keyByte = input.readByte();
-            Object key = this.load(input, WorldVersion, keyByte);
+            Object key = this.load(input, WorldVersion, keyByte, depth);
             byte valueByte = input.readByte();
-            Object value = this.load(input, WorldVersion, valueByte);
+            Object value = this.load(input, WorldVersion, valueByte, depth);
             this.rawset(key, value);
          }
       } else {
          for (int n = 0; n < count; n++) {
             byte valueByte = input.readByte();
             String key = GameWindow.ReadString(input);
-            Object value = this.load(input, WorldVersion, valueByte);
+            Object value = this.load(input, WorldVersion, valueByte, depth);
             this.rawset(key, value);
          }
       }
    }
 
-   public Object load(DataInputStream input, int WorldVersion, byte sbyt) throws IOException, RuntimeException {
+   public Object load(DataInputStream input, int WorldVersion, byte sbyt, int depth) throws IOException, RuntimeException {
       if (sbyt == 0) {
          return GameWindow.ReadString(input);
-      } else if (sbyt == 1) {
+      }
+
+      if (sbyt == 1) {
          return input.readDouble();
-      } else if (sbyt == 3) {
+      }
+
+      if (sbyt == 3) {
          return input.readByte() == 1;
-      } else if (sbyt == 2) {
+      }
+
+      if (sbyt == 2) {
+         if (depth + 1 >= 256) {
+            throw new RuntimeException("lua table nesting exceeded");
+         }
+
          KahluaTableImpl v = (KahluaTableImpl)LuaManager.platform.newTable();
-         v.load(input, WorldVersion);
+         v.load(input, WorldVersion, depth + 1);
          return v;
       } else {
          throw new RuntimeException("invalid lua table type " + sbyt);

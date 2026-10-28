@@ -3,6 +3,7 @@ package zombie.iso.objects;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
+import java.util.List;
 import zombie.GameTime;
 import zombie.GameWindow;
 import zombie.SandboxOptions;
@@ -483,11 +484,11 @@ public class IsoLightSwitch extends IsoObject {
    }
 
    private boolean hasFasciaAdjacentToBuildingSquare(IsoGridSquare square) {
-      IsoObject[] objects = (IsoObject[])square.getObjects().getElements();
-      int i = 0;
+      List<IsoObject> objects = square.getObjects();
+      int size = objects.size();
 
-      for (int n = square.getObjects().size(); i < n; i++) {
-         IsoObject object = objects[i];
+      for (int i = 0; i < size; i++) {
+         IsoObject object = objects.get(i);
          if (object.isFascia()) {
             IsoGridSquare square1 = object.getFasciaAttachedSquare();
             return this.isBuildingSquare(square1);

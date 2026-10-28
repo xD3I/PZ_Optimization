@@ -621,7 +621,7 @@ public final class IsoSprite {
       spriteInstance.tintb = b;
       spriteInstance.alpha = spriteInstance.targetAlpha = a;
       IsoGridSquare.getDefColorInfo().set(1.0F, 1.0F, 1.0F, 1.0F);
-      int scale = Core.tileScale;
+      int scale = 2;
       if (PerformanceSettings.fboRenderChunk) {
          FBORenderObjectHighlight.getInstance().setRenderingGhostTile(true);
          IndieGL.StartShader(0);
@@ -630,9 +630,9 @@ public final class IsoSprite {
       IndieGL.glDefaultBlendFunc();
       Texture texture = this.getTextureForCurrentFrame(IsoDirections.N);
       if (texture != null && texture.getName() != null && texture.getName().contains("JUMBO")) {
-         this.render(spriteInstance, null, x, y, z, IsoDirections.N, 96 * scale + offsetX, 224 * scale + offsetY, IsoGridSquare.getDefColorInfo(), true);
+         this.render(spriteInstance, null, x, y, z, IsoDirections.N, 192.0F + offsetX, 448.0F + offsetY, IsoGridSquare.getDefColorInfo(), true);
       } else {
-         this.render(spriteInstance, null, x, y, z, IsoDirections.N, 32 * scale + offsetX, 96 * scale + offsetY, IsoGridSquare.getDefColorInfo(), true);
+         this.render(spriteInstance, null, x, y, z, IsoDirections.N, 64.0F + offsetX, 192.0F + offsetY, IsoGridSquare.getDefColorInfo(), true);
       }
 
       if (PerformanceSettings.fboRenderChunk) {
@@ -721,8 +721,8 @@ public final class IsoSprite {
             }
 
             if (this.hasActiveModel()) {
-               float scaleX = inst.getScaleX() * Core.tileScale;
-               float scaleY = -inst.getScaleY() * Core.tileScale;
+               float scaleX = inst.getScaleX() * 2.0F;
+               float scaleY = -inst.getScaleY() * 2.0F;
                float resized = 0.666F;
                scaleX /= 2.664F;
                scaleY /= 2.664F;
@@ -1704,11 +1704,11 @@ public final class IsoSprite {
       ColorInfo info = pzoptInfo(); // pzopt: tileRecordParallel, a recording thread uses its own scratch
       Texture tex = this.getTextureForFrame(frame, dir, obj != null && obj.isUseSnowSprite());
       if (tex != null) {
-         if (Core.tileScale == 2 && tex.getWidthOrig() == 64 && tex.getHeightOrig() == 128) {
+         if (tex.getWidthOrig() == 64 && tex.getHeightOrig() == 128) {
             inst.setScale(2.0F, 2.0F);
          }
 
-         if (Core.tileScale == 2 && inst.scaleX == 2.0F && inst.scaleY == 2.0F && tex.getWidthOrig() == 128 && tex.getHeightOrig() == 256) {
+         if (inst.scaleX == 2.0F && inst.scaleY == 2.0F && tex.getWidthOrig() == 128 && tex.getHeightOrig() == 256) {
             inst.setScale(1.0F, 1.0F);
          }
 
@@ -1887,8 +1887,8 @@ public final class IsoSprite {
             sy = IsoUtils.YToScreen(x, y, z, 0);
             sx = (int)sx;
             sy = (int)sy;
-            sx -= texture.getWidth() / 2.0F * Core.tileScale;
-            sy -= texture.getHeight() / 2.0F * Core.tileScale;
+            sx -= texture.getWidth() / 2.0F * 2.0F;
+            sy -= texture.getHeight() / 2.0F * 2.0F;
             sx += goX;
             sy += goY;
             label39:

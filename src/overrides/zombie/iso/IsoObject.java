@@ -6,6 +6,7 @@ import java.io.Serializable;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
@@ -175,7 +176,7 @@ import zombie.util.io.BitHeaderRead;
 import zombie.util.io.BitHeaderWrite;
 import zombie.util.io.BitHeader.HeaderSize;
 import zombie.util.lambda.Invokers.Params2.Boolean.ICallback;
-import zombie.util.list.PZArrayList;
+import zombie.util.list.PZArrayUtil;
 import zombie.vehicles.BaseVehicle;
 import zombie.world.WorldDictionary;
 
@@ -186,6 +187,7 @@ public class IsoObject extends GameEntity implements Serializable, ILuaIsoObject
    public static final float THUMP_STRESS_DEFAULT = 25.0F;
    public static final float THUMP_STRESS_FENCES = 7.0F;
    public static final float THUMP_STRESS_TRANSPARENT_FENCES = 0.0F;
+   private static final float SHEET_ROPE_DAMAGE_MAX_DISTANCE = 1.5F;
    public static IsoObject lastRendered;
    public static IsoObject lastRenderedRendered;
    private static final ColorInfo stCol = new ColorInfo();
@@ -246,8 +248,8 @@ public class IsoObject extends GameEntity implements Serializable, ILuaIsoObject
    public short damage = 100;
    public float partialThumpDmg;
    public boolean noPicking;
-   public float offsetX = (float)(32 * Core.tileScale);
-   public float offsetY = (float)(96 * Core.tileScale);
+   public float offsetX = 64.0F;
+   public float offsetY = 192.0F;
    public boolean outlineOnMouseover;
    public IsoObject rerouteMask;
    public IsoSprite sprite;
@@ -968,7 +970,7 @@ public class IsoObject extends GameEntity implements Serializable, ILuaIsoObject
                PacketType.SyncIsoObject.send(connection);
             }
          } else if (bRemote) {
-            this.syncIsoObjectReceive(bb);
+            this.syncIsoObjectReceive(bb, source);
             if (GameServer.server) {
                for (UdpConnection connection : GameServer.udpEngine.connections) {
                   if (source != null && connection.getConnectedGUID() != source.getConnectedGUID()) {
@@ -1012,7 +1014,7 @@ public class IsoObject extends GameEntity implements Serializable, ILuaIsoObject
       }
    }
 
-   public void syncIsoObjectReceive(ByteBufferReader bb) {
+   public void syncIsoObjectReceive(ByteBufferReader bb, UdpConnection source) {
       this.setReserveWaterAmount(bb.getFloat());
       this.syncFluidContainerReceive(bb);
       Durability durability = (Durability)this.getComponent(ComponentType.Durability);
@@ -1030,10 +1032,25 @@ public class IsoObject extends GameEntity implements Serializable, ILuaIsoObject
 
       if (this.sheetRope) {
          float newSheetRopeHealth = bb.getFloat();
-         boolean sheetRopeHealthChanged = this.sheetRopeHealth != newSheetRopeHealth;
-         this.sheetRopeHealth = newSheetRopeHealth;
-         if (GameServer.server && this.getSquare() != null && sheetRopeHealthChanged) {
-            this.getSquare().damageSpriteSheetRopeFromBottom();
+         if (!GameServer.server) {
+            this.sheetRopeHealth = newSheetRopeHealth;
+         } else {
+            float healthDiff = this.sheetRopeHealth - newSheetRopeHealth;
+            boolean isHealthChangedCorrectly = healthDiff >= 5.0F && healthDiff < 15.0F;
+            if (this.getSquare() == null || !isHealthChangedCorrectly) {
+               return;
+            }
+
+            for (IsoZombie zombie : this.getCell().getZombieList()) {
+               if (zombie.getOwner() == source
+                  && zombie.getCurrentSquare() != null
+                  && zombie.getCurrentSquare().z == this.getSquare().z
+                  && zombie.getCurrentSquare().DistTo(this.getSquare()) < 1.5F) {
+                  this.sheetRopeHealth = newSheetRopeHealth;
+                  this.getSquare().damageSpriteSheetRopeFromBottom();
+                  break;
+               }
+            }
          }
       }
    }
@@ -1961,7 +1978,7 @@ public class IsoObject extends GameEntity implements Serializable, ILuaIsoObject
       this.container = container;
    }
 
-   public <T> PZArrayList<ItemContainer> getContainers(T paramToCompare, ICallback<T, ItemContainer> isValidPredicate, PZArrayList<ItemContainer> containerList) {
+   public <T> List<ItemContainer> getContainers(T paramToCompare, ICallback<T, ItemContainer> isValidPredicate, List<ItemContainer> containerList) {
       ItemContainer container = this.getContainer();
       if (container == null) {
          return containerList;
@@ -1970,7 +1987,7 @@ public class IsoObject extends GameEntity implements Serializable, ILuaIsoObject
       DebugType.General.noise("Container Detected!");
       boolean isValid = isValidPredicate == null || isValidPredicate.accept(paramToCompare, container);
       if (isValid) {
-         containerList.addUniqueReference(container);
+         PZArrayUtil.addUniqueReference(containerList, container);
       }
 
       return containerList;
@@ -2135,6 +2152,10 @@ public class IsoObject extends GameEntity implements Serializable, ILuaIsoObject
       }
    }
 
+   public boolean isType(IsoObjectType type) {
+      return this.getType() == type;
+   }
+
    public void addChild(IsoObject child) {
       if (this.children == null) {
          this.children = new ArrayList<>(4);
@@ -2223,8 +2244,8 @@ public class IsoObject extends GameEntity implements Serializable, ILuaIsoObject
       this.damage = 100;
       this.partialThumpDmg = 0.0F;
       this.noPicking = false;
-      this.offsetX = 32 * Core.tileScale;
-      this.offsetY = 96 * Core.tileScale;
+      this.offsetX = 64.0F;
+      this.offsetY = 192.0F;
       this.outlineOnMouseover = false;
       this.rerouteMask = null;
       this.sprite = null;
@@ -2550,10 +2571,10 @@ public class IsoObject extends GameEntity implements Serializable, ILuaIsoObject
          return null;
       }
 
-      PZArrayList<IsoObject> objects = square.getObjects();
+      List<IsoObject> objects = square.getObjects();
 
       for (int i = 0; i < objects.size(); i++) {
-         IsoObject object = (IsoObject)objects.get(i);
+         IsoObject object = objects.get(i);
          if (object instanceof IsoThumpable
             && (object.getSprite() == null || !object.getSprite().solidfloor)
             && !object.getUsesExternalWaterSource()
@@ -3519,7 +3540,11 @@ public class IsoObject extends GameEntity implements Serializable, ILuaIsoObject
    }
 
    public boolean isHoppable(GridSquareEdgeFacingDirection facingDirection) {
-      return this.getHoppableDirection() == facingDirection;
+      if (facingDirection == GridSquareEdgeFacingDirection.NORTH_SOUTH) {
+         return this.hasProperty(IsoFlagType.HoppableN);
+      } else {
+         return facingDirection == GridSquareEdgeFacingDirection.EAST_WEST ? this.hasProperty(IsoFlagType.HoppableW) : false;
+      }
    }
 
    public boolean isTallHoppable() {
@@ -3602,9 +3627,7 @@ public class IsoObject extends GameEntity implements Serializable, ILuaIsoObject
                if (this.shouldDrawMainSprite()) {
                   Texture oldTexture = this.checkClockTexture();
                   this.sprite
-                     .render(
-                        this, x, y, z, this.getForwardIsoDirection(), this.offsetX, this.offsetY + this.renderYOffset * Core.tileScale, stCol, !this.isBlink()
-                     );
+                     .render(this, x, y, z, this.getForwardIsoDirection(), this.offsetX, this.offsetY + this.renderYOffset * 2.0F, stCol, !this.isBlink());
                   this.sprite.texture = oldTexture;
                   if (!PerformanceSettings.fboRenderChunk
                      && this.isOutlineHighlight(playerIndex)
@@ -3621,17 +3644,7 @@ public class IsoObject extends GameEntity implements Serializable, ILuaIsoObject
                      }
 
                      this.sprite
-                        .render(
-                           this,
-                           x,
-                           y,
-                           z,
-                           this.getForwardIsoDirection(),
-                           this.offsetX,
-                           this.offsetY + this.renderYOffset * Core.tileScale,
-                           stCol,
-                           !this.isBlink()
-                        );
+                        .render(this, x, y, z, this.getForwardIsoDirection(), this.offsetX, this.offsetY + this.renderYOffset * 2.0F, stCol, !this.isBlink());
                      IndieGL.EndShader();
                   }
                }
@@ -3666,17 +3679,7 @@ public class IsoObject extends GameEntity implements Serializable, ILuaIsoObject
 
                   if (this.shouldDrawMainSprite()) {
                      this.sprite
-                        .render(
-                           this,
-                           x,
-                           y,
-                           z,
-                           this.getForwardIsoDirection(),
-                           this.offsetX,
-                           this.offsetY + this.renderYOffset * Core.tileScale,
-                           stCol,
-                           !this.isBlink()
-                        );
+                        .render(this, x, y, z, this.getForwardIsoDirection(), this.offsetX, this.offsetY + this.renderYOffset * 2.0F, stCol, !this.isBlink());
                   }
 
                   this.renderAttachedAndOverlaySpritesInternal(this.getForwardIsoDirection(), x, y, z, col, bDoAttached, bWallLightingPass, shader, null);
@@ -3770,16 +3773,7 @@ public class IsoObject extends GameEntity implements Serializable, ILuaIsoObject
 
             this.sprite
                .render(
-                  this,
-                  x,
-                  y,
-                  z,
-                  this.getForwardIsoDirection(),
-                  this.offsetX,
-                  this.offsetY + this.renderYOffset * Core.tileScale,
-                  stCol,
-                  !this.isBlink(),
-                  texdModifier
+                  this, x, y, z, this.getForwardIsoDirection(), this.offsetX, this.offsetY + this.renderYOffset * 2.0F, stCol, !this.isBlink(), texdModifier
                );
          }
 
@@ -3829,7 +3823,7 @@ public class IsoObject extends GameEntity implements Serializable, ILuaIsoObject
                IsoObject.OutlineShader.instance.setStepSize(this.outlineThickness, texture.getWidthHW(), texture.getHeightHW());
             }
 
-            this.sprite.render(this, x, y, z, dir, this.offsetX, this.offsetY + this.renderYOffset * Core.tileScale, stCol, !this.isBlink());
+            this.sprite.render(this, x, y, z, dir, this.offsetX, this.offsetY + this.renderYOffset * 2.0F, stCol, !this.isBlink());
             IndieGL.EndShader();
          }
       }
@@ -3874,7 +3868,7 @@ public class IsoObject extends GameEntity implements Serializable, ILuaIsoObject
                   y,
                   z,
                   this.offsetX,
-                  this.offsetY + this.renderYOffset * Core.tileScale,
+                  this.offsetY + this.renderYOffset * 2.0F,
                   stCol,
                   !this.isBlink(),
                   texdModifier
@@ -3945,7 +3939,7 @@ public class IsoObject extends GameEntity implements Serializable, ILuaIsoObject
                FBORenderCell.instance.renderSeamFix2_Wall(this, x, y, z, stCol, texdModifier);
             }
 
-            this.sprite.render(this, x, y, z, dir, this.offsetX, this.offsetY + this.renderYOffset * Core.tileScale, stCol, !this.isBlink(), texdModifier);
+            this.sprite.render(this, x, y, z, dir, this.offsetX, this.offsetY + this.renderYOffset * 2.0F, stCol, !this.isBlink(), texdModifier);
             if (shader != null) {
                IndieGL.popShader(shader);
             }
@@ -4264,15 +4258,11 @@ public class IsoObject extends GameEntity implements Serializable, ILuaIsoObject
             float alpha1 = this.alpha[playerIndex];
             this.alpha[playerIndex] = this.alpha[playerIndex] * newColor.a;
             this.getOverlaySprite()
-               .render(
-                  this, x, y, z, this.getForwardIsoDirection(), this.offsetX, this.offsetY + this.renderYOffset * Core.tileScale, newColor, true, texdModifier
-               );
+               .render(this, x, y, z, this.getForwardIsoDirection(), this.offsetX, this.offsetY + this.renderYOffset * 2.0F, newColor, true, texdModifier);
             this.alpha[playerIndex] = alpha1;
          } else {
             this.getOverlaySprite()
-               .render(
-                  this, x, y, z, this.getForwardIsoDirection(), this.offsetX, this.offsetY + this.renderYOffset * Core.tileScale, newColor, true, texdModifier
-               );
+               .render(this, x, y, z, this.getForwardIsoDirection(), this.offsetX, this.offsetY + this.renderYOffset * 2.0F, newColor, true, texdModifier);
          }
 
          if (PerformanceSettings.fboRenderChunk) {
@@ -4303,7 +4293,7 @@ public class IsoObject extends GameEntity implements Serializable, ILuaIsoObject
                   || texdModifier == pzopt.RenderScratch.cam() && pzopt.RenderScratch.cam().isDir(IsoDirections.W)) { // pzopt: tileRecordParallel, the thread's own modifier (pzopt.RenderScratch)
                   if (s.parentSprite.getProperties().has(IsoFlagType.attachedN) || s.parentSprite.hasProperty(IsoFlagType.WindowN)) {
                      Texture tex = s.parentSprite.getTextureForCurrentFrame(dir, this);
-                     if (tex != null && tex.getWidth() < 32 * Core.tileScale) {
+                     if (tex != null && tex.getWidth() < 64) {
                         continue;
                      }
                   }
@@ -4324,7 +4314,7 @@ public class IsoObject extends GameEntity implements Serializable, ILuaIsoObject
                   }
                }
 
-               s.parentSprite.render(s, this, x, y, z, dir, this.offsetX, this.offsetY + this.renderYOffset * Core.tileScale, col, true, texdModifier1);
+               s.parentSprite.render(s, this, x, y, z, dir, this.offsetX, this.offsetY + this.renderYOffset * 2.0F, col, true, texdModifier1);
                col.a = fa;
                s.update();
             }
@@ -4390,12 +4380,11 @@ public class IsoObject extends GameEntity implements Serializable, ILuaIsoObject
 
    public void renderFxMask(float x, float y, float z, boolean bDoAttached) {
       if (this.sprite != null) {
-         this.sprite.render(this, x, y, z, this.getForwardIsoDirection(), this.offsetX, this.offsetY + this.renderYOffset * Core.tileScale, colFxMask, false);
+         this.sprite.render(this, x, y, z, this.getForwardIsoDirection(), this.offsetX, this.offsetY + this.renderYOffset * 2.0F, colFxMask, false);
       }
 
       if (this.getOverlaySprite() != null) {
-         this.getOverlaySprite()
-            .render(this, x, y, z, this.getForwardIsoDirection(), this.offsetX, this.offsetY + this.renderYOffset * Core.tileScale, colFxMask, false);
+         this.getOverlaySprite().render(this, x, y, z, this.getForwardIsoDirection(), this.offsetX, this.offsetY + this.renderYOffset * 2.0F, colFxMask, false);
       }
 
       if (bDoAttached) {
@@ -4404,7 +4393,7 @@ public class IsoObject extends GameEntity implements Serializable, ILuaIsoObject
 
             for (int i = 0; i < n; i++) {
                IsoSpriteInstance s = this.attachedAnimSprite.get(i);
-               s.render(this, x, y, z, this.getForwardIsoDirection(), this.offsetX, this.offsetY + this.renderYOffset * Core.tileScale, colFxMask);
+               s.render(this, x, y, z, this.getForwardIsoDirection(), this.offsetX, this.offsetY + this.renderYOffset * 2.0F, colFxMask);
             }
          }
 
@@ -4495,7 +4484,7 @@ public class IsoObject extends GameEntity implements Serializable, ILuaIsoObject
 
    public void loadFromRemoteBuffer(ByteBufferReader b, boolean addToObjects) {
       try {
-         this.load(b.bb, 249);
+         this.load(b.bb, 251);
       } catch (IOException e) {
          DebugType.General.printException(e, LogSeverity.Error);
          return;
@@ -4812,7 +4801,7 @@ public class IsoObject extends GameEntity implements Serializable, ILuaIsoObject
             container.sourceGrid = this.square;
 
             try {
-               container.load(bb.bb, 249);
+               container.load(bb.bb, 251);
                if (i == 0) {
                   if (this instanceof IsoDeadBody) {
                      container.capacity = 8;
@@ -4839,7 +4828,7 @@ public class IsoObject extends GameEntity implements Serializable, ILuaIsoObject
             int index = this.getObjectIndex();
             if (index >= 0) {
                IsoObject replace = factoryFromFileInput(this.getCell(), bb.bb);
-               replace.load(bb.bb, 249);
+               replace.load(bb.bb, 251);
                replace.setSquare(this.square);
                this.square.getObjects().set(index, replace);
                this.square.getSpecialObjects().remove(this);
@@ -5543,7 +5532,7 @@ public class IsoObject extends GameEntity implements Serializable, ILuaIsoObject
                   IsoGridSquare testSq = this.getCell().getGridSquare(x, y, z);
                   if (testSq != null) {
                      for (int i = 0; i < testSq.getObjects().size(); i++) {
-                        IsoObject object = (IsoObject)testSq.getObjects().get(i);
+                        IsoObject object = testSq.getObjects().get(i);
                         if ((object != this || bAddSelf) && object.getSpriteGrid() == spriteGrid) {
                            result.add(object);
                         }
@@ -5984,7 +5973,7 @@ public class IsoObject extends GameEntity implements Serializable, ILuaIsoObject
       }
 
       if (this.isoEntityNetId == -1L || this.lastObjectIndex == -1 || this.lastObjectIndex != this.getObjectIndex()) {
-         this.lastObjectIndex = this.isFloor() ? 0 : this.getObjectIndex();
+         this.lastObjectIndex = this.getObjectIndex();
          long i = (long)this.lastObjectIndex << 40;
          long z = (long)this.square.getZ() << 32;
          long y = (long)this.square.getY() << 16;
@@ -6217,18 +6206,7 @@ public class IsoObject extends GameEntity implements Serializable, ILuaIsoObject
 
          this.getOnOverlay()
             .getParentSprite()
-            .render(
-               this.getOnOverlay(),
-               this,
-               x,
-               y,
-               z,
-               this.getForwardIsoDirection(),
-               this.offsetX,
-               this.offsetY + this.getRenderYOffset() * Core.tileScale,
-               col,
-               true
-            );
+            .render(this.getOnOverlay(), this, x, y, z, this.getForwardIsoDirection(), this.offsetX, this.offsetY + this.getRenderYOffset() * 2.0F, col, true);
          col.set(r, g, b, col.a);
          this.renderAttachedAndOverlaySpritesInternal(this.getForwardIsoDirection(), x, y, z, col, true, false, null, null);
       }
@@ -6516,11 +6494,11 @@ public class IsoObject extends GameEntity implements Serializable, ILuaIsoObject
       Texture tex = this.sprite.getTextureForCurrentFrame(this.getDir(), this);
       if (tex != null) {
          IsoSpriteInstance inst = this.sprite.def;
-         if (Core.tileScale == 2 && tex.getWidthOrig() == 64 && tex.getHeightOrig() == 128) {
+         if (tex.getWidthOrig() == 64 && tex.getHeightOrig() == 128) {
             inst.setScale(2.0F, 2.0F);
          }
 
-         if (Core.tileScale == 2 && inst.scaleX == 2.0F && inst.scaleY == 2.0F && tex.getWidthOrig() == 128 && tex.getHeightOrig() == 256) {
+         if (inst.scaleX == 2.0F && inst.scaleY == 2.0F && tex.getWidthOrig() == 128 && tex.getHeightOrig() == 256) {
             inst.setScale(1.0F, 1.0F);
          }
 
@@ -6541,7 +6519,7 @@ public class IsoObject extends GameEntity implements Serializable, ILuaIsoObject
             this.sx = IsoUtils.XToScreen(x + inst.offX, y + inst.offY, z + inst.offZ, 0);
             this.sy = IsoUtils.YToScreen(x + inst.offX, y + inst.offY, z + inst.offZ, 0);
             this.sx = this.sx - this.offsetX;
-            this.sy = this.sy - (this.offsetY + this.renderYOffset * Core.tileScale);
+            this.sy = this.sy - (this.offsetY + this.renderYOffset * 2.0F);
          }
 
          int playerIndex = IsoCamera.frameState.playerIndex;

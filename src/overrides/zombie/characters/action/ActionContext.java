@@ -5,6 +5,8 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.Stack;
+import java.util.function.Consumer;
+import java.util.function.Function;
 import zombie.ai.states.StateManager;
 import zombie.characters.IsoPlayer;
 import zombie.characters.IsoZombie;
@@ -18,6 +20,7 @@ import zombie.core.skinnedmodel.advancedanimation.IAnimationVariableSlot;
 import zombie.debug.DebugType;
 import zombie.network.GameClient;
 import zombie.util.list.PZArrayUtil;
+import zombie.util.list.PZArrayUtil.IListConverter1Param;
 
 public final class ActionContext {
    // pzopt: marker so the game log shows the loose class was loaded, not the jar's copy
@@ -558,11 +561,15 @@ public final class ActionContext {
 
    public void setGroup(ActionGroup group) {
       this.actionGroup = group;
-      this.setCurrentState(group.getInitialState());
+      this.setDefaultState();
    }
 
    public ActionGroup getGroup() {
       return this.actionGroup;
+   }
+
+   public void setDefaultState() {
+      this.setCurrentState(this.actionGroup.getInitialState());
    }
 
    public void reportEvent(String event) {
@@ -581,8 +588,32 @@ public final class ActionContext {
       return this.actionStateContainer.getChildStateAt(idx);
    }
 
-   public List<ActionState> getChildStates() {
+   public boolean hasChildStates() {
+      return this.actionStateContainer.hasChildStates();
+   }
+
+   public int childStateCount() {
+      return this.actionStateContainer.childStateCount();
+   }
+
+   private List<ActionState> getChildStates() {
       return this.actionStateContainer.getChildStates();
+   }
+
+   public void visitChildStates(Consumer<ActionState> visitor) {
+      PZArrayUtil.forEach(this.getChildStates(), visitor);
+   }
+
+   public <E> List<E> getChildStates(Function<ActionState, E> converter) {
+      return PZArrayUtil.listConvert(this.getChildStates(), converter);
+   }
+
+   public <E> List<E> getChildStates(List<E> dest, Function<ActionState, E> converter) {
+      return PZArrayUtil.listConvert(this.getChildStates(), dest, converter);
+   }
+
+   public <E, T1> List<E> getChildStates(List<E> dest, T1 v1, IListConverter1Param<ActionState, E, T1> converter) {
+      return PZArrayUtil.listConvert(this.getChildStates(), dest, v1, converter);
    }
 
    public String getCurrentStateName() {

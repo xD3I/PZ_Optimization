@@ -32,7 +32,7 @@ final class DoorRig {
    /** The rig's door edge is (x, y, z, north) (GodRays' log of what the light volumes made of it). */
    static boolean at(int x, int y, int z, boolean north) {
       IsoDoor d = door;
-      return d != null && d.getSquare() != null && d.getSquare().x == x && d.getSquare().y == y && d.getSquare().z == z && d.getNorth() == north;
+      return d != null && d.getSquare() != null && d.getSquare().x == x && d.getSquare().y == y && d.getSquare().z == z && d.isNorth() == north;
    }
 
    /** Harness route setup (game thread): picks the door; returns the player's start {x, y, z} or null. */
@@ -77,7 +77,7 @@ final class DoorRig {
                   if (!(o instanceof IsoDoor d) || d.isBarricaded()) {
                      continue;
                   }
-                  boolean north = d.getNorth();
+                  boolean north = d.isNorth();
                   if (pin != null && north != (pin[3] == 1)) {
                      continue;
                   }
@@ -157,7 +157,7 @@ final class DoorRig {
                continue;
             }
             for (int i = 0; i < q.getSpecialObjects().size(); i++) {
-               if (q.getSpecialObjects().get(i) instanceof IsoDoor d && d.getNorth() == bestNorth && !d.isBarricaded()
+               if (q.getSpecialObjects().get(i) instanceof IsoDoor d && d.isNorth() == bestNorth && !d.isBarricaded()
                   && (d.getProperties() != null && d.getProperties().has(zombie.core.properties.IsoPropertyType.GARAGE_DOOR)) == garage) {
                   d.setLocked(false);
                   d.setLockedByKey(false);
@@ -230,7 +230,7 @@ final class DoorRig {
                   if (!(sq.getSpecialObjects().get(i) instanceof IsoDoor d)) {
                      continue;
                   }
-                  boolean north = d.getNorth();
+                  boolean north = d.isNorth();
                   IsoGridSquare other = cell.getGridSquare(north ? x : x - 1, north ? y - 1 : y, z);
                   if ((sq.getRoom() != null) == (other != null && other.getRoom() != null)) {
                      continue;

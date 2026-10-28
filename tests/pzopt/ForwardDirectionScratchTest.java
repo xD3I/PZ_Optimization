@@ -5,6 +5,7 @@ import java.lang.classfile.ClassModel;
 import java.lang.classfile.MethodModel;
 import java.lang.classfile.instruction.FieldInstruction;
 import java.lang.classfile.instruction.InvokeInstruction;
+import java.lang.classfile.instruction.NewObjectInstruction;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.concurrent.atomic.AtomicReference;
@@ -43,10 +44,12 @@ public class ForwardDirectionScratchTest {
 
    public static void main(String[] args) throws Exception {
       // ── the jar: the method reads the shared static (the hazard is TIS's, the fix below is ours) ──
+      // Up to 42.21 the jar read the static tempVector2_2; 42.22 allocates a fresh Vector2 per call (thread-safe, re-read
+      // 2026-10-27: the override keeps the per-thread vector, the same result without the allocation per call).
       MethodModel jarMethod = method(jarClass(CLASS));
-      Check.check(readsField(jarMethod, "tempVector2_2"),
-            "the jar's " + METHOD + " still uses the static tempVector2_2 scratch"
-                  + " (if TIS reworked it, re-read the override against the new jar)");
+      Check.check(readsField(jarMethod, "tempVector2_2") || allocates(jarMethod, "zombie/iso/Vector2"),
+            "the jar's " + METHOD + " uses the static tempVector2_2 scratch or a fresh Vector2"
+                  + " (if TIS reworked it again, re-read the override against the new jar)");
 
       // ── the override: no shared scratch, the per-thread vector instead ──
       MethodModel ours = method(ClassFile.of().parse(Files.readAllBytes(looseClass("zombie.characters.IsoGameCharacter"))));
@@ -137,6 +140,16 @@ public class ForwardDirectionScratchTest {
          }
       }
       throw new AssertionError("FAILED: " + METHOD + "()V not found");
+   }
+
+   private static boolean allocates(MethodModel m, String className) {
+      boolean[] found = {false};
+      m.code().orElseThrow().forEach(el -> {
+         if (el instanceof NewObjectInstruction n && n.className().name().stringValue().equals(className)) {
+            found[0] = true;
+         }
+      });
+      return found[0];
    }
 
    private static boolean readsField(MethodModel m, String fieldName) {

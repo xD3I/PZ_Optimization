@@ -23,6 +23,7 @@ import zombie.characters.WornItems.BodyLocationGroup;
 import zombie.characters.WornItems.BodyLocations;
 import zombie.characters.action.ActionContext;
 import zombie.characters.action.ActionGroup;
+import zombie.characters.action.ActionState;
 import zombie.characters.action.IActionStateChanged;
 import zombie.characters.animals.IsoAnimal;
 import zombie.core.Color;
@@ -242,6 +243,9 @@ public final class AnimatedModel extends AnimationVariableSource implements IAni
          } else {
             this.setModelData(iHumanVisual.getHumanVisual(), this.itemVisuals);
          }
+      } else {
+         this.character = character;
+         this.setGrappleable(character);
       }
    }
 
@@ -354,7 +358,7 @@ public final class AnimatedModel extends AnimationVariableSource implements IAni
          }
 
          String stateName = StringUtils.isNullOrWhitespace(this.state) ? this.actionContext.getCurrentStateName() : this.state;
-         this.advancedAnimator.setState(stateName, PZArrayUtil.listConvert(this.actionContext.getChildStates(), state -> state.getName()));
+         this.advancedAnimator.setState(stateName, this.actionContext.getChildStates(ActionState::getName));
       } else if (!StringUtils.isNullOrWhitespace(this.state)) {
          this.advancedAnimator.setState(this.state);
       }
@@ -1315,7 +1319,7 @@ public final class AnimatedModel extends AnimationVariableSource implements IAni
    }
 
    public void actionStateChanged(ActionContext sender) {
-      this.advancedAnimator.setState(sender.getCurrentStateName(), PZArrayUtil.listConvert(sender.getChildStates(), state -> state.getName()));
+      this.advancedAnimator.setState(sender.getCurrentStateName(), sender.getChildStates(ActionState::getName));
    }
 
    public AnimationPlayerRecorder getAnimationRecorder() {

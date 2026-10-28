@@ -630,7 +630,7 @@ public final class GodRays {
       if (above.getFloor() != null || above.has(IsoFlagType.solidfloor)) {
          return true;
       }
-      zombie.util.list.PZArrayList<IsoObject> objects = above.getObjects();
+      java.util.List<IsoObject> objects = above.getObjects();
       for (int k = 0; k < objects.size(); k++) {
          IsoObject o = objects.get(k);
          String n = o != null && o.getSprite() != null ? o.getSprite().getName() : null;
@@ -735,7 +735,7 @@ public final class GodRays {
    }
 
    private static boolean roof(IsoGridSquare sq) {
-      zombie.util.list.PZArrayList<IsoObject> objects = sq.getObjects();
+      java.util.List<IsoObject> objects = sq.getObjects();
       for (int k = 0; k < objects.size(); k++) {
          IsoObject o = objects.get(k);
          if (o != null && ChunkAo.roofSprite(o.getSprite())) { // the tents' roof tiles too (WestRoof-typed, no RoofGroup)

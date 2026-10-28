@@ -2100,7 +2100,7 @@ public final class Harness {
                } else {
                   // find_side=in: the player inside, the zombies outdoors; out: the player outdoors, the zombies inside the room
                   if (!(o instanceof zombie.iso.objects.IsoWindow win) || win.isDestroyed() || win.isSmashed() || (sq.getRoom() == null) != outSide) continue;
-                  north = win.getNorth();
+                  north = win.isNorth();
                }
                int bx = north ? x : x - 1, by = north ? y - 1 : y; // behind: farther from the camera
                int sx = north ? x : x + 3, sy = north ? y + 3 : y;
@@ -2258,7 +2258,7 @@ public final class Harness {
                   float[] info;
                   if (windows) {
                      if (!(o instanceof zombie.iso.objects.IsoWindow win) || win.isDestroyed() || win.isSmashed() || win.IsOpen()) continue;
-                     info = new float[]{win.getNorth() ? 0F : 1F, 0F, 0F};
+                     info = new float[]{win.isNorth() ? 0F : 1F, 0F, 0F};
                   } else {
                      info = Mirrors.mirrorTileInfo(o.getSprite());
                      if (info == null) {

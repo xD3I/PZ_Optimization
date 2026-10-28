@@ -311,7 +311,7 @@ public final class AmbientStreamManager extends BaseAmbientStreamManager {
    }
 
    public void addRandomAmbient(boolean force) {
-      if (!Core.gameMode.equals("LastStand") && !Core.gameMode.equals("Tutorial")) {
+      if (!Core.getInstance().isTutorial()) {
          ArrayList<IsoPlayer> players = new ArrayList<>();
 
          for (int i = 0; i < IsoPlayer.numPlayers; i++) {
@@ -614,6 +614,8 @@ public final class AmbientStreamManager extends BaseAmbientStreamManager {
                );
             }
          }
+
+         LuaEventManager.triggerEvent("OnElectricityChanged");
       }
 
       this.electricityShutOffState = bPowerOn ? 1 : 0;
@@ -644,7 +646,7 @@ public final class AmbientStreamManager extends BaseAmbientStreamManager {
                      IsoGridSquare square = IsoWorld.instance.currentCell.getGridSquare(x, y, z);
                      if (square != null) {
                         for (int j = 0; j < square.getObjects().size(); j++) {
-                           IsoObject obj = (IsoObject)square.getObjects().get(j);
+                           IsoObject obj = square.getObjects().get(j);
                            obj.checkHaveElectricity();
                            pzoptVisited++; // pzopt
                         }
