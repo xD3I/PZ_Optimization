@@ -665,6 +665,7 @@ PzoptOptionClasses = {
     grassBladeRegrowSeconds = { "pzopt.GrassBlades" },
     grassBladeSegments = { "pzopt.GrassBlades" },
     grassBladeSheenPct = { "pzopt.GrassBlades" },
+    grassBladeSwayMotion = { "pzopt.GrassBlades" },
     grassBladeTrails = { "pzopt.GrassBlades" },
     grassBladeTrailSeconds = { "pzopt.GrassBlades" },
     grassBladeTranslucencyPct = { "pzopt.GrassBlades" },

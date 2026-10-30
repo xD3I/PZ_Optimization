@@ -142,11 +142,9 @@ public final class Sway {
          return false;
       }
       int ts = Core.tileScale;
-      // stock's wind types: 1 sways the most (grass), 3 the least (stiff plants)
-      float stiff = sprite.windType == 3 ? 0.35F : sprite.windType == 2 ? 0.65F : 1F;
       boolean bush = sprite.isBush;
       objClass = bush ? CLASS_BUSH : CLASS_GRASS;
-      objAmp = Math.min(1F, (bush ? 16F : 18F) * ts / 2F * stiff / AMP_MAX_PX);
+      objAmp = ampOf(bush, stiffOf(sprite), ts);
       objPhase = phaseOf(sq.x, sq.y, object.getObjectIndex());
       // the ground row: the square's south corner in the texture's logical space (TreeBake.spriteRect's rule)
       float xRel = sq.x - rc.chunk.wx * 8;
@@ -155,11 +153,7 @@ public final class Sway {
       objGround = (xRel + yRel) * (16 * ts) - sq.z * (96 * ts) + yoff + 32 * ts;
       // the plant's height: the sprite frame (its south corner sits on the ground row) less its transparent top
       Texture tex = sprite.getTextureForCurrentFrame(object.getDir(), object);
-      float h = 0F;
-      if (tex != null) {
-         h = (tex.getHeightOrig() - tex.getOffsetY()) * (ts == 2 && tex.getHeightOrig() <= 128 && tex.getWidthOrig() <= 64 ? 2F : 1F);
-      }
-      objHeight = h > 4F ? h : 48F * ts;
+      objHeight = heightOf(tex, ts);
       objOn = true;
       float cx = (xRel - yRel) * (32 * ts) + FBORenderChunkManager.instance.getXOffset();
       // the sprite's visible (trimmed) columns, dilated by how far this plant's top can move
@@ -169,6 +163,56 @@ public final class Sway {
       float r = objAmp * AMP_MAX_PX * strengthNow() * 1.3F + 2F;
       markRect(rc, x0 - r, objGround - objHeight - 2F, x1 + r, objGround + 2F);
       return true;
+   }
+
+   /** Stock's wind types: 1 sways the most (grass), 3 the least (stiff plants). */
+   static float stiffOf(IsoSprite sprite) {
+      return sprite.windType == 3 ? 0.35F : sprite.windType == 2 ? 0.65F : 1F;
+   }
+
+   /** A plant's amplitude at its top (0..1 of AMP_MAX_PX) at tile scale {@code ts}. */
+   static float ampOf(boolean bush, float stiff, int ts) {
+      return Math.min(1F, (bush ? 16F : 18F) * ts / 2F * stiff / AMP_MAX_PX);
+   }
+
+   /** A plant's height (logical px from the ground row to its top): the sprite frame less its transparent top. */
+   static float heightOf(Texture tex, int ts) {
+      float h = 0F;
+      if (tex != null) {
+         h = (tex.getHeightOrig() - tex.getOffsetY()) * (ts == 2 && tex.getHeightOrig() <= 128 && tex.getWidthOrig() <= 64 ? 2F : 1F);
+      }
+      return h > 4F ? h : 48F * ts;
+   }
+
+   /**
+    * Game thread (pzopt.GrassBlades' chunk grass cache): the sway of the plant on a ground square as {@link #begin} bakes it,
+    * for the blades growing there to move with it. The swaying grass object on the square (else a bush): bits 0-3 its phase
+    * (phaseOf), 4-7 its height in squares of z (32 x tile scale logical px) x 8 (1..15, 0 = no plant: the bits 0-3 are then
+    * the square's own phase), bits 8-9 its wind type's stiffness (0: 1, 1: 0.65, 2: 0.35), bit 10 a bush.
+    */
+   public static int plantCode(IsoGridSquare sq) {
+      IsoObject best = null;
+      IsoObject floor = sq.getFloor();
+      IsoObject[] objs = (IsoObject[])sq.getObjects().getElements();
+      for (int i = 0, n = sq.getObjects().size(); i < n; i++) {
+         IsoObject o = objs[i];
+         IsoSprite s = o == null || o == floor || o instanceof IsoTree ? null : o.getSprite();
+         if (s == null || !(s.moveWithWind || s.isBush)) {
+            continue;
+         }
+         if (best == null || best.getSprite().isBush && !s.isBush) {
+            best = o; // grass before a bush
+         }
+      }
+      if (best == null) {
+         return (int)phaseOf(sq.x, sq.y, 0);
+      }
+      IsoSprite s = best.getSprite();
+      int ts = Core.tileScale;
+      float hz = heightOf(s.getTextureForCurrentFrame(best.getDir(), best), ts) / (32F * ts);
+      int hq = Math.max(1, Math.min(15, Math.round(hz * 8F)));
+      int st = s.windType == 3 ? 2 : s.windType == 2 ? 1 : 0;
+      return (int)phaseOf(sq.x, sq.y, best.getObjectIndex()) | hq << 4 | st << 8 | (s.isBush ? 1 << 10 : 0);
    }
 
    // ---- the tile mask: which 16 x 16 texel tiles of a chunk texture a plant can reach (built while the bake populates)
