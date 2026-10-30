@@ -685,6 +685,9 @@ public final class ChunkAo {
       if (Config.DEV_AO_DUMP_TREE > 0 && treeComputes < Config.DEV_AO_DUMP_TREE && (hasTree(c, minLevel) || job.nTrees > 0)) {
          job.treeDump = ++treeComputes;
          job.dumpWhere = c.wx + "," + c.wy + "," + minLevel + "," + rc.getTopLevel();
+      } else if (!Config.DEV_AO_DUMP_CHUNK.isEmpty() && dumpChunk(c)) {
+         job.treeDump = ++treeComputes; // devAoDumpChunk: the same dump, into the same numbered directories
+         job.dumpWhere = c.wx + "," + c.wy + "," + minLevel + "," + rc.getTopLevel();
       }
       if (job.sun) {
          System.arraycopy(SunShadow.cDir, 0, job.sunDir, 0, 4);
@@ -1540,6 +1543,29 @@ public final class ChunkAo {
    }
 
    private static int treeComputes; // dev (devAoDumpTree)
+   private static int chunkComputes; // dev (devAoDumpChunk)
+
+   /** Dev (devAoDumpChunk = "wx,wy/wx,wy/...[:N]"): is this compute one of the first N (8) of those chunks? */
+   private static boolean dumpChunk(IsoChunk c) {
+      try {
+         String v = Config.DEV_AO_DUMP_CHUNK;
+         int n = 8;
+         int k = v.indexOf(':');
+         if (k >= 0) {
+            n = Integer.parseInt(v.substring(k + 1).trim());
+            v = v.substring(0, k);
+         }
+         for (String e : v.split("/")) {
+            String[] p = e.split(",");
+            if (c.wx == Integer.parseInt(p[0].trim()) && c.wy == Integer.parseInt(p[1].trim())) {
+               return chunkComputes++ < n;
+            }
+         }
+         return false;
+      } catch (RuntimeException e) {
+         return false;
+      }
+   }
 
    /** Does a tree stand in this chunk on the texture's levels (dev: devAoDumpTree)? */
    private static boolean hasTree(IsoChunk c, int minLevel) {
