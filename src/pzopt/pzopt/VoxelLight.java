@@ -2430,6 +2430,11 @@ public final class VoxelLight {
       "      if (Pk.z - floor(Pk.z + 0.006) > 0.12 && ((occAt(int(floor(Pk.x)), int(floor(Pk.y)), int(floor(Pk.z + 0.006))) >> 8) & 15u) != 0u) leaves++;",
       "   }",
       "   if (leaves >= 2) { imageStore(outL, ivec3(t, int(uAff2.z)), vec4(0.0)); return; }",
+      // a block whose samples span surfaces far apart (a cut wall's top over the room behind it, a counter's edge over the
+      // floor, furniture before a wall): one light cannot stand for all of them, the bilinear read spread the other surface's
+      // light over this one's edge (dark scallops under every cut wall top, 2026-10-31); marked, the composite reads the
+      // single-surface blocks round it instead
+      "   bool mixed = nv >= 2 && length((world((vec2(tv[nv - 1]) + 0.5) / vec2(ds), dv[nv - 1]) - world((vec2(tv[0]) + 0.5) / vec2(ds), dv[0])) * vec3(1.0, 1.0, LEVEL)) > 0.45;",
       // dilation: a block with no surface takes the nearest of the next blocks' (the composite's bilinear tap never mixes an
       // empty texel into its neighbours: dark dashes along every chunk texture's edge and dots round sprite holes)
       "   for (int k = 0; k < 8 && d >= 1.0; k++) {",
@@ -2474,6 +2479,16 @@ public final class VoxelLight {
       // crown for the top of a small tree beside a big one; the blotches that sampling the floor was meant to stop were the
       // composite's bilinear tap mixing in the native's empty texels, now weighed out)
       "   vec3 Q = planar ? P + n * vec3(0.25, 0.25, 0.25 / LEVEL) : P;",
+      // a point above the floor on a W / N wall's line (a cut wall's top, a counter against the wall): the room the wall's
+      // visible face is in (half the top's texels lay a hair behind the line and took the room behind the wall's light)
+      "   if (P.z - lz > 0.03) {",
+      "      vec2 s1 = floor(P.xy + 0.07), f1 = P.xy - s1;",
+      "      if (min(f1.x, f1.y) < 0.07) {",
+      "         uint e1 = texelFetch(uE, ivec3(ivec2(s1) & (N - 1), int(lz) - uWin.z), 0).r;",
+      "         if ((e1 & 1u) != 0u && f1.x < 0.07) Q.x = max(Q.x, s1.x + 0.25);",
+      "         if ((e1 & 2u) != 0u && f1.y < 0.07) Q.y = max(Q.y, s1.y + 0.25);",
+      "      }",
+      "   }",
       "   float fz = clamp(Q.z - lz, 0.5 / float(RZ), 1.0 - 0.5 / float(RZ));",
       "   vec2 sq = floor(Q.xy);",
       "   vec2 qa = Q.xy;",
@@ -2516,10 +2531,12 @@ public final class VoxelLight {
       "      float E = d0.x * max(-n.x, 0.0) + d0.y * max(n.x, 0.0) + d0.z * max(-n.y, 0.0) + d0.w * max(n.y, 0.0) + d1.x * max(-n.z, 0.0) + d1.y * max(n.z, 0.0);",
       "      lit += col * E * uCubeGain;",
       "   }",
-      // a: 0 the native's light here; under 0.5 partly the volume's (2a of it, no sky: the window's edge); 0.99 + 0.01 sky the
+      // a: 0 the native's light here; under 0.5 partly the volume's (2a of it, no sky: the window's edge); 0.50 + 0.01 sky the
+      // volume's on a block of mixed surfaces (far under 0.99: any share of it in a footprint takes the composite's four-tap
+      // path; at 0.90 a share under a tenth passed the one-fetch path and drew a dark line where it crossed) (the composite leaves it out while a block of one surface is in the footprint); 0.99 + 0.01 sky the
       // volume's. A filtered alpha under 0.99 tells the composite a native texel is in its footprint: it then weighs the four
       // texels by their validity (one bilinear fetch mixed the native texels' empty rgb in: dark rims round every crown and bush)
-      "   imageStore(outL, ivec3(t, int(uAff2.z)), vec4(clamp(lit / 1.25, 0.0, 1.0), valid > 0.5 ? 0.99 + 0.01 * sky : 0.25 * valid));",
+      "   imageStore(outL, ivec3(t, int(uAff2.z)), vec4(clamp(lit / 1.25, 0.0, 1.0), valid > 0.5 ? (mixed ? 0.50 : 0.99) + 0.01 * sky : 0.25 * valid));",
       "}");
 
    /**
@@ -2581,17 +2598,24 @@ public final class VoxelLight {
       "         ivec2 i0 = ivec2(floor(fx));",
       "         vec2 ff = fx - vec2(i0);",
       "         ivec2 lim = textureSize(vxlLM, 0).xy - 1;",
-      "         vec3 rs = vec3(0.0);",
-      "         float ws = 0.0, ss = 0.0;",
+      "         vec3 rs = vec3(0.0), rm = vec3(0.0);",
+      "         float ws = 0.0, ss = 0.0, bs = 0.0, wm = 0.0, sm = 0.0;",
+      // a block of mixed surfaces (RELIGHT_CS: 0.50 + 0.01 sky) weighs a twentieth while a block of one surface is in the
+      // footprint (its one light stood for the surface behind a cut wall's top too: dark scallops along every cut wall);
+      // a twentieth, not none: left out, the pixels where a one-surface block's weight ran out drew a hard line)
       "         for (int k = 0; k < 4; k++) {",
       "            ivec2 o = ivec2(k & 1, k >> 1);",
       "            vec4 tk = texelFetch(vxlLM, ivec3(clamp(i0 + o, ivec2(0), lim), int(vxlLayer)), 0);",
-      "            float vk = (tk.a > 0.9899 ? 1.0 : 2.0 * tk.a) * (o.x == 1 ? ff.x : 1.0 - ff.x) * (o.y == 1 ? ff.y : 1.0 - ff.y);",
+      "            float bk = (o.x == 1 ? ff.x : 1.0 - ff.x) * (o.y == 1 ? ff.y : 1.0 - ff.y);",
+      "            if (tk.a > 0.45 && tk.a < 0.55) { bk *= 0.05; rm += tk.rgb * bk; sm += clamp((tk.a - 0.50) * 100.0, 0.0, 1.0) * bk; wm += bk; continue; }",
+      "            float vk = (tk.a > 0.9899 ? 1.0 : 2.0 * tk.a) * bk;",
       "            rs += tk.rgb * vk;",
       "            ss += (tk.a > 0.9899 ? clamp((tk.a - 0.99) * 100.0, 0.0, 1.0) : 0.0) * vk;",
       "            ws += vk;",
+      "            bs += bk;",
       "         }",
-      "         vxlW = clamp(ws, 0.0, 1.0);",
+      "         rs += rm; ss += sm; ws += wm; bs += wm;",
+      "         vxlW = bs > 1e-6 ? clamp(ws / bs, 0.0, 1.0) : 0.0;",
       "         if (vxlW <= 0.001) return Ln;",
       "         lm.rgb = rs / ws;",
       "         lsky = ss / ws;",
@@ -2618,6 +2642,15 @@ public final class VoxelLight {
       "   if (edge < 1.0) return Ln;",
       // a quarter square along the normal into the air, inside the pixel's level
       "   vec3 Q = P + n * vec3(0.25, 0.25, 0.25 / PPL_LEVEL);",
+      // a point above the floor on a W / N wall's line (a cut wall's top): the room of the wall's visible face (as RELIGHT_CS)
+      "   if (P.z - lz > 0.03) {",
+      "      vec2 s1 = floor(P.xy + 0.07), f1 = P.xy - s1;",
+      "      if (min(f1.x, f1.y) < 0.07) {",
+      "         uint e1 = texelFetch(vxlE, ivec3((ivec2(s1) + ivec2(vxlMap.xy)) & (int(vxlWin.z) - 1), int(lz - vxlWin.w)), 0).r;",
+      "         if ((e1 & 1u) != 0u && f1.x < 0.07) Q.x = max(Q.x, s1.x + 0.25);",
+      "         if ((e1 & 2u) != 0u && f1.y < 0.07) Q.y = max(Q.y, s1.y + 0.25);",
+      "      }",
+      "   }",
       "   float fz = clamp(Q.z - lz, vxlMapZ.y, 1.0 - vxlMapZ.y);",
       // never filtered across a blocked edge of the square in front of the surface (a window's pane sits a hair inside the
       // wall: its own square is the room): the texels behind a wall are another room's
