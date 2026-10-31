@@ -1369,9 +1369,6 @@ public final class PixelLight {
                   if ((conn & 6) == 6 && same(v3, corner(px, cell, wx - 1, wy + 1, z, 1, playerIndex))) conn |= 32;
                   if ((conn & 12) == 12 && same(v0, corner(px, cell, wx - 1, wy - 1, z, 2, playerIndex))) conn |= 64;
                   if ((conn & 9) == 9 && same(v1, corner(px, cell, wx + 1, wy - 1, z, 3, playerIndex))) conn |= 128;
-                  if (Config.PPL_UNSEEN_HOLD && visible != 0 && conn != 0) {
-                     conn &= seenMask(px, cell, wx, wy, z, playerIndex);
-                  }
                   }
                }
             }
@@ -1397,10 +1394,10 @@ public final class PixelLight {
                   && zombie.iso.fboRenderChunk.FBORenderCutaways.getInstance().pzoptSquareHidden(playerIndex, sq)) {
                cutEdge = 16;
             }
-            // pplUnseenStock: a never-seen square holding a ForceAmbient sprite (a roof: baked with tint 1, the composite gives it
-            // the ambient): bit 5 of g; the rest of a never-seen square keeps the light it baked with (stock's)
+            // pplUnseenBlend: a never-seen square holding a ForceAmbient sprite (a roof: baked with tint 1, the composite gives it
+            // the ambient) keeps the ambient up to its edge: bit 5 of g
             int forceAmb = 0;
-            if (Config.PPL_UNSEEN_STOCK && visible == 0 && sq != null && !above && hasForceAmbient(sq)) {
+            if (Config.PPL_UNSEEN_BLEND && visible == 0 && sq != null && !above && hasForceAmbient(sq)) {
                forceAmb = 32;
             }
             // pplTorchFade: a square cross-fading the torch is not simple, its visibility between 64 (hidden) and 192 (visible)
@@ -1836,33 +1833,7 @@ public final class PixelLight {
       return sq != null && sq.lighting[playerIndex] instanceof LightingJNI.JNILighting jl ? jl.pzoptVert(i) : NO_SQUARE;
    }
 
-   /**
-    * pplUnseenHold: the connectivity bits (E S W N SE SW NW NE) of the neighbours the player has seen (or that do not exist).
-    * A never-seen square's light is 0 and it is drawn with the light it baked with (stock's corners, lit where they touch a
-    * seen square); a seen square blending towards that 0 went to half its light at the shared edge while the never-seen side
-    * started at the full corner light: a step along every square of the edge of what the player has explored.
-    */
-   private static int seenMask(PackCtx p, IsoCell cell, int x, int y, int z, int playerIndex) {
-      int m = 0;
-      if (seen(p, cell, x + 1, y, z, playerIndex)) m |= 1;
-      if (seen(p, cell, x, y + 1, z, playerIndex)) m |= 2;
-      if (seen(p, cell, x - 1, y, z, playerIndex)) m |= 4;
-      if (seen(p, cell, x, y - 1, z, playerIndex)) m |= 8;
-      if (seen(p, cell, x + 1, y + 1, z, playerIndex)) m |= 16;
-      if (seen(p, cell, x - 1, y + 1, z, playerIndex)) m |= 32;
-      if (seen(p, cell, x - 1, y - 1, z, playerIndex)) m |= 64;
-      if (seen(p, cell, x + 1, y - 1, z, playerIndex)) m |= 128;
-      return m;
-   }
-
-   private static boolean seen(PackCtx p, IsoCell cell, int x, int y, int z, int playerIndex) {
-      IsoChunk c = p.chunk;
-      int lx = x - c.wx * 8, ly = y - c.wy * 8;
-      IsoGridSquare sq = lx >= 0 && lx < 8 && ly >= 0 && ly < 8 ? c.getGridSquare(lx, ly, z) : cell.getGridSquare(x, y, z);
-      return !(sq != null && sq.lighting[playerIndex] instanceof LightingJNI.JNILighting jl) || (jl.pzoptVis() & 7) != 0;
-   }
-
-   /** pplUnseenStock: the square holds a sprite stock draws with the ambient whatever its light (roofs). */
+   /** pplUnseenBlend: the square holds a sprite stock draws with the ambient whatever its light (roofs). */
    private static boolean hasForceAmbient(IsoGridSquare sq) {
       zombie.util.list.PZArrayList<zombie.iso.IsoObject> objs = sq.getObjects();
       for (int i = 0; i < objs.size(); i++) {
@@ -3341,15 +3312,24 @@ public final class PixelLight {
       "   return clamp(max(dot(n, ld) + wr, 0.0) / max(ld.z + wr, 0.15), 0.0, 1.25);",
       "}",
       "uniform vec4 pplWet;", // x: wet ground x specular strength, y: shininess, z: the ambient (pplUnseenAmbient, on when w is 1)
-      // pplUnseenAmbient: the light of a never-seen square; it baked with its own light (stock's corners: black, lit where they
-      // touch a seen square), a ForceAmbient sprite (a roof) with tint 1. pplUnseenStock: only a square holding one (bit 5 of
-      // g) takes the ambient, the rest keep their baked light (1): stock's fade into the unexplored over one square; the
-      // ambient on everything drew the edge of the explored area as hard steps along the squares (the porch outside the door,
-      // 2026-10-31)
-      "#ifdef PPL_UNSEEN_STOCK",
-      "vec3 pplUnseenL(vec4 cu) { return (int(cu.g * 255.0 + 0.5) & 32) != 0 ? vec3(pplWet.z) : vec3(1.0); }",
+      // pplUnseenBlend: how much of the per-pixel light a never-seen square takes, 0 (the ambient) .. 1: the bilinear of its
+      // corners, 1 at a corner a seen square shares. The square baked with its own light, which is the game's fade into the
+      // unexplored (1 at those corners, 0 deep in): the per-pixel light carries on from the seen squares over that fade and
+      // the fog of war holds. The ambient alone drew the edge of the explored area as a hard colour step along the squares
+      // where a light reaches it (the door light on the porch's curb, 2026-10-31). A ForceAmbient square (a roof, bit 5 of g)
+      // keeps the ambient
+      "#ifdef PPL_UNSEEN_BLEND",
+      "float pplSeenAt(ivec2 s, int lvl) { return pplVisible(texelFetch(pplConn, ivec3(s & pplOrg.z, lvl), 0).a) ? 1.0 : 0.0; }",
+      "float pplUnseenW(vec4 cu, ivec2 s, int lvl, vec2 f) {",
+      "   if ((int(cu.g * 255.0 + 0.5) & 32) != 0) return 0.0;",
+      "   float nw = pplSeenAt(s + ivec2(-1, -1), lvl), n = pplSeenAt(s + ivec2(0, -1), lvl), ne = pplSeenAt(s + ivec2(1, -1), lvl);",
+      "   float w = pplSeenAt(s + ivec2(-1, 0), lvl), e = pplSeenAt(s + ivec2(1, 0), lvl);",
+      "   float sw = pplSeenAt(s + ivec2(-1, 1), lvl), so = pplSeenAt(s + ivec2(0, 1), lvl), se = pplSeenAt(s + ivec2(1, 1), lvl);",
+      "   float c00 = max(max(nw, n), w), c10 = max(max(n, ne), e), c11 = max(max(e, se), so), c01 = max(max(so, sw), w);",
+      "   return mix(mix(c00, c10, f.x), mix(c01, c11, f.x), f.y);",
+      "}",
       "#else",
-      "vec3 pplUnseenL(vec4 cu) { return vec3(pplWet.z); }",
+      "float pplUnseenW(vec4 cu, ivec2 s, int lvl, vec2 f) { return 0.0; }",
       "#endif",
       "vec3 pplSpec = vec3(0.0);", // out of pplLight: the wet glints of the lights (added, not multiplied by the surface colour)
       "const vec3 PPL_VIEW = vec3(0.6428, 0.6428, 0.5162);", // towards the camera, in squares (the axis the screen does not see: (3, 3, 1) levels)
@@ -3421,7 +3401,7 @@ public final class PixelLight {
       "         vec3 ca = vxlAmb.rgb * max(clamp((lm.a - 0.99) * 100.0, 0.0, 1.0), vxlAmb.w), cl = lm.rgb * 1.25;",
       "         vec3 Lq = vxlOpt.z > 1.5 ? ca + cl : max(ca, cl);",
       "#ifdef PPL_UNSEEN_AMBIENT",
-      "         if (pplWet.w > 0.5) { vec4 cu = texelFetch(pplConn, ivec3(s, lvl), 0); if (!pplVisible(cu.a)) Lq = pplUnseenL(cu); }",
+      "         if (pplWet.w > 0.5) { vec4 cu = texelFetch(pplConn, ivec3(s, lvl), 0); if (!pplVisible(cu.a)) Lq = mix(vec3(pplWet.z), Lq, pplUnseenW(cu, s, lvl, fxy)); }",
       "#endif",
       "         return clamp(Lq, 0.0, 1.0);",
       "      }",
@@ -3600,7 +3580,7 @@ public final class PixelLight {
       // pplUnseenAmbient: a square the player has never seen baked with its own light (black; ForceAmbient roofs their tint): the
       // ambient, as stock draws those roofs
       "#ifdef PPL_UNSEEN_AMBIENT",
-      "   if (pplWet.w > 0.5) { vec4 cu = texelFetch(pplConn, ivec3(s, lvl), 0); if (!pplVisible(cu.a)) { L = pplUnseenL(cu); pplSpec = vec3(0.0); } }",
+      "   if (pplWet.w > 0.5) { vec4 cu = texelFetch(pplConn, ivec3(s, lvl), 0); if (!pplVisible(cu.a)) { float uw = pplUnseenW(cu, s, lvl, fxy); L = mix(vec3(pplWet.z), L, uw); pplSpec *= uw; } }",
       "#endif",
       "#if !defined(PPL_BASE) && defined(PPL_DEV)",
       "   if (view == 5) L = torch * V;",
@@ -4139,7 +4119,7 @@ public final class PixelLight {
 
    /** The game's chunkShader.frag (DIFFUSE x vertex colour, depth = chunkDepth + the texture's depth) with the light multiplied in. */
    private static final String TINT = (Config.DEV_PPL_TINT ? "#define PPL_TINT\n" : "") + (Config.PPL_TEXEL_POS ? "#define PPL_TEXEL\n#define PPL_NSPAN " + Config.PPL_NORMAL_SPAN + "\n#define PPL_NSPAN_WIDE " + Config.PPL_NORMAL_SPAN_WIDE + "\n" : "")
-      + (Config.PPL_TEXEL_HEIGHT ? "#define PPL_TEXEL_Z\n" + (Config.PPL_FLOOR_SNAP ? "#define PPL_FLOOR_SNAP\n" : "") : "") + (Config.PPL_SEEN_EDGE ? "#define PPL_SEEN_EDGE\n" : "") + (Config.PPL_UNSEEN_AMBIENT ? "#define PPL_UNSEEN_AMBIENT\n" + (Config.PPL_UNSEEN_STOCK ? "#define PPL_UNSEEN_STOCK\n" : "") : "") + (Config.PPL_WALL_EDGE ? "#define PPL_WALL_EDGE\n" : "") + (Config.TORCH_SOURCE_SELF_SHADOW ? "#define PPL_SELF_SHADOW\n" : "") + Relief.defines() // the defines every chunk program gets
+      + (Config.PPL_TEXEL_HEIGHT ? "#define PPL_TEXEL_Z\n" + (Config.PPL_FLOOR_SNAP ? "#define PPL_FLOOR_SNAP\n" : "") : "") + (Config.PPL_SEEN_EDGE ? "#define PPL_SEEN_EDGE\n" : "") + (Config.PPL_UNSEEN_AMBIENT ? "#define PPL_UNSEEN_AMBIENT\n" + (Config.PPL_UNSEEN_BLEND ? "#define PPL_UNSEEN_BLEND\n" : "") : "") + (Config.PPL_WALL_EDGE ? "#define PPL_WALL_EDGE\n" : "") + (Config.TORCH_SOURCE_SELF_SHADOW ? "#define PPL_SELF_SHADOW\n" : "") + Relief.defines() // the defines every chunk program gets
       + (VoxelLight.ACTIVE ? "#define PPL_VOXEL\n" + ("texel".equals(Config.VOXEL_LIGHT_NORMAL) && Config.PPL_TEXEL_POS ? "#define VXL_TEXEL_N\n" : "screen".equals(Config.VOXEL_LIGHT_NORMAL) || "texel".equals(Config.VOXEL_LIGHT_NORMAL) ? "#define VXL_SCREEN_N\n" : "") : "");
    private static final String CHUNK_FRAG = "#version 420\n" + (Config.DEV_PPL_VIEW != 0 ? "#define PPL_DEV\n" : "") + TINT + CHUNK_FRAG_BODY; // dev views compiled in only when asked: they keep values alive to the end (registers)
    /** The same without the dynamic lights (chunk textures no light reaches): 32 registers, full occupancy on the 890M (64 with). */
