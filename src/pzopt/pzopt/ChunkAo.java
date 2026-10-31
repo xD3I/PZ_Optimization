@@ -3986,7 +3986,12 @@ public final class ChunkAo {
       "            if (dot(dF, N) < 0.04) continue;",
       "            vec2 fv = vec2(-dF.z, dot(dF.xy, D.xy));",
       "            float uF = sectorOf(fv, cn, sn);",
-      "            float uB = sectorOf(fv - vec2(thickness, 0.0), cn, sn);",
+      // a sample far nearer the camera than it is beside the texel (a stool's seat half a square before the counter it stands
+      // at: nearer by ~10x its offset) is a thing in front, not a surface meeting this one (a corner's: at most ~1.7x): its
+      // slab thinned towards a fifth, or the assumed 0.6-square depth behind every sprite reached the surface behind it and
+      // drew the thing's outline on it as a dark halo with a light rim (bar stools, 2026-10-31)
+      "            float tk = thickness * clamp(2.75 - fv.x / max(abs(fv.y), 1e-3), 0.2, 1.0);",
+      "            float uB = sectorOf(fv - vec2(tk, 0.0), cn, sn);",
       "            mask |= sectors(min(uF, uB), max(uF, uB));",
       "         }",
       "      }",
