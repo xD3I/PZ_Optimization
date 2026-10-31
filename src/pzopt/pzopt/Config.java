@@ -1862,6 +1862,7 @@ public final class Config {
    public static final boolean AO_REUSE = bool("aoReuse", true); // the AO buffer is kept while the camera, zoom and chunk textures stay the same (no AO work on such frames)
    public static volatile int AO_SCALE_PCT; // AO buffer size per axis, % of the viewport (25..100)
    public static final boolean AO_EDGE_SHADE = bool("aoEdgeShade", true); // chunk AO: a texel beside a deeper surface (0.05+ squares behind, 2-4 texels out) takes the darker AO of the two (a leaf's soft edge before a shaded wall showed a light outline round every leaf, Discord 2026-10-04)
+   public static final boolean AO_EDGE_SHADE_LEAVES = bool("aoEdgeShadeLeaves", true); // chunk AO: aoEdgeShade only where the texel is on no wall / floor / furniture plane (the fridge's rim took the shade of the wall behind it, a window frame a dotted line; the kitchen, 2026-10-31)
    public static final boolean AO_EDGE_AWARE = bool("aoEdgeAware", false); // measured and off (2026-09-29): the AO multiplied in with a depth-aware read of its half-resolution term; no visible change on the canopies (max zoom shows the mips), small elsewhere
    public static volatile int AO_RADIUS_PCT; // how far occluders reach, % of a square
    public static final int AO_STRENGTH_PCT = integer("aoStrengthPct", 100); // the one darkening strength before 2026-09-25; now only the fallback of the three per-surface strengths below while they are unset

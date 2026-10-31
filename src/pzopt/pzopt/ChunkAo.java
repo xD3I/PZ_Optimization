@@ -109,7 +109,7 @@ public final class ChunkAo {
    }
 
    // dev (devAoAlternate): bits the kernel and the passes read; a change re-bakes every texture (reconfigure)
-   static final int DEV_VIEW = 1, DEV_CLASS_VIEW = 2, DEV_OFF = 4, DEV_FACING_VIEW = 8;
+   static final int DEV_VIEW = 1, DEV_CLASS_VIEW = 2, DEV_OFF = 4, DEV_FACING_VIEW = 8, DEV_NO_EDGE_SHADE = 256, DEV_SOFT_EDGE_SHADE = 512, DEV_EDGE_SHADE_PLANAR = 1024;
    static volatile int devBits;
    private static long altT0;
 
@@ -123,6 +123,11 @@ public final class ChunkAo {
          return devBits;
       }
       return (Config.AO_WIDE_NORMALS ? K_WIDE : 0) | (Config.AO_JOIN_FACES ? K_JOIN : 0) | (Config.AO_FALLOFF ? K_FALLOFF : 0);
+   }
+
+   /** aoEdgeShadeLeaves, or devAoAlternate's bit while it runs. */
+   static boolean edgeShadeLeaves() {
+      return Config.DEV_AO_ALTERNATE.isEmpty() ? Config.AO_EDGE_SHADE_LEAVES : (devBits & DEV_EDGE_SHADE_PLANAR) != 0;
    }
 
    /** devAoView, or the AO view of devAoAlternate's bits (1 when any view bit is set). */
@@ -2411,8 +2416,8 @@ public final class ChunkAo {
       private final int[] viewport = new int[4];
       private final int[] uAo = new int[27];
       private final int[] uBlur = new int[4];
-      private final int[] uMul = new int[4];
-      private final int[] uRatio = new int[6];
+      private final int[] uMul = new int[5];
+      private final int[] uRatio = new int[7];
       private final int[] uCopy = new int[2];
       private boolean logged;
       private boolean cardsBound; // this compute's kernel reads the tree silhouettes
@@ -2498,7 +2503,7 @@ public final class ChunkAo {
        * aoEdgeAware: the texture's own depth on unit 2 for the multiply's depth-aware read of the half-resolution AO (the
        * bilinear read put the occlusion of the wall behind a thin object onto its edge); off, or no depth: plain bilinear.
        */
-      private void edgeUniforms(int depthLoc, int eLoc, Job job, float sc) {
+      private void edgeUniforms(int depthLoc, int eLoc, int pnLoc, Job job, float sc) {
          boolean on = (Config.AO_EDGE_AWARE || Config.AO_EDGE_SHADE) && job.n > 0 && job.srcTex[0] > 0;
          if (on) {
             GL13.glActiveTexture(GL13.GL_TEXTURE2);
@@ -2506,7 +2511,10 @@ public final class ChunkAo {
             GL13.glActiveTexture(GL13.GL_TEXTURE0);
          }
          GL20.glUniform1i(depthLoc, 2);
-         GL20.glUniform4f(eLoc, on && Config.AO_EDGE_AWARE ? 1.0F : 0.0F, sc, AmbientOcclusion.UNITS_PER_DEPTH / EDGE_TOLERANCE_SQUARES, on && Config.AO_EDGE_SHADE ? 1.0F : 0.0F);
+         GL20.glUniform4f(eLoc, on && Config.AO_EDGE_AWARE ? 1.0F : 0.0F, sc, AmbientOcclusion.UNITS_PER_DEPTH / EDGE_TOLERANCE_SQUARES, on && Config.AO_EDGE_SHADE && (devBits & DEV_NO_EDGE_SHADE) == 0 ? ((devBits & DEV_SOFT_EDGE_SHADE) != 0 ? 2.0F : 1.0F) : 0.0F);
+         // aoEdgeShadeLeaves: no edge shade on a texel of a wall / floor / furniture face (the fridge's rim took the shade of
+         // the wall behind it, a window frame a dotted line): texels per square and the row sign for its normal
+         GL20.glUniform4f(pnLoc, job.ppu, Config.AO_CHUNK_FLIP ? -1.0F : 1.0F, edgeShadeLeaves() ? 1.0F : 0.0F, 0.0F);
       }
 
       /** The texture's colour (its framebuffer bound) times its AO; the first time after a compute under an occlusion query. */
@@ -2516,7 +2524,7 @@ public final class ChunkAo {
          GL20.glUseProgram(this.mulProgram);
          GL20.glUniform1i(this.uMul[0], 0);
          GL20.glUniform4f(this.uMul[1], sc / aw, sc / ah, 1.0F, aoView());
-         this.edgeUniforms(this.uMul[2], this.uMul[3], job, sc);
+         this.edgeUniforms(this.uMul[2], this.uMul[3], this.uMul[4], job, sc);
          GL11.glBindTexture(GL11.GL_TEXTURE_2D, e.tex);
          GL11.glEnable(GL11.GL_BLEND);
          if (aoView() > 0) {
@@ -2783,7 +2791,7 @@ public final class ChunkAo {
          GL20.glUniform1i(this.uRatio[1], 1);
          GL20.glUniform4f(this.uRatio[2], sc / aw, sc / ah, 1.0F, hadOld ? 1.0F : 0.0F);
          GL20.glUniform4f(this.uRatio[3], direct ? 1.0F : (float)aw / this.rawW, direct ? 1.0F : (float)ah / this.rawH, aoView(), 0.0F);
-         this.edgeUniforms(this.uRatio[4], this.uRatio[5], job, sc);
+         this.edgeUniforms(this.uRatio[4], this.uRatio[5], this.uRatio[6], job, sc);
          GL13.glActiveTexture(GL13.GL_TEXTURE1);
          GL11.glBindTexture(GL11.GL_TEXTURE_2D, e.tex);
          GL13.glActiveTexture(GL13.GL_TEXTURE0);
@@ -2851,6 +2859,8 @@ public final class ChunkAo {
       private int slot;
       private final boolean[] pending = new boolean[64];
       private final boolean[] slotCompute = new boolean[64];
+      private final int[] slotBits = new int[64]; // devAoAlternate's bits when the job ran: a phase's jobs get their own line
+      private int accBits = -1;
       private long computeNs;
       private long applyNs;
       private long mipNs;
@@ -2883,6 +2893,7 @@ public final class ChunkAo {
          }
          this.pending[this.slot] = true;
          this.slotCompute[this.slot] = compute;
+         this.slotBits[this.slot] = devBits;
          this.slot = (this.slot + 1) & 63;
          if (this.pending[this.slot]) {
             int b = this.slot * 6;
@@ -2891,6 +2902,12 @@ public final class ChunkAo {
                long t1 = GL33.glGetQueryObjecti64(this.queries[b + 1], GL15.GL_QUERY_RESULT);
                long t2 = GL33.glGetQueryObjecti64(this.queries[b + 2], GL15.GL_QUERY_RESULT);
                long t3 = GL33.glGetQueryObjecti64(this.queries[b + 3], GL15.GL_QUERY_RESULT);
+               if (this.slotBits[this.slot] != this.accBits) {
+                  if (this.computeJobs + this.mulJobs > 0) {
+                     this.timingLine();
+                  }
+                  this.accBits = this.slotBits[this.slot];
+               }
                this.allNs += t3 - t0;
                if (this.slotCompute[this.slot]) {
                   this.computeNs += t1 - t0;
@@ -2906,20 +2923,24 @@ public final class ChunkAo {
                   this.mulJobs++;
                }
                if ((this.computeJobs + this.mulJobs) % 200 == 0) {
-                  double cj = Math.max(1L, this.computeJobs);
-                  long f = frames;
-                  double perFrame = this.lastFrames < 0 || f <= this.lastFrames ? -1.0 : this.allNs / 1e3 / (f - this.lastFrames);
-                  this.lastFrames = f;
-                  this.allNs = 0L;
-                  Log.info(String.format("chunk ao gpu us/frame=%.2f | us/job: compute=%.1f (context %.1f, kernel %.1f) + apply %.1f + mips/copy %.1f (%d jobs) multiply=%.1f (%d jobs) | %s",
-                     perFrame, this.computeNs / 1e3 / cj, this.ctxNs / 1e3 / cj, this.kernelNs / 1e3 / cj, this.applyNs / 1e3 / cj, this.mipNs / 1e3 / cj,
-                     this.computeJobs, this.mulJobs == 0 ? 0.0 : this.mulNs / 1e3 / this.mulJobs, this.mulJobs, stats()));
-                  this.computeNs = this.applyNs = this.mipNs = this.mulNs = this.ctxNs = this.kernelNs = 0L;
-                  this.computeJobs = this.mulJobs = 0L;
+                  this.timingLine();
                }
             }
             this.pending[this.slot] = false;
          }
+      }
+
+      private void timingLine() {
+         double cj = Math.max(1L, this.computeJobs);
+         long f = frames;
+         double perFrame = this.lastFrames < 0 || f <= this.lastFrames ? -1.0 : this.allNs / 1e3 / (f - this.lastFrames);
+         this.lastFrames = f;
+         this.allNs = 0L;
+         Log.info(String.format("chunk ao gpu" + (Config.DEV_AO_ALTERNATE.isEmpty() ? "" : " (dev bits " + this.accBits + ")") + " us/frame=%.2f | us/job: compute=%.1f (context %.1f, kernel %.1f) + apply %.1f + mips/copy %.1f (%d jobs) multiply=%.1f (%d jobs) | %s",
+            perFrame, this.computeNs / 1e3 / cj, this.ctxNs / 1e3 / cj, this.kernelNs / 1e3 / cj, this.applyNs / 1e3 / cj, this.mipNs / 1e3 / cj,
+            this.computeJobs, this.mulJobs == 0 ? 0.0 : this.mulNs / 1e3 / this.mulJobs, this.mulJobs, stats()));
+         this.computeNs = this.applyNs = this.mipNs = this.mulNs = this.ctxNs = this.kernelNs = 0L;
+         this.computeJobs = this.mulJobs = 0L;
       }
 
       /** Dev (devAoDumpFrame = the Nth computed texture): its raw AO (AO, depth) to ~/Zomboid/pzopt-chunkao-*. */
@@ -3153,7 +3174,7 @@ public final class ChunkAo {
             GL20.glUniform1i(this.uRatio[1], 1);
             GL20.glUniform4f(this.uRatio[2], sc / aw, sc / ah, 1.0F, 1.0F);
             GL20.glUniform4f(this.uRatio[3], 1.0F, 1.0F, aoView(), 0.0F);
-            this.edgeUniforms(this.uRatio[4], this.uRatio[5], j, sc);
+            this.edgeUniforms(this.uRatio[4], this.uRatio[5], this.uRatio[6], j, sc);
             GL13.glActiveTexture(GL13.GL_TEXTURE1);
             GL11.glBindTexture(GL11.GL_TEXTURE_2D, e.tex);
             GL13.glActiveTexture(GL13.GL_TEXTURE0);
@@ -3594,8 +3615,10 @@ public final class ChunkAo {
          this.uMul[1] = GL20.glGetUniformLocation(this.mulProgram, "m");
          this.uMul[2] = GL20.glGetUniformLocation(this.mulProgram, "Depth"); // aoEdgeAware
          this.uMul[3] = GL20.glGetUniformLocation(this.mulProgram, "e");
+         this.uMul[4] = GL20.glGetUniformLocation(this.mulProgram, "pn"); // aoEdgeShadeLeaves
          this.uRatio[4] = GL20.glGetUniformLocation(this.ratioProgram, "Depth");
          this.uRatio[5] = GL20.glGetUniformLocation(this.ratioProgram, "e");
+         this.uRatio[6] = GL20.glGetUniformLocation(this.ratioProgram, "pn"); // aoEdgeShadeLeaves
          this.uRatio[0] = GL20.glGetUniformLocation(this.ratioProgram, "NewAo");
          this.uRatio[1] = GL20.glGetUniformLocation(this.ratioProgram, "OldAo");
          this.uRatio[2] = GL20.glGetUniformLocation(this.ratioProgram, "m");
@@ -4092,7 +4115,7 @@ public final class ChunkAo {
       "   const vec3 NE = vec3(0.7071068, -0.3535534, -0.6123724);",
       "   const vec3 NS = vec3(-0.7071068, -0.3535534, -0.6123724);",
       "   float g = dot(N, NG), e = dot(N, NE), so = dot(N, NS);",
-      "   if ((devK & 32) != 0 && !(g > 0.94 || e > 0.94 || so > 0.94)) {", // dev variant: 4-texel differences where the 2-texel normal snaps to no plane
+      "   if ((devK & 32) != 0 && !(g > 0.94 || e > 0.94 || so > 0.94)) {", // aoWideNormals: 4-texel differences where the 2-texel normal snaps to no plane (DEPTH16 rounding stripes on walls and fronts)
       "      float dl4 = depthAt(c - vec2(4.0, 0.0)), dr4 = depthAt(c + vec2(4.0, 0.0)), dd4 = depthAt(c - vec2(0.0, 4.0)), du4 = depthAt(c + vec2(0.0, 4.0));",
       "      float zx4 = 0.25 * (abs(dr4 - d) < abs(d - dl4) ? dr4 - d : d - dl4);",
       "      float zy4 = 0.25 * (abs(du4 - d) < abs(d - dd4) ? du4 - d : d - dd4);",
@@ -4355,6 +4378,7 @@ public final class ChunkAo {
       "uniform vec4 m;", // AO uv per texture texel x, y; strength; dev view
       "uniform sampler2D Depth;", // the texture's own depth (aoEdgeAware)
       "uniform vec4 e;", // x: edge-aware on, y: AO texels per texture texel, z: squares per unit depth / tolerance in squares
+      "uniform vec4 pn;", // aoEdgeShadeLeaves: texture texels per square, row sign, on
       // the AO at this texel from the four around it, each weighted by how close its texel's depth is to this texel's: a
       // plain bilinear read at half resolution gave a thin object (a canopy's front edge, a cabinet door) the occlusion of
       // the wall right behind it (dark lines along the lower edges of canopies)
@@ -4388,6 +4412,7 @@ public final class ChunkAo {
       "   ivec2 p = ivec2(gl_FragCoord.xy);",
       "   float d0 = texelFetch(Depth, clamp(p, ivec2(0), ds), 0).r;",
       "   if (d0 >= 0.99999) return ao;",
+      "   float aE = ao;",
       "   for (int k = 0; k < 12; k++) {",
       "      int r = 2 + k / 4;",
       "      int q = k & 3;",
@@ -4397,10 +4422,28 @@ public final class ChunkAo {
       // a step behind, not the slope of the texel's own surface (a wall rises in depth texel by texel: the opposite side's
       // difference is taken off, or every wall texel shaded itself from four texels along in a rounding lattice)
       "      float stp = (dn - d0) - (dm < 0.99999 ? max(d0 - dm, 0.0) : 0.0);",
-      "      if (dn >= 0.99999 || stp * e.z * " + Gl.EDGE_TOLERANCE_SQUARES + " < 0.05) continue;",
-      "      ao = min(ao, textureLod(A, (gl_FragCoord.xy + vec2(o)) * uvPerAo * e.y * scale, 0.0).r);",
+      "      float sq = stp * e.z * " + Gl.EDGE_TOLERANCE_SQUARES + ";",
+      "      if (dn >= 0.99999 || sq < 0.05) continue;",
+      "      float an = textureLod(A, (gl_FragCoord.xy + vec2(o)) * uvPerAo * e.y * scale, 0.0).r;",
+      "      aE = e.w > 1.5 ? mix(aE, min(aE, an), smoothstep(0.05, 0.15, sq)) : min(aE, an);",
       "   }",
-      "   return ao;",
+      "   if (aE >= ao) return ao;",
+      // aoEdgeShadeLeaves: a texel on a wall / floor / furniture face keeps its own AO: one of its normals from the 2- or
+      // 4-texel differences, either side in x and in y, snaps to a plane (the AO kernel's test; either side, or a box's
+      // convex edges and DEPTH16's rounding stripes fail it). The leaf's soft edge the shade is for is no such plane.
+      "   if (pn.z > 0.5) {",
+      "      float kz = e.z * " + Gl.EDGE_TOLERANCE_SQUARES + " * pn.x;",
+      "      for (int w = 2; w <= 4; w += 2) {",
+      "         float dl = texelFetch(Depth, clamp(p - ivec2(w, 0), ivec2(0), ds), 0).r, dr = texelFetch(Depth, clamp(p + ivec2(w, 0), ivec2(0), ds), 0).r;",
+      "         float dd = texelFetch(Depth, clamp(p - ivec2(0, w), ivec2(0), ds), 0).r, du = texelFetch(Depth, clamp(p + ivec2(0, w), ivec2(0), ds), 0).r;",
+      "         for (int c = 0; c < 4; c++) {",
+      "            float zx = ((c & 1) == 0 ? dr - d0 : d0 - dl) / float(w), zy = ((c & 2) == 0 ? du - d0 : d0 - dd) / float(w);",
+      "            vec3 N = normalize(vec3(zx * kz, pn.y * zy * kz, -1.0));",
+      "            if (max(dot(N, vec3(0.0, 0.8660254, -0.5)), max(dot(N, vec3(0.7071068, -0.3535534, -0.6123724)), dot(N, vec3(-0.7071068, -0.3535534, -0.6123724)))) > 0.94) return ao;",
+      "         }",
+      "      }",
+      "   }",
+      "   return aE;",
       "}",
       "out vec4 fragColor;",
       "void main() {",
@@ -4422,6 +4465,7 @@ public final class ChunkAo {
       "uniform vec4 n;", // the scratch's used share x, y; dev view
       "uniform sampler2D Depth;", // the texture's own depth (aoEdgeAware)
       "uniform vec4 e;", // x: edge-aware on, y: AO texels per texture texel, z: squares per unit depth / tolerance in squares
+      "uniform vec4 pn;", // aoEdgeShadeLeaves: texture texels per square, row sign, on
       // the AO at this texel from the four around it, each weighted by how close its texel's depth is to this texel's: a
       // plain bilinear read at half resolution gave a thin object (a canopy's front edge, a cabinet door) the occlusion of
       // the wall right behind it (dark lines along the lower edges of canopies)
@@ -4455,6 +4499,7 @@ public final class ChunkAo {
       "   ivec2 p = ivec2(gl_FragCoord.xy);",
       "   float d0 = texelFetch(Depth, clamp(p, ivec2(0), ds), 0).r;",
       "   if (d0 >= 0.99999) return ao;",
+      "   float aE = ao;",
       "   for (int k = 0; k < 12; k++) {",
       "      int r = 2 + k / 4;",
       "      int q = k & 3;",
@@ -4464,10 +4509,28 @@ public final class ChunkAo {
       // a step behind, not the slope of the texel's own surface (a wall rises in depth texel by texel: the opposite side's
       // difference is taken off, or every wall texel shaded itself from four texels along in a rounding lattice)
       "      float stp = (dn - d0) - (dm < 0.99999 ? max(d0 - dm, 0.0) : 0.0);",
-      "      if (dn >= 0.99999 || stp * e.z * " + Gl.EDGE_TOLERANCE_SQUARES + " < 0.05) continue;",
-      "      ao = min(ao, textureLod(A, (gl_FragCoord.xy + vec2(o)) * uvPerAo * e.y * scale, 0.0).r);",
+      "      float sq = stp * e.z * " + Gl.EDGE_TOLERANCE_SQUARES + ";",
+      "      if (dn >= 0.99999 || sq < 0.05) continue;",
+      "      float an = textureLod(A, (gl_FragCoord.xy + vec2(o)) * uvPerAo * e.y * scale, 0.0).r;",
+      "      aE = e.w > 1.5 ? mix(aE, min(aE, an), smoothstep(0.05, 0.15, sq)) : min(aE, an);",
       "   }",
-      "   return ao;",
+      "   if (aE >= ao) return ao;",
+      // aoEdgeShadeLeaves: a texel on a wall / floor / furniture face keeps its own AO: one of its normals from the 2- or
+      // 4-texel differences, either side in x and in y, snaps to a plane (the AO kernel's test; either side, or a box's
+      // convex edges and DEPTH16's rounding stripes fail it). The leaf's soft edge the shade is for is no such plane.
+      "   if (pn.z > 0.5) {",
+      "      float kz = e.z * " + Gl.EDGE_TOLERANCE_SQUARES + " * pn.x;",
+      "      for (int w = 2; w <= 4; w += 2) {",
+      "         float dl = texelFetch(Depth, clamp(p - ivec2(w, 0), ivec2(0), ds), 0).r, dr = texelFetch(Depth, clamp(p + ivec2(w, 0), ivec2(0), ds), 0).r;",
+      "         float dd = texelFetch(Depth, clamp(p - ivec2(0, w), ivec2(0), ds), 0).r, du = texelFetch(Depth, clamp(p + ivec2(0, w), ivec2(0), ds), 0).r;",
+      "         for (int c = 0; c < 4; c++) {",
+      "            float zx = ((c & 1) == 0 ? dr - d0 : d0 - dl) / float(w), zy = ((c & 2) == 0 ? du - d0 : d0 - dd) / float(w);",
+      "            vec3 N = normalize(vec3(zx * kz, pn.y * zy * kz, -1.0));",
+      "            if (max(dot(N, vec3(0.0, 0.8660254, -0.5)), max(dot(N, vec3(0.7071068, -0.3535534, -0.6123724)), dot(N, vec3(-0.7071068, -0.3535534, -0.6123724)))) > 0.94) return ao;",
+      "         }",
+      "      }",
+      "   }",
+      "   return aE;",
       "}",
       "out vec4 fragColor;",
       "void main() {",
