@@ -2892,7 +2892,7 @@ public final class Config {
       GOD_RAYS_MOTES = bool("godRaysMotes", true);
       GOD_RAYS_SOFT_PCT = Math.max(0, Math.min(300, integer("godRaysSoftPct", 100)));
       GOD_RAYS_GLINT_PCT = Math.max(0, Math.min(300, integer("godRaysGlintPct", 100)));
-      GOD_RAYS_PATCH_ROLLOFF = bool("godRaysPatchRolloff", false); // patch + dust toward the screen pass's white 0.917 (the first version aimed at 1.0 and changed nothing, runs art-hdr-r7 / r9)
+      GOD_RAYS_PATCH_ROLLOFF = bool("godRaysPatchRolloff", true); // patch + dust toward the screen pass's white 0.917: the lamp shade in a shaft 54 -> 30 % clipped at 50 % scale, knee 55..85 alike (run art-hdr-r10; the first version aimed at 1.0 and changed nothing, r7 / r9)
       GOD_RAYS_PATCH_KNEE_PCT = Math.max(5, Math.min(95, integer("godRaysPatchKneePct", 70)));
       GOD_RAYS_LOCAL_METHOD = string("godRaysLocalMethod", "analytic").trim().toLowerCase(java.util.Locale.ROOT);
       GOD_RAYS_HAZE_MODE = string("godRaysHazeMode", "auto").trim().toLowerCase(java.util.Locale.ROOT);
