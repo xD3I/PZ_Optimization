@@ -1142,6 +1142,25 @@ public final class VoxelLight {
          return sl;
       }
 
+      private static int lastMixedMode = -1;
+      private static long mixedT0;
+
+      /** voxelLightMixed as the relight's uMixed (0 off, 1 mark); devVoxelMixedAlternate: the mode and off in turn. */
+      private static int mixedMode() {
+         int m = "mark".equals(Config.VOXEL_LIGHT_MIXED) ? 1 : 0;
+         if (Config.DEV_VOXEL_MIXED_ALTERNATE > 0 && m != 0) {
+            long now = System.currentTimeMillis();
+            if (mixedT0 == 0L) {
+               mixedT0 = now;
+               Log.info("voxel light: mixed blocks alternating every " + Config.DEV_VOXEL_MIXED_ALTERNATE + " ms from epoch_ms " + now + " (mode " + m + " first)");
+            }
+            if ((now - mixedT0) / Config.DEV_VOXEL_MIXED_ALTERNATE % 2L == 1L) {
+               m = 0;
+            }
+         }
+         return m;
+      }
+
       /** Render thread, before the composite: the budget's worth of light layers relit (new ones, re-baked ones, then stale ones, newest drawn first). */
       private static void relight(Frame f) {
          if (byLayer == null || SLOTS.isEmpty()) {
@@ -1153,6 +1172,16 @@ public final class VoxelLight {
                if (sl.cwx == wx && sl.cwy == wy) {
                   sl.baked = true;
                }
+            }
+         }
+         int mixedMode = mixedMode();
+         if (mixedMode != lastMixedMode) { // a mode change (devVoxelMixedAlternate): every layer relit
+            if (lastMixedMode != -1) {
+               Log.info("voxel light: mixed blocks mode " + mixedMode + " from epoch_ms " + System.currentTimeMillis());
+            }
+            lastMixedMode = mixedMode;
+            for (Slot sl : SLOTS.values()) {
+               sl.stale = true;
             }
          }
          queue.clear();
@@ -1181,6 +1210,7 @@ public final class VoxelLight {
          GL20.glUniform1i(GL20.glGetUniformLocation(progRelight, "uT2"), B_UNIT);
          GL20.glUniform1i(GL20.glGetUniformLocation(progRelight, "uE"), C_UNIT);
          GL20.glUniform1i(GL20.glGetUniformLocation(progRelight, "uCube"), CUBE ? 1 : 0);
+         GL20.glUniform1i(GL20.glGetUniformLocation(progRelight, "uMixed"), mixedMode);
          if (CUBE) {
             GL20.glUniform1f(GL20.glGetUniformLocation(progRelight, "uCubeGain"), Config.VOXEL_LIGHT_CUBE_GAIN_PCT / 100F);
             int[] us = {55, 56, 57};
@@ -2365,6 +2395,7 @@ public final class VoxelLight {
       "uniform sampler2DArray uT1;",
       "uniform sampler2DArray uT2;",
       "uniform usampler2DArray uE;",
+      "uniform int uMixed = 0;", // voxelLightMixed: 0 off; 1 mark (blocks spanning surfaces marked for the composite's read, wall-line points in the face's room)
       "uniform vec4 uAff;", // A = x - y = uAff.x u + uAff.y v + uAff0.x, B = x + y - 6z = uAff.z u + uAff.w v + uAff0.y (relative to uRef)
       "uniform vec4 uAff0;",
       "uniform vec4 uAff2;", // C = x + y + 2z = uAff2.x - depth * uAff2.y (relative to uRef); z: the layer; w: wrap
@@ -2434,7 +2465,7 @@ public final class VoxelLight {
       // floor, furniture before a wall): one light cannot stand for all of them, the bilinear read spread the other surface's
       // light over this one's edge (dark scallops under every cut wall top, 2026-10-31); marked, the composite reads the
       // single-surface blocks round it instead
-      "   bool mixed = nv >= 2 && length((world((vec2(tv[nv - 1]) + 0.5) / vec2(ds), dv[nv - 1]) - world((vec2(tv[0]) + 0.5) / vec2(ds), dv[0])) * vec3(1.0, 1.0, LEVEL)) > 0.45;",
+      "   bool mixed = nv >= 2 && length((world((vec2(tv[nv - 1]) + 0.5) / vec2(ds), dv[nv - 1]) - world((vec2(tv[0]) + 0.5) / vec2(ds), dv[0])) * vec3(1.0, 1.0, LEVEL)) > 0.45 && uMixed > 0;",
       // dilation: a block with no surface takes the nearest of the next blocks' (the composite's bilinear tap never mixes an
       // empty texel into its neighbours: dark dashes along every chunk texture's edge and dots round sprite holes)
       "   for (int k = 0; k < 8 && d >= 1.0; k++) {",
@@ -2481,7 +2512,7 @@ public final class VoxelLight {
       "   vec3 Q = planar ? P + n * vec3(0.25, 0.25, 0.25 / LEVEL) : P;",
       // a point above the floor on a W / N wall's line (a cut wall's top, a counter against the wall): the room the wall's
       // visible face is in (half the top's texels lay a hair behind the line and took the room behind the wall's light)
-      "   if (P.z - lz > 0.03) {",
+      "   if (uMixed > 0 && P.z - lz > 0.03) {",
       "      vec2 s1 = floor(P.xy + 0.07), f1 = P.xy - s1;",
       "      if (min(f1.x, f1.y) < 0.07) {",
       "         uint e1 = texelFetch(uE, ivec3(ivec2(s1) & (N - 1), int(lz) - uWin.z), 0).r;",
@@ -2642,15 +2673,6 @@ public final class VoxelLight {
       "   if (edge < 1.0) return Ln;",
       // a quarter square along the normal into the air, inside the pixel's level
       "   vec3 Q = P + n * vec3(0.25, 0.25, 0.25 / PPL_LEVEL);",
-      // a point above the floor on a W / N wall's line (a cut wall's top): the room of the wall's visible face (as RELIGHT_CS)
-      "   if (P.z - lz > 0.03) {",
-      "      vec2 s1 = floor(P.xy + 0.07), f1 = P.xy - s1;",
-      "      if (min(f1.x, f1.y) < 0.07) {",
-      "         uint e1 = texelFetch(vxlE, ivec3((ivec2(s1) + ivec2(vxlMap.xy)) & (int(vxlWin.z) - 1), int(lz - vxlWin.w)), 0).r;",
-      "         if ((e1 & 1u) != 0u && f1.x < 0.07) Q.x = max(Q.x, s1.x + 0.25);",
-      "         if ((e1 & 2u) != 0u && f1.y < 0.07) Q.y = max(Q.y, s1.y + 0.25);",
-      "      }",
-      "   }",
       "   float fz = clamp(Q.z - lz, vxlMapZ.y, 1.0 - vxlMapZ.y);",
       // never filtered across a blocked edge of the square in front of the surface (a window's pane sits a hair inside the
       // wall: its own square is the room): the texels behind a wall are another room's

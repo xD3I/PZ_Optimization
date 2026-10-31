@@ -3375,6 +3375,9 @@ public final class ChunkAo {
 
       /** devAoDefines: the kernel with those names defined (in-game ablation of its terms, the debug views below). */
       private static String devVariant(String src) {
+         if (!Config.AO_FRONT_THIN) {
+            src = variant(src, "AO_NO_FRONT_THIN");
+         }
          for (String d : Config.DEV_AO_DEFINES.split(",")) {
             if (!d.isBlank()) {
                src = variant(src, d.trim());
@@ -3990,7 +3993,11 @@ public final class ChunkAo {
       // at: nearer by ~10x its offset) is a thing in front, not a surface meeting this one (a corner's: at most ~1.7x): its
       // slab thinned towards a fifth, or the assumed 0.6-square depth behind every sprite reached the surface behind it and
       // drew the thing's outline on it as a dark halo with a light rim (bar stools, 2026-10-31)
+      "#ifdef AO_NO_FRONT_THIN",
+      "            float tk = thickness;", // aoFrontThin=false
+      "#else",
       "            float tk = thickness * clamp(2.75 - fv.x / max(abs(fv.y), 1e-3), 0.2, 1.0);",
+      "#endif",
       "            float uB = sectorOf(fv - vec2(tk, 0.0), cn, sn);",
       "            mask |= sectors(min(uF, uB), max(uF, uB));",
       "         }",
