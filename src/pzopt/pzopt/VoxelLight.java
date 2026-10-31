@@ -1031,6 +1031,8 @@ public final class VoxelLight {
       private static final ArrayList<Slot> queue = new ArrayList<>();
       private static final java.util.HashMap<Integer, int[]> LAYER_LOC = new java.util.HashMap<>();
       static final boolean CACHE = "cache".equals(Config.VOXEL_LIGHT_APPLY);
+      /** voxelLightCacheMatch: blocks whose read reaches another surface are marked; the composite lights their footprints per pixel. */
+      static final boolean MATCH = CACHE && Config.VOXEL_LIGHT_CACHE_MATCH && "texel".equals(Config.VOXEL_LIGHT_NORMAL) && Config.PPL_TEXEL_POS;
 
       /**
        * PixelLight.chunkDraw (render thread, the composite program bound, per chunk texture draw): its light layer for this
@@ -1143,7 +1145,7 @@ public final class VoxelLight {
       }
 
       private static int lastMixedMode = -1;
-      /** dev: devPplAlternate cost-mask bits the relight reads: 16777216 voxelLightWallTop off, 134217728 / 536870912 / 1073741824 dev views (uDev). */
+      /** dev: devPplAlternate cost-mask bits the relight reads: 16777216 voxelLightWallTop off, 33554432 any surface off a block's plane marks it (voxelLightCacheMatch), 67108864 voxelLightCacheMatch off, 134217728 / 268435456 / 536870912 / 1073741824 dev views (uDev). */
       static final int RELIGHT_DEV_BITS = 0x7F000000;
       private static int lastRelightDev = 0;
       private static long mixedT0;
@@ -1223,6 +1225,7 @@ public final class VoxelLight {
          GL20.glUniform1i(GL20.glGetUniformLocation(progRelight, "uMixed"), mixedMode);
          GL20.glUniform1i(GL20.glGetUniformLocation(progRelight, "uDev"), PixelLight.costMask & RELIGHT_DEV_BITS);
          GL20.glUniform1i(GL20.glGetUniformLocation(progRelight, "uWallTop"), Config.VOXEL_LIGHT_WALL_TOP && (PixelLight.costMask & 16777216) == 0 ? 1 : 0); // dev: cost bit 16777216 off
+         GL20.glUniform3f(GL20.glGetUniformLocation(progRelight, "uAmb"), ambR, ambG, ambB); // the brighter of two levels (RELIGHT_CS)
          if (CUBE) {
             GL20.glUniform1f(GL20.glGetUniformLocation(progRelight, "uCubeGain"), Config.VOXEL_LIGHT_CUBE_GAIN_PCT / 100F);
             int[] us = {55, 56, 57};
@@ -1236,6 +1239,7 @@ public final class VoxelLight {
             GL13.glActiveTexture(GL13.GL_TEXTURE0);
          }
          GL42.glBindImageTexture(0, texLM, 0, true, 0, GL15.GL_WRITE_ONLY, GL11.GL_RGBA16);
+         GL20.glUniform1i(GL20.glGetUniformLocation(progRelight, "uMatch"), MATCH && (PixelLight.costMask & 67108864) == 0 ? 1 : 0); // dev: cost bit 67108864 off (the composite's read too)
          GL13.glActiveTexture(GL13.GL_TEXTURE0 + 48);
          int n = Math.min(queue.size(), Config.VOXEL_LIGHT_RELIGHTS), bakedLeft = Config.VOXEL_LIGHT_RELIGHTS_BAKED;
          for (int i = 0; i < n; i++) {
@@ -1266,6 +1270,7 @@ public final class VoxelLight {
          GL13.glActiveTexture(GL13.GL_TEXTURE0);
          GL42.glMemoryBarrier(GL42.GL_SHADER_IMAGE_ACCESS_BARRIER_BIT | GL42.GL_TEXTURE_FETCH_BARRIER_BIT);
          GL42.glBindImageTexture(0, 0, 0, false, 0, GL15.GL_READ_ONLY, GL11.GL_RGBA16);
+         GL42.glBindImageTexture(1, 0, 0, false, 0, GL15.GL_READ_ONLY, GL30.GL_R32UI);
          GL20.glUseProgram(0);
          ShaderHelper.forgetCurrentlyBound();
          Timing.end("relight");
@@ -1334,7 +1339,7 @@ public final class VoxelLight {
             GL11.glTexParameteri(GL30.GL_TEXTURE_2D_ARRAY, GL11.GL_TEXTURE_WRAP_T, GL12.GL_CLAMP_TO_EDGE);
             GL11.glBindTexture(GL30.GL_TEXTURE_2D_ARRAY, 0);
             Log.info("voxel light: surface cache " + Config.VOXEL_LIGHT_CACHE_W + "x" + Config.VOXEL_LIGHT_CACHE_H + " x " + Config.VOXEL_LIGHT_CACHE_LAYERS + " layers ("
-               + ((long)Config.VOXEL_LIGHT_CACHE_W * Config.VOXEL_LIGHT_CACHE_H * Config.VOXEL_LIGHT_CACHE_LAYERS * 8 >> 20) + " MB)");
+               + ((long)Config.VOXEL_LIGHT_CACHE_W * Config.VOXEL_LIGHT_CACHE_H * Config.VOXEL_LIGHT_CACHE_LAYERS * 8 >> 20) + " MB" + (MATCH ? ", per pixel near surface edges" : "") + ")");
          }
          bufJobs = GL15.glGenBuffers();
          bufIdx = GL15.glGenBuffers();
@@ -2422,8 +2427,9 @@ public final class VoxelLight {
       "uniform sampler2DArray uT1;",
       "uniform sampler2DArray uT2;",
       "uniform usampler2DArray uE;",
-      "uniform int uDev = 0;", // dev (devPplAlternate cost bits 1 << 24 ..): 1 << 27 validity view, 1 << 29 flags view, 1 << 30 the surface point
+      "uniform int uDev = 0;", // dev (devPplAlternate cost bits 1 << 24 ..): 1 << 27 validity view, 1 << 29 flags view, 1 << 30 the surface point, 1 << 28 the class view (early returns: magenta leaves, cyan no surface, yellow out of the window, orange a crown point, white the window edge)
       "uniform int uWallTop = 1;", // voxelLightWallTop
+      "uniform vec3 uAmb;", // the composite's outdoor ambient (vxlAmb.rgb): the brighter of two levels
       "uniform int uMixed = 0;", // voxelLightMixed: 0 off; 1 mark (blocks spanning surfaces marked for the composite's read, wall-line points in the face's room)
       "uniform vec4 uAff;", // A = x - y = uAff.x u + uAff.y v + uAff0.x, B = x + y - 6z = uAff.z u + uAff.w v + uAff0.y (relative to uRef)
       "uniform vec4 uAff0;",
@@ -2436,6 +2442,7 @@ public final class VoxelLight {
       "uniform sampler3D uD1;",
       "uniform sampler3D uCf;", // the flood's bounce colour
       "layout(rgba16, binding = 0) uniform writeonly image2DArray outL;",
+      "uniform int uMatch = 0;",
       "const float LEVEL = 2.4494897;",
       "vec3 world(vec2 uv, float d) {", // relative to the reference square
       "   float A = dot(uAff.xy, uv) + uAff0.x, B = dot(uAff.zw, uv) + uAff0.y, C = uAff2.x - d * uAff2.y;",
@@ -2489,7 +2496,7 @@ public final class VoxelLight {
       "      vec3 Pk = world((vec2(tv[k]) + 0.5) / vec2(ds), dv[k]);",
       "      if (Pk.z - floor(Pk.z + 0.006) > 0.12 && ((occAt(int(floor(Pk.x)), int(floor(Pk.y)), int(floor(Pk.z + 0.006))) >> 8) & 15u) != 0u) leaves++;",
       "   }",
-      "   if (leaves >= 2) { imageStore(outL, ivec3(t, int(uAff2.z)), vec4(0.0)); return; }",
+      "   if (leaves >= 2) { imageStore(outL, ivec3(t, int(uAff2.z)), (uDev & 268435456) != 0 ? vec4(vec3(1.0, 0.0, 1.0) / 1.25, 0.99) : vec4(0.0)); return; }",
       // a block whose samples span surfaces far apart (a cut wall's top over the room behind it, a counter's edge over the
       // floor, furniture before a wall): one light cannot stand for all of them, the bilinear read spread the other surface's
       // light over this one's edge (dark scallops under every cut wall top, 2026-10-31); marked, the composite reads the
@@ -2502,12 +2509,12 @@ public final class VoxelLight {
       "      ti = clamp(ivec2(c0 + o * blk), ivec2(0), ds - 1);",
       "      d = texelFetch(uDepth, ti, 0).r;",
       "   }",
-      "   if (d >= 1.0) { imageStore(outL, ivec3(t, int(uAff2.z)), vec4(0.0)); return; }",
+      "   if (d >= 1.0) { imageStore(outL, ivec3(t, int(uAff2.z)), (uDev & 268435456) != 0 ? vec4(vec3(0.0, 1.0, 1.0) / 1.25, 0.99) : vec4(0.0)); return; }",
       "   vec2 uv = (vec2(ti) + 0.5) / vec2(ds);",
       "   vec3 P = world(uv, d);",
       // dev: a surface point outside its chunk (+ 4 squares for tall sprites): the texture's mapping is wrong (magenta)
       "   if (uLev.w > 0.5 && (P.x < uAff0.z - 4.0 || P.x > uAff0.z + 12.0 || P.y < uAff0.w - 4.0 || P.y > uAff0.w + 12.0 || P.z < uLev.x - 1.0 || P.z > uLev.y + 8.0)) { imageStore(outL, ivec3(t, int(uAff2.z)), vec4(1.0 / 1.25, 0.0, 1.0 / 1.25, 1.0)); return; }",
-      "   if (P.z < uWin.z || P.z >= float(uWin.z + LZ)) { imageStore(outL, ivec3(t, int(uAff2.z)), vec4(0.0)); return; }",
+      "   if (P.z < uWin.z || P.z >= float(uWin.z + LZ)) { imageStore(outL, ivec3(t, int(uAff2.z)), (uDev & 268435456) != 0 ? vec4(vec3(1.0, 1.0, 0.0) / 1.25, 0.99) : vec4(0.0)); return; }",
       // the normal from the depth K texels to each side (the side with the smaller change: never across an edge)
       "   const int K = 2;",
       "   float xp = texelFetch(uDepth, min(ti + ivec2(K, 0), ds - 1), 0).r, xm = texelFetch(uDepth, max(ti - ivec2(K, 0), ivec2(0)), 0).r;",
@@ -2538,20 +2545,26 @@ public final class VoxelLight {
       "   if (uWallTop != 0 && lzUp && int(lz) - 1 >= uWin.z) {",
       "      vec2 s0 = floor(P.xy + 0.07), f0 = P.xy - s0;",
       "      uint eb = texelFetch(uE, ivec3(ivec2(s0) & (N - 1), int(lz) - 1 - uWin.z), 0).r;",
-      "      if ((eb & 1u) != 0u && f0.x < 0.07 || (eb & 2u) != 0u && f0.y < 0.07) lz -= 1.0;",
+      // (a wall's face lies up to ~0.18 in front of its line, pplLazyNormal's measure: a face block or one with no plane (the
+      // edge between the face and the cap) within 0.2; a flat horizontal block within 0.07, an upper floor along the wall stays on its level. At 0.07 the hall's walls, whose faces
+      // stand further out, kept dark smudges under their tops, 2026-10-31)
+      "      float tw = abs(n.z) < 0.5 || !planar ? 0.2 : 0.07;",
+      "      if ((eb & 1u) != 0u && f0.x < tw || (eb & 2u) != 0u && f0.y < tw) lz -= 1.0;",
       "   }",
       // a leaf (a point above the floor inside a tree's crown: a baked tree's depth puts its crown inside the crown's own
       // volume, its normals are noise): the native's light, as the game lights its trees
       "   bool ground = planar && isFlat;",
-      "   if (!ground && ((occAt(int(floor(P.x)), int(floor(P.y)), int(floor(P.z + 0.006))) >> 8) & 15u) != 0u) { imageStore(outL, ivec3(t, int(uAff2.z)), vec4(0.0)); return; }",
+      "   if (!ground && ((occAt(int(floor(P.x)), int(floor(P.y)), int(floor(P.z + 0.006))) >> 8) & 15u) != 0u) { imageStore(outL, ivec3(t, int(uAff2.z)), (uDev & 268435456) != 0 ? vec4(vec3(1.0, 0.5, 0.0) / 1.25, 0.99) : vec4(0.0)); return; }",
       // a planar texel (a floor, a wall, a box's face) a quarter square along its normal into the air; any other (plants, bars,
       // a sprite's edge: its normal is noise) the light at the point itself (the floor under it took the shade of the next
       // crown for the top of a small tree beside a big one; the blotches that sampling the floor was meant to stop were the
       // composite's bilinear tap mixing in the native's empty texels, now weighed out)
       "   vec3 Q = planar ? P + n * vec3(0.25, 0.25, 0.25 / LEVEL) : P;",
       // a point above the floor on a W / N wall's line (a cut wall's top, a counter against the wall): the room the wall's
-      // visible face is in (half the top's texels lay a hair behind the line and took the room behind the wall's light)
-      "   if (uMixed > 0 && P.z - lz > 0.03) {",
+      // visible face is in (half the top's texels lay a hair behind the line and took the room behind the wall's light; with
+      // voxelLightWallTop too: a block at a wall's top that is not planar (its cap, the wall face's edge) is lit at the point
+      // itself, and on the line that was the room behind: dark dots along the hall's cut wall tops, 2026-10-31)
+      "   if ((uMixed > 0 || uWallTop != 0) && P.z - lz > 0.03) {",
       "      vec2 s1 = floor(P.xy + 0.07), f1 = P.xy - s1;",
       "      if (min(f1.x, f1.y) < 0.07) {",
       "         uint e1 = texelFetch(uE, ivec3(ivec2(s1) & (N - 1), int(lz) - uWin.z), 0).r;",
@@ -2559,24 +2572,48 @@ public final class VoxelLight {
       "         if ((e1 & 2u) != 0u && f1.y < 0.07) Q.y = max(Q.y, s1.y + 0.25);",
       "      }",
       "   }",
-      "   float fz = clamp(Q.z - lz, 0.5 / float(RZ), 1.0 - 0.5 / float(RZ));",
-      "   vec2 sq = floor(Q.xy);",
-      "   vec2 qa = Q.xy;",
-      "   uint e = texelFetch(uE, ivec3(ivec2(sq) & (N - 1), int(lz) - uWin.z), 0).r;",
-      "   float h = 0.5 / float(R);",
-      "   if ((e & 1u) != 0u) qa.x = max(qa.x, sq.x + h);",
-      "   if ((e & 4u) != 0u) qa.x = min(qa.x, sq.x + 1.0 - h);",
-      "   if ((e & 2u) != 0u) qa.y = max(qa.y, sq.y + h);",
-      "   if ((e & 8u) != 0u) qa.y = min(qa.y, sq.y + 1.0 - h);",
-      "   vec2 rel = qa - vec2(uWin.xy);",
-      "   float edge = min(min(rel.x, rel.y), min(float(N) - rel.x, float(N) - rel.y));",
-      "   if (edge < 1.0) { imageStore(outL, ivec3(t, int(uAff2.z)), vec4(0.0)); return; }",
-      "   vec2 vuv = qa / float(N);",
-      "   float tz = fz * float(RZ) - 0.5;",
-      "   float k = floor(tz), wz = tz - k;",
-      "   float layer = (lz - float(uWin.z)) * float(RZ) + k;",
-      "   vec4 T1 = tap(uT1, vuv, layer, wz);",
-      "   float valid = clamp(2.0 * T1.a, 0.0, 1.0) * clamp((edge - 1.0) / 4.0, 0.0, 1.0);",
+      // voxelLightWallTop: a point at the very bottom of a level where the volume holds nothing (inside the upper storey's wall
+      // over a cut wall's top, past the face tolerance above: the cap's back half) is the top of what stands below: the level
+      // below's light at its ceiling; a point lifted a level by the tolerance (written a hair under the level line: a wall
+      // cap's rows) takes the brighter of the two levels, as pixelLight's own pick does (the cache lit them on the dark upper
+      // storey: a dark speck on the hall's cut wall cap, 2026-10-31)
+      "   float fz, wz, layer, valid, edge;",
+      "   vec2 sq, vuv;",
+      "   vec4 T1;",
+      "   float lz0 = lz, fz0 = 0.0, wz0 = 0.0, layer0 = 0.0, valid0 = 0.0, edge0 = 0.0;",
+      "   vec2 sq0 = vec2(0.0), vuv0 = vec2(0.0);",
+      "   vec4 T10 = vec4(0.0);",
+      "   for (int pass = 0; ; pass++) {",
+      "      fz = clamp(Q.z - lz, 0.5 / float(RZ), 1.0 - 0.5 / float(RZ));",
+      "      sq = floor(Q.xy);",
+      "      vec2 qa = Q.xy;",
+      "      uint e = texelFetch(uE, ivec3(ivec2(sq) & (N - 1), int(lz) - uWin.z), 0).r;",
+      "      float h = 0.5 / float(R);",
+      "      if ((e & 1u) != 0u) qa.x = max(qa.x, sq.x + h);",
+      "      if ((e & 4u) != 0u) qa.x = min(qa.x, sq.x + 1.0 - h);",
+      "      if ((e & 2u) != 0u) qa.y = max(qa.y, sq.y + h);",
+      "      if ((e & 8u) != 0u) qa.y = min(qa.y, sq.y + 1.0 - h);",
+      "      vec2 rel = qa - vec2(uWin.xy);",
+      "      edge = min(min(rel.x, rel.y), min(float(N) - rel.x, float(N) - rel.y));",
+      "      if (edge < 1.0) { imageStore(outL, ivec3(t, int(uAff2.z)), (uDev & 268435456) != 0 ? vec4(vec3(1.0) / 1.25, 0.99) : vec4(0.0)); return; }",
+      "      vuv = qa / float(N);",
+      "      float tz = fz * float(RZ) - 0.5;",
+      "      float k = floor(tz);",
+      "      wz = tz - k;",
+      "      layer = (lz - float(uWin.z)) * float(RZ) + k;",
+      "      T1 = tap(uT1, vuv, layer, wz);",
+      "      valid = clamp(2.0 * T1.a, 0.0, 1.0) * clamp((edge - 1.0) / 4.0, 0.0, 1.0);",
+      "      if (pass > 0) {", // the level below read: the brighter of the two, as pixelLight's level pick (an invalid one never)
+      "         float m = max(uAmb.r, max(uAmb.g, uAmb.b));", // the composite's max(sky ambient, lamps)
+      "         float b0 = max(1.25 * max(T10.r, max(T10.g, T10.b)), m * max(clamp(2.0 * T10.a - 1.0, 0.0, 1.0), uLev.z));",
+      "         float b1 = max(1.25 * max(T1.r, max(T1.g, T1.b)), m * max(clamp(2.0 * T1.a - 1.0, 0.0, 1.0), uLev.z));",
+      "         if (valid0 >= 0.5 && (valid < 0.5 || b0 >= b1)) { lz = lz0; fz = fz0; wz = wz0; layer = layer0; valid = valid0; edge = edge0; sq = sq0; vuv = vuv0; T1 = T10; }",
+      "         break;",
+      "      }",
+      "      if (uWallTop == 0 || !lzUp || P.z - lz >= 0.03 || int(lz) - 1 < uWin.z || valid >= 0.5 && P.z >= lz) break;",
+      "      lz0 = lz; fz0 = fz; wz0 = wz; layer0 = layer; valid0 = valid; edge0 = edge; sq0 = sq; vuv0 = vuv; T10 = T1;",
+      "      lz -= 1.0;",
+      "   }",
       "   float sky = clamp(2.0 * T1.a - 1.0, 0.0, 1.0);",
       "   float fac = 1.0;",
       "   if (uRef.w != 0 && n.z < 0.95 && planar) {",
@@ -2604,12 +2641,66 @@ public final class VoxelLight {
       "      float E = d0.x * max(-n.x, 0.0) + d0.y * max(n.x, 0.0) + d0.z * max(-n.y, 0.0) + d0.w * max(n.y, 0.0) + d1.x * max(-n.z, 0.0) + d1.y * max(n.z, 0.0);",
       "      lit += col * E * uCubeGain;",
       "   }",
-      // a: 0 the native's light here; under 0.5 partly the volume's (2a of it, no sky: the window's edge); 0.50 + 0.01 sky the
+      // a: 0 the native's light here; up to 0.125 partly the volume's (2a of it at the window's edge, no sky); 0.25 + 0.2 sky the
       // volume's on a block of mixed surfaces (far under 0.99: any share of it in a footprint takes the composite's four-tap
       // path; at 0.90 a share under a tenth passed the one-fetch path and drew a dark line where it crossed) (the composite leaves it out while a block of one surface is in the footprint); 0.99 + 0.01 sky the
       // volume's. A filtered alpha under 0.99 tells the composite a native texel is in its footprint: it then weighs the four
       // texels by their validity (one bilinear fetch mixed the native texels' empty rgb in: dark rims round every crown and bush)
-      "   imageStore(outL, ivec3(t, int(uAff2.z)), vec4(clamp(lit / 1.25, 0.0, 1.0), valid > 0.5 ? (mixed ? 0.50 : 0.99) + 0.01 * sky : 0.25 * valid));",
+      // voxelLightCacheMatch: whether every surface the composite's read of this block reaches (a block across, both ways) lies
+      // on its plane (clean). A block that is not clean is marked like a mixed one (alpha 0.25 + 0.2 sky): a footprint holding it
+      // is lit by the volume per pixel (the composite's gathered alphas). Its plane class (0 floor, 1 x wall, 2 y wall, 3 anything
+      // else) is the class dev view's
+      "   bool clean = true;",
+      "   if (uMatch != 0) {",
+      // a block with no plane (grass, leaves, a sprite's edge) is clean while every surface in reach lies within 0.3 of its point
+      // (the composite's own cut for such a block), unless it lies near a level line above the texture's lowest level (a cut
+      // wall's cap and the face's edge under it: the blocks the blobs came from): marked for any texel off a plane, the grass
+      // and every sprite edge took the four-tap read, +350 us of composite at 5K (2026-10-31). (Marked like a planar block only
+      // where another light reaches the surface off its point: a dark blotch band under the hall's cut wall tops and hard-edged
+      // per-pixel squares on the walls, 2026-10-31 evening: kept as it was.)
+      "      float pf = fract(P.z + 0.006);",
+      "      clean = planar || !(P.z > uLev.x + 0.5 && (pf < 0.036 || pf > 0.8));",
+      "      bool broad = (uDev & 33554432) != 0;", // dev (cost bit 1 << 25): any surface off the plane marks the block
+      "      float lp = floor(P.z + 0.006);",
+      "      int le = int(clamp(lp, float(uWin.z), float(uWin.z + LZ - 1))) - uWin.z;",
+      "      vec2 sp = floor(P.xy);",
+      "      uint ep = texelFetch(uE, ivec3(ivec2(sp) & (N - 1), le), 0).r;",
+      "      vec3 nl = n;",
+      // (every second texel: a 5 x 5 grid, ~4 texels apart, could miss a wall cap's 2-texel rows.) A planar block is clean while
+      // every surface in reach lies within 0.2 of its plane: the wall faces' own depth wanders 0.1-0.15 off a plane in blotches
+      // (dev flags view, 2026-10-31), at 0.06 they all took the four-tap read (+290 us of composite at 5K); a cut wall's cap
+      // over the room behind or the storey above, a counter's top over the floor, lie far beyond it
+      "      ivec2 rq = ivec2(ceil(0.95 * blk));",
+      "      ivec2 q0 = ivec2(c0) - rq, q1 = ivec2(c0) + rq;",
+      "      ivec2 st = ivec2(2);",
+      "      bool dv = (uDev & 536870912) != 0;",
+      "      float maxOff = 0.0;", // dev (flags view): the farthest surface off the block's plane in reach
+      "      for (int qy = q0.y; qy <= q1.y && (clean || dv); qy += st.y)",
+      "      for (int qx = q0.x; qx <= q1.x && (clean || dv); qx += st.x) {",
+      "         ivec2 q = clamp(ivec2(qx, qy), ivec2(0), ds - 1);",
+      "         float dq = texelFetch(uDepth, q, 0).r;",
+      "         if (dq >= 1.0) continue;", // nothing drawn there: no pixel reads it
+      "         vec3 Pk = world((vec2(q) + 0.5) / vec2(ds), dq);",
+      "         vec3 dk = (Pk - P) * vec3(1.0, 1.0, LEVEL);",
+      "         float ok = planar ? abs(dot(dk, nl)) : length(dk);",
+      "         maxOff = max(maxOff, ok);",
+      // a planar block: a surface off its plane that another light reaches (another level, a quarter level up or down, or a square
+      // behind a wall: a cut wall's cap over the room behind or the storey above, a counter's top over the floor); one in the same
+      // room's light (a wall's foot on its floor, a cupboard against a wall) is spread as it was (marking every one put ~80 % of the
+      // picture on the per-pixel path, as dear as the volume per pixel everywhere, 2026-10-31)
+      "         bool fk = ok > (planar ? 0.2 : 0.3);",
+      "         if (fk && planar && !broad) {",
+      "            vec2 sk = floor(Pk.xy);",
+      "            bool walled = sk.x < sp.x && (ep & 1u) != 0u || sk.x > sp.x && (ep & 4u) != 0u || sk.y < sp.y && (ep & 2u) != 0u || sk.y > sp.y && (ep & 8u) != 0u;",
+      "            fk = floor(Pk.z + 0.006) != lp || abs(Pk.z - P.z) > 0.25 || walled;",
+      "         }",
+      "         if (fk) clean = false;",
+      "      }",
+      "      uint cls = !planar ? 3u : n.z > 0.94 ? 0u : n.x > 0.94 ? 1u : n.y > 0.94 ? 2u : 3u;",
+      "      if (dv) { lit = !planar ? vec3(0.3) : maxOff < 0.06 ? vec3(0.0, 1.0, 0.0) : maxOff < 0.1 ? vec3(1.0, 1.0, 0.0) : maxOff < 0.15 ? vec3(1.0, 0.0, 0.0) : maxOff < 0.25 ? vec3(1.0, 0.0, 1.0) : vec3(0.0, 0.0, 1.0); lit /= 1.25; valid = 1.0; clean = true; }", // dev (flags view, 1 << 29): a planar block's farthest surface off its plane in reach: green < 0.06, yellow < 0.1, red < 0.15, magenta < 0.25, blue beyond; grey no plane
+      "      if ((uDev & 268435456) != 0) { lit = (cls == 0u ? vec3(1.0, 0.2, 0.2) : cls == 1u ? vec3(0.2, 1.0, 0.2) : cls == 2u ? vec3(0.2, 0.2, 1.0) : vec3(0.6)) * (clean ? 1.0 : 0.45); valid = 1.0; clean = true; }", // dev: the block's class (floor red, x wall green, y wall blue, other grey), dimmed where not clean
+      "   }",
+      "   imageStore(outL, ivec3(t, int(uAff2.z)), vec4(clamp(lit / 1.25, 0.0, 1.0), valid > 0.5 ? (mixed || !clean ? 0.25 + 0.2 * sky : 0.99 + 0.01 * sky) : 0.25 * valid));",
       "}");
 
    /**
@@ -2623,6 +2714,15 @@ public final class VoxelLight {
       "layout(binding = 45) uniform sampler2DArray vxlT2;", // xy: the lamps' direction (octahedral), z: how directional, w: validity
       "layout(binding = 46) uniform usampler2DArray vxlE;", // per square and level: its blocked edges (1 W, 2 N, 4 E, 8 S)
       "layout(binding = 47) uniform sampler2DArray vxlLM;", // the surface cache: a light layer per chunk texture
+      // pixelLight's base path (no dynamic light reaches the texture): the one fetch only when all four texels are clean ones (vxlLight)
+      "#ifdef VXL_MATCH",
+      // (VXL_NEAR_C: within 2/256 of a texel's centre the hardware's weight of the far texels can be 0 while they stay in the
+      // footprint: the gather's test there as before, a 1-px line of the clean texels' light where a marked one sat at weight 0)
+      "#define VXL_NEAR_C any(lessThan(abs(fract(vxlUv * vec2(textureSize(vxlLM, 0).xy)) - 0.5), vec2(0.0079)))",
+      "#define VXL_ALL_CLEAN(a) (a > 0.9899 && (a > 0.9982 && !VXL_NEAR_C || (vxlCost & 67108864) != 0 || all(greaterThan(textureGather(vxlLM, vec3(vxlUv, vxlLayer), 3), vec4(0.9899)))))",
+      "#else",
+      "#define VXL_ALL_CLEAN(a) (a > 0.9899)",
+      "#endif",
       "uniform float vxlLayer = -1.0;", // this draw's layer (set per draw; -1: not lit yet, the volume per pixel; -2: not lit yet, the native's light)
       "vec2 vxlUv = vec2(0.0);", // the chunk texture coordinate (main)
       "uniform vec4 vxlMap;", // x, y: the origin square's world x, y mod N; z: 1 / N; w: on
@@ -2651,67 +2751,9 @@ public final class VoxelLight {
       "   if (w > 0.004) a = mix(a, textureLod(t, vec3(uv, layer + 1.0), 0.0), w);",
       "   return a;",
       "}",
-      "vec3 vxlLight(vec3 P, vec3 n, float lz, vec2 sq, vec3 Ln) {",
+      // the volume read per pixel (no cache layer, or none of the cache's blocks is this pixel's surface)
+      "vec3 vxlPixel(vec3 P, vec3 n, float lz, vec3 Ln) {",
       "   vxlW = 0.0;",
-      "   if ((vxlCost & 2097152) != 0) { vxlW = 1.0; return vec3(0.5); }", // dev probe: no fetch at all
-      "   if ((vxlCost & 1048576) != 0) { vxlW = 1.0; vec4 t = textureLod(vxlT1, vec3((P.xy + vxlMap.xy) * vxlMap.z, (lz - vxlWin.w) * vxlMapZ.x), 0.0); return max(vxlAmb.rgb * t.a, t.rgb); }", // dev probe: one fetch
-      "#ifdef PPL_DEV",
-      "   if ((vxlCost & 8388608) != 0) { vxlW = 1.0; return vec3(fract(P.x), fract(P.y), (mod(floor(P.x), 4.0) * 4.0 + mod(floor(P.y), 4.0) + 0.5) / 16.0); }", // dev: the pixel's surface point (as view 16), beside the cache's (relight uDev 1073741824)
-      "#endif",
-      "   if (vxlMap.w < 0.5 || vxlLayer < -1.5) return Ln;",
-      "   bool useCache = vxlLayer >= 0.0 && (vxlCost & 4194304) == 0;", // the surface cache: one fetch (dev cost bit 4194304: the per-pixel path instead)
-      "#ifdef PPL_DEV",
-      "   if (int(vxlMapZ.w + 0.5) == 10) useCache = false;", // dev view 10: the voxel lighting per pixel (to compare with view 0)
-      "#endif",
-      "   if (useCache) {",
-      "      vec4 lm = textureLod(vxlLM, vec3(vxlUv, vxlLayer), 0.0);",
-      "      float lsky;",
-      "      if (lm.a > 0.9899) {", // all four texels the volume's: the one fetch
-      "         vxlW = 1.0;",
-      "         lsky = clamp((lm.a - 0.99) * 100.0, 0.0, 1.0);",
-      "      } else {", // a texel of the native's in the footprint: the four weighed by their validity
-      "         vec2 fx = vxlUv * vec2(textureSize(vxlLM, 0).xy) - 0.5;",
-      "         ivec2 i0 = ivec2(floor(fx));",
-      "         vec2 ff = fx - vec2(i0);",
-      "         ivec2 lim = textureSize(vxlLM, 0).xy - 1;",
-      "         vec3 rs = vec3(0.0), rm = vec3(0.0);",
-      "         float ws = 0.0, ss = 0.0, bs = 0.0, wm = 0.0, sm = 0.0;",
-      // a block of mixed surfaces (RELIGHT_CS: 0.50 + 0.01 sky) weighs a twentieth while a block of one surface is in the
-      // footprint (its one light stood for the surface behind a cut wall's top too: dark scallops along every cut wall);
-      // a twentieth, not none: left out, the pixels where a one-surface block's weight ran out drew a hard line)
-      "         for (int k = 0; k < 4; k++) {",
-      "            ivec2 o = ivec2(k & 1, k >> 1);",
-      "            vec4 tk = texelFetch(vxlLM, ivec3(clamp(i0 + o, ivec2(0), lim), int(vxlLayer)), 0);",
-      "            float bk = (o.x == 1 ? ff.x : 1.0 - ff.x) * (o.y == 1 ? ff.y : 1.0 - ff.y);",
-      "            if (tk.a > 0.45 && tk.a < 0.55) { bk *= 0.05; rm += tk.rgb * bk; sm += clamp((tk.a - 0.50) * 100.0, 0.0, 1.0) * bk; wm += bk; continue; }",
-      "            float vk = (tk.a > 0.9899 ? 1.0 : 2.0 * tk.a) * bk;",
-      "            rs += tk.rgb * vk;",
-      "            ss += (tk.a > 0.9899 ? clamp((tk.a - 0.99) * 100.0, 0.0, 1.0) : 0.0) * vk;",
-      "            ws += vk;",
-      "            bs += bk;",
-      "         }",
-      "         rs += rm; ss += sm; ws += wm; bs += wm;",
-      "         vxlW = bs > 1e-6 ? clamp(ws / bs, 0.0, 1.0) : 0.0;",
-      "         if (vxlW <= 0.001) return Ln;",
-      "         lm.rgb = rs / ws;",
-      "         lsky = ss / ws;",
-      "      }",
-      "      vec3 ca = vxlAmb.rgb * max(lsky, vxlAmb.w), cl = lm.rgb * 1.25;",
-      "      vec3 Lc = vxlOpt.z > 1.5 ? ca + cl : vxlOpt.z > 0.5 ? max(ca, cl) : max(Ln, cl);",
-      "#ifdef PPL_DEV",
-      "      int cv = int(vxlMapZ.w + 0.5);",
-      "      if (cv == 1) Lc = cl;",
-      "      if (cv == 2) Lc = vec3(lsky);",
-      "      if (cv == 4) Lc = vec3(vxlW, 1.0 - vxlW, 0.0);",
-      "      if (cv == 6) vxlW = 1.0;",
-      "      if (cv == 7 && (P.x - P.y) < (vxlWin.x - vxlWin.y)) { vxlW = 0.0; return Ln; }",
-      "      if (cv == 9) Lc = vec3(0.2, 0.2, 1.0);", // dev: blue where the cache lights the pixel
-      "#endif",
-      "      return mix(Ln, clamp(Lc, 0.0, 1.0), vxlW);",
-      "   }",
-      "#ifdef PPL_DEV",
-      "   if (int(vxlMapZ.w + 0.5) == 9) { vxlW = 1.0; return vec3(1.0, 0.3, 0.2); }", // dev: red where the volume is read per pixel
-      "#endif",
       "   if (lz < vxlWin.w || lz > vxlWin.w + 7.0) return Ln;",
       "   vec2 rel = P.xy - vxlWin.xy;",
       "   float edge = min(min(rel.x, rel.y), min(vxlWin.z - rel.x, vxlWin.z - rel.y));",
@@ -2721,7 +2763,7 @@ public final class VoxelLight {
       "   float fz = clamp(Q.z - lz, vxlMapZ.y, 1.0 - vxlMapZ.y);",
       // never filtered across a blocked edge of the square in front of the surface (a window's pane sits a hair inside the
       // wall: its own square is the room): the texels behind a wall are another room's
-      "   sq = floor(Q.xy);",
+      "   vec2 sq = floor(Q.xy);",
       "   vec2 qa = Q.xy;",
       "   vec2 fq = Q.xy - sq;",
       "   if ((vxlCost & 262144) == 0 && (min(fq.x, fq.y) < vxlMapZ.z || max(fq.x, fq.y) > 1.0 - vxlMapZ.z)) {", // only near an edge does the filter reach the next square
@@ -2765,6 +2807,97 @@ public final class VoxelLight {
       "   if (vv == 8) Lv = n * 0.5 + 0.5;",
       "#endif",
       "   return mix(Ln, clamp(Lv, 0.0, 1.0), vxlW);",
+      "}",
+      "vec3 vxlLight(vec3 P, inout vec3 n, float lz, vec2 sq, vec3 Ln) {",
+      "   vxlW = 0.0;",
+      "   if ((vxlCost & 2097152) != 0) { vxlW = 1.0; return vec3(0.5); }", // dev probe: no fetch at all
+      "   if ((vxlCost & 1048576) != 0) { vxlW = 1.0; vec4 t = textureLod(vxlT1, vec3((P.xy + vxlMap.xy) * vxlMap.z, (lz - vxlWin.w) * vxlMapZ.x), 0.0); return max(vxlAmb.rgb * t.a, t.rgb); }", // dev probe: one fetch
+      "#ifdef PPL_DEV",
+      "   if ((vxlCost & 8388608) != 0) { vxlW = 1.0; return vec3(fract(P.x), fract(P.y), (mod(floor(P.x), 4.0) * 4.0 + mod(floor(P.y), 4.0) + 0.5) / 16.0); }", // dev: the pixel's surface point (as view 16), beside the cache's (relight uDev 1073741824)
+      "#endif",
+      "   if (vxlMap.w < 0.5 || vxlLayer < -1.5) return Ln;",
+      "   bool useCache = vxlLayer >= 0.0 && (vxlCost & 4194304) == 0;", // the surface cache: one fetch (dev cost bit 4194304: the per-pixel path instead)
+      "#ifdef PPL_DEV",
+      "   if (int(vxlMapZ.w + 0.5) == 10) useCache = false;", // dev view 10: the voxel lighting per pixel (to compare with view 0)
+      "#endif",
+      "   if (useCache) {",
+      "      vec3 lc = vec3(vxlUv, vxlLayer);",
+      "      vec4 lm = textureLod(vxlLM, lc, 0.0);",
+      "      float lsky;",
+      "      vec4 ga = vec4(lm.a);",
+      "      bool gd = false;",
+      "#ifdef VXL_MATCH",
+      // the one-fetch path only when each of the four texels is a clean one of the volume's (their alphas gathered): a small share
+      // of a marked block (then 0.50 + 0.01 sky) in the filtered alpha passed the 0.9899 test outdoors and ate the sky share it carries
+      // (0.99 + 0.01 sky): a dark 1-px line wherever the read's two paths met (grass, 2026-10-31)
+      // (a filtered alpha over 0.9982 holds no such share: the hardware's bilinear weights are multiples of 1/256, the least share
+      // of a marked (under 0.5) or native texel takes over 0.0019 off; the sky's outdoor texels skip the gather)
+      "      if (lm.a > 0.9899 && (lm.a <= 0.9982 || VXL_NEAR_C) && (vxlCost & 67108864) == 0) { ga = textureGather(vxlLM, lc, 3); gd = true; }",
+      "#endif",
+      "      if (all(greaterThan(ga, vec4(0.9899)))) {", // all four texels the volume's: the one fetch
+      "         vxlW = 1.0;",
+      "         lsky = clamp((lm.a - 0.99) * 100.0, 0.0, 1.0);",
+      "      } else {", // a texel of the native's in the footprint: the four weighed by their validity
+      "         if (!gd) ga = textureGather(vxlLM, lc, 3);",
+      "         vec4 mk = vec4(greaterThan(ga, vec4(0.19))) * vec4(lessThan(ga, vec4(0.5)));", // a block marked (RELIGHT_CS: 0.25 + 0.2 sky)
+      "#ifdef VXL_MATCH",
+      // voxelLightCacheMatch: any share of a block whose read reaches another surface lit otherwise (RELIGHT_CS: marked): the volume
+      // per pixel, as the reference (its one light stood for the cap over the room behind, the counter's top over the floor: blobs
+      // under the cut wall tops, smudges on the counters, 2026-10-31). Over half the footprint only (dev cost bit 2048, the other
+      // blocks carrying the read): ~10 us cheaper at 5K, but a rounded patch where the per-pixel light and the clean blocks' meet
+      // (hall wall); at 0.3 a band of dark blotches under the hall's cut wall tops (the clean blocks there are darker than the
+      // volume per pixel, cause not found)
+      // (the decision on the hardware's own footprint, any marked texel in it whatever its weight: weights computed here and put on
+      // the gathered texels drew a 1-px line of the clean texels' light where the two footprints parted, at a texel's centre)
+      "         vec2 fh = fract(vxlUv * vec2(textureSize(vxlLM, 0).xy) - 0.5);",
+      "         if ((vxlCost & 67108864) == 0 && ((vxlCost & 2048) != 0 ? dot(vec4((1.0 - fh.x) * fh.y, fh.x * fh.y, fh.x * (1.0 - fh.y), (1.0 - fh.x) * (1.0 - fh.y)), mk) > 0.5 : any(greaterThan(mk, vec4(0.0))))) {",
+      "#ifdef PPL_LAZY_NORMAL",
+      "            if (pplNeedN) { n = pplLazyNormal(P); pplNeedN = false; }",
+      "#endif",
+      "#ifdef PPL_DEV",
+      "            if (int(vxlMapZ.w + 0.5) == 11) { vxlW = 1.0; return vec3(1.0, 0.0, 0.0); }", // dev: red the volume per pixel
+      "#endif",
+      "            return vxlPixel(P, n, lz, Ln);",
+      "         }",
+      "#endif",
+      // the four texels fetched on this read's own footprint, issued together (the loop with branches waited one fetch after another;
+      // textureGather's footprint is the hardware's, which parts from weights computed here at a texel's centre)
+      "         vec2 fx = vxlUv * vec2(textureSize(vxlLM, 0).xy) - 0.5;",
+      "         ivec2 i0 = ivec2(floor(fx)), lim = textureSize(vxlLM, 0).xy - 1;",
+      "         vec2 ff = fx - vec2(i0);",
+      "         int ly = int(vxlLayer);",
+      "         vec4 t0 = texelFetch(vxlLM, ivec3(clamp(i0, ivec2(0), lim), ly), 0), t1 = texelFetch(vxlLM, ivec3(clamp(i0 + ivec2(1, 0), ivec2(0), lim), ly), 0);",
+      "         vec4 t2 = texelFetch(vxlLM, ivec3(clamp(i0 + ivec2(0, 1), ivec2(0), lim), ly), 0), t3 = texelFetch(vxlLM, ivec3(clamp(i0 + ivec2(1, 1), ivec2(0), lim), ly), 0);",
+      "         vec4 a4 = vec4(t0.a, t1.a, t2.a, t3.a);",
+      "         vec4 bw = vec4((1.0 - ff.x) * (1.0 - ff.y), ff.x * (1.0 - ff.y), (1.0 - ff.x) * ff.y, ff.x * ff.y);",
+      "         vec4 m4 = vec4(greaterThan(a4, vec4(0.19))) * vec4(lessThan(a4, vec4(0.5)));",
+      "         vec4 cl = vec4(greaterThan(a4, vec4(0.9899)));",
+      // per texel: the volume's share (1 clean, 2a at the window's edge, 0 the native's; a marked block out)
+      "         vec4 wv = bw * mix(2.0 * a4, vec4(1.0), cl) * (1.0 - m4);",
+      "         float ws = dot(wv, vec4(1.0)), bs = 1.0 - dot(bw, m4);",
+      "         vxlW = bs > 1e-6 ? clamp(ws / bs, 0.0, 1.0) : 0.0;",
+      "         if (vxlW <= 0.001) return Ln;",
+      "         lm.rgb = (t0.rgb * wv.x + t1.rgb * wv.y + t2.rgb * wv.z + t3.rgb * wv.w) / ws;",
+      "         lsky = dot(cl * clamp((a4 - 0.99) * 100.0, 0.0, 1.0), wv) / ws;",
+      "      }",
+      "      vec3 ca = vxlAmb.rgb * max(lsky, vxlAmb.w), cl = lm.rgb * 1.25;",
+      "      vec3 Lc = vxlOpt.z > 1.5 ? ca + cl : vxlOpt.z > 0.5 ? max(ca, cl) : max(Ln, cl);",
+      "#ifdef PPL_DEV",
+      "      int cv = int(vxlMapZ.w + 0.5);",
+      "      if (cv == 1) Lc = cl;",
+      "      if (cv == 2) Lc = vec3(lsky);",
+      "      if (cv == 4) Lc = vec3(vxlW, 1.0 - vxlW, 0.0);",
+      "      if (cv == 6) vxlW = 1.0;",
+      "      if (cv == 7 && (P.x - P.y) < (vxlWin.x - vxlWin.y)) { vxlW = 0.0; return Ln; }",
+      "      if (cv == 9) Lc = vec3(0.2, 0.2, 1.0);", // dev: blue where the cache lights the pixel
+      "      if (cv == 11) { vxlW = 1.0; return vec3(0.0, lm.a > 0.9899 ? 0.35 : 1.0, lm.a > 0.9899 ? 0.0 : 0.6); }", // dev: green the four-tap read, dark green the one fetch (red the volume per pixel, above)
+      "#endif",
+      "      return mix(Ln, clamp(Lc, 0.0, 1.0), vxlW);",
+      "   }",
+      "#ifdef PPL_DEV",
+      "   if (int(vxlMapZ.w + 0.5) == 9) { vxlW = 1.0; return vec3(1.0, 0.3, 0.2); }", // dev: red where the volume is read per pixel
+      "#endif",
+      "   return vxlPixel(P, n, lz, Ln);",
       "}",
       "#endif");
 }

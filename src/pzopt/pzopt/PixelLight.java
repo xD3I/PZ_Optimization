@@ -3349,6 +3349,9 @@ public final class PixelLight {
       VoxelLight.FRAG_GLSL,
       "vec3 pplLight(vec3 P, float dz, vec3 n) {", // n: the surface normal in squares (z up), towards the viewer
       "   int cost = int(pplOpt2.w + 0.5);", // dev: parts switched off (devPplCostAt)
+      "#ifdef PPL_VOXEL",
+      "   vxlCost = cost;",
+      "#endif",
       "   if ((cost & 8) != 0) return vec3(fract(P.x * 0.001) + 0.999);",
       // the square that owns the surface: a hair towards the viewer (a north wall's owner is on its +y side, a west wall's
       // on its +x side, a floor's above it)
@@ -3394,9 +3397,9 @@ public final class PixelLight {
       // voxel lighting's surface cache in a chunk texture no dynamic light reaches: a fully valid layer texel is the whole light
       // (the native's lattice, its edge path and the wall gradient are not read at all)
       "#if defined(PPL_VOXEL) && defined(PPL_BASE) && !defined(PPL_DEV)",
-      "   if (vxlLayer >= 0.0 && vxlMap.w > 0.5 && vxlOpt.z > 0.5 && (cost & (65536 | 8388608)) == 0) {",
+      "   if (vxlLayer >= 0.0 && vxlMap.w > 0.5 && vxlOpt.z > 0.5 && (cost & (65536 | 8388608)) == 0 && (cost & (4194304 | 2048)) != 4194304) {", // (dev cost bit 4194304: the volume per pixel everywhere; with 2048, here too: the reference before 2026-10-31 evening)
       "      vec4 lm = textureLod(vxlLM, vec3(vxlUv, vxlLayer), 0.0);",
-      "      if (lm.a > 0.9899) {", // all four texels the volume's (VoxelLight.RELIGHT_CS's alpha: 0.99 + 0.01 sky)
+      "      if (VXL_ALL_CLEAN(lm.a)) {", // all four texels the volume's (VoxelLight.RELIGHT_CS's alpha: 0.99 + 0.01 sky)
       "         vxlW = 1.0;",
       "         vec3 ca = vxlAmb.rgb * max(clamp((lm.a - 0.99) * 100.0, 0.0, 1.0), vxlAmb.w), cl = lm.rgb * 1.25;",
       "         vec3 Lq = vxlOpt.z > 1.5 ? ca + cl : max(ca, cl);",
@@ -3405,6 +3408,21 @@ public final class PixelLight {
       "#endif",
       "         return clamp(Lq, 0.0, 1.0);",
       "      }",
+      // voxelLightCacheMatch: a footprint of the volume's texels only, some marked (another surface lit otherwise in reach): the
+      // cache's four-tap read or the volume per pixel (vxlLight), the native's light not read either (it ran the whole native
+      // lattice first for nothing, 2026-10-31)
+      "#ifdef VXL_MATCH",
+      // (not under dev cost bit 4194304: vxlLight's per-pixel-everywhere path takes the normal it is given, the lazy one not made yet)
+      "      if (lm.a > 0.19 && (cost & (67108864 | 4194304)) == 0 && all(greaterThan(textureGather(vxlLM, vec3(vxlUv, vxlLayer), 3), vec4(0.19)))) {",
+      "         vec3 Lq = vxlLight(P, n, lz, sq, vec3(0.0));",
+      "         if (vxlW > 0.999) {",
+      "#ifdef PPL_UNSEEN_AMBIENT",
+      "            if (pplWet.w > 0.5) { vec4 cu = texelFetch(pplConn, ivec3(s, lvl), 0); if (!pplVisible(cu.a)) Lq = mix(vec3(pplWet.z), Lq, pplUnseenW(cu, s, lvl, fxy)); }",
+      "#endif",
+      "            return clamp(Lq, 0.0, 1.0);",
+      "         }",
+      "      }",
+      "#endif",
       "   }",
       "#endif",
       // 1. the base light is the native's sample at each square's centre (lightInfo without the torches: what stock draws
@@ -4120,7 +4138,7 @@ public final class PixelLight {
    /** The game's chunkShader.frag (DIFFUSE x vertex colour, depth = chunkDepth + the texture's depth) with the light multiplied in. */
    private static final String TINT = (Config.DEV_PPL_TINT ? "#define PPL_TINT\n" : "") + (Config.PPL_TEXEL_POS ? "#define PPL_TEXEL\n#define PPL_NSPAN " + Config.PPL_NORMAL_SPAN + "\n#define PPL_NSPAN_WIDE " + Config.PPL_NORMAL_SPAN_WIDE + "\n" : "")
       + (Config.PPL_TEXEL_HEIGHT ? "#define PPL_TEXEL_Z\n" + (Config.PPL_FLOOR_SNAP ? "#define PPL_FLOOR_SNAP\n" : "") : "") + (Config.PPL_SEEN_EDGE ? "#define PPL_SEEN_EDGE\n" : "") + (Config.PPL_UNSEEN_AMBIENT ? "#define PPL_UNSEEN_AMBIENT\n" + (Config.PPL_UNSEEN_BLEND ? "#define PPL_UNSEEN_BLEND\n" : "") : "") + (Config.PPL_WALL_EDGE ? "#define PPL_WALL_EDGE\n" : "") + (Config.TORCH_SOURCE_SELF_SHADOW ? "#define PPL_SELF_SHADOW\n" : "") + Relief.defines() // the defines every chunk program gets
-      + (VoxelLight.ACTIVE ? "#define PPL_VOXEL\n" + ("texel".equals(Config.VOXEL_LIGHT_NORMAL) && Config.PPL_TEXEL_POS ? "#define VXL_TEXEL_N\n" : "screen".equals(Config.VOXEL_LIGHT_NORMAL) || "texel".equals(Config.VOXEL_LIGHT_NORMAL) ? "#define VXL_SCREEN_N\n" : "") : "");
+      + (VoxelLight.ACTIVE ? "#define PPL_VOXEL\n" + ("texel".equals(Config.VOXEL_LIGHT_NORMAL) && Config.PPL_TEXEL_POS ? "#define VXL_TEXEL_N\n" + ("cache".equals(Config.VOXEL_LIGHT_APPLY) && Config.VOXEL_LIGHT_CACHE_MATCH ? "#define VXL_MATCH\n" : "") : "screen".equals(Config.VOXEL_LIGHT_NORMAL) || "texel".equals(Config.VOXEL_LIGHT_NORMAL) ? "#define VXL_SCREEN_N\n" : "") : "");
    private static final String CHUNK_FRAG = "#version 420\n" + (Config.DEV_PPL_VIEW != 0 ? "#define PPL_DEV\n" : "") + TINT + CHUNK_FRAG_BODY; // dev views compiled in only when asked: they keep values alive to the end (registers)
    /** The same without the dynamic lights (chunk textures no light reaches): 32 registers, full occupancy on the 890M (64 with). */
    private static final String CHUNK_BASE_FRAG = "#version 420\n#define PPL_BASE\n" + CHUNK_FRAG_BODY;
