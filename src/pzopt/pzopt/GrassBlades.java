@@ -2142,18 +2142,18 @@ public final class GrassBlades {
       "   small = keep && h * 2.0 / abs(uMapA.z) < uLod.x;",
       "   if (!keep) return false;",
       // grassBladeSwayMotion: the blade moves as foliage sway moves the plant baked on its square (Sway.plantCode in the
-      // record's bits 20-30, Sway.begin's parameters): its phase (a hair of jitter inside Sway's 1/16 step), and the weight of
-      // that plant's texel at the blade tip's height (Sway's pzSwQ: amplitude x (height / plant height)^1.5); on a square with
-      // no swaying plant the blade is a grass plant of its own (its tip a top texel, Sway's grass amplitude)
+      // record's bits 20-30, Sway.begin's parameters): its phase (a hair of jitter inside Sway's 1/16 step) and that plant's
+      // amplitude. Each blade is a plant of its own, so its tip moves as a plant's top texel does in Sway (weight = amplitude,
+      // whatever the height: Sway's (texel height / object height)^1.5 is 1 at every object's top); the curve bends the rest.
+      // (Weighting the tip by the square's plant at the same height left the blades on the tall-grass squares, a quarter of
+      // a lawn in the maintainer's save, nearly still beside the full-moving blades of the bare squares.)
       "   float swW = 0.0;",
       "   if (uCopy.w > 0.0) {",
       "      uint pc = s >> 20;",
-      "      float hq = float((pc >> 4) & 15u) / 8.0;",
       "      uint st = (pc >> 8) & 3u;",
       "      float stf = st == 2u ? 0.35 : (st == 1u ? 0.65 : 1.0);",
       "      float amp = min(1.0, (((pc >> 10) & 1u) != 0u ? 16.0 : 18.0) * uCopy.w / 2.0 * stf / " + Sway.AMP_MAX_PX + ");",
-      "      float hr = hq > 0.0 ? min(1.0, h / hq) : 1.0;",
-      "      swW = amp * hr * sqrt(hr) * (0.5 + 0.5 * stiff);",
+      "      swW = amp * (0.5 + 0.5 * stiff);",
       "      phase = fract((float(pc & 15u) + (gbH01(seed ^ 0x3334u) - 0.5) * 0.5) / 16.0);",
       "   }",
       "   vec2 l = lean + (gbH2(seed ^ 0x7777u) - 0.5) * 0.3;",
