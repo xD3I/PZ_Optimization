@@ -40,7 +40,7 @@ public final class GroundTiling {
                                    //   Gaussian value 0..1); row 3: texels 0..2 the PCA basis columns, texel 3 the mean colour
       uniform ivec4 pzGtPeriod;         // x, y exemplar period px (128N, 64N); z mode; w seed
       uniform vec4 pzGtHex;             // x cell size (squares), y height contrast, z weight exponent, w gain r
-      uniform vec4 pzGtBlend;           // height blend: x depth (0 = stock alpha), y boundary noise amplitude, z noise scale (squares), w height weight
+      uniform vec4 pzGtBlend;           // height blend: x depth (0 = stock alpha), y boundary noise amplitude, z noise scale (squares), w height weight (< 0: read smoothed, groundHeightBlendSoft)
       uniform vec4 pzGtMacro;           // macro: x brightness amplitude, y dryness amount, z brightness scale (squares), w dryness scale
       uniform vec3 pzGtDryTint;         // colour factor of fully dry grass (the game's dry grass over its green grass)
       uniform ivec2 pzGtWorld;          // the chunk origin in world squares (exact integers)
@@ -251,7 +251,7 @@ public final class GroundTiling {
       // Height-based blending of an overlay (material B over base A): the material whose height is higher wins (grass
       // blades over the dirt, sand into the cracks). t = B's coverage before the heights (0..1). Returns B's alpha.
       float gtHeightLerp(float t, float hB, float hA) {
-         float wb = hB * pzGtBlend.w + t, wa = hA * pzGtBlend.w + (1.0 - t);
+         float wb = hB * abs(pzGtBlend.w) + t, wa = hA * abs(pzGtBlend.w) + (1.0 - t); // (w < 0: groundHeightBlendSoft's flag)
          float m = max(wa, wb) - pzGtBlend.x;
          float bb = max(wb - m, 0.0), ba = max(wa - m, 0.0);
          return bb / max(bb + ba, 1e-5);
