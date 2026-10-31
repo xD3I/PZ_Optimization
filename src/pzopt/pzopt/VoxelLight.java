@@ -1143,6 +1143,9 @@ public final class VoxelLight {
       }
 
       private static int lastMixedMode = -1;
+      /** dev: devPplAlternate cost-mask bits the relight reads: 16777216 voxelLightWallTop off, 134217728 / 536870912 / 1073741824 dev views (uDev). */
+      static final int RELIGHT_DEV_BITS = 0x7F000000;
+      private static int lastRelightDev = 0;
       private static long mixedT0;
 
       /** voxelLightMixed as the relight's uMixed (0 off, 1 mark); devVoxelMixedAlternate: the mode and off in turn. */
@@ -1175,6 +1178,13 @@ public final class VoxelLight {
             }
          }
          int mixedMode = mixedMode();
+         int devBits = PixelLight.costMask & RELIGHT_DEV_BITS; // dev (devPplAlternate): relight variants, every layer relit at a change
+         if (devBits != lastRelightDev) {
+            lastRelightDev = devBits;
+            for (Slot sl : SLOTS.values()) {
+               sl.stale = true;
+            }
+         }
          if (mixedMode != lastMixedMode) { // a mode change (devVoxelMixedAlternate): every layer relit
             if (lastMixedMode != -1) {
                Log.info("voxel light: mixed blocks mode " + mixedMode + " from epoch_ms " + System.currentTimeMillis());
@@ -1211,6 +1221,8 @@ public final class VoxelLight {
          GL20.glUniform1i(GL20.glGetUniformLocation(progRelight, "uE"), C_UNIT);
          GL20.glUniform1i(GL20.glGetUniformLocation(progRelight, "uCube"), CUBE ? 1 : 0);
          GL20.glUniform1i(GL20.glGetUniformLocation(progRelight, "uMixed"), mixedMode);
+         GL20.glUniform1i(GL20.glGetUniformLocation(progRelight, "uDev"), PixelLight.costMask & RELIGHT_DEV_BITS);
+         GL20.glUniform1i(GL20.glGetUniformLocation(progRelight, "uWallTop"), Config.VOXEL_LIGHT_WALL_TOP && (PixelLight.costMask & 16777216) == 0 ? 1 : 0); // dev: cost bit 16777216 off
          if (CUBE) {
             GL20.glUniform1f(GL20.glGetUniformLocation(progRelight, "uCubeGain"), Config.VOXEL_LIGHT_CUBE_GAIN_PCT / 100F);
             int[] us = {55, 56, 57};
@@ -1784,12 +1796,27 @@ public final class VoxelLight {
          viewT0 = now;
       }
       String[] list = Config.DEV_VOXEL_LIGHT_VIEW_LIST.split(",");
-      int v = Integer.parseInt(list[(int)((now - viewT0) / Config.DEV_VOXEL_LIGHT_VIEW_CYCLE % list.length)].trim());
-      if (v != lastView) {
-         lastView = v;
-         Log.info("voxel light: dev view " + v + " from epoch_ms " + now);
+      int idx = (int)((now - viewT0) / Config.DEV_VOXEL_LIGHT_VIEW_CYCLE % list.length);
+      String e = list[idx].trim();
+      boolean ppl = e.endsWith("p"); // "<n>p": pixelLight's dev view n (devPplView's, e.g. 16 the lit point's world position), the voxel view 0
+      int v = ppl ? 0 : Integer.parseInt(e);
+      pplCycleView = ppl ? Integer.parseInt(e.substring(0, e.length() - 1)) : Config.DEV_PPL_VIEW;
+      if (idx != lastView) {
+         lastView = idx;
+         Log.info("voxel light: dev view " + e + " from epoch_ms " + now);
       }
       return v;
+   }
+
+   private static int pplCycleView = Config.DEV_PPL_VIEW;
+
+   /** pixelLight's dev view now: devPplView, or the cycle's "<n>p" entry (devVoxelLightViewCycle). */
+   static int devPplView() {
+      if (Config.DEV_VOXEL_LIGHT_VIEW_CYCLE <= 0 || Config.DEV_PPL_VIEW == 0) {
+         return Config.DEV_PPL_VIEW;
+      }
+      devView();
+      return pplCycleView;
    }
 
    /** dev (devVoxelLightTiming): GPU time of the passes, a line every 5 s. */
@@ -2395,6 +2422,8 @@ public final class VoxelLight {
       "uniform sampler2DArray uT1;",
       "uniform sampler2DArray uT2;",
       "uniform usampler2DArray uE;",
+      "uniform int uDev = 0;", // dev (devPplAlternate cost bits 1 << 24 ..): 1 << 27 validity view, 1 << 29 flags view, 1 << 30 the surface point
+      "uniform int uWallTop = 1;", // voxelLightWallTop
       "uniform int uMixed = 0;", // voxelLightMixed: 0 off; 1 mark (blocks spanning surfaces marked for the composite's read, wall-line points in the face's room)
       "uniform vec4 uAff;", // A = x - y = uAff.x u + uAff.y v + uAff0.x, B = x + y - 6z = uAff.z u + uAff.w v + uAff0.y (relative to uRef)
       "uniform vec4 uAff0;",
@@ -2501,6 +2530,16 @@ public final class VoxelLight {
       "   }",
       // the owner level and the volume there, as the composite's per-pixel path
       "   float lz = clamp(floor(P.z + 0.006), uLev.x, uLev.y);",
+      // voxelLightWallTop: a point at the very bottom of a level (within 0.03) on a W / N wall line of the level below is that
+      // wall's top (its cap and the top rows of its face, which reconstruct up to a hair above the level line), not the floor
+      // above: the level below. The +0.006 tolerance put such a block on the upper storey, whose light (no lamps, the upper
+      // rooms' sky) the cache's bilinear read spread down the wall: dark blue-grey scallops under every wall top, 2026-10-31
+      "   bool lzUp = lz > uLev.x && P.z - lz < 0.03;",
+      "   if (uWallTop != 0 && lzUp && int(lz) - 1 >= uWin.z) {",
+      "      vec2 s0 = floor(P.xy + 0.07), f0 = P.xy - s0;",
+      "      uint eb = texelFetch(uE, ivec3(ivec2(s0) & (N - 1), int(lz) - 1 - uWin.z), 0).r;",
+      "      if ((eb & 1u) != 0u && f0.x < 0.07 || (eb & 2u) != 0u && f0.y < 0.07) lz -= 1.0;",
+      "   }",
       // a leaf (a point above the floor inside a tree's crown: a baked tree's depth puts its crown inside the crown's own
       // volume, its normals are noise): the native's light, as the game lights its trees
       "   bool ground = planar && isFlat;",
@@ -2553,6 +2592,9 @@ public final class VoxelLight {
       "   }",
       // rgb: the light (the composite takes it as is, x 1.25 headroom: a facing light may pass the floor's), a: validity and sky
       "   vec3 lit = T1.rgb * fac;",
+      "   if ((uDev & 1073741824) != 0) { lit = vec3(fract(P.x), fract(P.y), (mod(floor(P.x), 4.0) * 4.0 + mod(floor(P.y), 4.0) + 0.5) / 16.0); valid = 1.0; }", // dev: the texel's surface point (as pixelLight's view 16)
+      "   if ((uDev & 536870912) != 0) { lit = vec3(lzUp ? 1.0 : 0.15, planar ? 1.0 : 0.15, mixed ? 1.0 : 0.15); valid = 1.0; }", // dev: R the level jumped up, G planar, B a mixed block
+      "   if ((uDev & 134217728) != 0) { lit = vec3(valid, fz, mixed ? 1.0 : 0.0); valid = 1.0; }", // dev: R the volume's validity at Q, G Q's height in its level (low: the point took the level above), B a mixed block
       "   if (uCube != 0) {", // the bounce arriving against the normal (flux flowing -n), coloured like the flood's
       "      ivec2 cs = ivec2(sq);",
       "      ivec3 cc = ivec3(cs & (N - 1), int(lz) - uWin.z);",
@@ -2613,6 +2655,9 @@ public final class VoxelLight {
       "   vxlW = 0.0;",
       "   if ((vxlCost & 2097152) != 0) { vxlW = 1.0; return vec3(0.5); }", // dev probe: no fetch at all
       "   if ((vxlCost & 1048576) != 0) { vxlW = 1.0; vec4 t = textureLod(vxlT1, vec3((P.xy + vxlMap.xy) * vxlMap.z, (lz - vxlWin.w) * vxlMapZ.x), 0.0); return max(vxlAmb.rgb * t.a, t.rgb); }", // dev probe: one fetch
+      "#ifdef PPL_DEV",
+      "   if ((vxlCost & 8388608) != 0) { vxlW = 1.0; return vec3(fract(P.x), fract(P.y), (mod(floor(P.x), 4.0) * 4.0 + mod(floor(P.y), 4.0) + 0.5) / 16.0); }", // dev: the pixel's surface point (as view 16), beside the cache's (relight uDev 1073741824)
+      "#endif",
       "   if (vxlMap.w < 0.5 || vxlLayer < -1.5) return Ln;",
       "   bool useCache = vxlLayer >= 0.0 && (vxlCost & 4194304) == 0;", // the surface cache: one fetch (dev cost bit 4194304: the per-pixel path instead)
       "#ifdef PPL_DEV",

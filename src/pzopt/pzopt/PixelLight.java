@@ -2519,7 +2519,7 @@ public final class PixelLight {
          this.mapping(this.map);
          GL20.glUniform1f(loc[0], (costMask & 64) != 0 ? 0.0F : 1.0F); // dev: bit 64, the shader's light off in per-pixel mode (cost probe)
          GL20.glUniform4f(loc[2], this.map[0], this.map[1], this.map[2], this.map[3]);
-         GL20.glUniform4f(loc[3], this.map[4], this.map[5], this.n, Config.DEV_PPL_VIEW);
+         GL20.glUniform4f(loc[3], this.map[4], this.map[5], this.n, VoxelLight.devPplView()); // dev: devVoxelLightViewCycle may step pixelLight's views too
          GL20.glUniform4i(loc[4], Math.floorMod(this.ox, this.n), Math.floorMod(this.oy, this.n), this.n - 1, LEVELS - 1);
          this.lightUniforms(loc[5], loc[6], loc[7], loc[9], loc[18]);
          GL20.glUniform4f(loc[14], this.wet * Config.PPL_SPEC_PCT / 100.0F, 48.0F, Math.max(this.ambient, 0.0F), this.ambient >= 0.0F ? 1.0F : 0.0F); // z, w: pplUnseenAmbient
@@ -3422,7 +3422,7 @@ public final class PixelLight {
       // dynamic point lights' visibility test below
       "   vec3 pplNat = L;",
       "#if defined(VXL_TEXEL_N) && defined(PPL_LAZY_NORMAL)",
-      "   if (pplNeedN && vxlLayer > -1.5 && vxlLayer < -0.5 && (cost & (65536 | 131072)) == 0) { n = pplLazyNormal(P); pplNeedN = false; }", // the per-pixel path only (the cache has its normals)
+      "   if (pplNeedN && (vxlLayer > -1.5 && vxlLayer < -0.5 || (cost & 4194304) != 0 || int(vxlMapZ.w + 0.5) == 10) && (cost & (65536 | 131072)) == 0) { n = pplLazyNormal(P); pplNeedN = false; }", // the per-pixel path only (the cache has its normals; dev: cost bit 4194304 / voxel view 10 read per pixel too)
       "#endif",
       "   vxlCost = cost;",
       "   if ((cost & 65536) == 0) L = vxlLight(P, n, lz, sq, L);", // dev: cost bit 65536, the voxel term off (devPplAlternate A/B)
