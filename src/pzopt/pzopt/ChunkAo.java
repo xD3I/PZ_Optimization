@@ -108,6 +108,50 @@ public final class ChunkAo {
    private ChunkAo() {
    }
 
+   // dev (devAoAlternate): bits the kernel and the passes read; a change re-bakes every texture (reconfigure)
+   static final int DEV_VIEW = 1, DEV_CLASS_VIEW = 2, DEV_OFF = 4, DEV_FACING_VIEW = 8;
+   static volatile int devBits;
+   private static long altT0;
+
+   // kernel switches (devK): normals from 4-texel differences where the 2-texel ones snap to no plane (aoWideNormals), faces
+   // between two furniture squares taken for the run's front (aoJoinFaces), occluders flattened towards the radius (aoFalloff)
+   static final int K_ANGLE = 16, K_WIDE = 32, K_JOIN = 64, K_FALLOFF = 128;
+
+   /** The kernel's switches: devAoAlternate's bits while it runs, else the keys. */
+   static int kernelBits() {
+      if (!Config.DEV_AO_ALTERNATE.isEmpty()) {
+         return devBits;
+      }
+      return (Config.AO_WIDE_NORMALS ? K_WIDE : 0) | (Config.AO_JOIN_FACES ? K_JOIN : 0) | (Config.AO_FALLOFF ? K_FALLOFF : 0);
+   }
+
+   /** devAoView, or the AO view of devAoAlternate's bits (1 when any view bit is set). */
+   static int aoView() {
+      return Config.DEV_AO_VIEW > 0 ? Config.DEV_AO_VIEW : (devBits & (DEV_VIEW | DEV_CLASS_VIEW | DEV_FACING_VIEW)) != 0 ? 1 : 0;
+   }
+
+   /** devAoAlternate=start,periodSec,maskA,maskB,...: from start seconds after the first frame the masks in turn (game thread). */
+   private static void devAlternate() {
+      if (Config.DEV_AO_ALTERNATE.isEmpty()) {
+         return;
+      }
+      long now = System.nanoTime();
+      if (altT0 == 0L) {
+         altT0 = now;
+      }
+      String[] a = Config.DEV_AO_ALTERNATE.split(",");
+      double t = (now - altT0) / 1.0e9 - Double.parseDouble(a[0].trim());
+      if (t < 0.0 || a.length < 3) {
+         return;
+      }
+      int m = Integer.parseInt(a[2 + (int)((long)(t / Double.parseDouble(a[1].trim())) % (a.length - 2))].trim());
+      if (m != devBits) {
+         devBits = m;
+         Log.info("chunk ao: dev bits " + m + " epoch_ms=" + System.currentTimeMillis());
+         reconfigure();
+      }
+   }
+
    /**
     * An AO key changed on the Enhancements tab (game thread, after Config's live reload). A texture's colour has its AO
     * multiplied in, so every loaded chunk texture bakes again (flagged as an object change: the bake budgets spread it over
@@ -410,6 +454,7 @@ public final class ChunkAo {
     * oldest first. A texture that is dirty again waits for its bake; one recycled to another chunk is dropped.
     */
    public static void flush(int playerIndex) {
+      devAlternate();
       runMasks();
       inTiles = false;
       frames++;
@@ -705,6 +750,9 @@ public final class ChunkAo {
       if (!deferMasks && Config.AO && Config.AO_ROOF_SKIP) {
          roofLevels(job.roofLv, c, minLevel);
       }
+      if (!deferMasks && Config.AO && (kernelBits() & K_JOIN) != 0) {
+         blockMask(job.block, c, minLevel);
+      }
       if (deferMasks) { // aoContextParallel: the pure world reads above, for every bake of the frame at once on the workers (flush)
          job.maskChunk = c;
          job.maskMinLevel = minLevel;
@@ -816,6 +864,9 @@ public final class ChunkAo {
          }
          if (Config.AO && Config.AO_ROOF_SKIP) {
             roofLevels(job.roofLv, c, minLevel);
+         }
+         if (Config.AO && (kernelBits() & K_JOIN) != 0) {
+            blockMask(job.block, c, minLevel);
          }
          return null;
       } catch (Throwable t) {
@@ -1105,6 +1156,98 @@ public final class ChunkAo {
     * these instead of the depth: a wall's painted depth (DEPTH16 steps, brick relief, window recesses) often misses the
     * plane snap, and an unsnapped east wall was then taken as facing a western sun, with cast shadows marched onto it.
     */
+   /**
+    * aoJoinFaces: the squares of the texture's two levels holding furniture (a counter, a cabinet, an appliance: blockObject).
+    * Each such sprite's depth is a box of its square, so a run of them has a face between every two of its squares in the
+    * depth wherever a sprite's opaque pixels reach past its neighbour's box: the kernel takes those faces for the run's front.
+    */
+   private static void blockMask(int[] m, IsoChunk c, int minLevel) {
+      java.util.Arrays.fill(m, 0);
+      zombie.iso.IsoCell cell = IsoWorld.instance.currentCell;
+      if (cell == null) {
+         return;
+      }
+      int x0 = c.wx * 8 - VEG_MARGIN;
+      int y0 = c.wy * 8 - VEG_MARGIN;
+      boolean log = Config.DEV_AO_BLOCK_LOG && !Config.DEV_AO_DUMP_CHUNK.isEmpty() && dumpChunkListed(c) && BLOCK_LOGGED.add(((long)c.wx << 32) ^ c.wy ^ ((long)minLevel << 56));
+      for (int plane = 0; plane < 2; plane++) {
+         for (int y = 0; y < VEG_SIDE; y++) {
+            for (int x = 0; x < VEG_SIDE; x++) {
+               IsoGridSquare sq = cell.getGridSquare(x0 + x, y0 + y, minLevel + plane);
+               if (sq == null) {
+                  continue;
+               }
+               zombie.util.list.PZArrayList<IsoObject> objs = sq.getObjects();
+               int block = 0;
+               for (int i = 0; i < objs.size(); i++) {
+                  IsoObject o = objs.get(i);
+                  int b = blockObject(o);
+                  block |= b;
+                  if (log && x >= VEG_MARGIN && y >= VEG_MARGIN && x < VEG_MARGIN + 8 && y < VEG_MARGIN + 8) {
+                     zombie.iso.sprite.IsoSprite sp = o.getSprite();
+                     zombie.core.properties.PropertyContainer pc = sp == null ? null : sp.getProperties();
+                     Log.info("chunk ao: block " + (x0 + x) + "," + (y0 + y) + "," + (minLevel + plane) + " " + (sp == null ? "-" : sp.getName()) + " type=" + (sp == null ? "-" : sp.getType())
+                        + (pc == null ? "" : " solid=" + pc.has(IsoFlagType.solid) + " solidtrans=" + pc.has(IsoFlagType.solidtrans) + " Surface=" + pc.get("Surface") + " IsTable=" + pc.has("IsTable")
+                           + " IsHigh=" + pc.has("IsHigh") + " IsLow=" + pc.has("IsLow") + " Facing=" + pc.get("Facing") + " floor=" + o.isFloor() + " container=" + (o.getContainer() != null)) + " -> " + b);
+                  }
+               }
+               int bit = y * VEG_SIDE + x;
+               if ((block & 1) != 0) {
+                  m[plane * 8 + (bit >> 5)] |= 1 << (bit & 31);
+               }
+               if ((block & 2) != 0) {
+                  m[16 + plane * 8 + (bit >> 5)] |= 1 << (bit & 31);
+               }
+            }
+         }
+      }
+   }
+
+   private static final java.util.HashSet<Long> BLOCK_LOGGED = new java.util.HashSet<>(); // devAoBlockLog: chunks logged
+
+   /**
+    * 1: a piece of furniture standing on its square up to a surface (counters, cabinets, a fridge, a stove: solid or
+    * solidtrans with a Surface); 2: a wall cabinet (IsHigh, a container); 0: anything else: floors, walls, doors, windows,
+    * trees, curtains, stairs (their sprite types), seats (a stool's square beside a counter's end does not hide its side).
+    */
+   private static int blockObject(IsoObject o) {
+      zombie.iso.sprite.IsoSprite sp = o.getSprite();
+      if (sp == null || o.isFloor()) {
+         return 0;
+      }
+      zombie.iso.SpriteDetails.IsoObjectType t = sp.getType();
+      if (t != zombie.iso.SpriteDetails.IsoObjectType.MAX && t != zombie.iso.SpriteDetails.IsoObjectType.normal && t != zombie.iso.SpriteDetails.IsoObjectType.isMoveAbleObject) {
+         return 0;
+      }
+      zombie.core.properties.PropertyContainer pc = sp.getProperties();
+      if (pc.has("BedType") || pc.has("SeatMaterial") || pc.has(IsoFlagType.solidfloor)) {
+         return 0;
+      }
+      if (pc.has("IsHigh")) {
+         return o.getContainer() != null ? 2 : 0;
+      }
+      return (pc.has(IsoFlagType.solid) || pc.has(IsoFlagType.solidtrans)) && pc.has("Surface") ? 1 : 0;
+   }
+
+   private static boolean dumpChunkListed(IsoChunk c) {
+      String v = Config.DEV_AO_DUMP_CHUNK;
+      int k = v.indexOf(':');
+      if (k >= 0) {
+         v = v.substring(0, k);
+      }
+      for (String e : v.split("/")) {
+         String[] p = e.split(",");
+         try {
+            if (c.wx == Integer.parseInt(p[0].trim()) && c.wy == Integer.parseInt(p[1].trim())) {
+               return true;
+            }
+         } catch (RuntimeException ex) {
+            return false;
+         }
+      }
+      return false;
+   }
+
    private static void wallMask(int[] wall, IsoChunk c, int minLevel) {
       java.util.Arrays.fill(wall, 0);
       zombie.iso.IsoCell cell = IsoWorld.instance.currentCell;
@@ -2048,6 +2191,7 @@ public final class ChunkAo {
       final int[] ext = new int[24]; // exterior squares, 2 planes of 16 x 16 bits, then the roof columns (exteriorMask)
       final int[] roofLv = new int[16]; // aoRoofSkip: squares with a roof tile on the texture's lower / upper level, 2 planes of 16 x 16 bits (roofLevels)
       final int[] wall = new int[32]; // wall edges (wallMask): W walls on levels 0, 1, then N walls on levels 0, 1; 16 x 16 bits each
+      final int[] block = new int[32]; // aoJoinFaces: squares holding furniture (blockMask): standing on levels 0, 1, then hanging (wall cabinets) on levels 0, 1; 16 x 16 bits each
       boolean far; // sunShadowFar: farH holds the column heights around the chunk
       final byte[] farH = new byte[FAR_SIDE * FAR_SIDE]; // column tops above the texture's lowest level, quarter levels, FAR_MARGIN squares before the chunk
       final byte[] farT = new byte[FAR_SIDE * FAR_SIDE]; // sunShadowFarTrees: crown tops the same way (0: no crown)
@@ -2247,7 +2391,7 @@ public final class ChunkAo {
       private final HashMap<Integer, Integer> bareByColour = new HashMap<>();
       private int aoProgram;
       private int aoOnlyProgram; // AO_PASS: no sun code (its registers)
-      private final int[] uAoOnly = new int[25];
+      private final int[] uAoOnly = new int[27];
       private int blurProgram;
       private int mulProgram;
       private static final float EDGE_TOLERANCE_SQUARES = 0.12F; // aoEdgeAware: a depth step of this many squares halves a tap's weight (roughly)
@@ -2265,7 +2409,7 @@ public final class ChunkAo {
       private int rawW;
       private int rawH;
       private final int[] viewport = new int[4];
-      private final int[] uAo = new int[25];
+      private final int[] uAo = new int[27];
       private final int[] uBlur = new int[4];
       private final int[] uMul = new int[4];
       private final int[] uRatio = new int[6];
@@ -2332,7 +2476,7 @@ public final class ChunkAo {
          if (e == null || !e.valid || e.key != job.key || e.aw != aw || e.ah != ah) {
             return; // a compute is queued
          }
-         boolean dev = Config.DEV_AO_VIEW > 0;
+         boolean dev = aoView() > 0;
          if (e.queryPending && !Config.BAKE_NO_SYNC && GL15.glGetQueryObjecti(e.query, GL15.GL_QUERY_RESULT_AVAILABLE) != 0) { // bakeNoSync: read after the swap (pollQueries)
             e.empty = GL15.glGetQueryObjecti(e.query, GL15.GL_QUERY_RESULT) == 0;
             e.queryPending = false;
@@ -2367,15 +2511,15 @@ public final class ChunkAo {
 
       /** The texture's colour (its framebuffer bound) times its AO; the first time after a compute under an occlusion query. */
       private void drawMultiply(Job job, Entry e, float sc, int aw, int ah) {
-         boolean dev = Config.DEV_AO_VIEW > 0;
+         boolean dev = aoView() > 0;
          GL11.glViewport(0, 0, job.w, job.h);
          GL20.glUseProgram(this.mulProgram);
          GL20.glUniform1i(this.uMul[0], 0);
-         GL20.glUniform4f(this.uMul[1], sc / aw, sc / ah, 1.0F, Config.DEV_AO_VIEW);
+         GL20.glUniform4f(this.uMul[1], sc / aw, sc / ah, 1.0F, aoView());
          this.edgeUniforms(this.uMul[2], this.uMul[3], job, sc);
          GL11.glBindTexture(GL11.GL_TEXTURE_2D, e.tex);
          GL11.glEnable(GL11.GL_BLEND);
-         if (Config.DEV_AO_VIEW > 0) {
+         if (aoView() > 0) {
             GL11.glBlendFunc(GL11.GL_DST_ALPHA, GL11.GL_ZERO); // the AO term alone, premultiplied by the texture's alpha
          } else {
             GL11.glBlendFunc(GL11.GL_ZERO, GL11.GL_SRC_COLOR);
@@ -2481,6 +2625,12 @@ public final class ChunkAo {
          GL20.glUniform4f(u[5], strength(Config.AO_STRENGTH_FLOOR_PCT), strength(Config.AO_STRENGTH_WALL_PCT), strength(Config.AO_STRENGTH_OBJECT_PCT),
             strength(Config.AO_STRENGTH_VEGETATION_PCT));
          GL20.glUniform4f(u[22], strength(Config.AO_STRENGTH_PLANT_PCT), Config.AO_PLANT_LEAF_OCCLUSION ? 0.0F : 1.0F, 0.0F, 0.0F);
+         if (u[25] >= 0) {
+            GL20.glUniform1i(u[25], kernelBits()); // the kernel switches (and devAoAlternate's views)
+         }
+         if (u[26] >= 0 && (kernelBits() & K_JOIN) != 0) {
+            GL30.glUniform1uiv(u[26], job.block); // aoJoinFaces
+         }
       }
 
       private static float strength(int pct) {
@@ -2569,7 +2719,7 @@ public final class ChunkAo {
          GL20.glUseProgram(this.blurProgram);
          GL20.glUniform1i(this.uBlur[0], 0);
          GL20.glUniform4f(this.uBlur[1], AmbientOcclusion.UNITS_PER_DEPTH, 1.0F / ppuAo, aw - 1, ah - 1);
-         GL20.glUniform1f(this.uBlur[2], Config.DEV_SUN_VIEW > 0 ? 1.0F : 0.0F);
+         GL20.glUniform1f(this.uBlur[2], (devBits & DEV_CLASS_VIEW) != 0 ? 2.0F : Config.DEV_SUN_VIEW > 0 ? 1.0F : 0.0F); // dev class view: unblurred
          GL20.glUniform1f(this.uBlur[3], job.sun ? job.sunDir[3] : 0.0F);
          GL11.glBindTexture(GL11.GL_TEXTURE_2D, this.rawTex);
          GL11.glDrawArrays(GL11.GL_TRIANGLE_FAN, 0, 4);
@@ -2632,14 +2782,14 @@ public final class ChunkAo {
          GL20.glUniform1i(this.uRatio[0], 0);
          GL20.glUniform1i(this.uRatio[1], 1);
          GL20.glUniform4f(this.uRatio[2], sc / aw, sc / ah, 1.0F, hadOld ? 1.0F : 0.0F);
-         GL20.glUniform4f(this.uRatio[3], direct ? 1.0F : (float)aw / this.rawW, direct ? 1.0F : (float)ah / this.rawH, Config.DEV_AO_VIEW, 0.0F);
+         GL20.glUniform4f(this.uRatio[3], direct ? 1.0F : (float)aw / this.rawW, direct ? 1.0F : (float)ah / this.rawH, aoView(), 0.0F);
          this.edgeUniforms(this.uRatio[4], this.uRatio[5], job, sc);
          GL13.glActiveTexture(GL13.GL_TEXTURE1);
          GL11.glBindTexture(GL11.GL_TEXTURE_2D, e.tex);
          GL13.glActiveTexture(GL13.GL_TEXTURE0);
          GL11.glBindTexture(GL11.GL_TEXTURE_2D, direct ? e.tex : this.newTex);
          GL11.glEnable(GL11.GL_BLEND);
-         if (Config.DEV_AO_VIEW > 0) {
+         if (aoView() > 0) {
             GL11.glBlendFunc(GL11.GL_DST_ALPHA, GL11.GL_ZERO);
          } else {
             GL11.glBlendFunc(GL11.GL_DST_COLOR, GL11.GL_SRC_COLOR); // 2 src dst: src = ratio / 2 darkens and lightens
@@ -3002,14 +3152,14 @@ public final class ChunkAo {
             GL20.glUniform1i(this.uRatio[0], 0);
             GL20.glUniform1i(this.uRatio[1], 1);
             GL20.glUniform4f(this.uRatio[2], sc / aw, sc / ah, 1.0F, 1.0F);
-            GL20.glUniform4f(this.uRatio[3], 1.0F, 1.0F, Config.DEV_AO_VIEW, 0.0F);
+            GL20.glUniform4f(this.uRatio[3], 1.0F, 1.0F, aoView(), 0.0F);
             this.edgeUniforms(this.uRatio[4], this.uRatio[5], j, sc);
             GL13.glActiveTexture(GL13.GL_TEXTURE1);
             GL11.glBindTexture(GL11.GL_TEXTURE_2D, e.tex);
             GL13.glActiveTexture(GL13.GL_TEXTURE0);
             GL11.glBindTexture(GL11.GL_TEXTURE_2D, e.stageTex);
             GL11.glEnable(GL11.GL_BLEND);
-            if (Config.DEV_AO_VIEW > 0) {
+            if (aoView() > 0) {
                GL11.glBlendFunc(GL11.GL_DST_ALPHA, GL11.GL_ZERO);
             } else {
                GL11.glBlendFunc(GL11.GL_DST_COLOR, GL11.GL_SRC_COLOR);
@@ -3342,7 +3492,7 @@ public final class ChunkAo {
 
       /** A kernel variant's uniform locations, in uAo's order (and its sources on units 0..8). */
       private static void locate(int program, int[] u) {
-         String[] names = {"rect", "off", "geo", "params", "nSrc", "strength", "veg", "iso0", "iso1", "mode", "sunDir", "sunPerp", "sunPar", "ext", "sunTree", "treeA", "treeB", "sunWorld", "wallm", "farPar", "treeC", "treeD", "plantPar", "roofLv", "farTree"};
+         String[] names = {"rect", "off", "geo", "params", "nSrc", "strength", "veg", "iso0", "iso1", "mode", "sunDir", "sunPerp", "sunPar", "ext", "sunTree", "treeA", "treeB", "sunWorld", "wallm", "farPar", "treeC", "treeD", "plantPar", "roofLv", "farTree", "devK", "blockm"};
          for (int i = 0; i < names.length; i++) {
             u[i] = GL20.glGetUniformLocation(program, names[i]);
          }
@@ -3423,6 +3573,9 @@ public final class ChunkAo {
          this.uAo[21] = GL20.glGetUniformLocation(this.aoProgram, "treeD");
          this.uAo[22] = GL20.glGetUniformLocation(this.aoProgram, "plantPar");
          this.uAo[23] = GL20.glGetUniformLocation(this.aoProgram, "roofLv"); // aoRoofSkip: missing here, so with sun shadows on the roof squares went to location 0 and every roof kept its AO bands
+         this.uAo[24] = GL20.glGetUniformLocation(this.aoProgram, "farTree"); // (missing too: the far-tree uniform went to location 0)
+         this.uAo[25] = GL20.glGetUniformLocation(this.aoProgram, "devK"); // the kernel switches (devAoAlternate: views too)
+         this.uAo[26] = GL20.glGetUniformLocation(this.aoProgram, "blockm"); // aoJoinFaces
          GL20.glUseProgram(this.aoProgram);
          GL20.glUniform1i(GL20.glGetUniformLocation(this.aoProgram, "farH"), FAR_UNIT);
          GL20.glUniform1i(GL20.glGetUniformLocation(this.aoProgram, "treeSil"), TREE_UNIT);
@@ -3495,6 +3648,7 @@ public final class ChunkAo {
       "uniform uint ext[24];", // exterior squares: planes 0-1 = the texture's levels, plane 2 = roof columns; 16 x 16 bits from 4 squares before the chunk
       "uniform uint roofLv[16];", // aoRoofSkip: roof squares of the texture's lower / upper level (16 x 16 bits each)
       "uniform uint wallm[32];",
+      "uniform uint blockm[32];", // aoJoinFaces: squares holding furniture: standing (planes 0, 1 = the texture's levels), hanging (2, 3); 16 x 16 bits from 4 squares before the chunk
       "uniform sampler2D farH;", // FAR_UNIT: column tops round the chunk above the texture's lowest level (x 255 quarter levels), 20 squares before its corner
       "uniform vec4 farTree;", // sunShadowFarTrees: x on, y..z where the cards hand over to the far crowns (squares along the ground), w a crown's optical depth per square
       "uniform vec4 farPar;", // x on, y the first t (where the near march stops, squares), z the last t, |w| the reach (the fade's end), w < 0 the near march is capped (its tail hands over) // wall edges: W walls (face east) on levels 0-1, then N walls (face south); 16 x 16 bits from 4 squares before the chunk
@@ -3504,7 +3658,8 @@ public final class ChunkAo {
       "uniform vec4 treeD[32];", // u per square along the card, v of the foot, v per square of height
       "uniform sampler2DArray treeSil;", // TREE_UNIT: the trees' silhouettes (pzopt.TreeSilhouette)
       "uniform vec4 sunWorld;", // the direction to the sun in world squares (x east, y south, z up)
-      "uniform vec4 sunTree;", // trees: x the crowns' optical depth per square for the sun (0: none), y for the sky above (0: none), z the proxies in use, w the silhouettes' opacity (0: no cards)
+      "uniform vec4 sunTree;",
+      "uniform int devK;", // dev (devAoAlternate): 2 class view, 4 AO off, 8 facing view, 16.. kernel variants // trees: x the crowns' optical depth per square for the sun (0: none), y for the sky above (0: none), z the proxies in use, w the silhouettes' opacity (0: no cards)
       "out vec4 result;",
       "const float HALF_PI = 1.5707963;",
       "const float BAYER[16] = float[16](0.0, 8.0, 2.0, 10.0, 12.0, 4.0, 14.0, 6.0, 3.0, 11.0, 1.0, 9.0, 15.0, 7.0, 13.0, 5.0);",
@@ -3646,6 +3801,12 @@ public final class ChunkAo {
       // is the surface outdoors: its square, a quarter square off the surface along the normal (a wall belongs to the side it faces)
       // a wall face from the grid: 1 = the east face of a wall on the west edge of its square, 2 = the south face of a north-edge
       // wall, 0 none; P in squares from the chunk's corner, height in squares above the texture's lowest level (worldAt)
+      "bool blockAt(int plane, ivec2 sq) {",
+      "   sq += 4;",
+      "   if (sq.x < 0 || sq.y < 0 || sq.x >= 16 || sq.y >= 16) return false;",
+      "   int bit = sq.y * 16 + sq.x;",
+      "   return ((blockm[plane * 8 + (bit >> 5)] >> uint(bit & 31)) & 1u) != 0u;",
+      "}",
       "bool wallBit(int plane, ivec2 sq) {",
       "   sq += 4;",
       "   if (sq.x < 0 || sq.y < 0 || sq.x >= 16 || sq.y >= 16) return false;",
@@ -3931,6 +4092,39 @@ public final class ChunkAo {
       "   const vec3 NE = vec3(0.7071068, -0.3535534, -0.6123724);",
       "   const vec3 NS = vec3(-0.7071068, -0.3535534, -0.6123724);",
       "   float g = dot(N, NG), e = dot(N, NE), so = dot(N, NS);",
+      "   if ((devK & 32) != 0 && !(g > 0.94 || e > 0.94 || so > 0.94)) {", // dev variant: 4-texel differences where the 2-texel normal snaps to no plane
+      "      float dl4 = depthAt(c - vec2(4.0, 0.0)), dr4 = depthAt(c + vec2(4.0, 0.0)), dd4 = depthAt(c - vec2(0.0, 4.0)), du4 = depthAt(c + vec2(0.0, 4.0));",
+      "      float zx4 = 0.25 * (abs(dr4 - d) < abs(d - dl4) ? dr4 - d : d - dl4);",
+      "      float zy4 = 0.25 * (abs(du4 - d) < abs(d - dd4) ? du4 - d : d - dd4);",
+      "      vec3 N4 = normalize(vec3(zx4 * kz * ppu, ys * zy4 * kz * ppu, -1.0));",
+      "      float g4 = dot(N4, NG), e4 = dot(N4, NE), s4 = dot(N4, NS);",
+      "      if (g4 > 0.94 || e4 > 0.94 || s4 > 0.94) { N = N4; g = g4; e = e4; so = s4; }",
+      "   }",
+      // aoJoinFaces: every furniture sprite's depth is a box of its square and a run's art reaches past its neighbour's box, so
+      // the depth of a counter run is a row of box corners (each tile's front half one face, half the other); a face between
+      // two squares that both hold furniture is inside the run: the texel is moved onto the run's front plane along its view
+      // ray (an S face at y = Y between furniture north and south: the E face x = floor(x) + 1; an E face: the S face
+      // y = floor(y) + 1), unless furniture stands in front of that plane too
+      "   if ((devK & 64) != 0 && (so > 0.94 || e > 0.94)) {",
+      "      vec3 Pj = worldAt(c, d, ys);",
+      "      int lj = clamp(int(floor(Pj.z / 2.4494897 + 0.02)), 0, 1);",
+      "      lj += Pj.z - float(lj) * 2.4494897 > 1.3 ? 2 : 0;", // above a counter's top: the wall cabinets' plane
+      "      float pj = (c.x - iso0.x) * iso0.y;",
+      "      float qj = (ys < 0.0 ? c.y : rect[0].w - c.y) / iso0.z - iso0.w;",
+      "      if (so > 0.94) {",
+      "         float Y = floor(Pj.y + 0.5), X = floor(Pj.x);",
+      "         if (abs(Pj.y - Y) < 0.08 && blockAt(lj, ivec2(int(X), int(Y))) && blockAt(lj, ivec2(int(X), int(Y) - 1))) {",
+      "            float K = X + 1.0, yy = K - pj, sum = K + yy, zl = (iso1.x * sum - qj) / iso1.y;",
+      "            if (!blockAt(lj, ivec2(int(K), int(floor(yy))))) { d = (20.0 - sum - 2.0 * zl) * iso1.z; e = 1.0; so = 0.0; g = 0.0; }",
+      "         }",
+      "      } else {",
+      "         float X = floor(Pj.x + 0.5), Y = floor(Pj.y);",
+      "         if (abs(Pj.x - X) < 0.08 && blockAt(lj, ivec2(int(X), int(Y))) && blockAt(lj, ivec2(int(X) - 1, int(Y)))) {",
+      "            float K = Y + 1.0, xx = K + pj, sum = xx + K, zl = (iso1.x * sum - qj) / iso1.y;",
+      "            if (!blockAt(lj, ivec2(int(floor(xx)), int(K)))) { d = (20.0 - sum - 2.0 * zl) * iso1.z; e = 0.0; so = 1.0; g = 0.0; }",
+      "         }",
+      "      }",
+      "   }",
       // a baked tree is a camera-facing card whose depth steps once per texel row (DEPTH16): its reconstructed normals are
       // noise (the sun term came out in stripes); take the card's own normal, horizontal towards the camera
       // (not the floors and walls in the crown's squares: a card's depth gets nearer upwards, a floor's farther, so a card
@@ -3986,7 +4180,11 @@ public final class ChunkAo {
       "            vec2 o = (floor(sp) + 0.5 - c) / ppu;",
       "            vec3 dF = vec3(o.x, ys * o.y, (sd - d) * kz);",
       "            if (dot(dF, dF) > radius * radius) continue;",
-      "            if (dot(dF, N) < 0.04) continue;",
+      "            float hN = dot(dF, N);",
+      "            if (hN < 0.04 + ((devK & 16) != 0 ? 0.3 * length(dF - N * hN) : 0.0)) continue;", // dev variant 16: an angle bias (~17 degrees)
+      // aoFalloff: the occluder sinks towards the plane over the outer 60 % of the radius (a step's occlusion fades out instead
+      // of ending on a line at the radius)
+      "            if ((devK & 128) != 0) dF -= N * (hN * smoothstep(0.4 * radius, radius, sqrt(dot(dF, dF))));",
       "            vec2 fv = vec2(-dF.z, dot(dF.xy, D.xy));",
       "            float uF = sectorOf(fv, cn, sn);",
       // a sample far nearer the camera than it is beside the texel (a stool's seat half a square before the counter it stands
@@ -4006,7 +4204,10 @@ public final class ChunkAo {
       "      wsum += pnl;",
       "   }",
       "   float ao = clamp(1.0 - (1.0 - (wsum > 0.0 ? vis / wsum : 1.0)) * sk, 0.0, 1.0);",
-      "   if (mode.w > 1.5) ao = roofAo ? 0.25 : 1.0;", // dev (devAoRoofView): the texels taken for roof dark
+      "   if (mode.w > 1.5) ao = roofAo ? 0.25 : 1.0;",
+      "   if ((devK & 2) != 0) ao = tree ? 0.05 : g > 0.94 ? 0.95 : e > 0.94 ? 0.7 : so > 0.94 ? 0.45 : vk == 1 ? 0.1 : 0.25;", // dev class view: floor, E wall, S wall, object, plant
+      "   if ((devK & 8) != 0) ao = clamp(0.5 + 0.5 * (e - so), 0.0, 1.0);", // dev facing view
+      "   if ((devK & 4) != 0) ao = 1.0;", // dev: AO off // dev (devAoRoofView): the texels taken for roof dark
       // the sky the crowns hide (aoTreeCanopyPct): straight up from the texel through every crown in reach; a tree's trunk and
       // lower crown under its own, the ground under a tree (the horizon kernel skips a card's own plane and sees no volume)
       // (at most half the sky: light still comes in under and between the crowns); shade the vegetation casts, so the
@@ -4139,6 +4340,7 @@ public final class ChunkAo {
       "      }",
       "   }",
       "   float ao = wsum > 0.0 ? sum / wsum : c.r;",
+      "   if (sunOnly > 1.5) { result = vec4(c.r, 0.0, 0.0, 1.0); return; }", // dev (devAoAlternate class view): the raw texel
       "   float sun = swsum > 1e-4 ? ssum / swsum : (c.b >= 0.0 ? c.b : 1.0);",
       // the direct sun's share of the light the texture is baked with (x the transmittance of a cloud: the cloud shadow)
       "   float o = twsum > 1e-4 ? osum / twsum : 0.0, l = twsum > 1e-4 ? lsum / twsum : 0.0;",
