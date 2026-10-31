@@ -15,6 +15,9 @@ still, `--prop devCapture=<start>,<secs>,60,100,gray,crop=x:y:w:h,ram`):
     against the correlation between two `sway` blocks the same distance apart in the B half (foliage sway with itself).
     A blade field that moves with foliage sway's field reads the same as sway against sway.
 
+  * the brightness spectrum of the pixels the blades move vs the pixels foliage sway moves (pixel_spectra): the reliable
+    frequency reading (the block shifts lock on few lawn blocks: thin blades over painted grass have little texture).
+
 Usage: blade-motion.py RUN [--block 24] [--search 18] [--near 260] [--json f]
 """
 import argparse
@@ -99,6 +102,50 @@ def spectrum(series, fps):
         out = p if out is None else out + p
     f = np.fft.rfftfreq(256, 1 / fps)
     return f, (out / max(1, len(series)) if out is not None else None)
+
+
+def pixel_spectra(frames, stamps, gray, period, t0, ds=4):
+    """The brightness spectrum of every ds-th pixel per window (detrended, Hann), averaged over the pixels the blades move
+    (moving in A, still in B: `lawn`) and the pixels foliage sway moves (moving in B: `sway`). A thin blade sweeping over the
+    painted grass changes a pixel's brightness at its motion's frequency (and harmonics): unlike the block shifts this needs no
+    texture to lock on, so it reads every blade."""
+    win = (stamps - t0) // period
+    ph = (stamps - t0) % period
+    grid = np.linspace(0.2, 6.0, 30)
+    acc = {0: [], 1: []}
+    std = {0: [], 1: []}
+    for wv in sorted(set(win.tolist())):
+        idx = np.nonzero((win == wv) & (ph > 300))[0]
+        if len(idx) < 100:
+            continue
+        a = np.stack([luma(frames[i], gray)[::ds, ::ds] for i in idx]).reshape(len(idx), -1)
+        n = len(idx)
+        T = (stamps[idx[-1]] - stamps[idx[0]]) / 1000.0
+        tu = np.linspace(0, T, n)
+        M = np.vstack([tu - tu.mean(), np.ones(n)]).T
+        coef, *_ = np.linalg.lstsq(M, a, rcond=None)
+        a = a - M @ coef
+        f = np.fft.rfftfreq(n, T / n)
+        P = np.abs(np.fft.rfft(a * np.hanning(n)[:, None], axis=0)) ** 2
+        acc[int(wv % 2)].append((f, P))
+        std[int(wv % 2)].append(a.std(0))
+    if not std[0] or not std[1]:
+        return {}
+    sA, sB = np.mean(std[0], 0), np.mean(std[1], 0)
+    masks = {"lawn_A": (0, (sA > 6) & (sB < 1.5)), "sway_B": (1, sB > 6), "sway_A": (0, sB > 6)}
+    out = {}
+    for name, (half, m) in masks.items():
+        if m.sum() == 0:
+            continue
+        sp = np.zeros_like(grid)
+        for f, P in acc[half]:
+            sp += np.interp(grid, f, P[:, m].mean(1))
+        sp /= sp.sum()
+        out["px_" + name] = {"pixels": int(m.sum()), "peak_hz": round(float(grid[sp.argmax()]), 2),
+                             "share_osc": round(float(sp[(grid > 1.2) & (grid < 2.0)].sum()), 3),
+                             "share_wave": round(float(sp[(grid > 0.35) & (grid < 0.75)].sum()), 3),
+                             "share_osc2": round(float(sp[(grid > 2.8) & (grid < 3.4)].sum()), 3)}
+    return out
 
 
 def main():
@@ -229,7 +276,13 @@ def main():
     # with a phase per plant the signed correlation of two places spreads round 0; |r| says how locked they are
     res["abs_lawn_sway_A"] = round(float(np.mean(np.abs(cl))), 3) if len(cl) else None
     res["abs_sway_sway_B"] = round(float(np.mean(np.abs(cs_))), 3) if len(cs_) else None
+    res.update(pixel_spectra(frames, stamps, gray, period, t0))
     print(json.dumps(res))
+    for k in ("px_lawn_A", "px_sway_B", "px_sway_A"):
+        if k in res:
+            r = res[k]
+            print(f"brightness spectrum {k}: {r['pixels']} px, peak {r['peak_hz']} Hz, share 1.2-2.0 Hz (sway oscillator) {r['share_osc']}, "
+                  f"0.35-0.75 Hz (old waves) {r['share_wave']}, 2.8-3.4 Hz (2nd harmonic) {r['share_osc2']}")
     print(f"blocks: sway {res['sway_blocks']} lawn {res['lawn_blocks']} of {res['blocks']}, {fps:.0f} fps analysed")
     print(f"motion (std of dx in a window, px): blades on lawn {res['amp_lawn_A_px']}, foliage sway alone {res['amp_sway_B_px']}, "
           f"sway squares with blades {res['amp_sway_A_px']}")
