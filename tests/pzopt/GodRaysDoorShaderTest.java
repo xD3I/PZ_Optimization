@@ -15,8 +15,8 @@ public class GodRaysDoorShaderTest {
       Check.check(GodRays.APD_FRAG.contains("leafT(") && GodRays.APD_FRAG.contains("capsT(") && GodRays.APD_FRAG.contains("swirl("), "the light volume shader has the door leaf, the capsules and the dust");
       Check.check(GodRays.LL_FRAG.contains("uLP["), "the local lights carry the spill's frustum");
       // godRaysPatchRolloff: both patch paths roll the brightest channel off above the knee (a lit lamp shade in a shaft went flat white)
-      Check.check(GodRays.APD_FRAG.contains("uniform sampler2D uWorld;") && GodRays.APD_FRAG.contains("uRoll.x > 0.5"), "the direct light volumes read the picture for the patch roll-off");
-      Check.check(GodRays.APC_FRAG.contains("uS.w > 0.0 && m2 > 1.0"), "the light volume composite rolls the patch off");
+      Check.check(GodRays.APD_FRAG.contains("uniform sampler2D uWorld;") && GodRays.APD_FRAG.contains("uRoll.x > 0.5 && (lit > 0.0 || ins > 0.0)"), "the direct light volumes read the picture for the patch roll-off");
+      Check.check(GodRays.APC_FRAG.contains("uS.w > 0.0 && vm > uS.w && vm > cm"), "the light volume composite rolls the patch off");
       Path check = Path.of(System.getenv().getOrDefault("GLSLCHECK", "/tmp/glslcheck"));
       if (!Files.isExecutable(check)) {
          System.out.println("GodRaysDoorShaderTest ok (text only: no /tmp/glslcheck)");

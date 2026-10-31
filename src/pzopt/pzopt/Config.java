@@ -2146,8 +2146,8 @@ public final class Config {
    public static volatile int GOD_RAYS_HAZE_PCT; // how hazy the open air is, % of the weather's own (fog, rain, morning mist add to it)
    public static volatile int GOD_RAYS_DUST_PCT; // how dusty rooms are (the shafts through windows), %
    public static volatile int GOD_RAYS_PATCH_PCT; // sunlit patches on floors and walls inside (the light the shaft lands with), %
-   public static volatile boolean GOD_RAYS_PATCH_ROLLOFF; // god rays: the sunlit patch rolls bright surfaces off toward white instead of clipping them (a lit lamp shade in a shaft went flat white); reads the picture under the patch (texture barrier)
-   public static volatile int GOD_RAYS_PATCH_KNEE_PCT; // god rays, the patch roll-off: display-linear brightness (% of white) above which the patch is compressed so white stays white
+   public static volatile boolean GOD_RAYS_PATCH_ROLLOFF; // god rays: the light a shaft adds (sunlit patch + dust) rolls off toward the white the stock screen pass shows (world 0.917) instead of clipping (a lit lamp shade in a shaft went flat white); never darkens; reads the picture under the shaft (texture barrier)
+   public static volatile int GOD_RAYS_PATCH_KNEE_PCT; // god rays, the roll-off: the world value (% of 1.0, at most 86) above which the light a shaft adds is compressed toward the screen pass's white
    public static volatile String GOD_RAYS_METHOD;
    public static volatile boolean GOD_RAYS_APERTURES;
    public static volatile boolean GOD_RAYS_AP_DIRECT;
@@ -2892,8 +2892,8 @@ public final class Config {
       GOD_RAYS_MOTES = bool("godRaysMotes", true);
       GOD_RAYS_SOFT_PCT = Math.max(0, Math.min(300, integer("godRaysSoftPct", 100)));
       GOD_RAYS_GLINT_PCT = Math.max(0, Math.min(300, integer("godRaysGlintPct", 100)));
-      GOD_RAYS_PATCH_ROLLOFF = bool("godRaysPatchRolloff", false); // off: aimed at 1.0, but the stock screen tail (contrast 1.2 round 0.4) clips world values above 0.917 first, so it changed nothing (runs art-hdr-r7 / r9)
-      GOD_RAYS_PATCH_KNEE_PCT = Math.max(5, Math.min(95, integer("godRaysPatchKneePct", 35)));
+      GOD_RAYS_PATCH_ROLLOFF = bool("godRaysPatchRolloff", false); // patch + dust toward the screen pass's white 0.917 (the first version aimed at 1.0 and changed nothing, runs art-hdr-r7 / r9)
+      GOD_RAYS_PATCH_KNEE_PCT = Math.max(5, Math.min(95, integer("godRaysPatchKneePct", 70)));
       GOD_RAYS_LOCAL_METHOD = string("godRaysLocalMethod", "analytic").trim().toLowerCase(java.util.Locale.ROOT);
       GOD_RAYS_HAZE_MODE = string("godRaysHazeMode", "auto").trim().toLowerCase(java.util.Locale.ROOT);
       GOD_RAYS_LOCAL_PCT = Math.max(0, Math.min(400, integer("godRaysLocalPct", 100)));
