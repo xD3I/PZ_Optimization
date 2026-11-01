@@ -1,14 +1,19 @@
 package pzopt;
 
+import java.io.DataInputStream;
+import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.attribute.FileTime;
+import java.util.Arrays;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.jar.JarEntry;
 import java.util.jar.JarOutputStream;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * pzopt.BootRepair's file work on a temporary game folder: the removal (inside the folder only, the manifest and file
@@ -35,6 +40,7 @@ public class BootRepairTest {
          stock(dir.resolve("stock"));
          pending(dir.resolve("pending"));
          zomboid();
+         preload();
       } finally {
          Updater.deleteTree(dir);
       }
@@ -151,5 +157,66 @@ public class BootRepairTest {
    static void zomboid() {
       check(BootRepair.zomboidDir(new String[] {"-debug", "-cachedir=/tmp/zz "}).equals(Path.of("/tmp/zz")), "-cachedir= wins");
       check(BootRepair.zomboidDir(new String[0]).equals(Path.of(System.getProperty("user.home"), "Zomboid")), "else ~/Zomboid");
+   }
+
+   /**
+    * Every pzopt class BootRepair, Restart and Log refer to (class entries and descriptors of their constant pools) is in
+    * BootRepair.PRELOAD: after the removal a class the old install did not load yet is gone (2026-10-29: BenchPlan).
+    */
+   static void preload() throws Exception {
+      Set<String> listed = new LinkedHashSet<>(Arrays.asList(BootRepair.PRELOAD));
+      for (Class<?> c : new Class<?>[] {BootRepair.class, Restart.class, Log.class}) {
+         for (String ref : pzoptRefs(c)) {
+            check(ref.equals(c.getName()) || ref.equals("pzopt.BootRepair") || listed.contains(ref),
+                  c.getSimpleName() + " refers to " + ref + ", which BootRepair.PRELOAD does not load before the files change");
+         }
+      }
+      for (String name : BootRepair.PRELOAD) {
+         check(Class.forName(name, false, BootRepairTest.class.getClassLoader()) != null, "PRELOAD names a class: " + name);
+      }
+   }
+
+   static Set<String> pzoptRefs(Class<?> c) throws Exception {
+      Set<String> out = new LinkedHashSet<>();
+      Pattern desc = Pattern.compile("Lpzopt/([A-Za-z0-9_$]+);");
+      try (InputStream raw = c.getResourceAsStream("/" + c.getName().replace('.', '/') + ".class");
+            DataInputStream in = new DataInputStream(raw)) {
+         in.readInt();
+         in.readUnsignedShort();
+         in.readUnsignedShort();
+         int n = in.readUnsignedShort();
+         String[] utf = new String[n];
+         int[] classIdx = new int[n];
+         for (int i = 1; i < n; i++) {
+            int tag = in.readUnsignedByte();
+            switch (tag) {
+               case 1 -> utf[i] = in.readUTF();
+               case 7 -> classIdx[i] = in.readUnsignedShort();
+               case 8, 16, 19, 20 -> in.readUnsignedShort();
+               case 3, 4, 9, 10, 11, 12, 17, 18 -> in.readInt();
+               case 15 -> {
+                  in.readUnsignedByte();
+                  in.readUnsignedShort();
+               }
+               case 5, 6 -> {
+                  in.readLong();
+                  i++;
+               }
+               default -> throw new IllegalStateException("constant pool tag " + tag + " in " + c);
+            }
+         }
+         for (int i = 1; i < n; i++) {
+            if (classIdx[i] != 0 && utf[classIdx[i]].startsWith("pzopt/")) {
+               out.add(utf[classIdx[i]].replace('/', '.'));
+            }
+            if (utf[i] != null) {
+               Matcher m = desc.matcher(utf[i]);
+               while (m.find()) {
+                  out.add("pzopt." + m.group(1));
+               }
+            }
+         }
+      }
+      return out;
    }
 }

@@ -45,6 +45,13 @@ public final class BootRepair {
    static final String NOTICE_NAME = "pzopt-boot-repair.txt";
    /** How long a fresh uninstall list may belong to a helper that is still working (it starts when the old game ends). */
    static final long HELPER_GRACE_MS = 20_000;
+   /**
+    * Every pzopt class this class refers to, loaded before the first file changes: once the old install's files are gone
+    * a class not yet loaded is missing (NoClassDefFoundError, the repair dies before the restart; 2026-10-29, BenchPlan).
+    * BootRepairTest fails when BootRepair, Restart or Log refer to a pzopt class this list does not name.
+    */
+   static final String[] PRELOAD = {"pzopt.Restart", "pzopt.Log", "pzopt.Overrides", "pzopt.BuildInfo", "pzopt.Updater",
+         "pzopt.Updater$Release", "pzopt.Uninstall", "pzopt.Uninstall$Plan", "pzopt.AotCache", "pzopt.GcChoice", "pzopt.BenchPlan"};
 
    private BootRepair() {
    }
@@ -109,8 +116,9 @@ public final class BootRepair {
          }
 
          // --- everything from the old install is loaded from here on: no pzopt class may load after files change ---
-         Class.forName("pzopt.Restart");
-         Class.forName("pzopt.Log");
+         for (String c : PRELOAD) {
+            Class.forName(c);
+         }
          Set<Path> files = new LinkedHashSet<>();
          List<Path> dirs = new ArrayList<>();
          if (Files.isRegularFile(game.resolve(Updater.MANIFEST)) || Files.isRegularFile(game.resolve(Updater.FILE_LIST))) {
@@ -138,6 +146,18 @@ public final class BootRepair {
             gc = copy == null && GcChoice.undo(game);
          } catch (Exception e) {
             log(base, "launcher JSON undo failed: " + e);
+         }
+
+         // a built-in benchmark run in progress is aborted now, while the old install's classes are still on disk
+         // (2026-10-29: called after the removal, BenchPlan was missing and the repair died before the restart)
+         try {
+            String bench = BenchPlan.abandon(zomboid.toFile(), "the install was " + (uninstall ? "uninstalled" : copy != null ? "replaced" : "removed")
+                  + " by the boot repair");
+            if (bench != null) {
+               log(base, bench);
+            }
+         } catch (Throwable t) {
+            log(base, "benchmark plan not aborted: " + t);
          }
 
          touched = true;
@@ -173,10 +193,6 @@ public final class BootRepair {
                + " could not be removed" + (left.isEmpty() ? "" : " (first: " + left.get(0) + ")")
                + (aot ? "; launcher back to the loose classes" : "") + (gc ? "; launcher's collector / JIT / heap flags undone" : ""));
          notice(zomboid, action, reason, rev, from, copy != null ? copy.commit : "");
-         String bench = BenchPlan.abandon(zomboid.toFile(), "the install was " + action + " by the boot repair");
-         if (bench != null) {
-            log(base, bench);
-         }
          boolean relaunched = Restart.relaunch();
          log(base, relaunched ? "the game is started again" : "could not start the game again: start it from Steam");
          return true;
