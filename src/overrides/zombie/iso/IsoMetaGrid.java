@@ -881,17 +881,20 @@ public final class IsoMetaGrid {
       return newZone;
    }
 
+   // pzopt: retain all 32 bits of each stock duplicate-comparison component.
+   private record PzoptVehicleZoneKey(int x, int y, int width, int height) { }
+
    public void checkVehiclesZones() {
       if (pzopt.Config.LOADER_CPU_FIXES && pzopt.Overrides.enabled()) {
          // pzopt: stock compares every zone with every earlier one (O(n^2)) and builds the debug string for each
          // duplicate whether or not DebugType.Vehicle logs; same outcome: the first zone of each (x, y, w, h) survives
-         java.util.HashSet<Long> seen = new java.util.HashSet<>(this.vehiclesZones.size() * 2);
+         java.util.HashSet<PzoptVehicleZoneKey> seen = new java.util.HashSet<>(this.vehiclesZones.size() * 2);
          int removed = 0;
          int n = 0;
 
          while (n < this.vehiclesZones.size()) {
             Zone a = (Zone)this.vehiclesZones.get(n);
-            long key = ((long)a.getX() & 0xFFFFL) << 48 | ((long)a.getY() & 0xFFFFL) << 32 | ((long)a.w & 0xFFFFL) << 16 | (long)a.h & 0xFFFFL;
+            PzoptVehicleZoneKey key = new PzoptVehicleZoneKey(a.getX(), a.getY(), a.w, a.h);
             if (seen.add(key)) {
                n++;
             } else {
