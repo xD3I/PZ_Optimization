@@ -75,3 +75,26 @@ On a Windows install with the release built from this change (Steam, the game in
    names it; `-Force` moves it to `Zomboid\pzopt\replaced-files\`.
 7. Cut-short install: delete `pzopt-installed.txt` and `pzopt-files.txt` after an install; `-Uninstall` says "no list
    of installed files ... removing the N files that are PZ Optimization's" and the game starts stock.
+
+## Boot repair on a real game update (2026-10-29, game on the 42.22 pre-release e013dbb529)
+
+The released build (`d1bbdcf`, revision 4a0e9546ec, the Workshop item's `42/`) was installed with its own `install.bash`
+the way a player has it, then the 42.22 game was started directly (queue jobs 15558, 15560):
+
+- **With a 42.22 copy in the Workshop item** (`mods/PZ_Optimization/42.22/`, the port-42.22-master build): the old
+  `MainScreenState` runs on the new jar, the boot repair logs "updated", installs the copy and restarts the game, which
+  runs the overrides (127 `[pzopt]` lines, no build mismatch).
+- **Without one:** the files were removed and the notice written, then `failed: java.lang.NoClassDefFoundError:
+  pzopt/BenchPlan`. `BenchPlan.abandon` (added 2026-10-19 with the built-in benchmark) ran after the removal and
+  BenchPlan had never been loaded, so `Restart.relaunch` was never reached: the game closed once without a word and
+  the next start was stock. The pending-uninstall path had the same hole; the "updated" path only worked because the
+  copy had just put a new BenchPlan in place.
+
+Fix: the benchmark plan is aborted before the first file changes (in its own try / catch), and every pzopt class
+BootRepair refers to is loaded first from one list, `BootRepair.PRELOAD`. `BootRepairTest` reads the constant pools of
+BootRepair, Restart and Log and fails when one refers to a pzopt class the list does not name (checked: without
+BenchPlan in the list the test fails naming it). Re-test with the fixed build installed by install.sh: a faked
+revision with no copy ("removed"), a faked revision with the 42.22 copy staged ("updated"), and a pending uninstall
+list ("uninstalled") each restart the game: stock, with the overrides, stock; no `failed:` line. Every install released
+between 2026-10-19 and this fix still has the hole: on a game update without a matching Workshop copy the game closes
+once, then starts stock.
