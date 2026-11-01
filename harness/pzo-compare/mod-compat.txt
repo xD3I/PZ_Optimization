@@ -1,0 +1,2 @@
+mod compat: no Java mod patches a class we ship (report)
+mod compat: scan took 68 ms (modCompat=report)
