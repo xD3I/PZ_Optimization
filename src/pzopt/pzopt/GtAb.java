@@ -217,8 +217,14 @@ public final class GtAb {
       // ABBA (devGtAbba, default on): on, off, off, on, on, off, ... so a scene that grows heavier along the route weighs
       // both halves alike; plain alternation put every off half after its on half (an A/A placebo read 0.6 ms / 7 points
       // of misses "better" on, 2026-10-05)
+      boolean wasOff = off;
       off = Config.DEV_GT_ABBA ? ((period + 1L) >> 1 & 1L) == 1L : (period & 1L) == 1L;
       lastOff = off;
+      if (VSYNC_ALT && (off != wasOff || !vsyncSet)) { // vsyncAlt: vsync on in the "on" half, off in the "off" half
+         vsyncSet = true;
+         boolean sync = !off;
+         zombie.core.opengl.RenderThread.invokeOnRenderContext(() -> org.lwjglx.opengl.Display.setVSyncEnabled(sync));
+      }
       if (MASK2 != 0) {
          long period2 = (now - t0) / Config.DEV_GT_ALTERNATE2;
          off2 = Config.DEV_GT_ABBA ? ((period2 + 1L) >> 1 & 1L) == 1L : (period2 & 1L) == 1L;
@@ -379,5 +385,21 @@ public final class GtAb {
    /** False in the off half of an alternation for a listed key: the caller takes its old path this frame. */
    public static boolean on(long bit) {
       return (!off || (MASK & bit) == 0) && (!off2 || (MASK2 & bit) == 0);
+   }
+
+   /**
+    * frameCapAlt in devGtAlternateKeys (capped vs uncapped pass, 2026-10-28; list it beside zombNoop, which turns the
+    * alternation on): the "on" half runs at the player's frame cap, the "off" half uncapped (FrameCap.uncappedNow), so
+    * one run compares the two on the same scene.
+    */
+   public static final boolean CAP_ALT = Config.DEV_GT_ALTERNATE > 0 && ("," + Config.DEV_GT_ALTERNATE_KEYS.replace(" ", "") + ",").contains(",frameCapAlt,");
+
+   /** vsyncAlt in devGtAlternateKeys (same pass): vsync on in the "on" half, off in the "off" half (Display.setVSyncEnabled). */
+   public static final boolean VSYNC_ALT = Config.DEV_GT_ALTERNATE > 0 && ("," + Config.DEV_GT_ALTERNATE_KEYS.replace(" ", "") + ",").contains(",vsyncAlt,");
+   private static boolean vsyncSet;
+
+   /** frameCapAlt: this frame is in the uncapped half. */
+   public static boolean capAltUncapped() {
+      return CAP_ALT && off;
    }
 }
