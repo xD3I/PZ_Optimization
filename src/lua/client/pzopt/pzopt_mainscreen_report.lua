@@ -713,27 +713,85 @@ function R.linkOf(o, col, v)
     return "file://" .. path
 end
 
--- the y axis of a chart: its range, ticks and a value -> pixel function over [py, py + ph]
+-- the decimals that write every multiple of a tick step exactly (0.25 -> 2, 2.5 -> 1, 50 -> 0)
+function R.stepDecimals(step)
+    local dec = 0
+    while dec < 6 and math.abs(step * 10 ^ dec - math.floor(step * 10 ^ dec + 0.5)) > 1e-6 * step * 10 ^ dec do dec = dec + 1 end
+    return dec
+end
+
+-- the y axis of a chart: its range, ticks and a value -> pixel function over [py, py + ph]. Ticks are values of the
+-- series (A.y takes them); a MiB axis reaching 1 GiB is written in GiB throughout (A.div), not "768 MiB" under "1.22 GiB".
+-- Log axes step 1-2-5 (0.5, 1, 2, 5, 10 ms ...; decades only when those do not fit), linear ones a nice step written
+-- with the step's decimals on every tick (0.00, 0.25, 0.50, not 0, 0.3, 0.5).
 function R.axis(s, lo, hi, posMin, unit, py, ph, hS)
     if lo == nil then return nil end
-    local A = { unit = unit, ticks = {} }
+    local A = { unit = unit, ticks = {}, div = 1 }
+    if unit == "mbytes" and math.max(math.abs(lo), math.abs(hi)) >= 1024 then A.unit, A.div = "gbytes", 1024 end
+    local div = A.div
+    lo, hi = lo / div, hi / div
     if s.log then
         if not posMin then return nil end
-        local l2 = math.log(2)
-        local a = math.floor(math.log(posMin) / l2 + 1e-9)
-        local b = math.ceil(math.log(math.max(hi, posMin)) / l2 - 1e-9)
-        if b <= a then b = a + 1 end
-        local every = math.max(1, math.ceil((b - a + 1) / math.max(2, math.floor(ph / (hS * 1.6)))))
-        for k = a, b, every do table.insert(A.ticks, 2 ^ k) end
+        posMin = posMin / div
+        hi = math.max(hi, posMin)
+        -- the range: the 1-2-5 values just around the data
+        local e0 = math.floor(math.log(posMin) / math.log(10) + 1e-9)
+        local e1 = math.ceil(math.log(hi) / math.log(10) - 1e-9)
+        local all = {}
+        for e = e0, e1 do
+            for _, m in ipairs({ 1, 2, 5 }) do table.insert(all, { m * 10 ^ e, m == 1 }) end
+        end
+        local a, b = all[1][1], all[#all][1]
+        for _, v in ipairs(all) do
+            if v[1] <= posMin * (1 + 1e-9) then a = v[1] end
+        end
+        for i = #all, 1, -1 do
+            if all[i][1] >= hi * (1 - 1e-9) then b = all[i][1] end
+        end
+        if b <= a then b = a * 2 end
+        local la, lb = math.log(a), math.log(b)
+        local function px(v) return (math.log(v) - la) / (lb - la) * ph end
+        local gap = hS * 1.3 -- (labels that fit one above the other)
+        local function fits(t)
+            for i = 2, #t do
+                if px(t[i]) - px(t[i - 1]) < gap then return false end
+            end
+            return true
+        end
+        local ticks, decades = {}, {}
+        for _, v in ipairs(all) do
+            if v[1] >= a * (1 - 1e-9) and v[1] <= b * (1 + 1e-9) then
+                table.insert(ticks, v[1])
+                if v[2] then table.insert(decades, v[1]) end
+            end
+        end
+        if not fits(ticks) then
+            -- too dense: the decades, the range's ends where they clear the nearest decade; then every n-th decade
+            ticks = {}
+            if #decades == 0 or px(decades[1]) >= gap then table.insert(ticks, a) end
+            for _, v in ipairs(decades) do
+                if #ticks == 0 or v > ticks[#ticks] * (1 + 1e-9) then table.insert(ticks, v) end
+            end
+            if #decades == 0 or ph - px(decades[#decades]) >= gap then
+                if b > ticks[#ticks] * (1 + 1e-9) then table.insert(ticks, b) end
+            end
+            local every = 1
+            while not fits(ticks) and every < #decades do
+                every = every + 1
+                ticks = {}
+                for i = 1, #decades, every do table.insert(ticks, decades[i]) end
+            end
+        end
+        for _, v in ipairs(ticks) do table.insert(A.ticks, v * div) end
         A.y = function(v)
             if not v or v <= 0 then return nil end
-            local f = (math.log(v) / l2 - a) / (b - a)
+            local f = (math.log(v / div) - la) / (lb - la)
             return py + ph - math.max(0, math.min(1, f)) * ph
         end
         return A
     end
-    local mn = s.min or (s.softMin and math.min(0, lo)) or lo
-    local mx = s.max or hi
+    local mn = s.min and s.min / div or (s.softMin and math.min(0, lo)) or lo
+    local mx = s.max and s.max / div or hi
     if mx <= mn then mx = mn + 1 end
     local step = R.nice((mx - mn) / math.max(2, math.floor(ph / (hS * 2.2))))
     if not s.max then mx = math.ceil(mx / step - 1e-9) * step end
@@ -741,22 +799,29 @@ function R.axis(s, lo, hi, posMin, unit, py, ph, hS)
     if mx <= mn then mx = mn + step end
     local v = math.ceil(mn / step - 1e-9) * step
     while v <= mx + step * 1e-6 do
-        table.insert(A.ticks, math.floor(v / step + 0.5) * step) -- (no float drift: 0, not -1e-17)
+        table.insert(A.ticks, math.floor(v / step + 0.5) * step * div) -- (no float drift: 0, not -1e-17)
         v = v + step
     end
     A.step = step
     A.y = function(x)
         if not x then return nil end
-        local f = (x - mn) / (mx - mn)
+        local f = (x / div - mn) / (mx - mn)
         return py + ph - math.max(0, math.min(1, f)) * ph
     end
-    A.base = A.y(math.max(mn, math.min(mx, 0)))
+    A.base = A.y(math.max(mn, math.min(mx, 0)) * div)
     return A
 end
 
 function R.tickText(A, v)
-    if A.step and A.step < 1 then return R.fmt(v, A.unit, math.max(0, -math.floor(math.log(A.step) / math.log(10) + 1e-9))) end
-    return R.fmt(v, A.unit)
+    local div = A.div or 1
+    if A.step then return R.fmt(v / div, A.unit, R.stepDecimals(A.step)) end
+    return R.fmt(v / div, A.unit)
+end
+
+-- route seconds on a time axis: as R.clock, before the route's start with a minus (-00:00:05, not 23:59:55)
+function R.tickClock(t)
+    if t < -0.5 then return "-" .. R.clock(-t) end
+    return R.clock(t)
 end
 
 -- a series' points as pixel columns { x, top, bot, first, last, brk } (several points in one pixel column merge; a gap
@@ -963,21 +1028,12 @@ function R.tsOps(o, it)
     local px = pad + axisW(AL)
     local pw = W - px - pad - axisW(AR) - (legW > 0 and (legW + 8) or 0)
     if pw < 20 then pw = 20 end
-    -- x: the route's seconds (from 0, or the first point before it, to the route's end or the last point)
-    local x0, x1 = R.xRange(o)
-    for _, sr in ipairs(ser) do
-        for _, t in ipairs(sr.e.t) do
-            if t then
-                if t < x0 then x0 = t end
-                if t > x1 then x1 = t end
-            end
-        end
-    end
-    if x1 <= x0 then x1 = x0 + 1 end
+    -- x: the route's seconds, the panel's first to last point (R.xRange)
+    local x0, x1 = R.xRange(o, p)
     local function X(t) return px + (t - x0) / (x1 - x0) * pw end
     local gc = 0.07
     -- grid and ticks
-    local lw = tw(UIFont.Small, "00:00:00") + 16
+    local lw = tw(UIFont.Small, x0 < -0.5 and "-00:00:00" or "00:00:00") + 16
     local step = 3600
     for _, st in ipairs({ 1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 1800, 3600 }) do
         if (x1 - x0) / st * lw <= pw then
@@ -986,14 +1042,14 @@ function R.tsOps(o, it)
         end
     end
     local t = math.ceil(x0 / step - 1e-9) * step
-    local half = math.floor(tw(UIFont.Small, "00:00:00") / 2) + 2 -- (the first / last label inside the panel)
+    local half = math.floor(tw(UIFont.Small, x0 < -0.5 and "-00:00:00" or "00:00:00") / 2) + 2 -- (the first / last label inside the panel)
     local lastR = -1e9
     while t <= x1 + 1e-6 do
         local xx = math.floor(X(t))
         table.insert(ops, { 1, xx, py, xx, py + ph, 1, 1, 1, gc })
         local cx = math.max(half, math.min(W - half, xx))
         if cx - half >= lastR then -- (a label pushed inside the panel would overlap its neighbour: left out)
-            table.insert(ops, { 4, R.clock(t), cx, py + ph + 3, C_GREY.r, C_GREY.g, C_GREY.b, 1, UIFont.Small, 2 })
+            table.insert(ops, { 4, R.tickClock(t), cx, py + ph + 3, C_GREY.r, C_GREY.g, C_GREY.b, 1, UIFont.Small, 2 })
             lastR = cx + half
         end
         t = t + step
@@ -1121,17 +1177,31 @@ function R.histOps(o, it)
     return ops
 end
 
--- the time axis' range: Grafana's window (30 s before the route to 120 s after its start) when the data names it, else
--- the route; a series reaching further widens it (tsOps)
-function R.xRange(o)
-    local w = o.data.window
-    if w then return w[1], math.max(w[2], o.data.route or 0) end
-    return 0, o.data.route or 0
+-- a chart's time axis: the first to the last point of its own series, so every chart fills its width (Grafana's fixed
+-- window, 30 s before the route to 120 s after its start, left two thirds of a 40 s pass empty; one range for the page
+-- left the panels whose data starts at the route empty on the left), else the route
+function R.xRange(o, p)
+    if not p.xr then
+        local lo, hi = nil, nil
+        for _, e in ipairs(p.s or {}) do
+            local v = e.lo or e.v
+            for i, t in ipairs(e.t or {}) do
+                if t and v and v[i] then -- (a band's empty columns hold no point)
+                    if not lo or t < lo then lo = t end
+                    if not hi or t > hi then hi = t end
+                end
+            end
+        end
+        if not lo then lo, hi = 0, o.data.route or 0 end
+        if hi <= lo then hi = lo + 1 end
+        p.xr = { lo, hi }
+    end
+    return p.xr[1], p.xr[2]
 end
 
 -- the time axis' labels and grid lines (as in tsOps) into ops
 function R.timeTicks(ops, X, x0, x1, px, pw, py, ph, W)
-    local lw = tw(UIFont.Small, "00:00:00") + 16
+    local lw = tw(UIFont.Small, x0 < -0.5 and "-00:00:00" or "00:00:00") + 16
     local step = 3600
     for _, st in ipairs({ 1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 1800, 3600 }) do
         if (x1 - x0) / st * lw <= pw then
@@ -1139,7 +1209,7 @@ function R.timeTicks(ops, X, x0, x1, px, pw, py, ph, W)
             break
         end
     end
-    local half = math.floor(tw(UIFont.Small, "00:00:00") / 2) + 2
+    local half = math.floor(tw(UIFont.Small, x0 < -0.5 and "-00:00:00" or "00:00:00") / 2) + 2
     local t = math.ceil(x0 / step - 1e-9) * step
     local lastR = -1e9
     while t <= x1 + 1e-6 do
@@ -1147,7 +1217,7 @@ function R.timeTicks(ops, X, x0, x1, px, pw, py, ph, W)
         table.insert(ops, { 1, xx, py, xx, py + ph, 1, 1, 1, 0.07 })
         local cx = math.max(half, math.min(W - half, xx))
         if cx - half >= lastR then -- (as in tsOps: no label over its neighbour)
-            table.insert(ops, { 4, R.clock(t), cx, py + ph + 3, C_GREY.r, C_GREY.g, C_GREY.b, 1, UIFont.Small, 2 })
+            table.insert(ops, { 4, R.tickClock(t), cx, py + ph + 3, C_GREY.r, C_GREY.g, C_GREY.b, 1, UIFont.Small, 2 })
             lastR = cx + half
         end
         t = t + step
@@ -1212,14 +1282,7 @@ function R.stateOps(o, it)
     local py = o.titleH + 2
     local ph = H - py - (hS + 6) - pad
     local px, pw = pad + labW, W - 2 * pad - labW
-    local x0, x1 = R.xRange(o)
-    for _, e in ipairs(p.s) do
-        for _, t in ipairs(e.t) do
-            if t and t < x0 then x0 = t end
-            if t and t > x1 then x1 = t end
-        end
-    end
-    if x1 <= x0 then x1 = x0 + 1 end
+    local x0, x1 = R.xRange(o, p)
     local function X(t) return px + (t - x0) / (x1 - x0) * pw end
     R.timeTicks(ops, X, x0, x1, px, pw, py, ph, W)
     local n = #p.s

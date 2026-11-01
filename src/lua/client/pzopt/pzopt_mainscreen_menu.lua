@@ -820,6 +820,7 @@ local function pathOf(id)
     local out = {}
     local n = id
     while n do
+        if TAB_LAYOUT and n == "home" then break end -- (2026-10-23, maintainer: no home page; the crumbs start at the tab)
         table.insert(out, 1, n)
         n = parentOf(n)
     end
@@ -6152,6 +6153,9 @@ function PzoptMainMenu:selectNode(id, focus, from)
     -- (tab layout) the benchmark has no overview and no Past results page: its tab opens on the run planner, the reports
     -- are the sidebar
     if TAB_LAYOUT and (id == "bench" or id == "bench/history") then id = "bench/setup" end
+    -- (2026-10-23, maintainer) no home page in the tab layout: the screen opens on Optimizations and every way to home
+    -- (a rig, an old link) lands there too; its tools are in the bar, its presets in the box, Fix a problem is HELP
+    if TAB_LAYOUT and id == "home" then id = "perf" end
     if TAB_LAYOUT and tabOf(id) then
         self.tabLast = self.tabLast or {}
         self.tabLast[tabOf(id)] = id
@@ -6954,7 +6958,7 @@ function PzoptMainMenu:hints()
         add(BT[Joypad.DPadDown], "Move")
     elseif self.pane == "side" then
         add(T.AButton, "Open")
-        add(T.BButton, parentOf(self.selected) == "home" and "Close" or "Up")
+        add(T.BButton, (TAB_LAYOUT or parentOf(self.selected) == "home") and "Close" or "Up") -- (tab layout: B in the sidebar closes)
         add(BT[Joypad.DPadDown], "Move")
     elseif self.pane == "master" then
         local a = "Details"

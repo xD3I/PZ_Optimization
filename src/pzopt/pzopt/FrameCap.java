@@ -195,6 +195,9 @@ public final class FrameCap {
          phaseFrames = 0;
       }
       phaseFrames++;
+      if (Harness.REQUESTED) {
+         Harness.resumeModPause(nowNs); // a mod's popup paused an unattended pass
+      }
    }
 
    // --- menu option --------------------------------------------------------------------

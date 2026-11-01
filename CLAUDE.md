@@ -52,6 +52,13 @@ saturated" is itself a finding. Chunk-latency wins are done; do not spend more o
   Steam. run.sh's own default is still `auto` (Steam whenever the client is logged on), so a direct `run.sh` call or a
   `submit cmd` wrapper must pass `--launcher direct` itself. A Steam launch loaded no overrides on 2026-10-06 (0 `[pzopt]`
   console lines): check `grep -c '\[pzopt\]' console.txt` > 0.
+- **The Bash tool runs zsh: an unquoted variable never splits into arguments.** `F="--flag a=1 --flag b=2"; fight.sh x $F`
+  hands run.sh ONE argument; it answers `unknown arg: --flag a=1 --flag b=2` and exits 2, the queued job burns its slot
+  and no game starts (2026-09-22 three runs, 2026-10-23 two runs: h80-p36/p37). Pass run flags one of these ways:
+  written out literally (`--flag a=1 --flag b=2`); as an array (`F=(--flag a=1 --flag b=2); fight.sh x "${F[@]}"`, which
+  works in zsh and bash); or under `bash -c '...'` when you need bash itself (`mapfile`, `${PIPESTATUS[@]}`). Quote a
+  value with `;`, spaces or globs as one word: `--flag "rifle_parts=Base.RedDot;Base.AmmoStraps"`. A failed job's
+  `output.log` ends in `unknown arg:`; check the first job of a scripted batch has `launched` before trusting the rest.
 - **Run etiquette.** The maintainer is usually at the machine. Say a run is about to start before
   launching, one run at a time, never long batches. Never edit `harness/run.sh` while a run is in
   progress (bash reads it incrementally; a mid-edit launch died and its EXIT trap corrupted

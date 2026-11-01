@@ -1,0 +1,58 @@
+[h1]Project Zomboid without the stutter[/h1]
+[url=https://github.com/xD3I/PZ_Optimization#readme][img]https://raw.githubusercontent.com/xD3I/PZ_Optimization/master/docs/workshop/images/00-showcase-thumbnail.gif[/img][/url]
+Driving, hordes, storms: the game's own work spread over frames and CPU cores, so the frame time stays even. 120 km/h drive p99 19 -> 8 ms, thunderstorm 83 -> 188 fps, loading twice as fast. Optional graphics on top: lighting, shadows, reflections, glass. Steam version, Windows / Linux / macOS, Build @VERSION@.
+
+[url=https://github.com/xD3I/PZ_Optimization][img]https://raw.githubusercontent.com/xD3I/PZ_Optimization/master/docs/workshop/images/link-github-small.png[/img][/url] [url=https://discord.gg/W32aAnKpK][img]https://raw.githubusercontent.com/xD3I/PZ_Optimization/master/docs/workshop/images/link-discord-small.png[/img][/url]
+
+[quote][b]Read before subscribing[/b]
+[list]
+[*][b]Subscribing is not enough.[/b] This replaces game classes; it needs the one-time install below.
+[*][b]Mods: untested, unsupported.[/b] Other mods may work alongside it; nobody checks them and problems with them are not fixed.
+[*][b]Multiplayer: untested, unsupported.[/b] It installs on your client only; joining a server may work, may not.
+[*]Something wrong? Options > PZ Optimization > "Stock game" preset, restart, then tell us on Discord.
+[/list][/quote]
+
+[h1]Install (once, about two minutes)[/h1]
+[img]https://raw.githubusercontent.com/xD3I/PZ_Optimization/master/docs/workshop/images/40-install.gif[/img]
+[olist]
+[*]Subscribe, let Steam download it.
+[*]Mods (main menu): enable [b]PZ_Optimization[/b]; a window shows your install command.
+[*][b]Copy the command[/b], paste it into PowerShell (Windows) or a terminal (Linux, macOS), Enter.
+[*]Quit the game; the installer copies the files when it has closed.
+[*]Start the game, disable the mod again. Options has a new [b]PZ Optimization[/b] tab.
+[/olist]
+No window? Windows: [code]irm https://github.com/xD3I/PZ_Optimization/releases/latest/download/install.ps1 | iex[/code]
+Linux, macOS: [code]curl -fsSL https://github.com/xD3I/PZ_Optimization/releases/latest/download/install.sh | bash[/code]
+
+[h1]New! Settings in one place[/h1]
+[img]https://raw.githubusercontent.com/xD3I/PZ_Optimization/master/docs/workshop/images/59-settings-in-one-place.gif[/img]
+
+[h1]What you get[/h1]
+[table]
+[tr][th]Performance (on)[/th][th]Visuals (opt-in)[/th][th]Tools[/th][/tr]
+[tr][td]Even frame time while driving[/td][td]Per-pixel lighting[/td][td]F9 performance overlay[/td][/tr]
+[tr][td]Hordes on all CPU cores[/td][td]Sun, moon, cloud shadows[/td][td]Game-thread profiler[/td][/tr]
+[tr][td]Cached rain, puddles, fog[/td][td]God rays, ambient occlusion[/td][td]Stock-game preset[/td][/tr]
+[tr][td]Faster boot and loading[/td][td]Reflections, mirrors[/td][td]Settings export / import[/td][/tr]
+[tr][td]Smooth zoom and car camera[/td][td]Glass car windows[/td][td]Built-in updater[/td][/tr]
+[tr][td]Lag-free UI[/td][td]Colour grading, HDR[/td][td]One-click uninstall[/td][/tr]
+[tr][td]FSR, dynamic resolution[/td][td]Sharp sprites, foliage sway[/td][td]Mod conflict check[/td][/tr]
+[/table]
+
+[h1]Against the other performance mods[/h1]
+Same three uncapped routes, one mod at a time:
+[img]https://raw.githubusercontent.com/xD3I/PZ_Optimization/master/docs/workshop/images/10-workshop-mods-comparison.jpg[/img]
+[table]
+[tr][th]Mod[/th][th]Result[/th][/tr]
+[tr][td]Project Zomboid Optimiser[/td][td]stock, within noise[/td][/tr]
+[tr][td]Tempo[/td][td]stock, within noise[/td][/tr]
+[tr][td]Every Texture Optimized[/td][td]less VRAM, same frame time[/td][/tr]
+[tr][td]Lugli, Zed's Better FPS[/td][td]stock, within noise[/td][/tr]
+[tr][td]Multi-Cpu Enhance[/td][td]worse: 300 ms GC pauses[/td][/tr]
+[tr][td][b]PZ Optimization[/b][/td][td][b]481 / 246 / 456 fps, p99 8.8 / 13.8 / 8.5 ms[/b][/td][/tr]
+[/table]
+
+[h1]Updates, uninstall[/h1]
+Updates arrive in the main menu (PZ OPTIMIZATION UPDATE, one click). To remove: Options > PZ Optimization > [b]Uninstall PZ Optimization[/b], [b]before[/b] you unsubscribe (unsubscribing leaves the installed files). After unsubscribing: the install command with [b]-Uninstall[/b] (Windows) or [b]| bash -s -- --uninstall[/b] (Linux, macOS).
+
+Build @VERSION@, game revision @REV@, commit @COMMIT@, @NFILES@ files, sha256 @SHA@. projectzomboid.jar is never modified.

@@ -104,6 +104,32 @@ public class BenchPlanTest {
       p = BenchPlan.read();
       Check.check("aborted".equals(p.getProperty("state")) && "1".equals(p.getProperty("cleaned")), "aborted and cleaned");
       Check.check(BenchPlan.abortRunning("again") == null, "nothing running: null");
+
+      // 7. (2026-10-25) the report launch restores the player's options once and marks the plan cleaned: what the player
+      //    saves on the report screen (a preset, then RESTART NOW) survives the next launch, whatever the state is then
+      File opts = UserOptions.file();
+      opts.getParentFile().mkdirs();
+      p = running("horde/A/1", 1, -1, 0);
+      p.setProperty("run", "20261019-000005");
+      p.setProperty("state", "report");
+      p.setProperty("user_options", "before=1\n");
+      p.setProperty("user_options_existed", "1");
+      BenchPlan.write(p);
+      Files.writeString(opts.toPath(), "pass=1\n", StandardCharsets.UTF_8);
+      BenchPlan.resetForTests();
+      Check.check(!BenchPlan.active(), "no step runs after the passes");
+      Check.check("before=1\n".equals(Files.readString(opts.toPath(), StandardCharsets.UTF_8)), "the report launch restores the backup");
+      Check.check("1".equals(BenchPlan.read().getProperty("cleaned")), "the report launch marks the plan cleaned");
+      Files.writeString(opts.toPath(), "groundTracks=true\n", StandardCharsets.UTF_8); // saved on the report screen
+      BenchPlan.resetForTests();
+      Check.check(!BenchPlan.active(), "no step runs after the passes");
+      Check.check("groundTracks=true\n".equals(Files.readString(opts.toPath(), StandardCharsets.UTF_8)), "still the report: kept");
+      p = BenchPlan.read();
+      p.setProperty("state", "done"); // the report shown
+      BenchPlan.write(p);
+      BenchPlan.resetForTests();
+      Check.check(!BenchPlan.active(), "no step runs after the passes");
+      Check.check("groundTracks=true\n".equals(Files.readString(opts.toPath(), StandardCharsets.UTF_8)), "after the report: kept");
       System.out.println("BenchPlanTest ok");
    }
 }

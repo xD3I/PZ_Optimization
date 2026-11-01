@@ -17,6 +17,18 @@ Jev (final): 1, 2, 3, 5, 6, 7 improved; 4 not reproduced.
 
 Open: the roof trim under the street lamp (2), the remaining leaf outline (3), issue 4 itself.
 
+2026-10-27, item 5 revisited: once street lamps cast character shadows (`sunShadowStaticLights`, 2026-10-25) the 1-3
+square fade made their long shadows (a lamp 3 squares up, the caster 5 away: 6-7 squares of shadow) capsule blobs past
+the feet (maintainer's screenshot). The fade now applies only where the light grazes the receiver:
+`sunShadowLampMeshGrazeNearPct` / `FarPct` (300 / 600) on ground distance from the lamp over its height above the
+receiver. A headlight (0.75 up) is past 4 from about a square beyond the caster and fades as before; a street lamp's
+shadow stays under 3 over its length and keeps the model's shape (runs `blobfix-new` vs `blobfix-old`, `harness/lampshadow/run-lamp.sh`;
+`GrazeFarPct=0` = the old rule). The far end of a long lamp shadow shows the view tile's texels as a ragged edge.
+With the shape kept to the end, the shadow's head was cut flat (maintainer's screenshot by the Rosewood church lot's
+utility pole, 8157,11482): the light quad's far end came from the bounding capsule's centre line, and a lamp a little
+above the head throws the head's top far past it. The quad now reaches the projection of the capsule's top
+(`p.z + rr` in the light pass's vertex shader); runs `spot2-old` vs `spot2-fix`: the end 0.6 square longer and rounded.
+
 Rigs: `exit_car=true`, `headlights_toggle=S` (harness/CLAUDE.md); scripts used (pairs, car, lampmask, aohf) in
 /tmp/nick-shadows on the desktop. Dead ends: AO blur plane prediction, AO angle bias, AO silhouette min at 0.36 squares,
 plant marking in the AO blur (indoor potted plants are not vegetation to the AO kernel), the AO canopy term (the mesh was

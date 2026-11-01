@@ -135,7 +135,8 @@ local JOY_BUTTONS = { a = "AButton", b = "BButton", x = "XButton", y = "YButton"
 --   hold:x / hold:y = the button down, its release 0.8 s later (the screen acts once held 0.5 s); hold:lt = the left trigger
 --   held 0.8 s, lt / rt = a trigger tapped (0.15 s): isJoypadLTPressed / isJoypadRTPressed answer true for the rig's pad
 --   meanwhile (the screen polls them in pollPad); press:ctrl+s / press:alt+s / press:cmd+f ... = the main screen's key release of that key with that
---   modifier reported down; cancel / ok = the button of the text box opened last (ISTextBox); nav:<page> = a page as
+--   modifier reported down; cancel / ok = the button of the text box opened last (ISTextBox); dlg:yes / dlg:no / dlg:ok =
+--   that button of the screen's last confirm or message dialog (what A / B press on a pad); nav:<page> = a page as
 --   options_nav names it (key:<setting> included); open:report[:n] = the n-th newest report, open:compare = the compare
 --   page; leaf:<label> = a mouse click on the sidebar row of that label (_ for a space, a prefix is enough; :n = the n-th
 --   such row; leaf:@report:n = the n-th newest report's row); wheel:<n> = the mouse wheel over the page of panels (n notches, + = down); state = the screen's state
@@ -232,6 +233,11 @@ local function joyStep(m, step, n)
         local ok, err = pcall(function() MainScreen.instance:onKeyRelease(key) end)
         isCtrlKeyDown, isAltKeyDown, isMetaKeyDown = c0, a0, m0
         if not ok then error(err) end
+    elseif verb == "dlg" then -- (2026-10-23) A / B on the screen's last confirm (yes / no) or message (ok): its button clicked
+        local d = arg == "ok" and m.messageModal or m.confirmModal
+        local b = d and d[arg]
+        if not (b and d:isVisible()) then error("no dialog with " .. tostring(arg)) end
+        d:onClick(b)
     elseif step == "cancel" or step == "ok" then
         local box = RIG.box
         if not (box and box:isVisible()) then error("no text box open") end
@@ -869,9 +875,12 @@ local function optionsTick()
             return
         end
         if c.clips and PzoptSettings then PzoptSettings.setClipsOn(c.clips == "1" or c.clips == "true") end
-        local nav = c.nav or OLD_TABS[c.tab or ""] or "home"
+        -- (2026-10-23) no page named: the page the screen opens on itself (Optimizations since the tab layout; "home" is
+        -- only the sidebar title's page now), so a recording starts where a player's does
+        local nav = c.nav or OLD_TABS[c.tab or ""]
         if c.select then nav = "key:" .. c.select end
-        applyNav(nav)
+        if nav then applyNav(nav) end
+        nav = nav or "(the screen's own)"
         print("[pzopt-harness] options: PZ OPTIMIZATION screen shown, page " .. tostring(m.selected) .. " (" .. nav .. ")")
         c.openedMs = now
     elseif c.read and not c.readStarted then
@@ -889,7 +898,7 @@ local function optionsTick()
     elseif c.tour and not c.tourDone then
         -- options_tour=1 (pzopt_harness_tour.lua, harness/menu-tour.sh): the mouse tour of the screen for a preview video
         if now < c.openedMs + 1500 or not PzoptHarnessTour then return end
-        if PzoptHarnessTour.tick(now) then c.tourDone, c.shotMs = true, now end
+        if PzoptHarnessTour.tick(now, c.tour) then c.tourDone, c.shotMs = true, now end
     elseif c.joy and not c.joyDone then
         local m0 = PzoptMainMenu.instance() -- (a rebuilt screen gets the rig's pad at once, as mainJoypad's pad does in show)
         if RIG.focused and m0 and m0.joyfocus ~= JOY then
@@ -1037,7 +1046,7 @@ local function onMainMenuEnter()
                     end
                     return t
                 end)() or nil,
-                tour = (flags.options_tour and flags.options_tour ~= "") and true or nil,
+                tour = (flags.options_tour and flags.options_tour ~= "") and flags.options_tour or nil, -- (1, or a variant: mods)
                 joyMs = tonumber(flags.options_joy_ms or "") }
         end
         return

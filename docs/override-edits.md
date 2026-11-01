@@ -8927,3 +8927,11 @@ below test a static final first. KahluaThread, LuaJavaInvoker, MultiLuaJavaInvok
   bits, error messages, tracebacks, error reports; run also with `-Dpzopt.luaJitSplitAbove=300` and
   `-Dpzopt.devLuaJitEntryDeopt=true`), `LuaMapTest`, `LuaJitCorpus` (every function of the game's and a mod list's Lua
   compiled and defined), `LuaVmBench`.
+
+### TextureID.generateHwId: devTexLoadStats (2026-10-29, `docs/findings-texture-atlas-2026-10-29.md`)
+
+- Dev probe, off by default: with `devTexLoadStats` the upload is timed from the top of `generateHwId` to just before the
+  texture is entered in `TextureIDMap`, and handed with its source path (the file name, else the asset path, `@pack@/...`
+  for an atlas page) and the growth of `totalMemUsed` to `pzopt.TexLoadStats`. Off, the method reads one boolean and one
+  float more and does nothing else. `FileTaskStats` also keeps each task class's first start and last end.
+

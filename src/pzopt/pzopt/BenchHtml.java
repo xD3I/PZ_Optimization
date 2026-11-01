@@ -267,17 +267,29 @@ final class BenchHtml {
       if (len < 2 || max <= 0) {
          return "<p class=mut>no data</p>";
       }
-      max = niceCeil(max);
-      // t: room above the top grid line for its axis number (11 px text, centred on the line); the unit sits 5 above the bottom
-      int w = 520, hh = 150, l = 40, b = 18, t = 12;
+      // y: about four nice steps from 0, every tick with the step's decimals and the unit (0.0 ms, 2.5 ms, 5.0 ms ...)
+      double step = niceCeil(max / 4);
+      int steps = (int)Math.ceil(max / step - 1e-9);
+      max = steps * step;
+      int dec = 0;
+      while (dec < 6 && Math.abs(step * Math.pow(10, dec) - Math.rint(step * Math.pow(10, dec))) > 1e-6 * step * Math.pow(10, dec)) {
+         dec++;
+      }
+      String[] labels = new String[steps + 1];
+      int chars = 0;
+      for (int i = 0; i <= steps; i++) {
+         labels[i] = String.format(Locale.ROOT, "%." + dec + "f", step * i) + " " + unit;
+         chars = Math.max(chars, labels[i].length());
+      }
+      // t: room above the top grid line for its axis number (11 px text, centred on the line); l: the longest label (~6.2 px a character)
+      int w = 520, hh = 150, l = 8 + (int)Math.ceil(chars * 6.2), b = 18, t = 12;
       StringBuilder s = new StringBuilder();
       s.append("<svg viewBox='0 0 ").append(w).append(' ').append(hh).append("' role=img>");
-      for (int i = 0; i <= 4; i++) {
-         double y = t + (hh - b - t) * i / 4.0;
+      for (int i = 0; i <= steps; i++) {
+         double y = t + (hh - b - t) * (1 - i / (double)steps);
          s.append("<line class=ax x1=").append(l).append(" x2=").append(w).append(" y1=").append(f(y)).append(" y2=").append(f(y)).append(" />");
-         s.append("<text x=2 y=").append(f(y + 4)).append('>').append(String.format(Locale.ROOT, "%.0f", max * (4 - i) / 4)).append("</text>");
+         s.append("<text x=").append(l - 4).append(" y=").append(f(y + 4)).append(" text-anchor=end>").append(esc(labels[i])).append("</text>");
       }
-      s.append("<text x=").append(w - 30).append(" y=").append(hh - 5).append('>').append(esc(unit)).append("</text>");
       int ci = 0;
       for (double[] v : lines) {
          s.append("<polyline fill=none stroke-width=1.4 stroke='").append(COLORS[ci++ % COLORS.length]).append("' points='");

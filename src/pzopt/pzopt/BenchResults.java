@@ -70,6 +70,11 @@ public final class BenchResults {
       if (d(r, "paused_frames") > 0) {
          invalid.add("the game was paused during the pass");
       }
+      // ticks come from the world update, so a pause stops them and paused_frames with them: a mod's popup froze a pass
+      // at 275 ticks in 13,803 frames and it passed as valid (2026-10-26); a running world ticks once a frame
+      if (frames >= 100 && ticks < 0.9 * frames) {
+         invalid.add(String.format(Locale.ROOT, "the world updated in only %.0f %% of the frames (the game was paused)", 100 * ticks / frames));
+      }
       // other programs' CPU (machine load minus the game's): 36 % on the desktop (a database import) halved a Louisville
       // pass, 99 -> 56 fps; a quarter of the machine taken is a different machine
       double bg = d(r, "cpu_background_pct");

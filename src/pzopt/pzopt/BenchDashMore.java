@@ -81,10 +81,15 @@ final class BenchDashMore {
 
    // ------------------------------------------------------------------ the frame row (BenchDash.frameCharts)
 
-   /** "Every frame"'s game-frame series (Stats.frameTick's clock) as a min / max band over Grafana's window. */
+   /** "Every frame"'s game-frame series (Stats.frameTick's clock) as a min / max band over its own first to last frame. */
    void gameFrameBand(StringBuilder b) {
       if (gameFrames != null && gameFrames.n > 0) {
-         band(b, "game frame", gameFrames.t, gameFrames.num("ms"), windowFrom(), windowTo(gameFrames.t));
+         double from = Double.POSITIVE_INFINITY, to = Double.NEGATIVE_INFINITY;
+         for (double x : gameFrames.t) {
+            from = Math.min(from, x);
+            to = Math.max(to, x);
+         }
+         band(b, "game frame", gameFrames.t, gameFrames.num("ms"), from, to);
       }
    }
 
@@ -526,7 +531,7 @@ final class BenchDashMore {
       }
       panel(b, 51);
       if (keys.isEmpty()) {
-         line(b, "S", "no input recorded", fmt(windowTo(null)), "0");
+         line(b, "S", "no input recorded", "0", "0"); // (at the route start: no lane drawn, the time axis not widened)
       }
       for (Map.Entry<String, List<String[]>> e : keys.entrySet()) {
          eventSeries(b, e.getKey(), e.getValue());
@@ -592,23 +597,6 @@ final class BenchDashMore {
    }
 
    // ------------------------------------------------------------------ helpers
-
-   double windowFrom() {
-      return WINDOW_FROM;
-   }
-
-   /** Grafana's window end, or later when the pass ran longer (nothing of it is cut off). */
-   double windowTo(double[] t) {
-      double to = Math.max(WINDOW_TO, routeS);
-      if (t != null) {
-         for (double x : t) {
-            if (x > to) {
-               to = x;
-            }
-         }
-      }
-      return to;
-   }
 
    private static void band(StringBuilder b, String name, double[] t, double[] v, double from, double to) {
       int cols = BenchDash.BAND_COLUMNS;

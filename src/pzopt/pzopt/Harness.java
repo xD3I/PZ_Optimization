@@ -214,6 +214,11 @@ public final class Harness {
    private static int gameSpeedResets;
    private static long gameSpeedLogNs;
    private static float pauseAt; // pause_at: seconds into the route at which the game is paused (UIManager speed 0), 0 = never
+   // a pause nobody asked for (a mod's popup calling setGameSpeed(0): HorseMod, SpawnSelector) is undone while the route
+   // runs; an unattended run had no one to close it (2026-10-26, a 361-mod profile paused 30 s in for 43 minutes).
+   // mod_pause=keep leaves it; the pause_at rig keeps its own pause
+   private static boolean resumeModPauses;
+   private static int modPausesResumed;
    private static float startX, startY;
    private static int chunksAtStart;
    private static long runStartNs;
@@ -370,6 +375,7 @@ public final class Harness {
             endAt = new int[] {Integer.parseInt(xy[0].trim()), Integer.parseInt(xy[1].trim())};
          }
          fixedStep = Float.parseFloat(HarnessFlags.get("fixed_step", "0"));
+         resumeModPauses = !"keep".equals(HarnessFlags.get("mod_pause", "resume").trim()) && Float.parseFloat(HarnessFlags.get("pause_at", "0").trim()) <= 0f;
          jitterTiles = Float.parseFloat(HarnessFlags.get("jitter", "0"));
          shotBurst = Integer.parseInt(HarnessFlags.get("shot_burst", "0"));
          jitterY = "true".equals(HarnessFlags.get("jitter_y", "false"));
@@ -1013,6 +1019,7 @@ public final class Harness {
                Stats.mark("route-end");
                runEndEpochMs = System.currentTimeMillis();
                Log.info("harness: route done in " + secs + "s, " + chunks + " chunks loaded (" + chunks / secs + "/s); quitting");
+               TexLoadStats.routeDone();
                Log.info("harness: player at route end: " + Scene.visionState(p)); // blur > 0 = the screen was soft (pinWornItems)
                Benchmark.onRouteEnd("complete", ""); // built-in benchmark: results, next pass armed
                HarnessModLua.routeEnd(); // before the summary: run.sh treats pzopt-bench.out as the end of the route
@@ -1212,6 +1219,7 @@ public final class Harness {
          }
       }
       Log.info("harness: world ready, player at " + (int)x + "," + (int)y + "," + (int)p.getZ() + "; settling " + settle + "s");
+      TexLoadStats.worldReady();
       Log.info("harness: MangoHud is " + (mangoHudLoaded() ? "loaded" : "NOT loaded") + " in this process");
       Log.info(ModelShaders.summary()); // how many model loads blocked on the render thread during boot + load
       long scheduled = Long.parseLong(HarnessFlags.get("route_start_epoch", "0")) * 1000L;
@@ -1778,6 +1786,31 @@ public final class Harness {
       }
       Log.info(String.format(java.util.Locale.ROOT, "harness: grid coverage: player %.1f,%.1f,%.2f grid x %d..%d y %d..%d (%d chunks, centre chunk %d,%d) corners outside the grid, tiles:%s",
             p.getX(), p.getY(), p.getZ(), x0, x0 + w, y0, y0 + w, zombie.iso.IsoChunkMap.chunkGridWidth, cm.worldX, cm.worldY, sb));
+   }
+
+   /**
+    * A mod paused the game (speed 0, its window left open): back to normal speed; game_speed re-applies its own after.
+    * From FrameCap.onFrame, every game-thread frame before the world update: onFrame itself runs from IsoChunk.update,
+    * which a pause stops (the 2026-10-26 run drew 13,803 frames and updated the world 275 times, the pause unseen).
+    */
+   static void resumeModPause(long nowNs) {
+      if (!resumeModPauses || (state != SETTLE && state != RUN)) {
+         return;
+      }
+      zombie.ui.SpeedControls sc = zombie.ui.UIManager.getSpeedControls();
+      if (sc == null || sc.getCurrentGameSpeed() != 0) {
+         return;
+      }
+      sc.SetCurrentGameSpeed(1); // not 5 (the speed before the pause): a second setGameSpeed(0) has made that 0
+      modPausesResumed++;
+      if (modPausesResumed <= 20) {
+         Log.info(String.format(java.util.Locale.ROOT, "harness: the game was paused (a mod's window?), resumed #%d in %s at t=%.1fs", modPausesResumed,
+               state == RUN ? "the route" : "the settle", runStartNs == 0L ? 0.0 : (nowNs - runStartNs) / 1e9));
+      }
+   }
+
+   static int modPausesResumed() {
+      return modPausesResumed;
    }
 
    private static void goUpstairs(IsoPlayer p, int z) {

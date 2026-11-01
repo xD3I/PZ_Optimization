@@ -17,10 +17,14 @@ public final class FileTaskStats {
 
    /** a named row (e.g. time the decoders slept in TextureIDAssetManager.waitFileTask) */
    public static void add(String name, long ns) {
-      long[] v = byClass.computeIfAbsent(name, k -> new long[2]);
+      long[] v = byClass.computeIfAbsent(name, k -> new long[4]);
+      long end = System.currentTimeMillis();
+      long start = end - ns / 1_000_000L;
       synchronized (v) {
          v[0]++;
          v[1] += ns;
+         v[2] = v[2] == 0 ? start : Math.min(v[2], start);
+         v[3] = Math.max(v[3], end);
       }
    }
 
@@ -33,6 +37,19 @@ public final class FileTaskStats {
       synchronized (v) {
          return String.format(java.util.Locale.ROOT, "%d/%.1fs", v[0], v[1] / 1e9);
       }
+   }
+
+   /** Per class the wall span its tasks ran in: first start .. last end, epoch ms (devTexLoadStats, matched to the load trace). */
+   public static String spans() {
+      ArrayList<Map.Entry<String, long[]>> rows = new ArrayList<>(byClass.entrySet());
+      rows.sort((a, b) -> Long.compare(a.getValue()[2], b.getValue()[2]));
+      StringBuilder sb = new StringBuilder("file task spans (epoch ms):");
+      for (Map.Entry<String, long[]> e : rows) {
+         synchronized (e.getValue()) {
+            sb.append(' ').append(e.getKey()).append('=').append(e.getValue()[2]).append("..").append(e.getValue()[3]);
+         }
+      }
+      return sb.toString();
    }
 
    public static String summary() {

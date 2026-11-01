@@ -2679,7 +2679,11 @@ public final class CapsuleShadow {
       "      vec2 dir = p.xy - L.xy;",
       "      float dh = length(dir);",
       "      dir = dh > 1e-3 ? dir / dh : vec2(1.0, 0.0);",
-      "      float t = p.z < L.z - 0.05 ? (L.z - facts.x) / (L.z - p.z) : 1e3;", // the ray from the lamp through p hits the floor at L + (p - L) t
+      // the ray from the lamp through p's top (the bounding capsule's surface over it) hits the floor at L + (p - L) t: a
+      // lamp view shows the model up to there, and a street lamp a little above the head stretches that top's shadow far
+      // past the centre line's (the long shadow ended on the quad's edge, 2026-10-27)
+      "      float pz = p.z + rr;",
+      "      float t = pz < L.z - 0.05 ? (L.z - facts.x) / (L.z - pz) : 1e3;",
       "      float far = min(min(dh * t, reach), max(wallDist(L.xy, dir, lim, reach), dh)) + rr + 0.3;", // a static light's shadow ends at its wall plane (sunShadowStaticLights)
       "      sp[e * 2] = toPx(p);",
       "      sp[e * 2 + 1] = toPx(vec3(L.xy + dir * far, facts.x));",
@@ -2834,6 +2838,11 @@ public final class CapsuleShadow {
       // a low headlight's shadow of the legs stretched into thin sharp strands, "torn", Discord 2026-10-04) fades into the
       // capsules' soft shadow, whose penumbra widens with the distance as a lamp's does; the shape stays where it is seen
       "      float fk = " + (Config.SUN_SHADOW_LAMP_MESH_FAR_PCT <= 0 ? "0.0" : "smoothstep(" + (Config.SUN_SHADOW_LAMP_MESH_NEAR_PCT / 100.0F) + ", " + (Math.max(Config.SUN_SHADOW_LAMP_MESH_FAR_PCT, Config.SUN_SHADOW_LAMP_MESH_NEAR_PCT + 1) / 100.0F) + ", length(P.xy - 0.5 * (ba0.xy + bb0.xy)))") + ";",
+      // sunShadowLampMeshGrazeNearPct / FarPct: only where the light grazes the receiver (a texel of the view stretches
+      // with it); a street lamp three squares up keeps its long shadow's shape, a headlight's still fades as before
+      Config.SUN_SHADOW_LAMP_MESH_FAR_PCT <= 0 || Config.SUN_SHADOW_LAMP_MESH_GRAZE_FAR_PCT <= 0 ? "" : "      fk *= smoothstep("
+         + (Config.SUN_SHADOW_LAMP_MESH_GRAZE_NEAR_PCT / 100.0F) + ", " + (Math.max(Config.SUN_SHADOW_LAMP_MESH_GRAZE_FAR_PCT, Config.SUN_SHADOW_LAMP_MESH_GRAZE_NEAR_PCT + 1) / 100.0F)
+         + ", length(P.xy - la.xy) / max(la.z - P.z, 0.05));",
       "      if (fk > 0.0) {",
       "         float cv = 1.0;",
       "         for (int i = 0; i < 10; i++) {",
