@@ -4664,6 +4664,13 @@ public final class FBORenderCell {
                   col3 = Color.lerpABGR(col3, -16777216, fade);
                }
 
+               if (isShore && renderInfo.layer == ObjectRenderLayer.TranslucentFloor) { // pzopt: cloudShadows, a shore floor drawn per frame (never by the chunk composite) darkens under a cloud like the water over it
+                  col0 = pzopt.CloudShadow.shoreLight(col0, square.x, square.y, square.z); // pzopt: vertex 0 = corner (x, y), as water.depth[0]
+                  col1 = pzopt.CloudShadow.shoreLight(col1, square.x + 1, square.y, square.z); // pzopt: vertex 1 = (x + 1, y), water.depth[3]
+                  col2 = pzopt.CloudShadow.shoreLight(col2, square.x + 1, square.y + 1, square.z); // pzopt: vertex 2 = (x + 1, y + 1), water.depth[2]
+                  col3 = pzopt.CloudShadow.shoreLight(col3, square.x, square.y + 1, square.z); // pzopt: vertex 3 = (x, y + 1), water.depth[1]
+               } // pzopt
+
                if (DebugOptions.instance.terrain.renderTiles.isoGridSquare.floor.lightingDebug.getValue()) {
                   col0 = -65536;
                   col1 = -65536;

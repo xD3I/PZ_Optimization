@@ -8935,3 +8935,18 @@ below test a static final first. KahluaThread, LuaJavaInvoker, MultiLuaJavaInvok
   for an atlas page) and the growth of `totalMemUsed` to `pzopt.TexLoadStats`. Off, the method reads one boolean and one
   float more and does nothing else. `FileTaskStats` also keeps each task class's first start and last end.
 
+## Cloud shadows on shore floors (2026-10-22, Discord report, redfox.x)
+
+- `FBORenderCell.pzoptRenderFloor` (stock `renderFloor`'s body): a shore square's floor (`IsoWaterGeometry.isbShore`, a
+  `blends_natural` floor beside water) drawn in the per-frame TranslucentFloor layer gets its four corner lights through
+  `pzopt.CloudShadow.shoreLight` before they go to the floor shapers: each corner times `1 - s (1 - T)`, T the cloud's
+  transmittance at that corner (`transmittanceAt`, the composite's field, drift and density on the CPU), s the key light's
+  strength (`SunShadow.dir[3]`), as the water program darkens the water over it (`pzCloudWater`). Stock draws shore floors
+  per frame so they fade under the water (shoreFade); they never pass through the chunk composite where cloud shadows
+  apply, so under a cloud the ring of shore squares stayed in full light and stood out bright against the darkened ground
+  and water. Vertex i is corner (x, y), (x + 1, y), (x + 1, y + 1), (x, y + 1), the order of the water depths beside it.
+  Only the TranslucentFloor layer: a floor baked into a chunk texture never takes it (it would freeze one cloud into the
+  picture). No change with cloud shadows off, at night without a key light or without a cloud over the square.
+  Checked on the Mac (2026-10-23, runs `mac-shore3-b-before` with `devCloudShoreOff=true` / `mac-shore3-b`, cloud cover 0.6,
+  noon, a natural bank west of Riverside found by `find=shore shore_min=8` at 6154,5199): before, the zigzag strip of shore
+  tiles at the water's edge was a bright orange line against the clouded ground; after, it takes the ground's shade.

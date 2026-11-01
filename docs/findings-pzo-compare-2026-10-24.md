@@ -87,7 +87,7 @@ facing spin, zoom 1 / 2 instead of the widest, PZO's own frame clock.
 
 ## 2. Same rig, same window: stock, stock G1 8 GB, PZO, ours
 
-Rig (`~/pzopt-wt/pzo-cmp-stockrig/harness/pzo-compare/`, uncommitted): for the stock / G1 / PZO rows the job moves our
+Rig (`harness/pzo-compare/stockrig-*`, committed 2026-11-01): for the stock / G1 / PZO rows the job moves our
 install and PZ_Controller (it overrides `AimingReticle`) aside, puts back the stock 42.21 JSON (ZGC, 3 GB; for G1 the
 same with `-XX:+UseG1GC -Xmx8192m`, for PZO the installer's edit); our harness Lua presses Continue, a uinput mouse passes
 click-to-start, a new Lua file (`pzopt_harness_stockrig.lua`, flag `stockrig=1`) drives the bench: god mode, invisible,
@@ -302,7 +302,7 @@ by `tools/comment-sbs.py`, whose `--pick` and `--extra` arguments record the han
 - `~/pzopt-wt/pzo-cmp-ownbench/harness/pzo-compare/`: `ownbench.sh <full|threadoff|stock> <label> <save-dir>` (cmd job:
   stash our install, installer JSON, launch with PZO's bench, restore + check), `switchmod/` (the threading-off Lua mod),
   `ownbench-table.py`. Louisville bench save: `harness/runs/pzo3-lou-save` (prep run `pzo3-lou-prep-20261024-005334`).
-- `~/pzopt-wt/pzo-cmp-stockrig/harness/pzo-compare/`: `stockrig-job.sh <row> <bench> <label>`, `stockrig-wrap.sh`,
+- `harness/pzo-compare/` (committed 2026-11-01; was `~/pzopt-wt/pzo-cmp-stockrig`): `stockrig-job.sh <row> <bench> <label>`, `stockrig-wrap.sh`,
   `stockrig-helper.py` (click-to-start, file copies, watchdog), `stockrig-submit.sh`, `stockrig-table.py`; Lua
   `harness/mod/pzopt-harness/42/media/lua/client/pzopt_harness_stockrig.lua`.
 - `~/pzopt-wt/pzo-cmp-noguard/harness/pzo-compare/`: `PatchGuard.java`, `PZOptimEngine-noguard.jar`, `noguard-wrap.sh`,

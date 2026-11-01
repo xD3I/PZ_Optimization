@@ -58,8 +58,8 @@ Defaults: `voxelLight` off (Enhancements tab, per-pixel lighting section, next l
 
 The native's per-square light is `max(ambient x darkMulti, max over lamps of (1 - d / r) colour)` per channel (d in squares
 between square centres, r the lamp's radius capped at 20, colour = the lamp's x 2 clamped): predicted 0.5 -> native 0.44 on
-the red channel over 10k squares; room lights flat 0.9 / 0.8 / 0.7 in their room's rectangle; darkMulti is the indoor
-ambient factor (0.5 / 0.67 / 0.75 / 1), not vision (the vision cone is its own screen pass). The first version summed the
+the red channel over 10k squares; room lights flat 0.9 / 0.8 / 0.7 in their room's rectangle; darkMulti (0.5 / 0.67 / 0.75 / 1 on
+that dump) was read as an indoor factor; it is the fog of war (see "Rooms darker than stock by day, and the fog of war"). The first version summed the
 lamps with a screen blend and added the ambient: overlapping sodium lamps saturated green and blue, the lot turned
 yellow-green. Defaults are now the native's combination (`voxelLightCombine=max`, the brighter of ambient and lamps).
 
@@ -271,6 +271,37 @@ and a Jev-directed walk on the Riverside pier (6436,5186). Judged by `voxel-judg
   only the roof squares the player has seen (0.2-0.57) and `pplUnseenAmbient` draws the never-seen ones with the flat ambient,
   per square. Stock has the same boundary at low contrast; the brighter voxel light makes its steps visible. Not changed:
   lighting never-seen squares would light rooms the player has not discovered; a smoothed boundary costs fetches.
+
+## Rooms darker than stock by day, and the fog of war (2026-10-22/23, Discord report, redfox.x)
+
+A player at 05:49 on 26 December (before sunrise) inside a warehouse with closed roller doors: the room nearly black with
+voxel lighting on. Flip runs (Radeon 890M; the Mac has no GL 4.3) in the closed Riverside fire-station garage after a
+teleport, 10:00, clear, `devCapture` frames (runs `flip-vxroom*`, `flip-vxfow*`), found three causes, one of them much worse
+than the report:
+
+1. **The outdoor ambient was unknown.** The sky term is `vxlAmb x max(flood, voxelLightSkyFloorPct)` with `vxlAmb` =
+   `PixelLight.ambientOutdoor()`, the mode of the native light of seen outdoor squares. A player loaded or teleported into a
+   closed building never sees one: it stayed -1, the composite's `ca` went negative and only lamps lit the room (the garage
+   black but for the torch; floor 20 vs 50 gave identical frames). A player who stays inside kept the hour of the last look
+   out. Fix: `voxelLightAmbientModel` (default on): when no fresh estimate (120 commits), the game's own ambient x colour mods
+   (`RenderSettings`, what it hands the native) stand in, scaled by their ratio to the last fresh estimate.
+2. **The voxel light ignored the fog of war.** `darkMulti` is not an indoor factor (the night dump's 0.5 / 0.67 / 0.75 above
+   were squares out of the player's view): it is stock's visibility model (`IsoGridSquare` lighting: 1 in sight; seen but out of
+   view the ambient x 0.94 or x 0.5 when blocked, x 0.7 in a room, 0 for another room of the building; 0 never seen; the native
+   eases `darkMulti` towards `targetDarkMulti`). A day dump (`fowdump2`, 17k squares) shows it: in sight vis 7, light 1.00,
+   darkMulti 1.00; in line of sight but behind the player vis 4, light 0.00, darkMulti 0.00, lamps listed and still 0. The
+   voxel light replaced the native's light and never read it, so everything behind the player was drawn lit by day (the street
+   and the fire station's front at full daylight where stock is black): master's behaviour, hidden in the garage only because
+   cause 1 also dropped the ambient. Fix: `voxelLightFogOfWar` (default on): the lattice packs `darkMulti` (conn texture blue,
+   bits 0-6; the gradient flag moved to bit 7) and both voxel paths (the surface cache and `vxlLight`) multiply their light by it,
+   bilinear between square centres as the native's light is read (per square it drew the edge of sight in square steps).
+   Outdoors the frame now matches stock (mean |difference| 6.6 / 255, black share 45 % stock vs 50 %).
+3. **The floor.** In sight stock lights a room at the full ambient (darkMulti 1); the voxel sky flood keeps
+   `max(flood, floor)` of it. With the floor at 20 % a deep room by day was a fifth of stock. Default now 50 %; the floor and the
+   decay are in the menu (Voxel lighting: least daylight deep inside rooms / how far daylight reaches into rooms; next launch):
+   in the garage the floor in sight deep in the room is ~1/3 of stock at 50 % (the ambient model's 10:00 value), equal to stock
+   near the doors and under the torch. Raising it towards 100 % is the stock look; where the default should sit is a look
+   decision.
 
 ## Bugs found on the way
 

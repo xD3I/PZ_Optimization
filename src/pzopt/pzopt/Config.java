@@ -2016,6 +2016,7 @@ public final class Config {
    public static final boolean CLOUD_CULL = bool("cloudCull", true); // cloudShadows: chunk textures no cloud reaches this frame skip the cloud work in the composite (a coarse max map of the field, per texture on the game thread)
    public static final int DEV_CLOUD_SKIP = integer("devCloudSkip", 0); // dev (cost split): 1 = no kept-term tap (a constant share), 2 = no detail tap (no erosion), 4 = the kept term bound once a frame (wrong picture: the cost of per-draw binds); bits
    public static final int DEV_CLOUD_ALTERNATE = integer("devCloudAlternate", 0); // dev: ms; cloud shadows switch on and off every period (the frames' GPU time split by it)
+   public static final boolean DEV_CLOUD_SHORE_OFF = bool("devCloudShoreOff", false); // dev: the shore floors drawn per frame without the cloud (the look before 2026-10-22: a bright ring of shore squares under a cloud)
    // ground without the grid (pzopt.GroundTilingPatch / GroundTiling / GroundTileArt; groundHexTiling): the tiling technique
    // and its cell (the in-run comparison steps through devGroundCycle=hex,hpb,... instead)
    public static final String DEV_GROUND_TILING_MODE = string("devGroundTilingMode", "hpb"); // dev: hex | hpb | bomb | voronoi | two | lap
@@ -2327,7 +2328,9 @@ public final class Config {
    public static final boolean VOXEL_LIGHT_SKY = bool("voxelLightSky", true); // the ambient from the open sky, flooded through windows and doorways into rooms (replaces the native's indoor darkening)
    public static final String VOXEL_LIGHT_SKY_METHOD = string("voxelLightSkyMethod", "flood"); // the sky term: flood (open columns flooded through openings) or cones (17 rays a cell through the occupancy, the flood softening them)
    public static final int VOXEL_LIGHT_SKY_DECAY_PCT = integer("voxelLightSkyDecayPct", 72); // sky flood: what is left of the sky light a square further from the open sky, %
-   public static final int VOXEL_LIGHT_SKY_FLOOR_PCT = integer("voxelLightSkyFloorPct", 20); // sky flood: the least ambient a room keeps, % of the outdoor ambient
+   public static final int VOXEL_LIGHT_SKY_FLOOR_PCT = integer("voxelLightSkyFloorPct", 50); // sky flood: the least ambient a room keeps, % of the outdoor ambient (stock lights a room in sight at the full ambient; 20 until 2026-10-22: a deep room by day a fifth of stock, Discord report; in the menu since)
+   public static final boolean VOXEL_LIGHT_FOG_OF_WAR = bool("voxelLightFogOfWar", true); // the voxel light x each square's darkMulti (stock's fog of war: 1 in sight, dimmer out of view, 0 never seen; the native's light is 0 there, lamps included); off, everything behind the player was drawn lit (2026-10-23)
+   public static final boolean VOXEL_LIGHT_AMBIENT_MODEL = bool("voxelLightAmbientModel", true); // the sky's outdoor ambient from the game's ambient x colour mods (scaled to the last seen outdoor squares) when no outdoor square was seen lately (off: the last seen value, unknown = no sky light: rooms black by day after loading inside; 2026-10-22)
    public static final boolean VOXEL_LIGHT_AMBIENT_ADD = bool("voxelLightAmbientAdd", false); // the lamps add to the sky's ambient (off: the brighter of the two, as the native)
    public static final boolean VOXEL_LIGHT_BOUNCE = bool("voxelLightBounce", true); // one bounce: the traced light's reflection, flooded through the occupancy (warm spill from lit windows, fill near lamp pools)
    public static final int VOXEL_LIGHT_BOUNCE_PCT = integer("voxelLightBouncePct", 15); // one bounce: the surfaces' albedo, %

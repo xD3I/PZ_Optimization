@@ -1862,6 +1862,7 @@ public final class Harness {
    private static void goToShore(IsoPlayer p) {
       zombie.iso.IsoCell cell = zombie.iso.IsoWorld.instance.currentCell;
       int px = (int)p.getX(), py = (int)p.getY();
+      int shoreMin = Integer.parseInt(HarnessFlags.get("shore_min", "0").trim()); // natural bank squares within 5 tiles (0: a pier will do)
       for (int r = 0; r <= 110; r++) {
          for (int y = py - r; y <= py + r; y++) {
             for (int x = px - r; x <= px + r; x++) {
@@ -1872,26 +1873,35 @@ public final class Harness {
                if (sq == null || sq.isWaterSquare() || sq.getFloor() == null || !sq.isFree(false)) {
                   continue;
                }
-               int water = 0;
+               int water = 0, bank = 0;
                for (int dy = -5; dy <= 5; dy++) {
                   for (int dx = -5; dx <= 5; dx++) {
                      zombie.iso.IsoGridSquare w = cell.getGridSquare(x + dx, y + dy, 0);
                      water += w != null && w.isWaterSquare() ? 1 : 0;
+                     bank += shoreMin > 0 && naturalBank(cell, w) ? 1 : 0;
                   }
                }
-               if (water >= 20) {
+               if (water >= 20 && bank >= shoreMin) {
                   p.setX(x + 0.5F);
                   p.setY(y + 0.5F);
                   p.setLastX(x + 0.5F);
                   p.setLastY(y + 0.5F);
                   p.setCurrent(sq);
-                  Log.info("harness: find=shore: moved to " + x + "," + y + " (" + water + " water squares within 5 tiles, " + r + " tiles from " + px + "," + py + ")");
+                  Log.info("harness: find=shore: moved to " + x + "," + y + " (" + water + " water squares, " + bank + " natural bank squares within 5 tiles, " + r + " tiles from " + px + "," + py + ")");
                   return;
                }
             }
          }
       }
       Log.warn("harness: find=shore: no shore within 110 tiles of " + px + "," + py);
+   }
+
+   /**
+    * find=shore shore_min=N (2026-10-22, the cloud-shadow shore fix): a square the game draws as a shore
+    * ({@code IsoWaterGeometry.isbShore}: its floor drawn per frame under the water's fade) rather than a pier or a quay wall.
+    */
+   private static boolean naturalBank(zombie.iso.IsoCell cell, zombie.iso.IsoGridSquare sq) {
+      return sq != null && sq.getWater() != null && sq.getWater().isbShore();
    }
 
    /** find=water: the water squares in the loaded grid around the player, nearest first (HDR glint scenes). */

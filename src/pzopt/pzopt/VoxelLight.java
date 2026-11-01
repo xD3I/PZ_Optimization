@@ -2745,6 +2745,7 @@ public final class VoxelLight {
       "   return a;",
       "}",
       "float vxlW = 0.0;",
+      "float vxlFog = 1.0;", // voxelLightFogOfWar: the square's darkMulti (stock's fog of war), set by the caller; the native's Ln has it already
       "int vxlCost = 0;", // dev (devPplAlternate masks): 131072 no facing, 262144 no wall clamp, 524288 one layer always
       "vec4 vxlTap(sampler2DArray t, vec2 uv, float layer, float w) {", // one bilinear tap, or two layers mixed (walls)
       "   vec4 a = textureLod(t, vec3(uv, layer), 0.0);",
@@ -2806,7 +2807,7 @@ public final class VoxelLight {
       "   if (vv == 7 && (P.x - P.y) < (vxlWin.x - vxlWin.y)) { vxlW = 0.0; return Ln; }", // split: the native left of the window's centre line
       "   if (vv == 8) Lv = n * 0.5 + 0.5;",
       "#endif",
-      "   return mix(Ln, clamp(Lv, 0.0, 1.0), vxlW);",
+      "   return mix(Ln, clamp(Lv, 0.0, 1.0) * vxlFog, vxlW);",
       "}",
       "vec3 vxlLight(vec3 P, inout vec3 n, float lz, vec2 sq, vec3 Ln) {",
       "   vxlW = 0.0;",
@@ -2892,7 +2893,7 @@ public final class VoxelLight {
       "      if (cv == 9) Lc = vec3(0.2, 0.2, 1.0);", // dev: blue where the cache lights the pixel
       "      if (cv == 11) { vxlW = 1.0; return vec3(0.0, lm.a > 0.9899 ? 0.35 : 1.0, lm.a > 0.9899 ? 0.0 : 0.6); }", // dev: green the four-tap read, dark green the one fetch (red the volume per pixel, above)
       "#endif",
-      "      return mix(Ln, clamp(Lc, 0.0, 1.0), vxlW);",
+      "      return mix(Ln, clamp(Lc, 0.0, 1.0) * vxlFog, vxlW);",
       "   }",
       "#ifdef PPL_DEV",
       "   if (int(vxlMapZ.w + 0.5) == 9) { vxlW = 1.0; return vec3(1.0, 0.3, 0.2); }", // dev: red where the volume is read per pixel

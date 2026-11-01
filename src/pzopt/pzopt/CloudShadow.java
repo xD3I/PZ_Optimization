@@ -352,6 +352,27 @@ public final class CloudShadow {
       return 1F - Config.CLOUD_OPACITY_PCT / 100F * (1F - (float)Math.exp(-3.0 * d)) / 0.95021293F;
    }
 
+   /**
+    * A shore square's floor light at one corner (FBORenderCell.pzoptRenderFloor; any thread: the floor pass may be recorded on
+    * the frame workers). Stock draws a shore floor per frame so it fades under the water (shoreFade), never through the chunk
+    * composite, so the cloud never reached it and the shore stood out bright under a cloud (Discord, 2026-10-22). Darkened as
+    * the water over it is ({@code pzCloudWater}: open ground in the sun keeps its whole direct share): 1 - s (1 - T). ABGR in
+    * and out, alpha kept.
+    */
+   public static int shoreLight(int abgr, float wx, float wy, float z) {
+      float s = SunShadow.dir[3];
+      if (s <= 0F || Config.DEV_CLOUD_SHORE_OFF) {
+         return abgr;
+      }
+      float t = transmittanceAt(wx, wy, z);
+      if (t >= 1F) {
+         return abgr;
+      }
+      float k = 1F - s * (1F - t);
+      int r = Math.round((abgr & 0xFF) * k), g = Math.round((abgr >> 8 & 0xFF) * k), b = Math.round((abgr >> 16 & 0xFF) * k);
+      return abgr & 0xFF000000 | b << 16 | g << 8 | r;
+   }
+
    private static float sample(byte[] f, double u, double v, int ch) {
       double x = (u - Math.floor(u)) * N - 0.5, y = (v - Math.floor(v)) * N - 0.5;
       int x0 = (int)Math.floor(x), y0 = (int)Math.floor(y);
