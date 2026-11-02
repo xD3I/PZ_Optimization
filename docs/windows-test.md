@@ -6,8 +6,9 @@ the zip built on Linux carries the finished class files, and the runtime guard
 class it shadows against the Windows jar. If anything differs it logs one line and
 the game runs as stock, so the worst case of a mismatch is "no effect".
 
-Current target since 2026-09-28: game revision `4a0e9546ec` (Build 42.21, the stable branch); the releases
-below tagged `b42.20.4-*` were for revision `b0bbce05d5`. Release tags are `b<game version>-<yyyymmdd>-<hhmm>-<commit>`
+Current target since 2026-11-03: game revision `e013dbb529` (Build 42.22, the Pre-Release branch, merged into master
+as `c14e4bbe`); the releases tagged `b42.21-*` were for revision `4a0e9546ec` (Build 42.21, stable until 42.22 replaces it; the
+last one is `b42.21-20261102-2253-154126d0`), the releases tagged `b42.20.4-*` for revision `b0bbce05d5`. Release tags are `b<game version>-<yyyymmdd>-<hhmm>-<commit>`
 (UTC creation time) since 2026-09-29, when every `win-<revision>-<commit>` release was renamed to that form so that
 GitHub's list (by creation day, then by tag name; names that parse as versions, like `42.20.4-...`, rank first within
 a day, hence the `b`) runs in release order; tags of releases deleted before then keep their old names below.
