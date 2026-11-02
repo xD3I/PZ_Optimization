@@ -5,6 +5,7 @@
     scripts/discord-announce.py --tag <tag> --dry-run                           # print the payload only
     scripts/discord-announce.py --tag <tag> --headline "Zombies attack cars again"
     scripts/discord-announce.py --seed-cards                                    # mark the page's current New! cards as posted
+    scripts/discord-announce.py --tag <tag> --no-workshop --extra "..."         # GitHub-only install line (Workshop item unavailable), an extra paragraph
 
 Every release is announced (maintainer, 2026-10-04). scripts/workshop.sh --tag <tag> --upload runs this after
 a successful Workshop upload, so the post links both the GitHub release and the Workshop page.
@@ -169,6 +170,8 @@ def main():
     ap.add_argument("--no-cards", action="store_true")
     ap.add_argument("--force-cards", action="store_true")
     ap.add_argument("--seed-cards", action="store_true")
+    ap.add_argument("--no-workshop", action="store_true", help="no Workshop link (the item is unavailable): install from GitHub only")
+    ap.add_argument("--extra", help="a paragraph after the release notes (a 42.22 note, a known issue)")
     a = ap.parse_args()
 
     cards = page_cards(a.description) if Path(a.description).is_file() else []
@@ -192,9 +195,13 @@ def main():
     if len(notes) > 3800:
         notes = notes[:3800].rsplit(" ", 1)[0] + " …"
 
-    desc = (notes + "\n\n" if notes else "") + (
-        f"**Install:** Steam Workshop ([subscribe]({WORKSHOP})) or `install.ps1` / `install.sh` "
-        f"from the [GitHub release]({rel['url']}).")
+    if a.no_workshop:
+        install = (f"**Install:** `install.ps1` / `install.sh` from the [GitHub release]({rel['url']}), or unpack the zip "
+                   f"into the game folder (the Steam Workshop item is unavailable at the moment).")
+    else:
+        install = (f"**Install:** Steam Workshop ([subscribe]({WORKSHOP})) or `install.ps1` / `install.sh` "
+                   f"from the [GitHub release]({rel['url']}).")
+    desc = (notes + "\n\n" if notes else "") + (a.extra.strip() + "\n\n" if a.extra else "") + install
     embeds = [{
         "title": rel["name"],
         "url": rel["url"],
