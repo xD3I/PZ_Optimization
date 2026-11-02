@@ -1,0 +1,59 @@
+[table]
+[tr][td][b]What it is[/b][/td][td]Engine optimizations for Project Zomboid Build @VERSION@: smoother driving, hordes and storms, faster loading, plus optional graphics.[/td][/tr]
+[tr][td][b]Install[/b][/td][td]Not automatic: one command, see [b]Install[/b] below.[/td][/tr]
+[tr][td][b]Platforms[/b][/td][td]Steam version on Windows, Linux, macOS.[/td][/tr]
+[tr][td][b]Single player[/b][/td][td]Tested and supported.[/td][/tr]
+[tr][td][b]Other mods[/b][/td][td]Untested, unsupported.[/td][/tr]
+[tr][td][b]Multiplayer[/b][/td][td]Untested, unsupported.[/td][/tr]
+[tr][td][b]Remove[/b][/td][td]Options > PZ Optimization > Uninstall.[/td][/tr]
+[/table]
+
+[url=https://github.com/xD3I/PZ_Optimization][img]https://raw.githubusercontent.com/xD3I/PZ_Optimization/master/docs/workshop/images/link-github-small.png[/img][/url] [url=https://discord.gg/W32aAnKpK][img]https://raw.githubusercontent.com/xD3I/PZ_Optimization/master/docs/workshop/images/link-discord-small.png[/img][/url]
+
+[h1]Install[/h1]
+PZ Optimization puts class files into the game folder; the game loads them instead of its own. Steam cannot do that by itself, so the item carries an install window:
+[olist]
+[*]Subscribe. Wait for the download.
+[*]Main menu > Mods > enable [b]PZ_Optimization[/b].
+[*]The window shows the command for your system: [b]Copy the command[/b].
+[*]Windows: open PowerShell (Start menu, type powershell). Linux, macOS: open a terminal. Paste, Enter.
+[*]Quit the game. The installer copies the files once the game has closed.
+[*]Start the game and disable the mod again.
+[/olist]
+[img]https://raw.githubusercontent.com/xD3I/PZ_Optimization/master/docs/workshop/images/40-install.gif[/img]
+The same without the window:
+[code]irm https://github.com/xD3I/PZ_Optimization/releases/latest/download/install.ps1 | iex[/code]
+[code]curl -fsSL https://github.com/xD3I/PZ_Optimization/releases/latest/download/install.sh | bash[/code]
+(first line Windows PowerShell, second Linux / macOS terminal). Nothing is overwritten and projectzomboid.jar is untouched.
+
+[h1]Mods and multiplayer[/h1]
+Neither is tested and neither is supported. The tested setup is single player with no other mods. Lua mods, Java mods (ZombieBuddy and the like) and servers may work or may break in ways we have not seen. If you try anyway and something goes wrong: Options > PZ Optimization > "Stock game" preset, restart; if it is still wrong, uninstall. Reports are welcome on Discord, with the mod list and Zomboid/console.txt.
+
+[h1]New! Settings in one place[/h1]
+[img]https://raw.githubusercontent.com/xD3I/PZ_Optimization/master/docs/workshop/images/59-settings-in-one-place.gif[/img]
+
+[h1]Features[/h1]
+[list]
+[*][b]Driving:[/b] chunk loading, baking and lighting spread over frames; 120 km/h p99 frame time 19 -> 8 ms.
+[*][b]Hordes:[/b] zombie animation, actions and lighting reads on every CPU core.
+[*][b]Weather:[/b] rain, puddles, fog and lightning cached; storm 83 -> 188 fps, heavy fog 220 -> 389 fps.
+[*][b]Loading:[/b] menu 7.6 -> 4.9 s, save 7.7 -> 3.5 s.
+[*][b]Smoothness:[/b] eased zoom, interpolated car and camera, a UI that answers in the same frame.
+[*][b]Low-end:[/b] FSR upscaling, dynamic resolution, GPU texture compression, a low-end preset.
+[*][b]Framerate:[/b] an "Uncapped" entry and a separate menu cap.
+[*][b]Graphics (opt-in):[/b] per-pixel lighting; sun, moon and cloud shadows; god rays; ambient occlusion; reflections; mirrors and windows; glass car windows with the people inside; colour grading; HDR; sharp sprites; foliage sway; blood; relief.
+[*][b]Overlay (F9 / L3 + R3):[/b] frame time and its tail, CPU / GPU load, a live game-thread profile.
+[*][b]Housekeeping:[/b] "Stock game" preset, settings export / import, in-menu updates, one-click uninstall.
+[/list]
+
+[h1]Compared with the other performance mods[/h1]
+Each of the most-subscribed Build 42 performance mods alone, same three uncapped routes (120 km/h drive, drive in a thunderstorm, Rosewood spin); fps mean / p99 frame time:
+[img]https://raw.githubusercontent.com/xD3I/PZ_Optimization/master/docs/workshop/images/10-workshop-mods-comparison.jpg[/img]
+Project Zomboid Optimiser, Tempo, Every Texture Optimized, Lugli and Zed's Better FPS measure within noise of stock; Multi-Cpu Enhance is worse (its garbage collector pauses 300 ms). PZ Optimization: 481 / 246 / 456 fps, p99 8.8 / 13.8 / 8.5 ms.
+
+[h1]Updates and uninstall[/h1]
+New builds show up in the main menu as PZ OPTIMIZATION UPDATE: one click, restart. After a game update, if the game closes at start, run the install command again.
+Uninstall [b]before[/b] unsubscribing (Options > PZ Optimization > Uninstall PZ Optimization): unsubscribing deletes this item but not the installed files. Too late? Windows: [code]& ([scriptblock]::Create((irm https://github.com/xD3I/PZ_Optimization/releases/latest/download/install.ps1))) -Uninstall[/code] Linux, macOS: the curl line ending in [b]| bash -s -- --uninstall[/b].
+
+[h1]This build[/h1]
+Game revision @REV@ (Build @VERSION@), commit @COMMIT@, @NFILES@ files, zip sha256 @SHA@.

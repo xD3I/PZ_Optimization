@@ -116,9 +116,11 @@ public final class GroundTilingPatch implements GroundBake.FloorPatch {
          spec = MODES[0];
       }
       float dry = seasonDryness();
+      boolean soft = Config.GROUND_HEIGHT_BLEND_SOFT;
       float[] p = {
          mode, Config.DEV_GROUND_TILING_CELL_PCT / 100F, 0.6F, 7F, 0.5F, // tiling
-         height ? 0.12F : 0F, 0.18F, 1.1F, 0.35F, // blend: softness (score units), noise amplitude, noise cell (squares), height weight
+         // groundHeightBlendSoft: a wider ramp and the height weight negative = the art's height read smoothed (the shader's flag)
+         height ? (soft ? 0.18F : 0.12F) : 0F, 0.18F, 1.1F, soft ? -0.35F : 0.35F, // blend: softness (score units), noise amplitude, noise cell (squares), height weight
          0.18F * macro / 100F, 0.3F * dry * macro / 100F, 8F, 24F, // macro: brightness drift, dry patches (season), scales (squares)
          GroundTileArt.DRY_TINT[0], GroundTileArt.DRY_TINT[1], GroundTileArt.DRY_TINT[2],
          seed()};
@@ -270,9 +272,13 @@ public final class GroundTilingPatch implements GroundBake.FloorPatch {
       }
       float gtScore(int c, float wc, ivec2 px, vec2 q, ivec2 bi, vec2 bf) {
          int la = GT_CODE_LAYER[c];
-         float h = la < 0 ? 0.5 : gtFetch(px, ivec2(0), float(la)).a;
+         // the art's height, per texel (pzGtBlend.w > 0) or smoothed over 4 x 4 texels (w < 0, groundHeightBlendSoft): per texel it
+         // outweighs the field's slope (0.03 a texel against the 0.12 ramp), so each texel flipped whole between the two
+         // materials, a dither that zoomed in (4 px a texel at zoom 0.25) drew a saw-toothed border; smoothed, the line keeps
+         // its organic bends and grades over a few texels
+         float h = la < 0 ? 0.5 : pzGtBlend.w < 0.0 ? gtLapFetch(px, ivec2(0), float(la), 2.0).a : gtFetch(px, ivec2(0), float(la)).a;
          float nz = gtFbm2(q, bi, bf, 31u + uint(c)) - 0.5;
-         return wc + 0.06 * float(gtRank(c)) + 2.0 * pzGtBlend.y * nz + pzGtBlend.w * (h - 0.5);
+         return wc + 0.06 * float(gtRank(c)) + 2.0 * pzGtBlend.y * nz + abs(pzGtBlend.w) * (h - 0.5);
       }
       void gtTop(int c, float sc, inout int c1, inout float s1, inout int c2, inout float s2) {
          if (sc > s1) { s2 = s1; c2 = c1; s1 = sc; c1 = c; } else if (sc > s2) { s2 = sc; c2 = c; }

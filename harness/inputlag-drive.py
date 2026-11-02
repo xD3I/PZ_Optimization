@@ -11,8 +11,10 @@ commands, one per line (harness/inputlag/*.txt):
   mmove <dx> <dy>               one relative pointer move (libinput accelerates it; +-8000 clamps at the screen edge)
   stick <l|r> <x> <y> <hold s>  put a stick at x, y (-1..1, y down), hold, back to centre
   sset <l|r> <x> <y>            put a stick there and leave it (a change of direction while held)
-  pad <a|b|x|y|lb|rb|lt|rt> <hold s>  (lt aims while the right stick is off centre, rt attacks)
-  pdown <lt|rt> / pup <lt|rt>
+  pad <a|b|x|y|lb|rb|lt|rt|back|start|l3|r3|up|down|left|right> <hold s>  (lt aims while the right stick is off
+                                centre, rt attacks; up/down/left/right = the D-pad)
+  pdown <button> / pup <button> hold or release any of those (a held button while other lines run)
+  trig <lt|rt> <0..1>           leave a trigger at that pull (0 = released; partial pulls: aim without firing)
   sleep <s> | sleep <a>-<b>     fixed or uniform random wait (random gaps keep the presses off the frame phase)
   repeat <n> ... end            (nestable)
   activate                      raise the game window (xdotool windowactivate)
@@ -36,7 +38,9 @@ from pad import make_pad  # noqa: E402
 
 KEYS = {"w": e.KEY_W, "s": e.KEY_S, "a": e.KEY_A, "d": e.KEY_D, "home": e.KEY_HOME, "end": e.KEY_END}  # home / end: the horde scene (pzopt.HordeScene)
 MBTN = {"left": e.BTN_LEFT, "right": e.BTN_RIGHT}
-PAD_BTN = {"a": e.BTN_A, "b": e.BTN_B, "x": e.BTN_X, "y": e.BTN_Y, "lb": e.BTN_TL, "rb": e.BTN_TR}
+PAD_BTN = {"a": e.BTN_A, "b": e.BTN_B, "x": e.BTN_X, "y": e.BTN_Y, "lb": e.BTN_TL, "rb": e.BTN_TR,
+           "back": e.BTN_SELECT, "start": e.BTN_START, "l3": e.BTN_THUMBL, "r3": e.BTN_THUMBR}
+PAD_HAT = {"up": (e.ABS_HAT0Y, -1), "down": (e.ABS_HAT0Y, 1), "left": (e.ABS_HAT0X, -1), "right": (e.ABS_HAT0X, 1)}
 STICK = {"l": (e.ABS_X, e.ABS_Y), "r": (e.ABS_RX, e.ABS_RY)}
 
 
@@ -193,13 +197,28 @@ class Driver:
             self.pad.write(e.EV_ABS, ay, int(float(p[3]) * 32767))
             self.pad.syn()
             self.log("in stick:%s %s,%s t=%d" % (p[1], p[2], p[3], now_us()))
-        elif op in ("pdown", "pup"):  # pdown / pup <lt|rt>: hold or release a trigger
+        elif op in ("pdown", "pup"):  # pdown / pup <button>: hold or release a trigger, button or D-pad direction
+            down = op == "pdown"
+            if p[1] in ("lt", "rt"):
+                axis = e.ABS_Z if p[1] == "lt" else e.ABS_RZ
+                self.emit(self.pad, e.EV_ABS, axis, 255 if down else 0, "pad:" + p[1])
+            elif p[1] in PAD_HAT:
+                axis, value = PAD_HAT[p[1]]
+                self.emit(self.pad, e.EV_ABS, axis, value if down else 0, "pad:" + p[1])
+            else:
+                self.emit(self.pad, e.EV_KEY, PAD_BTN[p[1]], 1 if down else 0, "pad:" + p[1])
+        elif op == "trig":  # trig <lt|rt> <0..1>: a partial trigger pull, left there
             axis = e.ABS_Z if p[1] == "lt" else e.ABS_RZ
-            self.emit(self.pad, e.EV_ABS, axis, 255 if op == "pdown" else 0, "pad:" + p[1])
+            self.emit(self.pad, e.EV_ABS, axis, int(max(0.0, min(1.0, float(p[2]))) * 255), "pad:" + p[1])
         elif op == "pad":
             if p[1] in ("lt", "rt"):
                 axis = e.ABS_Z if p[1] == "lt" else e.ABS_RZ
                 self.emit(self.pad, e.EV_ABS, axis, 255, "pad:" + p[1])
+                time.sleep(float(p[2]))
+                self.emit(self.pad, e.EV_ABS, axis, 0, "pad:" + p[1])
+            elif p[1] in PAD_HAT:
+                axis, value = PAD_HAT[p[1]]
+                self.emit(self.pad, e.EV_ABS, axis, value, "pad:" + p[1])
                 time.sleep(float(p[2]))
                 self.emit(self.pad, e.EV_ABS, axis, 0, "pad:" + p[1])
             else:

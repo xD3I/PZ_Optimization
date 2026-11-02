@@ -264,9 +264,40 @@ empty options file. Ground truth `devUiTruth` (stale = a visible UI element diff
 240 fps held in every scene; uncapped ~-1 % fps. Runs: `uil13-cost-new`, `uil13-cost-prev`, `uil6-cost-stock`,
 `uil12-truth-new`, `uil12-truth-nocap`, `uil7-truth-prev`, `uil11-unc-prev`, `uil11-unc-new` (harness/runs of the worktree).
 
+## 2026-10-13 04:31-06:40 — KodeMannn's PZ-Mod-Performance-Suite v2.21.0, its "1-click" fixes (`docs/findings-kms-suite-2026-10-13.md`)
+
+Desktop 5120x2160, direct launcher, vsync off, empty pzopt options file. `kgc` = stock + its GC fix (G1, `MaxGCPauseMillis=5`,
+`-Xmx16g`), `kall` = kgc + its graphics settings (`lightFPS=60`, mipmaps, texture compression, 10 ragdolls), `optk` = ours + kall.
+
+| bench | stock | kgc | kall | ours | ours + kall |
+|---|---|---|---|---|---|
+| drive 120 fps (p99 ms) | 201.1 (12.9) | 204.1 (11.8) | 197.8 (11.5) | 614.5 (3.4) | 601.6 (3.5) |
+| spin fps (p99 ms) | 110.4 (34.1) | 131.7 (28.8) | 97.8 (36.1) | 411.8 (8.6) | 413.9 (7.1) |
+| Louisville fps (p99 ms) | 23.8 (116.7) | 26.0 (124.0) | 26.2 (98.1) | 113.8 (36.0) | 113.6 (31.5) |
+| Louisville + 132 mods | OOM (3 GB) | 24.2 (158.4) | | 63.4 (85.0) | |
+
+Spin `klight` (kgc + `lightFPS=60` only) 117.7 fps: the lighting rate takes two thirds of the GC gain. Stock sides use 21-37 %
+CPU / 28-43 % GPU (game thread 77-98 %); ours GPU 90-99 % on drive and spin. Runs `kmsv-*`, `kms-louisville-*`, `kms132-*`,
+`kmsv132-*`; all Louisville runs' settle frames checked clean.
+
 ## 2026-10-18 16:20-16:25 — KI5 LAV-300 flicker report, single-player repro (`docs/findings-ki5-vehicle-flicker-2026-10-18.md`)
 
 Desktop, direct launch, `--mode bench --mod damnlib --mod 84gageV300`, LAV-300 APC + vanilla Van parked by the car rig at
 8158,11514, 14 s hold, recorded. `ki5-lav-repro2` (tab file: car glass and sun shadows off): steady, LAV / Van frame-to-frame
 luma diff 0.30 / 0.30. `ki5-lav-allenh` (rain, every Visuals key on): steady, 0.69 / 0.43 (rain streaks), LAV mean luma flat
 within +-0.2 over 6 s. No flicker reproduced.
+
+## 2026-10-29 18:21-18:57 — texture loading and the on-disk atlas suggestion (`docs/findings-texture-atlas-2026-10-29.md`)
+
+Desktop, 42.21, bench `drive-120-south`, `--launcher direct --no-mangohud --prop devTexLoadStats=true`, desktop tab file.
+`tex-opt`, `tex-opt2`, `tex-opt-prof` (asprof wall + cpu), `tex-stock` (18:21-18:31): another program held ~3 GB of VRAM
+from launch, 102-104 fps (stock 80): profile use only. Quiet GPU:
+
+| run | setting | boot | load | D | drive fps / p99 / p99.9 |
+|---|---|---|---|---|---|
+| `tex-stock2-20261029-185550` | `enabled=false`, textureCompression off | 7.69 s | 9.99 s | 3.20 s | 112.6 / 41.5 / 51.7 ms |
+| `tex-opt3-20261029-185409` | ours, compression off | 5.05 s | 3.13 s | 0.88 s | 143.6 / 15.3 / 20.3 ms |
+| `tex-comp-20261029-184634` | ours, compression on | 5.67 s | 2.62 s | 0.04 s | 145.7 / 14.1 / 20.2 ms |
+| `tex-cache1-20261029-184815` | + `texCompressCache` (filling) | 5.45 s | 5.65 s | 3.18 s | 145.3 / 14.6 / 19.9 ms |
+| `tex-cache2-20261029-185209` | + `texCompressCache` (warm, 225 MB) | 5.34 s | 2.22 s | 0.04 s | 144.5 / 14.8 / 19.2 ms |
+

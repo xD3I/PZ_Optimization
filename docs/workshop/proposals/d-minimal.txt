@@ -1,0 +1,37 @@
+Smoother Project Zomboid: even frame times while driving, in hordes and in storms, faster loading, optional graphics. Build @VERSION@, Steam version, Windows / Linux / macOS.
+
+[url=https://github.com/xD3I/PZ_Optimization][img]https://raw.githubusercontent.com/xD3I/PZ_Optimization/master/docs/workshop/images/link-github-small.png[/img][/url] [url=https://discord.gg/W32aAnKpK][img]https://raw.githubusercontent.com/xD3I/PZ_Optimization/master/docs/workshop/images/link-discord-small.png[/img][/url]
+
+[h1]Install[/h1]
+Subscribing alone does nothing. Then:
+[olist]
+[*]Mods: enable [b]PZ_Optimization[/b] and press [b]Copy the command[/b].
+[*]Paste it into PowerShell (Windows) or a terminal (Linux, macOS).
+[*]Quit the game; start it again; disable the mod.
+[/olist]
+[img]https://raw.githubusercontent.com/xD3I/PZ_Optimization/master/docs/workshop/images/40-install.gif[/img]
+
+[h1]Not supported[/h1]
+[b]Other mods and multiplayer are untested and unsupported.[/b] Use them at your own risk. If anything looks wrong, pick the "Stock game" preset in Options > PZ Optimization and tell us on Discord.
+
+[h1]New! Settings in one place[/h1]
+[img]https://raw.githubusercontent.com/xD3I/PZ_Optimization/master/docs/workshop/images/59-settings-in-one-place.gif[/img]
+
+[h1]Features[/h1]
+[list]
+[*]Driving p99 frame time 19 -> 8 ms; storms 83 -> 188 fps; loading about twice as fast.
+[*]Hordes on every CPU core.
+[*]Smooth zoom, steady car camera, lag-free UI.
+[*]FSR upscaling, dynamic resolution and a low-end preset.
+[*]Opt-in graphics: per-pixel lighting, real sun and moon shadows, god rays, reflections, glass car windows, colour grading, HDR.
+[*]F9 performance overlay, in-menu updates, one-click uninstall.
+[/list]
+
+[h1]Other performance mods[/h1]
+[img]https://raw.githubusercontent.com/xD3I/PZ_Optimization/master/docs/workshop/images/10-workshop-mods-comparison.jpg[/img]
+Measured one at a time on the same routes: Project Zomboid Optimiser, Tempo, Every Texture Optimized, Lugli and Zed's Better FPS run like stock; Multi-Cpu Enhance runs worse. Details on GitHub.
+
+[h1]Uninstall[/h1]
+Options > PZ Optimization > [b]Uninstall PZ Optimization[/b], [b]before[/b] you unsubscribe.
+
+Revision @REV@, commit @COMMIT@, sha256 @SHA@.

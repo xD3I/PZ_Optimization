@@ -8928,6 +8928,29 @@ below test a static final first. KahluaThread, LuaJavaInvoker, MultiLuaJavaInvok
   `-Dpzopt.devLuaJitEntryDeopt=true`), `LuaMapTest`, `LuaJitCorpus` (every function of the game's and a mod list's Lua
   compiled and defined), `LuaVmBench`.
 
+### TextureID.generateHwId: devTexLoadStats (2026-10-29, `docs/findings-texture-atlas-2026-10-29.md`)
+
+- Dev probe, off by default: with `devTexLoadStats` the upload is timed from the top of `generateHwId` to just before the
+  texture is entered in `TextureIDMap`, and handed with its source path (the file name, else the asset path, `@pack@/...`
+  for an atlas page) and the growth of `totalMemUsed` to `pzopt.TexLoadStats`. Off, the method reads one boolean and one
+  float more and does nothing else. `FileTaskStats` also keeps each task class's first start and last end.
+
+## Cloud shadows on shore floors (2026-10-22, Discord report, redfox.x)
+
+- `FBORenderCell.pzoptRenderFloor` (stock `renderFloor`'s body): a shore square's floor (`IsoWaterGeometry.isbShore`, a
+  `blends_natural` floor beside water) drawn in the per-frame TranslucentFloor layer gets its four corner lights through
+  `pzopt.CloudShadow.shoreLight` before they go to the floor shapers: each corner times `1 - s (1 - T)`, T the cloud's
+  transmittance at that corner (`transmittanceAt`, the composite's field, drift and density on the CPU), s the key light's
+  strength (`SunShadow.dir[3]`), as the water program darkens the water over it (`pzCloudWater`). Stock draws shore floors
+  per frame so they fade under the water (shoreFade); they never pass through the chunk composite where cloud shadows
+  apply, so under a cloud the ring of shore squares stayed in full light and stood out bright against the darkened ground
+  and water. Vertex i is corner (x, y), (x + 1, y), (x + 1, y + 1), (x, y + 1), the order of the water depths beside it.
+  Only the TranslucentFloor layer: a floor baked into a chunk texture never takes it (it would freeze one cloud into the
+  picture). No change with cloud shadows off, at night without a key light or without a cloud over the square.
+  Checked on the Mac (2026-10-23, runs `mac-shore3-b-before` with `devCloudShoreOff=true` / `mac-shore3-b`, cloud cover 0.6,
+  noon, a natural bank west of Riverside found by `find=shore shore_min=8` at 6154,5199): before, the zigzag strip of shore
+  tiles at the water's edge was a bright orange line against the clouded ground; after, it takes the ground's shade.
+
 ## Port to Build 42.22 (2026-10-27, pre-release, revision `e013dbb529`)
 
 Made on top of origin/master `adef1841` (the `d1bbdcf` release) in worktree `~/pzopt-wt/port4222`, for the day 42.22 leaves the
@@ -8980,3 +9003,12 @@ test of the save id holds), and `UiDepsTest` drops its case built on the removed
 case). Checks: `build.sh` audit 9,538 unedited methods, 0 mismatches; 85 methods 42.22 changed that we edit: 74 carry exactly
 42.22's change against master's 42.21 build, the other 11 are the 10 read for the origin port plus `doLoadGridsquare`, whose
 changes landed in master's `pzoptLoad*` steps (`getBuildingsIntersecting`'s new flag in `pzoptLoadMid`); `scripts/test.sh` passes.
+
+### Master merged again (2026-11-03, master `e01f1c31` = the `154126d0` release plus its docs commits)
+
+Merged on the Flip 1S without a 42.22 depot, so this merge is **unbuilt**: build.sh's audit and test.sh against the 42.22 jar
+are still to run. Source merged clean; the only conflict was this file (master's TextureID / shore-floor sections and the port
+section, both kept). Master's new code read the square object list as the removed `PZArrayList` in three places, converted as
+above: `ChunkAo` (the block scan in the AO job), `PixelLight.hasForceAmbient` (pplUnseenBlend), `Sway` (the square's swaying
+sprite, `getElements()` array read -> `List.get`). No other 42.22-removed API (`isNorth()`, `getGameMode()`,
+`getSkyLightLevel()`, `getOptionTexture2x`, Last Stand) appears in master's additions since `22f546a7`.

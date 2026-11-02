@@ -87,6 +87,19 @@ public class GrassBladesTest {
             n++;
          }
       }
+      // the compute generation (gbMake: grassBladeSwayMotion's plant bits, 2026-10-31) alone, on the driver and Mesa
+      Path cp = Files.writeString(Files.createTempFile("pzgb", ".comp"), GrassBlades.GEN);
+      String out = RipplesLinkTest.run(new ProcessBuilder(check.toString(), cp.toString()));
+      Check.check(out.contains("link ok"), "generation (compute) with the driver:\n" + out);
+      n++;
+      if (Files.exists(mesa)) {
+         ProcessBuilder pb = new ProcessBuilder(check.toString(), cp.toString());
+         pb.environment().put("__EGL_VENDOR_LIBRARY_FILENAMES", mesa.toString());
+         pb.environment().put("LIBGL_ALWAYS_SOFTWARE", "1");
+         String m = RipplesLinkTest.run(pb);
+         Check.check(m.contains("link ok"), "generation (compute) with Mesa (llvmpipe):\n" + m);
+         n++;
+      }
       System.out.println("GrassBladesTest ok (" + n + " program links)");
    }
 }

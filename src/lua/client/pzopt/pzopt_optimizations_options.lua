@@ -2805,6 +2805,12 @@ local ENHANCEMENT_SECTIONS = {
               why = {
                   gpu = "Worked out again when buildings change: flood ~32 us of compute for the whole window, cascades ~0.9 ms and cones ~2 ms (17 rays a cell) on the desktop at 5K.",
               } },
+            { key = "voxelLightSkyFloorPct", label = "Voxel lighting: least daylight deep inside rooms (%)",
+              choices = { "20", "35", "50", "65", "80" }, note = { ["50"] = "default: as the base game's darkest rooms", ["20"] = "darker than the base game" },
+              tip = "The least of the outdoor daylight a room keeps far from its windows and doorways. The base game keeps about half of it; lower makes the inside of large buildings darker than in the base game, higher brighter. Applies on the next launch." },
+            { key = "voxelLightSkyDecayPct", label = "Voxel lighting: how far daylight reaches into rooms (%)",
+              choices = { "60", "72", "80", "88" }, note = { ["72"] = "default" },
+              tip = "How much of the daylight coming in through a window or doorway is left one square further into the room. Higher carries it deeper into the room before it falls to the least daylight above. Applies on the next launch." },
             { key = "voxelLightBounce", label = "Voxel lighting: bounced light",
               tip = "Lit floors and walls light their surroundings a little: a lamp pool fills the area round it, a lit window spills warm light outside." },
             { key = "pplShadows", label = "Per-pixel lighting: torch shadows",
@@ -2868,6 +2874,7 @@ local NEXT_LAUNCH_ONLY = { hdr = true, hdrAuto = true, godRaysRoofExact = true, 
     pplWetSpecular = true, pplSpecPct = true, pplShadows = true, pplShadowFilter = true, torchSourceSelfShadow = true,
     -- voxel lighting: its shader code is compiled into the per-pixel lighting programs at start-up
     voxelLight = true, voxelLightTorchShadows = true, voxelLightSkyMethod = true, voxelLightBounce = true,
+    voxelLightSkyFloorPct = true, voxelLightSkyDecayPct = true,
     -- reflections: the water, puddle and chunk composite shaders are patched when the game loads them (only then);
     -- strength and puddles apply at once
     reflections = true,
@@ -3257,7 +3264,7 @@ local KEY_CLIP = {
     godRaysSpill = "godraysspill", godRaysSpillPct = "godraysspill",
     -- the Visuals keys without their section's clip (2026-10-20, docs/menu-clips-2026-10-20.md; per-pixel lighting, torch source
     -- and relief show their sections' clips "ppl" / "torchsource" / "relief")
-    voxelLight = "voxel", voxelLightTorchShadows = "voxel", voxelLightSkyMethod = "voxel", voxelLightBounce = "voxel",
+    voxelLight = "voxel", voxelLightTorchShadows = "voxel", voxelLightSkyMethod = "voxel", voxelLightBounce = "voxel", voxelLightSkyFloorPct = "voxel", voxelLightSkyDecayPct = "voxel",
     cloudShadows = "clouds", cloudOpacityPct = "clouds", cloudSpeedPct = "clouds", cloudScalePct = "clouds", moonShadows = "moon", moonShadowPct = "moon",
     ripplesWake = "wakes", ripplesVehicles = "wakes", carOccupant = "occupant", carOccupantOcclusion = "occupant", carOccupantLightPct = "occupant",
     mirrorsProps = "props", mirrorsPropGlassPct = "props", darknessFloorPct = "darkfloor", darknessFloorBasements = "darkfloor", colorGradingNightPct = "grade",

@@ -32,6 +32,9 @@ public class VoxelLightShaderTest {
          {"full-texel", "#define PPL_VOXEL\n#define VXL_TEXEL_N\n"},
          {"base-texel", "#define PPL_BASE\n#define PPL_VOXEL\n#define VXL_TEXEL_N\n"},
          {"dev-texel", "#define PPL_DEV\n#define PPL_VOXEL\n#define VXL_TEXEL_N\n"},
+         {"full-texel-match", "#define PPL_VOXEL\n#define VXL_TEXEL_N\n#define VXL_MATCH\n"}, // voxelLightCacheMatch
+         {"base-texel-match", "#define PPL_BASE\n#define PPL_VOXEL\n#define VXL_TEXEL_N\n#define VXL_MATCH\n"},
+         {"dev-texel-match", "#define PPL_DEV\n#define PPL_VOXEL\n#define VXL_TEXEL_N\n#define VXL_MATCH\n"},
          {"full-screen", "#define PPL_VOXEL\n#define VXL_SCREEN_N\n"},
          {"base-screen", "#define PPL_BASE\n#define PPL_VOXEL\n#define VXL_SCREEN_N\n"},
          {"base-none", "#define PPL_BASE\n#define PPL_VOXEL\n"},

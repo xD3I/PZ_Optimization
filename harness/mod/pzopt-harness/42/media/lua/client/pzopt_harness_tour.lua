@@ -55,6 +55,10 @@ local function rowPoint(i, where)
     local r = l.rowsY and l.rowsY[i]
     if not r then return nil end
     local x = 80
+    if where == "label" then -- (right of the row's switch or fold arrow: a click there selects, it does not toggle)
+        if l.toggleX and l.toggleX[i] then x = l.toggleX[i][2] + 40
+        elseif l.foldX and l.foldX[i] then x = l.foldX[i][2] + 30 end
+    end
     if where == "value" and l.valueX and l.valueX[i] then x = l.valueX[i] + 6 end
     if where == "reset" and l.resetX and l.resetX[i] then x = (l.resetX[i][1] + l.resetX[i][2]) / 2 end
     if where == "toggle" and l.toggleX and l.toggleX[i] then x = (l.toggleX[i][1] + l.toggleX[i][2]) / 2 end
@@ -63,6 +67,43 @@ local function rowPoint(i, where)
 end
 
 local function bySetting(key) return function(it) return it.setting == key end end
+local function anySetting(it) return it.setting ~= nil end
+
+-- a sidebar row by a test on the row (the benchmark's reports and their sections have no id of their own)
+local function sideFind(pred)
+    local m = screen()
+    for _, r in ipairs(m.side.rows or {}) do
+        if not r.hidden and r.y and pred(r) then return abs(m.side, 40 + (r.depth or 0) * 14, r.y + r.h / 2) end
+    end
+    return nil
+end
+
+local function centre(el) return el and abs(el, el:getWidth() / 2, el:getHeight() / 2) or nil end
+
+-- the preset box in the bar, an entry of its open list by label
+local function presetBox()
+    local c = screen().presetCard
+    local bx, by, bw, bh = c:boxRect()
+    return abs(c, bx + bw / 2, by + bh / 2)
+end
+local function presetEntry(label)
+    local pop = screen().presetPop
+    for _, hb in ipairs(pop.hit or {}) do
+        local e = pop.entries[hb[1]]
+        if e and e.label == label then return abs(pop, pop:getWidth() / 2, (hb[2] + hb[3]) / 2) end
+    end
+    return nil
+end
+
+-- the dialogs: the screen's last confirm / message, the text box opened last
+local BOX = {}
+local function dialogButton(which)
+    local m = screen()
+    if which == "yes" then return centre(m.confirmModal and m.confirmModal.yes) end
+    if which == "ok" then return centre(m.messageModal and m.messageModal.ok) end
+    if which == "box" then return centre(BOX.last and BOX.last.yes) end
+    return nil
+end
 
 -- game UI coordinates -> the X server's (the two can differ: desktop scaling, a window offset); measured at the start by
 -- two moves to known X points and the game's own mouse position after each
@@ -81,8 +122,11 @@ local function shot(name)
     log("screenshot " .. name)
 end
 
+-- options_tour=mods: the benchmark run of 2026-10-21 05:07 with 289 Workshop mods enabled (their Lua 72.6 ms a frame)
+local MODS_RUN = "20261021-050700"
+
 -- the steps: { delay before the step (ms), function }
-local function steps()
+local function steps(variant)
     local t = {}
     local function at(ms, fn) table.insert(t, { ms, fn }) end
     at(1200, function() req("move 1000 600 150") end)
@@ -98,45 +142,99 @@ local function steps()
             CAL[2][1], CAL[2][2], K.ax, K.bx, K.ay, K.by))
         moveTo({ getCore():getScreenWidth() * 0.62, getCore():getScreenHeight() * 0.55 }, 400)
     end)
-    at(1500, function() log("home") shot("home") end)
-    for _, id in ipairs({ "perf", "vis", "tools", "bench", "update", "compat" }) do
-        at(2200, function() log("tab " .. id) moveTo(tabPoint(id), 450, true) end)
+    if variant == "mods" then -- (2026-10-23) the teaser's second part: a benchmark report of a modded game, its Mods (Lua) row
+        at(1500, function() log("tab bench") moveTo(tabPoint("bench"), 600, true) end)
+        at(2000, function()
+            local m = screen()
+            local run = MODS_RUN
+            log("report " .. run)
+            local pt = sideFind(function(r) return r.run == run and r.fold ~= nil and not r.scene and not r.section end)
+            if pt then moveTo(pt, 900, true)
+            else log("report row not on screen: opened directly") m:openPage("bench/report", { run }) end
+        end)
+        at(3200, function() shot("mods-report") end)
+        at(300, function() log("section: Mods (Lua)") moveTo(sideFind(function(r) return r.section == 60 end), 700, true) end)
+        at(4500, function() shot("mods-row") end)
+        at(300, function()
+            local p = screen().detailText
+            if p then moveTo(abs(p, p:getWidth() * 0.55, p:getHeight() * 0.5), 700) end
+        end)
+        for k = 1, 5 do
+            at(k == 1 and 1200 or 3200, function() req("wheel down 3") end)
+        end
+        at(3200, function() shot("mods-functions") end)
+        at(1500, function() log("done") end)
+        return t
     end
-    at(2400, function() log("tab vis") moveTo(tabPoint("vis"), 500, true) end)
-    -- the sidebar is the category page's table of contents: God rays scrolls Lighting and shadows to its heading
-    at(2200, function() log("sidebar: Lighting and shadows") moveTo(sidePoint("vis/light"), 600, true) end)
-    at(2200, function() log("sidebar: God rays") moveTo(sidePoint("vis/light/4"), 500, true) end)
-    -- the tree: a click on a row shows its detail (resting the mouse selects nothing)
-    at(2200, function() log("click godRays") moveTo(rowPoint(rowIndex(bySetting("godRays")), "label"), 500, true) end)
-    at(2800, function() shot("settings") end)
-    at(400, function() log("click a modifier") moveTo(rowPoint(rowIndex(bySetting("godRaysStrengthPct")), "label"), 450, true) end)
-    at(2400, function() log("click godRays") moveTo(rowPoint(rowIndex(bySetting("godRays")), "label"), 450, true) end)
-    -- one click on the switch: on, the modifiers under it lose their dim, the amber dot and reset appear
-    at(1800, function() log("toggle godRays") moveTo(rowPoint(rowIndex(bySetting("godRays")), "toggle"), 500, true) end)
-    at(2600, function() shot("changed") end)
-    at(600, function() log("reset godRays") moveTo(rowPoint(rowIndex(bySetting("godRays")), "reset"), 500, true) end)
-    -- folding: God rays' modifiers, a group, every group, then every group open again
-    at(2000, function() log("fold godRays") moveTo(rowPoint(rowIndex(bySetting("godRays")), "fold"), 500, true) end)
-    at(2400, function() shot("folded-setting") end)
-    at(400, function() log("open godRays") moveTo(rowPoint(rowIndex(bySetting("godRays")), "fold"), 400, true) end)
-    at(2000, function() log("fold a group") moveTo(rowPoint(rowIndex(function(it) return it.id == "group:vis/light/2" end), "label"), 500, true) end)
-    at(2400, function() shot("folded-group") end)
-    at(400, function()
-        log("fold all")
-        local m = screen()
-        local f = m.foldAllRect
-        if f then moveTo(abs(m, f[1] + f[3] / 2, f[2] + f[4] / 2), 500, true) end
+    -- (2026-10-23, the release teaser) the screen opens on Optimizations; each card leads with its summary, the verdict on
+    -- this PC and the SAVES / COSTS columns with the resources' icons, the list shows each row's main resource as an icon
+    at(1800, function() log("start page") shot("start") end)
+    at(600, function() log("sidebar: What bakes") moveTo(sidePoint("perf/world/1"), 700, true) end)
+    at(1800, function() log("click treesInChunkTexture") moveTo(rowPoint(rowIndex(bySetting("treesInChunkTexture")), "label"), 600, true) end)
+    at(3800, function() shot("card-trees") end)
+    -- the list's icons: the cursor runs down the rows (no click)
+    at(300, function()
+        local i = rowIndex(bySetting("bakeBudget")) or rowIndex(bySetting("bakeScheduler"))
+        moveTo(rowPoint(i, "label"), 2200)
     end)
-    at(2400, function() shot("folded-all") end)
-    at(400, function()
-        log("open all")
+    at(2600, function() log("click treeAppend") moveTo(rowPoint(rowIndex(bySetting("treeAppend")), "label"), 600, true) end)
+    at(3400, function() shot("card-append") end)
+    -- the bar's sidebar switch: the page takes the whole width, then the sidebar comes back
+    at(400, function() log("sidebar off") moveTo(centre(screen().sideToggle), 700, true) end)
+    at(3000, function() shot("sidebar-off") end)
+    at(300, function() log("sidebar on") moveTo(centre(screen().sideToggle), 400, true) end)
+    at(1800, function() log("sidebar: On other cores") moveTo(sidePoint("perf/zombies/1"), 700, true) end)
+    at(1800, function() log("click animBonesParallel") moveTo(rowPoint(rowIndex(bySetting("animBonesParallel")), "label"), 500, true) end)
+    at(3600, function() shot("card-bones") end)
+    -- Loading: a setting that shortens the boot (the hourglass)
+    at(300, function() log("tab boot") moveTo(tabPoint("boot"), 600, true) end)
+    at(1800, function() log("click the first Loading setting") moveTo(rowPoint(rowIndex(anySetting), "label"), 600, true) end)
+    at(3400, function() shot("card-load") end)
+    -- Enhancements: God rays and its before / after clip
+    at(300, function() log("tab vis") moveTo(tabPoint("vis"), 600, true) end)
+    at(1800, function() log("sidebar: God rays") moveTo(sidePoint("vis/light/4"), 600, true) end)
+    at(1800, function() log("click godRays") moveTo(rowPoint(rowIndex(bySetting("godRays")), "label"), 500, true) end)
+    at(4200, function() shot("godrays") end)
+    -- presets: the list (built in, saved on this PC), one loaded, the current settings saved under a name
+    at(300, function() log("preset list") moveTo(presetBox(), 800, true) end)
+    at(2000, function() moveTo(presetEntry("Recommended"), 600) end)
+    at(1400, function() moveTo(presetEntry("Enhanced"), 600) end)
+    at(1600, function() shot("presets") log("load Enhanced") moveTo(presetEntry("Enhanced"), 200, true) end)
+    at(1600, function() moveTo(dialogButton("yes"), 600, true) end)
+    at(2600, function() shot("preset-loaded") moveTo(dialogButton("ok"), 600, true) end)
+    at(1600, function() log("SAVE...") moveTo(centre(screen().presetSave), 700, true) end)
+    at(1400, function() moveTo(centre(BOX.last and BOX.last.entry), 500, true) end)
+    -- (the box opens with the loaded preset's name: emptied, else the typed name is appended to it)
+    at(700, function() if BOX.last and BOX.last.entry then BOX.last.entry:setText("") end end)
+    at(900, function() req("type Night drive") end)
+    at(1600, function() moveTo(dialogButton("box"), 600, true) end)
+    at(2400, function() moveTo(dialogButton("ok"), 600, true) end)
+    at(1200, function() log("preset list") moveTo(presetBox(), 600, true) end)
+    at(2600, function() shot("presets-saved") moveTo(presetBox(), 400, true) end)
+    -- the benchmark: the run planner (scenes, passes, Start), then the newest report and its Mods (Lua) section (each
+    -- enabled mod's Lua per frame, sampled during the pass)
+    at(1200, function() log("tab bench") moveTo(tabPoint("bench"), 600, true) end)
+    at(3400, function() shot("planner") end)
+    at(300, function()
         local m = screen()
-        local f = m.foldAllRect
-        if f then moveTo(abs(m, f[1] + f[3] / 2, f[2] + f[4] / 2), 400, true) end
+        local newest = m:benchHistory()[1]
+        log("report " .. tostring(newest and newest[1]))
+        moveTo(sideFind(function(r) return newest and r.run == newest[1] and r.fold ~= nil and not r.scene and not r.section end), 700, true)
     end)
-    at(2200, function() req("wheel up 30") end)
-    -- search "memory": the results, then the heap on its page
-    at(2200, function()
+    at(3600, function() shot("report") end)
+    at(300, function() log("section: Mods (Lua)") moveTo(sideFind(function(r) return r.section == 60 end), 700, true) end)
+    at(3600, function() shot("report-mods") end)
+    at(300, function()
+        local p = screen().detailText
+        if p then moveTo(abs(p, p:getWidth() / 2, p:getHeight() / 2), 600) end
+    end)
+    at(900, function() req("wheel down 6") end)
+    at(3200, function() shot("report-mods-functions") end)
+    -- Mods & multiplayer: the compatibility check and its choice
+    at(300, function() log("tab compat") moveTo(tabPoint("compat"), 600, true) end)
+    at(3200, function() shot("compat") end)
+    -- search "memory": the results, then the heap on its page (the RAM icon)
+    at(300, function()
         log("search")
         local s = screen().search
         moveTo(abs(s, s:getWidth() / 2, s:getHeight() / 2), 700, true)
@@ -151,24 +249,32 @@ local function steps()
         local i = rowIndex(bySetting("gcHeap"))
         if i then moveTo(rowPoint(i, "label"), 400) end
     end)
-    at(3200, function() shot("heap") end)
+    at(3600, function() shot("heap") end)
     at(1500, function() log("done") end)
     return t
 end
 
-function PzoptHarnessTour.start()
+function PzoptHarnessTour.start(variant)
+    if ISTextBox and not BOX.hooked then -- (the SAVE... name box: its OK button for the click)
+        BOX.hooked = true
+        local init0 = ISTextBox.initialise
+        ISTextBox.initialise = function(self, ...)
+            BOX.last = self
+            return init0(self, ...)
+        end
+    end
     local w = getFileWriter(REQ, true, false) -- emptied
     if w then w:close() end
-    PzoptHarnessTour.t = steps()
+    PzoptHarnessTour.t = steps(variant)
     PzoptHarnessTour.i = 0
     PzoptHarnessTour.at = getTimestampMs()
     log("started, " .. #PzoptHarnessTour.t .. " steps")
 end
 
 -- true when the tour is done
-function PzoptHarnessTour.tick(now)
+function PzoptHarnessTour.tick(now, variant)
     local T = PzoptHarnessTour
-    if not T.t then T.start() end
+    if not T.t then T.start(variant) end
     local nxt = T.t[T.i + 1]
     if not nxt then return true end
     if now - T.at < nxt[1] then return false end

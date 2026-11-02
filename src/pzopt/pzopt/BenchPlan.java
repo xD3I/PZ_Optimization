@@ -146,15 +146,20 @@ public final class BenchPlan {
       }
       Properties p = read();
       String state = p.getProperty("state", "");
-      boolean finishedUncleaned = ("done".equals(state) || "aborted".equals(state)) && !"1".equals(p.getProperty("cleaned"));
-      if ("running".equals(state) || "report".equals(state) || finishedUncleaned) {
+      boolean cleaned = "1".equals(p.getProperty("cleaned"));
+      boolean finishedUncleaned = ("done".equals(state) || "aborted".equals(state)) && !cleaned;
+      // (2026-10-25) the report process is the player's menu again: it restores once and marks the plan cleaned, or the
+      // next launch restored the run's backup a second time over what the player saved on the report screen (a preset
+      // loaded there, then RESTART NOW: every setting it set was gone, and the next run started without them)
+      boolean reportUncleaned = "report".equals(state) && !cleaned;
+      if ("running".equals(state) || reportUncleaned || finishedUncleaned) {
          // the pass before this process is over: its world goes, Continue points at the player's save again, and the
          // options file the feature sweep switched is the player's own again (before Config reads it)
          deleteWorlds();
          restoreLatestSave(p);
          restoreUserOptions(p);
          restoreFile(p, "game_options", new File(UserOptions.zomboidDir(), "options.ini"));
-         if (finishedUncleaned) {
+         if (finishedUncleaned || reportUncleaned) {
             p.setProperty("cleaned", "1"); // once: later changes to the player's files are theirs
             write(p);
          }

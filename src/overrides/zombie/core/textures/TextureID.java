@@ -412,6 +412,8 @@ public final class TextureID extends Asset implements IDestroyable, Serializable
    }
 
    private void generateHwId(boolean setPixels) {
+      long pzoptT0 = pzopt.Config.DEV_TEX_LOAD_STATS ? System.nanoTime() : 0L; // pzopt: devTexLoadStats, the upload's render-thread time
+      float pzoptMem0 = totalMemUsed; // pzopt: devTexLoadStats, its bytes in the game's own accounting
       pzopt.TexCompress.pollStagingIfLow(); // pzopt: texCompress, releases GPU staging ranges whose fence signalled (tail pass: only when the staging buffer runs low; once a frame after the swap otherwise)
       this.id = pzopt.GlNames.texture(); // pzopt: glNoSync, a pooled name instead of a driver round trip
       this.pzoptSentMin = this.pzoptSentMag = -1; // pzopt: texParamCache, a new name has the GL defaults
@@ -500,6 +502,10 @@ public final class TextureID extends Asset implements IDestroyable, Serializable
          this.assetParams = null;
       }
 
+      if (pzoptT0 != 0L) { // pzopt: devTexLoadStats
+         pzopt.TexLoadStats.add(this.pathFileName != null ? this.pathFileName : this.getPath() == null ? null : this.getPath().getPath(), this.width, this.height, // pzopt
+            System.nanoTime() - pzoptT0, (long)(totalMemUsed - pzoptMem0)); // pzopt
+      } // pzopt
       TextureIDMap.put(this.id, this.pathFileName);
       PZGLUtil.checkGLErrorThrowTexture("generateHwId id:%d pathFileName:%s", new Object[]{this.id, this.pathFileName});
    }

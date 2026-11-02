@@ -18,6 +18,8 @@ label=menu-tour
 tour=(--flag options_tour=1)
 park=0
 [[ "${1:-}" == --no-tour ]] && { tour=(); park=1; shift; }
+# --tour <variant>: another tour of pzopt_harness_tour.lua (mods = a modded benchmark report's Mods (Lua) row)
+[[ "${1:-}" == --tour ]] && { tour=(--flag "options_tour=$2"); shift 2; }
 "$HERE/run.sh" --label "$label" --mode verify --launcher direct --no-mangohud --no-dashboard --quit-after 240 \
   "${tour[@]}" --flag options_clips=1 "$@" &
 runpid=$!

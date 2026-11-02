@@ -77,6 +77,7 @@ public final class GrassBlades {
       boolean partialTest = true; // dev: false = a partial square keeps every blade (no root-colour grass test)
       boolean tufts = true;
       int wavesPct = 100;
+      boolean swayMotion = true; // grassBladeSwayMotion: the blades move as foliage sway moves the plant on their square (knob "motion")
       boolean trails = true, cut = true, push = true, wear = true;
       float lodPx = 0F;
       int genEvery = 1;
@@ -117,6 +118,7 @@ public final class GrassBlades {
          o.partialTest = partialTest;
          o.tufts = tufts;
          o.wavesPct = wavesPct;
+         o.swayMotion = swayMotion;
          o.trails = trails;
          o.cut = cut;
          o.push = push;
@@ -175,6 +177,7 @@ public final class GrassBlades {
                   case "partialTest" -> partialTest = Boolean.parseBoolean(v);
                   case "tufts" -> tufts = Boolean.parseBoolean(v);
                   case "waves" -> wavesPct = Integer.parseInt(v);
+                  case "motion" -> swayMotion = Boolean.parseBoolean(v);
                   case "trails" -> trails = Boolean.parseBoolean(v);
                   case "cut" -> cut = Boolean.parseBoolean(v);
                   case "push" -> push = Boolean.parseBoolean(v);
@@ -239,6 +242,7 @@ public final class GrassBlades {
       o.aa = Config.GRASS_BLADE_ANTIALIAS;
       o.tufts = Config.GRASS_BLADE_TUFTS;
       o.wavesPct = Config.GRASS_BLADE_WAVES_PCT;
+      o.swayMotion = Config.GRASS_BLADE_SWAY_MOTION;
       o.trails = Config.GRASS_BLADE_TRAILS;
       o.cut = Config.GRASS_BLADE_CUT;
       o.push = Config.GRASS_BLADE_PUSH;
@@ -377,16 +381,17 @@ public final class GrassBlades {
     * object is reused); re-read, two a frame, after 2 s.
     */
    private static final class ChunkGrass {
-      final byte[] g = new byte[64];
+      final int[] g = new int[64]; // squareGrass | Sway.plantCode << 4
       int frame;
       boolean any;
    }
 
    private static final int SLOT = GroundChunk.id("grassBlades");
    private static int refreshBudget, gatherFrame;
-   static long gatherNs, moversNs, chunkReads;
+   static long gatherNs, moversNs, chunkReads, plantSquares, plantHeightSum;
+   static int plantHeightMax; // the squares' swaying plants (Sway.plantCode heights, eighths of a square), for the 10 s log
 
-   private static byte[] chunkGrass(IsoCell cell, int wx, int wy) {
+   private static int[] chunkGrass(IsoCell cell, int wx, int wy) {
       zombie.iso.IsoChunk c = cell.getChunk(wx, wy);
       if (c == null) {
          return null;
@@ -403,7 +408,7 @@ public final class GrassBlades {
          for (int i = 0; i < 64; i++) {
             IsoGridSquare sq = c.getGridSquare(i & 7, i >> 3, 0);
             int k = sq == null ? 0 : squareGrass(sq);
-            e.g[i] = (byte)k;
+            e.g[i] = k == 0 ? 0 : k | Sway.plantCode(sq) << 4;
             e.any |= k != 0;
          }
          chunkReads++;
@@ -522,7 +527,7 @@ public final class GrassBlades {
       gatherFrame++;
       for (int wy = (icy - r) >> 3; wy <= (icy + r) >> 3; wy++) {
          for (int wx = (icx - r) >> 3; wx <= (icx + r) >> 3; wx++) {
-            byte[] g = chunkGrass(cell, wx, wy);
+            int[] g = chunkGrass(cell, wx, wy);
             if (g == null) {
                continue;
             }
@@ -543,7 +548,13 @@ public final class GrassBlades {
                   if (rx < 0 || rx > 255 || ry < 0 || ry > 255) {
                      continue;
                   }
-                  f.squares[n++] = rx | ry << 8 | k << 16;
+                  f.squares[n++] = rx | ry << 8 | (k & 15) << 16 | (k >>> 4) << 20; // bits 20-30: the plant's sway (Sway.plantCode)
+                  int hq = k >>> 8 & 15;
+                  if (hq > 0) {
+                     plantSquares++;
+                     plantHeightSum += hq;
+                     plantHeightMax = Math.max(plantHeightMax, hq);
+                  }
                }
             }
          }
@@ -577,8 +588,13 @@ public final class GrassBlades {
       long now = System.currentTimeMillis();
       if (now - lastLogMs > 10000L && frames > 0) {
          if (lastLogMs != 0L) {
-            Log.info(String.format(java.util.Locale.ROOT, "grass blades: %d frames, %.1f squares/frame, game thread %.2f us/frame (squares %.2f, movers %.2f, chunk reads %d) | %s",
-               frames, squaresTotal / (double)frames, gameNs / 1e3 / frames, gatherNs / 1e3 / frames, moversNs / 1e3 / frames, chunkReads, Gpu.stats()));
+            Log.info(String.format(java.util.Locale.ROOT, "grass blades: %d frames, %.1f squares/frame, game thread %.2f us/frame (squares %.2f, movers %.2f, chunk reads %d), "
+               + "swaying plants on %.1f squares/frame (height mean %.2f, max %.2f squares) | %s",
+               frames, squaresTotal / (double)frames, gameNs / 1e3 / frames, gatherNs / 1e3 / frames, moversNs / 1e3 / frames, chunkReads,
+               plantSquares / (double)frames, plantSquares > 0 ? plantHeightSum / 8.0 / plantSquares : 0.0, plantHeightMax / 8.0, Gpu.stats()));
+            plantSquares = 0;
+            plantHeightSum = 0;
+            plantHeightMax = 0;
             gatherNs = 0;
             moversNs = 0;
             chunkReads = 0;
@@ -1574,7 +1590,7 @@ public final class GrassBlades {
          GL20.glUniform4f(u[7], p.cx, p.cy, o.radius, Math.max(1.5F, o.radius * 0.3F));
          GL20.glUniform1f(u[8], depthOk ? 1F : 0F);
          GL20.glUniform4f(u[12], o.lodPx, o.lodSegments, o.devGen, o.rootFilter);
-         GL20.glUniform4f(u[14], div, cox, coy, 0F);
+         GL20.glUniform4f(u[14], div, cox, coy, o.swayMotion ? Core.tileScale : 0F); // w: grassBladeSwayMotion (the tile scale) or 0
          GL13.glActiveTexture(GL13.GL_TEXTURE2);
          GL11.glBindTexture(GL11.GL_TEXTURE_2D, trails ? Trails.tex : 0);
          GL20.glUniform1i(u[9], 2);
@@ -1629,7 +1645,9 @@ public final class GrassBlades {
          GL20.glUniform1f(u[12], p.ts);
          // the waves' phases from the run's clock in double (no float drift over a long session)
          double wt = p.now;
-         GL20.glUniform4f(u[15], p.windOn && o.wind ? o.wavesPct / 100F : 0F, (float)(wt * WAVE_SPEED % (2.0 * Math.PI)), (float)(wt * 0.21 % (2.0 * Math.PI)), 0F);
+         // grassBladeSwayMotion: no waves (foliage sway has none; they were most of the blades' motion, at their own 0.54 Hz)
+         GL20.glUniform4f(u[15], p.windOn && o.wind && !o.swayMotion ? o.wavesPct / 100F : 0F, (float)(wt * WAVE_SPEED % (2.0 * Math.PI)), (float)(wt * 0.21 % (2.0 * Math.PI)),
+            o.swayMotion ? 1F : 0F);
       }
 
       /**
@@ -1879,7 +1897,8 @@ public final class GrassBlades {
             float u = m.x - m.y, v = m.x + m.y;
             f.push[i * 4] = (float)(u - Sway.GUST_PERIOD_SQ * Math.floor(u / Sway.GUST_PERIOD_SQ));
             f.push[i * 4 + 1] = (float)(v - Sway.GUST_PERIOD_SQ * Math.floor(v / Sway.GUST_PERIOD_SQ));
-            f.push[i * 4 + 2] = m.who == GroundMovers.VEHICLE ? 1.8F : 0.7F;
+            // grassBladeSwayMotion: foliage sway's pusher radius (Sway.moved: 0.9 a character, 2.2 a car)
+            f.push[i * 4 + 2] = m.who == GroundMovers.VEHICLE ? (o.swayMotion ? 2.2F : 1.8F) : (o.swayMotion ? 0.9F : 0.7F);
             f.push[i * 4 + 3] = m.strength;
          }
       }
@@ -2020,7 +2039,7 @@ public final class GrassBlades {
       "uniform vec4 uParams;", // height scale, width scale, tufts
       "uniform vec4 uFade;", // player x, y (relative), radius, fade width (squares)
       "uniform float uHasDepth;",
-      "uniform vec4 uCopy;", // the colour / depth textures: divisor, origin x, y
+      "uniform vec4 uCopy;", // the colour / depth textures: divisor, origin x, y; w: grassBladeSwayMotion (the tile scale) or 0
       "uniform vec4 uLod;", // small blade px, small segments, dev bisection
       "uniform sampler2D uTrail;", // 256 x 256 RGBA32F, two texels a square, toroidal: trample time, cut time, key, direction
       "uniform vec4 uTrailK;", // now (s), 1 / trail recovery (s), 1 / regrow (s), on
@@ -2122,10 +2141,25 @@ public final class GrassBlades {
       // two draws: blades shorter than uLod.x px on screen with uLod.y segments, the rest with the full count
       "   small = keep && h * 2.0 / abs(uMapA.z) < uLod.x;",
       "   if (!keep) return false;",
+      // grassBladeSwayMotion: the blade moves as foliage sway moves the plant baked on its square (Sway.plantCode in the
+      // record's bits 20-30, Sway.begin's parameters): its phase (a hair of jitter inside Sway's 1/16 step) and that plant's
+      // amplitude. Each blade is a plant of its own, so its tip moves as a plant's top texel does in Sway (weight = amplitude,
+      // whatever the height: Sway's (texel height / object height)^1.5 is 1 at every object's top); the curve bends the rest.
+      // (Weighting the tip by the square's plant at the same height left the blades on the tall-grass squares, a quarter of
+      // a lawn in the maintainer's save, nearly still beside the full-moving blades of the bare squares.)
+      "   float swW = 0.0;",
+      "   if (uCopy.w > 0.0) {",
+      "      uint pc = s >> 20;",
+      "      uint st = (pc >> 8) & 3u;",
+      "      float stf = st == 2u ? 0.35 : (st == 1u ? 0.65 : 1.0);",
+      "      float amp = min(1.0, (((pc >> 10) & 1u) != 0u ? 16.0 : 18.0) * uCopy.w / 2.0 * stf / " + Sway.AMP_MAX_PX + ");",
+      "      swW = amp * (0.5 + 0.5 * stiff);",
+      "      phase = fract((float(pc & 15u) + (gbH01(seed ^ 0x3334u) - 0.5) * 0.5) / 16.0);",
+      "   }",
       "   vec2 l = lean + (gbH2(seed ^ 0x7777u) - 0.5) * 0.3;",
       "   float width = (0.028 + 0.014 * gbH01(seed ^ 0x8888u)) * uParams.y;",
       "   A = vec4(p, h, uintBitsToFloat(packUnorm4x8(vec4(clamp(col * tone, 0.0, 1.0), flatK))));",
-      "   B = vec4(l, width, uintBitsToFloat(packUnorm4x8(vec4(phase, stiff, facing, 0.0))));",
+      "   B = vec4(l, width, uintBitsToFloat(packUnorm4x8(vec4(phase, stiff, facing, swW))));",
       "   return true;",
       "}");
 
@@ -2180,7 +2214,7 @@ public final class GrassBlades {
       "uniform float uPushN;",
       "uniform vec4 uSun;", // direction to the sun (x east, y south, z up), translucency
       "uniform vec4 uShade;", // ao, sheen
-      "uniform vec4 uWave;", // Tsushima waves: amount, travelling phase, drift phase
+      "uniform vec4 uWave;", // Tsushima waves: amount, travelling phase, drift phase; w: 1 = grassBladeSwayMotion
       "uniform float uTs;",
       // foliage sway's gust ("sines") and its displacement pzSwDk, the same expressions (Sway.gustExpr / composite)
       "float gbGust(vec2 wp) { return 0.5 + 0.25 * (sin(dot(wp, vec2(0.625, 0.21875)) * 0.78539816 + uGust.x * 0.78539816) + sin(dot(wp, vec2(-0.28125, 0.71875)) * 0.78539816 + uGust.y * 0.78539816)); }",
@@ -2237,15 +2271,18 @@ public final class GrassBlades {
       "   }",
       "   float h = A.z;",
       "   vec4 col = unpackUnorm4x8(floatBitsToUint(A.w));",
-      "   vec4 pk = unpackUnorm4x8(floatBitsToUint(B.w));", // phase, stiffness, facing
+      "   vec4 pk = unpackUnorm4x8(floatBitsToUint(B.w));", // phase, stiffness, facing, sway weight (grassBladeSwayMotion)
       "   int segs = int(uShape.x);",
       "   int seg = vid >> 1;",
       "   float t = vid >= 2 * segs ? 1.0 : float(seg) / float(segs);",
       "   float side = vid >= 2 * segs ? 0.0 : ((vid & 1) == 0 ? -1.0 : 1.0);",
       // wind: foliage sway's displacement of a grass texel at the blade's tip (logical px, screen x) -> world squares
-      "   vec2 wp = mod(uOriginW.xy + vec2(A.x - A.y, A.x + A.y), " + Sway.GUST_PERIOD_SQ + ");",
+      // (grassBladeSwayMotion: at the tip's place on screen, as the composite takes the gust and the push at the pixel; the
+      // weight the generation gave the blade from its square's plant)
+      "   bool swm = uWave.w > 0.5;",
+      "   vec2 wp = mod(uOriginW.xy + vec2(A.x - A.y, A.x + A.y - (swm ? 2.0 * h : 0.0)), " + Sway.GUST_PERIOD_SQ + ");",
       "   float g = gbGust(wp);",
-      "   float weight = clamp(h / 0.75, 0.0, 1.0) * (0.75 + 0.25 * pk.y);",
+      "   float weight = swm ? pk.w : clamp(h / 0.75, 0.0, 1.0) * (0.75 + 0.25 * pk.y);",
       "   float dxPx = gbSwayX(weight, g, pk.x);",
       "   float wave = uWave.x > 0.0 ? gbWave(wp) * uWave.x : 0.0;",
       "   dxPx += wave * weight * " + Sway.AMP_MAX_PX + " * 0.9 * uWind.x * uWind.z;",

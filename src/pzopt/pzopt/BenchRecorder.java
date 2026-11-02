@@ -368,6 +368,7 @@ public final class BenchRecorder {
       put(m, "chunks_per_s", wall > 0 ? chunks / wall : 0);
       put(m, "unfocused_frames", unfocusedFrames);
       put(m, "paused_frames", pausedFrames);
+      put(m, "mod_pauses_resumed", Harness.modPausesResumed()); // pauses the harness undid (a mod's popup), the pass stays valid
       put(m, "ticks", ticks);
       m.put("per_second", perSecond());
       displayPacing(m, f);

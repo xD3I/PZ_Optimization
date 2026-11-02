@@ -3167,7 +3167,8 @@ public final class GodRays {
             uApd = new int[] {GL20.glGetUniformLocation(apdProg, "uMapA"), GL20.glGetUniformLocation(apdProg, "uMapB"), GL20.glGetUniformLocation(apdProg, "uVp"),
                GL20.glGetUniformLocation(apdProg, "uDepth"), GL20.glGetUniformLocation(apdProg, "uLight"), GL20.glGetUniformLocation(apdProg, "uPlanes"),
                GL20.glGetUniformLocation(apdProg, "uC"), GL20.glGetUniformLocation(apdProg, "uS"), GL20.glGetUniformLocation(apdProg, "uOrg"),
-               GL20.glGetUniformLocation(apdProg, "uSoft"), GL20.glGetUniformLocation(apdProg, "uDoor"), GL20.glGetUniformLocation(apdProg, "uCap")};
+               GL20.glGetUniformLocation(apdProg, "uSoft"), GL20.glGetUniformLocation(apdProg, "uDoor"), GL20.glGetUniformLocation(apdProg, "uCap"),
+               GL20.glGetUniformLocation(apdProg, "uWorld"), GL20.glGetUniformLocation(apdProg, "uRoll")};
             if (apVbo == 0) {
                apVbo = GL15.glGenBuffers();
             }
@@ -3288,6 +3289,7 @@ public final class GodRays {
             GL20.glUniform4fv(uApd[11], f.cap);
          }
          GL20.glUniform4f(uApd[8], f.prismOrgX, f.prismOrgY, f.prismOrgX + f.view.ox - (f.prismOrgY + f.view.oy), f.prismOrgX + f.view.ox + f.prismOrgY + f.view.oy); // zw: the reference square's absolute u, v
+         boolean rolled = rollOff(f, fbo); // godRaysPatchRolloff: the picture under the patch for the shader's roll-off
          if ((Config.DEV_GOD_RAYS_SKIP & 64) != 0) {
             GL14.glBlendFuncSeparate(GL11.GL_ONE, GL11.GL_ONE, GL11.GL_ZERO, GL11.GL_ONE); // dev: a plain additive blend (the dual-source blend's own cost)
          }
@@ -3296,6 +3298,11 @@ public final class GodRays {
          coarseEnd(coarse);
          if (f.bounces > 0 && f.doorFx) {
             bounces(f);
+         }
+         if (rolled) {
+            GL13.glActiveTexture(GL13.GL_TEXTURE0 + APC_WORLD_UNIT); // the render target no longer bound to a sampler unit
+            GL11.glBindTexture(GL11.GL_TEXTURE_2D, 0);
+            GL13.glActiveTexture(GL13.GL_TEXTURE0);
          }
          GL30.glBindVertexArray(0);
          if (zTest) {
@@ -3314,6 +3321,51 @@ public final class GodRays {
          SpriteRenderer.ringBuffer.restoreBoundTextures = true;
          apOn = false; // nothing for the composite to read
       }
+
+      /**
+       * godRaysPatchRolloff (apDirect's program bound): the patch's display-space multiplier clipped every surface brighter
+       * than 1 / sqrt(1 + gain) of white (the lit floor lamp's shade in a shaft: a flat white disc). The shader reads the
+       * pixel it multiplies (after a texture barrier: one read and one write a texel, overlapping prisms read the picture
+       * before the draw) and rolls the brightest channel off toward white above the knee. Without a barrier (GL < 4.5 with
+       * neither texture barrier extension: the Mac's 4.1) or with the key off: the plain multiplier. Returns whether the
+       * world texture was bound (the caller unbinds it after the draw).
+       */
+      private static boolean rollOff(Frame f, int fbo) {
+         int tex = 0;
+         if (Config.GOD_RAYS_PATCH_ROLLOFF && uApd[12] >= 0 && uApd[13] >= 0) {
+            org.lwjgl.opengl.GLCapabilities caps = GL.getCapabilities();
+            if (caps.OpenGL45 || caps.GL_ARB_texture_barrier || caps.GL_NV_texture_barrier) {
+               tex = lateNow ? lateColorTex : colorTexture(fbo);
+               if (tex != 0) {
+                  if (caps.OpenGL45) {
+                     org.lwjgl.opengl.GL45.glTextureBarrier();
+                  } else if (caps.GL_ARB_texture_barrier) {
+                     org.lwjgl.opengl.ARBTextureBarrier.glTextureBarrier();
+                  } else {
+                     org.lwjgl.opengl.NVTextureBarrier.glTextureBarrierNV();
+                  }
+                  GL13.glActiveTexture(GL13.GL_TEXTURE0 + APC_WORLD_UNIT);
+                  GL11.glBindTexture(GL11.GL_TEXTURE_2D, tex);
+                  GL13.glActiveTexture(GL13.GL_TEXTURE0);
+                  GL20.glUniform1i(uApd[12], APC_WORLD_UNIT);
+               }
+            }
+         }
+         if (uApd[13] >= 0) {
+            GL20.glUniform4f(uApd[13], tex != 0 ? 1F : 0F, Math.min(Config.GOD_RAYS_PATCH_KNEE_PCT / 100F, SCREEN_WHITE - 0.05F), SCREEN_WHITE, 0F);
+         }
+         rollFrames += tex != 0 ? 1 : 0;
+         if (tex != 0 && !rollLogged) {
+            rollLogged = true;
+            Log.info("god rays: patch roll-off on (knee " + Config.GOD_RAYS_PATCH_KNEE_PCT + " %, world texture " + tex + (lateNow ? ", late draw" : "") + ")");
+         }
+         return tex != 0;
+      }
+
+      static long rollFrames;
+      /** The world value the stock screen pass shows as white: its contrast(c, 1.2) round 0.4 reaches 1.0 at 0.4 + 0.6 / 1.2. */
+      static final float SCREEN_WHITE = 0.4F + 0.6F / 1.2F;
+      private static boolean rollLogged;
 
       static int bncProg, bncVbo;
       private static int[] uBnc;
@@ -3838,7 +3890,7 @@ public final class GodRays {
          GL20.glUniform1i(uApc[1], AUX_UNIT);
          GL20.glUniform4f(uApc[2], vx, vy, vw, vh);
          GL20.glUniform4f(uApc[3], color[0], color[1], color[2], 0F);
-         GL20.glUniform4f(uApc[4], apScale[0], f.patch, f.view_, 0F);
+         GL20.glUniform4f(uApc[4], apScale[0], f.patch, f.view_, Config.GOD_RAYS_PATCH_ROLLOFF ? Config.GOD_RAYS_PATCH_KNEE_PCT / 100F : 0F); // w: godRaysPatchRolloff's knee
          GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER, quadVbo);
          for (int i = 0; i < 5; i++) {
             GL20.glDisableVertexAttribArray(i);
@@ -5495,6 +5547,16 @@ public final class GodRays {
       "uniform vec4 uDoor;", // x the door leaves on (devGodRaysDoorAlternate), y the characters' capsules
       "uniform vec4 uCap[" + (MAX_CAPS * 2) + "];", // godRaysCharShadows: per capsule a (xyz, r) and b (xyz, -), squares from the prisms' reference
       "uniform vec4 uSoft;", // x the penumbra's half width at the aperture, y its growth a square from it (squares), z the fade a square along the beam, w the glints' gain
+      "uniform sampler2D uWorld;", // godRaysPatchRolloff: the world picture under the patch (read after a texture barrier)
+      "uniform vec4 uRoll;", // x roll-off on, y the knee (display value), z the white the screen pass shows (display value)
+      "vec3 pzRollAdded(vec3 c0, vec3 v, vec3 b, inout vec3 m) {", // returns the beam, scales the multiplier's excess alike
+      "   float vm = max(max(v.r, v.g), v.b), cm = max(max(c0.r, c0.g), c0.b), k = uRoll.y, t = uRoll.z;",
+      "   if (vm <= k || vm <= cm) return b;",
+      "   float tm = cm >= t ? cm : max(k + (t - k) * (1.0 - exp(-(vm - k) / (t - k))), cm);",
+      "   float s = clamp((tm - cm) / (vm - cm), 0.0, 1.0);",
+      "   m = vec3(1.0) + s * (m - vec3(1.0));",
+      "   return b * s;",
+      "}",
       WORLD_GLSL,
       "flat in vec4 pl0, pl1, pl2, pl3, pl4, pl5, pl6, pl7, pl8, pl9, pl10;",
       "layout(location = 0, index = 0) out vec4 beam;",
@@ -5629,7 +5691,19 @@ public final class GodRays {
       "      }",
       "   }",
       "   beam = vec4(sqrt(uC.rgb * ins), 0.0);",
-      "   mul = vec4(vec3(sqrt(1.0 + uS.y * lit)), 1.0);",
+      "   float m2 = 1.0 + uS.y * lit;", // the patch multiplies display-linear (squared) colour
+      "   mul = vec4(vec3(sqrt(m2)), 1.0);",
+      // godRaysPatchRolloff: the patch (x sqrt(m2)) and the dust (a screen blend) pushed near-white surfaces past the white the
+      // stock screen pass shows (its contrast 1.2 round 0.4 clips every world value above 0.917): a lit lamp shade in the shaft
+      // went flat white. The result's brightest channel rolls off above the knee toward that white (slope 1 at the knee); a
+      // pixel already at or above it is left as it is (never darkened); the light added is scaled as a whole (hue kept):
+      // v' = c0 + s (v - c0) is beam s and multiplier 1 + s (mul - 1) in the same blend
+      "   if (uRoll.x > 0.5 && (lit > 0.0 || ins > 0.0)) {",
+      "      vec3 c0 = texelFetch(uWorld, ivec2(gl_FragCoord.xy), 0).rgb;",
+      "      vec3 mr = mul.rgb;",
+      "      beam.rgb = pzRollAdded(c0, beam.rgb * (1.0 - c0) + c0 * mr, beam.rgb, mr);",
+      "      mul.rgb = mr;",
+      "   }",
       "   if (uVp.z > 2.5) {", // dev (devGodRaysSoftView): red = the mean cover along the column inside the hull, green = the hull's stretch
       "      float st = max(zhi - za, 0.0);",
       "      beam = vec4(st > 1e-4 ? path / (st * 8.0) : 0.0, min(st, 1.0) * 0.5, 0.0, 0.0); mul = vec4(1.0);",
@@ -5652,7 +5726,15 @@ public final class GodRays {
       "   vec3 c = texelFetch(uWorld, ivec2(gl_FragCoord.xy), 0).rgb;",
       "   float dust = min(a.r, 24.0) * uS.x, lit = clamp(a.g, 0.0, 1.0);",
       "   if (uS.z > 0.5) { o = vec4(sqrt(uC.rgb * dust * 8.0) + vec3(uS.z > 1.5 ? lit : 0.0), 1.0); return; }",
-      "   o = vec4(sqrt(c * c * (1.0 + uS.y * lit) + uC.rgb * dust), 1.0);",
+      "   float m2 = 1.0 + uS.y * lit;",
+      "   vec3 v = sqrt(c * c * m2 + uC.rgb * dust);",
+      // godRaysPatchRolloff (w: the knee, 0 = off): the light added rolled off toward the white the screen pass shows (apDirect's curve)
+      "   float vm = max(max(v.r, v.g), v.b), cm = max(max(c.r, c.g), c.b), t = 0.4 + 0.6 / 1.2;",
+      "   if (uS.w > 0.0 && vm > uS.w && vm > cm) {",
+      "      float k = min(uS.w, t - 0.05), tm = cm >= t ? cm : max(k + (t - k) * (1.0 - exp(-(vm - k) / (t - k))), cm);",
+      "      v = c + clamp((tm - cm) / (vm - cm), 0.0, 1.0) * (v - c);",
+      "   }",
+      "   o = vec4(v, 1.0);",
       "}",
       "");
 

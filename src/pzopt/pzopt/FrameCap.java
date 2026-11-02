@@ -112,6 +112,9 @@ public final class FrameCap {
 
    /** Main thread only: is the current state's cap "uncapped"? */
    public static boolean uncappedNow() {
+      if (GtAb.CAP_ALT && Overrides.enabled() && GameWindow.isIngameState()) {
+         return GtAb.capAltUncapped(); // devGtAlternateKeys=frameCapAlt: capped and uncapped halves within one run
+      }
       if (Config.FRAME_CAP_FPS > 0 && Overrides.enabled()) {
          return false;
       }
@@ -195,6 +198,9 @@ public final class FrameCap {
          phaseFrames = 0;
       }
       phaseFrames++;
+      if (Harness.REQUESTED) {
+         Harness.resumeModPause(nowNs); // a mod's popup paused an unattended pass
+      }
    }
 
    // --- menu option --------------------------------------------------------------------

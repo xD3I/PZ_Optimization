@@ -12,7 +12,7 @@ The bot token is a credential and the repo is public, so it is never committed: 
 the Message Content intent for the text of other users' messages. Times are printed in UTC.
 """
 
-import argparse, json, os, sys, urllib.error, urllib.request
+import argparse, json, os, sys, time, urllib.error, urllib.request
 from pathlib import Path
 
 API = "https://discord.com/api/v10"
@@ -32,11 +32,16 @@ def token():
 def get(path):
     req = urllib.request.Request(API + path, headers={"Authorization": "Bot " + token(),
                                                       "User-Agent": "pzopt-discord-read (github.com/xD3I/PZ_Optimization, 1)"})
-    try:
-        with urllib.request.urlopen(req, timeout=20) as r:
-            return json.load(r)
-    except urllib.error.HTTPError as e:
-        sys.exit(f"discord-read: GET {path} -> HTTP {e.code}: {e.read().decode(errors='replace')[:300]}")
+    for attempt in range(8):
+        try:
+            with urllib.request.urlopen(req, timeout=20) as r:
+                return json.load(r)
+        except urllib.error.HTTPError as e:
+            body = e.read().decode(errors='replace')
+            if e.code == 429 and attempt < 7:  # rate limited: wait what Discord asks, then retry
+                time.sleep(float(json.loads(body).get("retry_after", 1.0)) + 0.2)
+                continue
+            sys.exit(f"discord-read: GET {path} -> HTTP {e.code}: {body[:300]}")
 
 
 def text_channels():

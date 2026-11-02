@@ -1238,10 +1238,14 @@ public final class PixelLight {
                air |= above;
             }
             int v0 = 0, v1 = 0, v2 = 0, v3 = 0, t0 = 0, t1 = 0, t2 = 0, t3 = 0;
-            int info = 0, conn = 0, tvis = 255, visible = 0;
+            int info = 0, conn = 0, tvis = 255, visible = 0, fog = 127;
             float fade = -1.0F; // pplTorchFade: the torch's visibility between 0 and 1 here (-1: all or nothing, tvis)
             if (sq != null && sq.lighting[playerIndex] instanceof LightingJNI.JNILighting jl) {
                visible = (jl.pzoptVis() & 7) != 0 ? 1 : 0; // pplSeenEdge: seen (explored), in sight, or in line of sight; 0: never seen (blacked out)
+               // voxelLightFogOfWar: the square's darkMulti, stock's fog of war (IsoGridSquare's visibility model: 1 in sight, a
+               // share of the ambient seen out of view, 0 never seen; the native eases towards it): the voxel light's ambient
+               // takes it as the native's does
+               fog = Math.round(Math.max(0.0F, Math.min(1.0F, jl.darkMulti())) * 127.0F);
                if (above) {
                   v0 = t0 = jl.pzoptVert(4);
                   v1 = t1 = jl.pzoptVert(5);
@@ -1394,6 +1398,12 @@ public final class PixelLight {
                   && zombie.iso.fboRenderChunk.FBORenderCutaways.getInstance().pzoptSquareHidden(playerIndex, sq)) {
                cutEdge = 16;
             }
+            // pplUnseenBlend: a never-seen square holding a ForceAmbient sprite (a roof: baked with tint 1, the composite gives it
+            // the ambient) keeps the ambient up to its edge: bit 5 of g
+            int forceAmb = 0;
+            if (Config.PPL_UNSEEN_BLEND && visible == 0 && sq != null && !above && hasForceAmbient(sq)) {
+               forceAmb = 32;
+            }
             // pplTorchFade: a square cross-fading the torch is not simple, its visibility between 64 (hidden) and 192 (visible)
             int simple = fade >= 0.0F ? 64 + Math.round(fade * 128.0F) : conn != 255 || wallEdge != 0 ? (tvis == 255 ? 192 : 64) : tvis == 255 ? 255 : 0;
             if (sq != null && !above) { // (no square: no pixels; above the top: the level below's)
@@ -1418,7 +1428,7 @@ public final class PixelLight {
             int outdoor = (sq != null && sq.isOutside() ? 128 : 0) | (visible != 0 ? (sq.isOutside() ? 127 : 64) : 0);
             // pplNormalSpanWide: bits 2 / 3 of g, the square has a wall on its west / north edge (the wide-span normal's test)
             int wallAt = Config.PPL_NORMAL_SPAN_WIDE > 0 && sq != null && !above ? (ChunkAo.edgeW(sq) ? 4 : 0) | (ChunkAo.edgeN(sq) ? 8 : 0) : 0;
-            b.putInt(base + 256 + cell8, conn | (tvis & 0x80 | wallEdge | wallAt | cutEdge) << 8 | grad << 16 | outdoor << 24); // connectivity bits, torch visibility (bit 7) + wall edges W / N (bits 0, 1; walls 2, 3; not drawn 4), vertical gradient, outdoors + visible
+            b.putInt(base + 256 + cell8, conn | (tvis & 0x80 | wallEdge | wallAt | cutEdge | forceAmb) << 8 | (grad & 0x80 | fog) << 16 | outdoor << 24); // connectivity bits, torch visibility (bit 7) + wall edges W / N (bits 0, 1; walls 2, 3; not drawn 4; ForceAmbient unseen 5), vertical gradient (bit 7) + darkMulti x 127 (bits 0-6), outdoors + visible
             b.putInt(base + 512 + cell8, grad == 0 ? 0x808080 : wallDelta(v0, v1, v2, v3, t0, t1, t2, t3)); // top corners' mean - bottom corners' mean, 0.5 = none
          }
       }
@@ -1513,9 +1523,54 @@ public final class PixelLight {
    private static int ambOut = -1, ambIn = -1;
    private static final int[] ambKeys = new int[2 * 64], ambCounts = new int[2 * 64], ambTotal = new int[2];
 
+   // voxel lighting's outdoor ambient when no seen outdoor square gave one lately (2026-10-22, Discord: rooms black by day): a
+   // player who loads or stays inside a closed building sees no outdoor square, so ambOut stayed unknown (the voxel sky term
+   // dropped: only lamps lit a room) or kept the hour the player last looked out. Then the game's own ambient x colour mods
+   // (what it hands the native, LightingJNI.stateEndFrame) stand in, scaled by their ratio to the last fresh estimate (1 until
+   // there is one: under the storm's ambient 0.47 the estimate was 121 / 255)
+   private static long ambFrames, ambOutFrame = Long.MIN_VALUE / 2;
+   private static float ambKR = 1.0F, ambKG = 1.0F, ambKB = 1.0F;
+   private static final long AMB_STALE_FRAMES = 120;
+   private static final float[] AMB_MODEL = new float[3];
+
    /** The outdoor ambient as the native gives it (rgb packed, -1 unknown): voxel lighting's sky light. */
    static int ambientOutdoor() {
-      return ambOut;
+      if (ambOut >= 0 && ambFrames - ambOutFrame <= AMB_STALE_FRAMES || !Config.VOXEL_LIGHT_AMBIENT_MODEL || !ambientModel()) {
+         return ambOut;
+      }
+      return amb255(AMB_MODEL[0] * ambKR) | amb255(AMB_MODEL[1] * ambKG) << 8 | amb255(AMB_MODEL[2] * ambKB) << 16;
+   }
+
+   private static int amb255(float v) {
+      return Math.max(0, Math.min(255, (int)(v * 255.0F + 0.5F)));
+   }
+
+   /** The game's outdoor light for player 1 into AMB_MODEL (ambient x rmod / gmod / bmod); false before the settings exist. */
+   private static boolean ambientModel() {
+      zombie.core.opengl.RenderSettings rs = zombie.core.opengl.RenderSettings.getInstance();
+      zombie.core.opengl.RenderSettings.PlayerRenderSettings s = rs == null ? null : rs.getPlayerSettings(0);
+      if (s == null) {
+         return false;
+      }
+      float a = s.getAmbient();
+      AMB_MODEL[0] = a * s.getRmod();
+      AMB_MODEL[1] = a * s.getGmod();
+      AMB_MODEL[2] = a * s.getBmod();
+      return true;
+   }
+
+   /** A fresh outdoor estimate (game thread, ambientCommit): its ratio to the game's ambient, for when it goes stale. */
+   private static void ambOutFresh() {
+      ambOutFrame = ambFrames;
+      if (ambientModel()) {
+         ambKR = ambRatio((ambOut & 0xFF) / 255.0F, AMB_MODEL[0], ambKR);
+         ambKG = ambRatio((ambOut >> 8 & 0xFF) / 255.0F, AMB_MODEL[1], ambKG);
+         ambKB = ambRatio((ambOut >> 16 & 0xFF) / 255.0F, AMB_MODEL[2], ambKB);
+      }
+   }
+
+   private static float ambRatio(float est, float model, float k) {
+      return model > 0.04F ? Math.max(0.5F, Math.min(2.0F, est / model)) : k; // too dark to tell: keep the last ratio
    }
 
    private static void ambientSample(int cls, int rgb) {
@@ -1544,6 +1599,7 @@ public final class PixelLight {
    }
 
    private static void ambientCommit() {
+      ambFrames++;
       for (int cls = 0; cls < 2; cls++) {
          if (ambTotal[cls] >= 24) {
             int best = -1, bestN = 0;
@@ -1562,7 +1618,12 @@ public final class PixelLight {
                if (cur < 0 || ambNear(best, cur, 8)) {
                   ambCand[cls] = -1;
                   ambCandN[cls] = 0;
-                  if (cls == 0) ambOut = best; else ambIn = best;
+                  if (cls == 0) {
+                     ambOut = best;
+                     ambOutFresh();
+                  } else {
+                     ambIn = best;
+                  }
                } else {
                   if (ambCand[cls] >= 0 && ambNear(best, ambCand[cls], 3)) {
                      ambCandN[cls]++;
@@ -1571,7 +1632,12 @@ public final class PixelLight {
                      ambCandN[cls] = 1;
                   }
                   if (ambCandN[cls] >= 3) {
-                     if (cls == 0) ambOut = best; else ambIn = best;
+                     if (cls == 0) {
+                        ambOut = best;
+                        ambOutFresh();
+                     } else {
+                        ambIn = best;
+                     }
                      ambCand[cls] = -1;
                      ambCandN[cls] = 0;
                   }
@@ -1825,6 +1891,18 @@ public final class PixelLight {
       int lx = x - c.wx * 8, ly = y - c.wy * 8;
       IsoGridSquare sq = lx >= 0 && lx < 8 && ly >= 0 && ly < 8 ? c.getGridSquare(lx, ly, z) : cell.getGridSquare(x, y, z); // inside the chunk: no cell lookup
       return sq != null && sq.lighting[playerIndex] instanceof LightingJNI.JNILighting jl ? jl.pzoptVert(i) : NO_SQUARE;
+   }
+
+   /** pplUnseenBlend: the square holds a sprite stock draws with the ambient whatever its light (roofs). */
+   private static boolean hasForceAmbient(IsoGridSquare sq) {
+      java.util.List<zombie.iso.IsoObject> objs = sq.getObjects(); // 42.22: a List (PZArrayList is gone)
+      for (int i = 0; i < objs.size(); i++) {
+         zombie.iso.IsoObject o = objs.get(i);
+         if (o != null && o.sprite != null && o.sprite.forceAmbient) {
+            return true;
+         }
+      }
+      return false;
    }
 
    /** Per channel 128 + (top mean - bottom mean) / 2 of the corner colours: a wall's light from its foot to its top. */
@@ -2519,7 +2597,7 @@ public final class PixelLight {
          this.mapping(this.map);
          GL20.glUniform1f(loc[0], (costMask & 64) != 0 ? 0.0F : 1.0F); // dev: bit 64, the shader's light off in per-pixel mode (cost probe)
          GL20.glUniform4f(loc[2], this.map[0], this.map[1], this.map[2], this.map[3]);
-         GL20.glUniform4f(loc[3], this.map[4], this.map[5], this.n, Config.DEV_PPL_VIEW);
+         GL20.glUniform4f(loc[3], this.map[4], this.map[5], this.n, VoxelLight.devPplView()); // dev: devVoxelLightViewCycle may step pixelLight's views too
          GL20.glUniform4i(loc[4], Math.floorMod(this.ox, this.n), Math.floorMod(this.oy, this.n), this.n - 1, LEVELS - 1);
          this.lightUniforms(loc[5], loc[6], loc[7], loc[9], loc[18]);
          GL20.glUniform4f(loc[14], this.wet * Config.PPL_SPEC_PCT / 100.0F, 48.0F, Math.max(this.ambient, 0.0F), this.ambient >= 0.0F ? 1.0F : 0.0F); // z, w: pplUnseenAmbient
@@ -3287,6 +3365,17 @@ public final class PixelLight {
       "layout(binding = 10) uniform sampler2DArray pplConn;", // CONN_UNIT: one texel per square, r its connected neighbours (bits E S W N SE SW NW NE)
       "vec4 pplInfoAt(ivec2 s, int lvl) { return texelFetch(pplInfo, ivec3(s & pplOrg.z, lvl), 0); }",
       "bool pplVisible(float a) { return mod(floor(a * 255.0 + 0.5), 128.0) >= 32.0; }", // the conn texture's alpha: 64 / 255 visible (pplSeenEdge)
+      // voxelLightFogOfWar: the squares' darkMulti (conn b, bits 0-6) between their centres, as the native's light is read (a
+      // per-square factor drew the edge of the player's sight in square steps)
+      "#ifdef VXL_FOG",
+      "float pplFogTexel(ivec2 t, int lvl) { return float(int(texelFetch(pplConn, ivec3(t & pplOrg.z, lvl), 0).b * 255.0 + 0.5) & 127) / 127.0; }",
+      "float pplFog(vec2 p, int lvl) {",
+      "   vec2 tx = p + vec2(pplOrg.xy) - 0.5;",
+      "   ivec2 t = ivec2(floor(tx));",
+      "   vec2 f = tx - floor(tx);",
+      "   return mix(mix(pplFogTexel(t, lvl), pplFogTexel(t + ivec2(1, 0), lvl), f.x), mix(pplFogTexel(t + ivec2(0, 1), lvl), pplFogTexel(t + ivec2(1, 1), lvl), f.x), f.y);",
+      "}",
+      "#endif",
       // the facing of a surface to a light, relative to a floor's (floors unchanged; wrap softens the sprites' own shading)
       "float pplFacing(vec3 P, vec3 n, vec3 lp) {",
       "   vec3 ld = normalize(lp - P * vec3(1.0, 1.0, PPL_LEVEL));",
@@ -3294,6 +3383,25 @@ public final class PixelLight {
       "   return clamp(max(dot(n, ld) + wr, 0.0) / max(ld.z + wr, 0.15), 0.0, 1.25);",
       "}",
       "uniform vec4 pplWet;", // x: wet ground x specular strength, y: shininess, z: the ambient (pplUnseenAmbient, on when w is 1)
+      // pplUnseenBlend: how much of the per-pixel light a never-seen square takes, 0 (the ambient) .. 1: the bilinear of its
+      // corners, 1 at a corner a seen square shares. The square baked with its own light, which is the game's fade into the
+      // unexplored (1 at those corners, 0 deep in): the per-pixel light carries on from the seen squares over that fade and
+      // the fog of war holds. The ambient alone drew the edge of the explored area as a hard colour step along the squares
+      // where a light reaches it (the door light on the porch's curb, 2026-10-31). A ForceAmbient square (a roof, bit 5 of g)
+      // keeps the ambient
+      "#ifdef PPL_UNSEEN_BLEND",
+      "float pplSeenAt(ivec2 s, int lvl) { return pplVisible(texelFetch(pplConn, ivec3(s & pplOrg.z, lvl), 0).a) ? 1.0 : 0.0; }",
+      "float pplUnseenW(vec4 cu, ivec2 s, int lvl, vec2 f) {",
+      "   if ((int(cu.g * 255.0 + 0.5) & 32) != 0) return 0.0;",
+      "   float nw = pplSeenAt(s + ivec2(-1, -1), lvl), n = pplSeenAt(s + ivec2(0, -1), lvl), ne = pplSeenAt(s + ivec2(1, -1), lvl);",
+      "   float w = pplSeenAt(s + ivec2(-1, 0), lvl), e = pplSeenAt(s + ivec2(1, 0), lvl);",
+      "   float sw = pplSeenAt(s + ivec2(-1, 1), lvl), so = pplSeenAt(s + ivec2(0, 1), lvl), se = pplSeenAt(s + ivec2(1, 1), lvl);",
+      "   float c00 = max(max(nw, n), w), c10 = max(max(n, ne), e), c11 = max(max(e, se), so), c01 = max(max(so, sw), w);",
+      "   return mix(mix(c00, c10, f.x), mix(c01, c11, f.x), f.y);",
+      "}",
+      "#else",
+      "float pplUnseenW(vec4 cu, ivec2 s, int lvl, vec2 f) { return 0.0; }",
+      "#endif",
       "vec3 pplSpec = vec3(0.0);", // out of pplLight: the wet glints of the lights (added, not multiplied by the surface colour)
       "const vec3 PPL_VIEW = vec3(0.6428, 0.6428, 0.5162);", // towards the camera, in squares (the axis the screen does not see: (3, 3, 1) levels)
       "#ifdef PPL_LAZY_NORMAL",
@@ -3312,6 +3420,9 @@ public final class PixelLight {
       VoxelLight.FRAG_GLSL,
       "vec3 pplLight(vec3 P, float dz, vec3 n) {", // n: the surface normal in squares (z up), towards the viewer
       "   int cost = int(pplOpt2.w + 0.5);", // dev: parts switched off (devPplCostAt)
+      "#ifdef PPL_VOXEL",
+      "   vxlCost = cost;",
+      "#endif",
       "   if ((cost & 8) != 0) return vec3(fract(P.x * 0.001) + 0.999);",
       // the square that owns the surface: a hair towards the viewer (a north wall's owner is on its +y side, a west wall's
       // on its +x side, a floor's above it)
@@ -3357,17 +3468,37 @@ public final class PixelLight {
       // voxel lighting's surface cache in a chunk texture no dynamic light reaches: a fully valid layer texel is the whole light
       // (the native's lattice, its edge path and the wall gradient are not read at all)
       "#if defined(PPL_VOXEL) && defined(PPL_BASE) && !defined(PPL_DEV)",
-      "   if (vxlLayer >= 0.0 && vxlMap.w > 0.5 && vxlOpt.z > 0.5 && (cost & (65536 | 8388608)) == 0) {",
+      "   if (vxlLayer >= 0.0 && vxlMap.w > 0.5 && vxlOpt.z > 0.5 && (cost & (65536 | 8388608)) == 0 && (cost & (4194304 | 2048)) != 4194304) {", // (dev cost bit 4194304: the volume per pixel everywhere; with 2048, here too: the reference before 2026-10-31 evening)
       "      vec4 lm = textureLod(vxlLM, vec3(vxlUv, vxlLayer), 0.0);",
-      "      if (lm.a > 0.9899) {", // all four texels the volume's (VoxelLight.RELIGHT_CS's alpha: 0.99 + 0.01 sky)
+      "      if (VXL_ALL_CLEAN(lm.a)) {", // all four texels the volume's (VoxelLight.RELIGHT_CS's alpha: 0.99 + 0.01 sky)
       "         vxlW = 1.0;",
       "         vec3 ca = vxlAmb.rgb * max(clamp((lm.a - 0.99) * 100.0, 0.0, 1.0), vxlAmb.w), cl = lm.rgb * 1.25;",
       "         vec3 Lq = vxlOpt.z > 1.5 ? ca + cl : max(ca, cl);",
+      // voxelLightFogOfWar: x the square's darkMulti, stock's fog of war (1 in sight, dimmer out of view, 0 never seen; the native's
+      // own light is 0 there, its lamps included): the voxel light drew everything behind the player lit (2026-10-23)
+      "#ifdef VXL_FOG",
+      "         Lq *= pplFog(P.xy, lvl);",
+      "#endif",
       "#ifdef PPL_UNSEEN_AMBIENT",
-      "         if (pplWet.w > 0.5 && !pplVisible(texelFetch(pplConn, ivec3(s, lvl), 0).a)) Lq = vec3(pplWet.z);",
+      "         if (pplWet.w > 0.5) { vec4 cu = texelFetch(pplConn, ivec3(s, lvl), 0); if (!pplVisible(cu.a)) Lq = mix(vec3(pplWet.z), Lq, pplUnseenW(cu, s, lvl, fxy)); }",
       "#endif",
       "         return clamp(Lq, 0.0, 1.0);",
       "      }",
+      // voxelLightCacheMatch: a footprint of the volume's texels only, some marked (another surface lit otherwise in reach): the
+      // cache's four-tap read or the volume per pixel (vxlLight), the native's light not read either (it ran the whole native
+      // lattice first for nothing, 2026-10-31)
+      "#ifdef VXL_MATCH",
+      // (not under dev cost bit 4194304: vxlLight's per-pixel-everywhere path takes the normal it is given, the lazy one not made yet)
+      "      if (lm.a > 0.19 && (cost & (67108864 | 4194304)) == 0 && all(greaterThan(textureGather(vxlLM, vec3(vxlUv, vxlLayer), 3), vec4(0.19)))) {",
+      "         vec3 Lq = vxlLight(P, n, lz, sq, vec3(0.0));",
+      "         if (vxlW > 0.999) {",
+      "#ifdef PPL_UNSEEN_AMBIENT",
+      "            if (pplWet.w > 0.5) { vec4 cu = texelFetch(pplConn, ivec3(s, lvl), 0); if (!pplVisible(cu.a)) Lq = mix(vec3(pplWet.z), Lq, pplUnseenW(cu, s, lvl, fxy)); }",
+      "#endif",
+      "            return clamp(Lq, 0.0, 1.0);",
+      "         }",
+      "      }",
+      "#endif",
       "   }",
       "#endif",
       // 1. the base light is the native's sample at each square's centre (lightInfo without the torches: what stock draws
@@ -3391,7 +3522,7 @@ public final class PixelLight {
       "   if ((B.a < 0.999 && B.a > 0.001 || view == 6) && (cost & 2) == 0) {",
       "      vec3 cc = texelFetch(pplConn, ivec3(s, lvl), 0).rgb;",
       "      conn = int(cc.r * 255.0 + 0.5);",
-      "      grad = cc.b > 0.5;",
+      "      grad = int(cc.b * 255.0 + 0.5) >= 128;", // bit 7 (bits 0-6: the fog of war)
       "      int bx = dir.x > 0 ? 1 : 4, by = dir.y > 0 ? 2 : 8;",
       "      int bxy = dir.x > 0 ? (dir.y > 0 ? 16 : 128) : (dir.y > 0 ? 32 : 64);",
       "      bool cx = (conn & bx) != 0, cy = (conn & by) != 0, cxy = (conn & bxy) != 0;",
@@ -3422,9 +3553,12 @@ public final class PixelLight {
       // dynamic point lights' visibility test below
       "   vec3 pplNat = L;",
       "#if defined(VXL_TEXEL_N) && defined(PPL_LAZY_NORMAL)",
-      "   if (pplNeedN && vxlLayer > -1.5 && vxlLayer < -0.5 && (cost & (65536 | 131072)) == 0) { n = pplLazyNormal(P); pplNeedN = false; }", // the per-pixel path only (the cache has its normals)
+      "   if (pplNeedN && (vxlLayer > -1.5 && vxlLayer < -0.5 || (cost & 4194304) != 0 || int(vxlMapZ.w + 0.5) == 10) && (cost & (65536 | 131072)) == 0) { n = pplLazyNormal(P); pplNeedN = false; }", // the per-pixel path only (the cache has its normals; dev: cost bit 4194304 / voxel view 10 read per pixel too)
       "#endif",
       "   vxlCost = cost;",
+      "#ifdef VXL_FOG",
+      "   vxlFog = pplFog(P.xy, lvl);", // voxelLightFogOfWar
+      "#endif",
       "   if ((cost & 65536) == 0) L = vxlLight(P, n, lz, sq, L);", // dev: cost bit 65536, the voxel term off (devPplAlternate A/B)
       "#endif",
       "   vec2 c00 = sq + 0.5, c11 = c00 + vec2(dir);",
@@ -3543,7 +3677,7 @@ public final class PixelLight {
       // pplUnseenAmbient: a square the player has never seen baked with its own light (black; ForceAmbient roofs their tint): the
       // ambient, as stock draws those roofs
       "#ifdef PPL_UNSEEN_AMBIENT",
-      "   if (pplWet.w > 0.5 && !pplVisible(texelFetch(pplConn, ivec3(s, lvl), 0).a)) { L = vec3(pplWet.z); pplSpec = vec3(0.0); }",
+      "   if (pplWet.w > 0.5) { vec4 cu = texelFetch(pplConn, ivec3(s, lvl), 0); if (!pplVisible(cu.a)) { float uw = pplUnseenW(cu, s, lvl, fxy); L = mix(vec3(pplWet.z), L, uw); pplSpec *= uw; } }",
       "#endif",
       "#if !defined(PPL_BASE) && defined(PPL_DEV)",
       "   if (view == 5) L = torch * V;",
@@ -4082,8 +4216,8 @@ public final class PixelLight {
 
    /** The game's chunkShader.frag (DIFFUSE x vertex colour, depth = chunkDepth + the texture's depth) with the light multiplied in. */
    private static final String TINT = (Config.DEV_PPL_TINT ? "#define PPL_TINT\n" : "") + (Config.PPL_TEXEL_POS ? "#define PPL_TEXEL\n#define PPL_NSPAN " + Config.PPL_NORMAL_SPAN + "\n#define PPL_NSPAN_WIDE " + Config.PPL_NORMAL_SPAN_WIDE + "\n" : "")
-      + (Config.PPL_TEXEL_HEIGHT ? "#define PPL_TEXEL_Z\n" + (Config.PPL_FLOOR_SNAP ? "#define PPL_FLOOR_SNAP\n" : "") : "") + (Config.PPL_SEEN_EDGE ? "#define PPL_SEEN_EDGE\n" : "") + (Config.PPL_UNSEEN_AMBIENT ? "#define PPL_UNSEEN_AMBIENT\n" : "") + (Config.PPL_WALL_EDGE ? "#define PPL_WALL_EDGE\n" : "") + (Config.TORCH_SOURCE_SELF_SHADOW ? "#define PPL_SELF_SHADOW\n" : "") + Relief.defines() // the defines every chunk program gets
-      + (VoxelLight.ACTIVE ? "#define PPL_VOXEL\n" + ("texel".equals(Config.VOXEL_LIGHT_NORMAL) && Config.PPL_TEXEL_POS ? "#define VXL_TEXEL_N\n" : "screen".equals(Config.VOXEL_LIGHT_NORMAL) || "texel".equals(Config.VOXEL_LIGHT_NORMAL) ? "#define VXL_SCREEN_N\n" : "") : "");
+      + (Config.PPL_TEXEL_HEIGHT ? "#define PPL_TEXEL_Z\n" + (Config.PPL_FLOOR_SNAP ? "#define PPL_FLOOR_SNAP\n" : "") : "") + (Config.PPL_SEEN_EDGE ? "#define PPL_SEEN_EDGE\n" : "") + (Config.PPL_UNSEEN_AMBIENT ? "#define PPL_UNSEEN_AMBIENT\n" + (Config.PPL_UNSEEN_BLEND ? "#define PPL_UNSEEN_BLEND\n" : "") : "") + (Config.PPL_WALL_EDGE ? "#define PPL_WALL_EDGE\n" : "") + (Config.TORCH_SOURCE_SELF_SHADOW ? "#define PPL_SELF_SHADOW\n" : "") + Relief.defines() // the defines every chunk program gets
+      + (VoxelLight.ACTIVE ? "#define PPL_VOXEL\n" + (Config.VOXEL_LIGHT_FOG_OF_WAR ? "#define VXL_FOG\n" : "") + ("texel".equals(Config.VOXEL_LIGHT_NORMAL) && Config.PPL_TEXEL_POS ? "#define VXL_TEXEL_N\n" + ("cache".equals(Config.VOXEL_LIGHT_APPLY) && Config.VOXEL_LIGHT_CACHE_MATCH ? "#define VXL_MATCH\n" : "") : "screen".equals(Config.VOXEL_LIGHT_NORMAL) || "texel".equals(Config.VOXEL_LIGHT_NORMAL) ? "#define VXL_SCREEN_N\n" : "") : "");
    private static final String CHUNK_FRAG = "#version 420\n" + (Config.DEV_PPL_VIEW != 0 ? "#define PPL_DEV\n" : "") + TINT + CHUNK_FRAG_BODY; // dev views compiled in only when asked: they keep values alive to the end (registers)
    /** The same without the dynamic lights (chunk textures no light reaches): 32 registers, full occupancy on the 890M (64 with). */
    private static final String CHUNK_BASE_FRAG = "#version 420\n#define PPL_BASE\n" + CHUNK_FRAG_BODY;
