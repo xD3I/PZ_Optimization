@@ -302,9 +302,9 @@ public final class GrassBlades {
             r |= overlayBits(si == null ? null : si.parentSprite);
          }
       }
-      IsoObject[] objs = (IsoObject[])sq.getObjects().getElements();
+      java.util.List<IsoObject> objs = sq.getObjects(); // 42.22: a List (PZArrayList is gone)
       for (int i = 0, n = sq.getObjects().size(); i < n; i++) {
-         IsoObject o = objs[i];
+         IsoObject o = objs.get(i);
          if (o != null && o != floor) {
             r |= overlayBits(o.sprite);
          }

@@ -424,13 +424,30 @@ public final class IsoMetaGrid {
       }
    }
 
-   public void getBuildingsIntersecting(int x, int y, int w, int h, ArrayList<BuildingDef> result) {
+   public void getBuildingsIntersecting(int x, int y, int w, int h, boolean includeEmptyOutside, ArrayList<BuildingDef> result) {
       for (int cy = y / 256; cy <= (y + this.height) / 256; cy++) {
          for (int cx = x / 256; cx <= (x + this.width) / 256; cx++) {
             if (cx >= this.minX && cx <= this.maxX && cy >= this.minY && cy <= this.maxY) {
                IsoMetaCell cell = this.getCell(cx - this.minX, cy - this.minY);
                if (cell != null) {
-                  cell.getBuildingsIntersecting(x, y, w, h, result);
+                  cell.getBuildingsIntersecting(x, y, w, h, includeEmptyOutside, result);
+               }
+            }
+         }
+      }
+   }
+
+   public void getBuildingsIntersecting(int x, int y, int w, int h, ArrayList<BuildingDef> result) {
+      this.getBuildingsIntersecting(x, y, w, h, false, result);
+   }
+
+   public void getRoomsIntersecting(int x, int y, int w, int h, boolean includeEmptyOutside, ArrayList<RoomDef> roomDefs) {
+      for (int cy = y / 256; cy <= (y + this.height) / 256; cy++) {
+         for (int cx = x / 256; cx <= (x + this.width) / 256; cx++) {
+            if (cx >= this.minX && cx <= this.maxX && cy >= this.minY && cy <= this.maxY) {
+               IsoMetaCell cell = this.getCell(cx - this.minX, cy - this.minY);
+               if (cell != null) {
+                  cell.getRoomsIntersecting(x, y, w, h, includeEmptyOutside, roomDefs);
                }
             }
          }
@@ -438,16 +455,7 @@ public final class IsoMetaGrid {
    }
 
    public void getRoomsIntersecting(int x, int y, int w, int h, ArrayList<RoomDef> roomDefs) {
-      for (int cy = y / 256; cy <= (y + this.height) / 256; cy++) {
-         for (int cx = x / 256; cx <= (x + this.width) / 256; cx++) {
-            if (cx >= this.minX && cx <= this.maxX && cy >= this.minY && cy <= this.maxY) {
-               IsoMetaCell cell = this.getCell(cx - this.minX, cy - this.minY);
-               if (cell != null) {
-                  cell.getRoomsIntersecting(x, y, w, h, roomDefs);
-               }
-            }
-         }
-      }
+      this.getRoomsIntersecting(x, y, w, h, false, roomDefs);
    }
 
    public int countRoomsIntersecting(int x, int y, int w, int h) {
@@ -1042,7 +1050,7 @@ public final class IsoMetaGrid {
          output.put((byte)69);
          output.put((byte)84);
          output.put((byte)65);
-         output.putInt(249);
+         output.putInt(251);
          output.putInt(this.minX);
          output.putInt(this.minY);
          output.putInt(this.maxX);
@@ -1566,7 +1574,7 @@ public final class IsoMetaGrid {
       for (int i = 0; i < this.buildings.size(); i++) {
          BuildingDef def = this.buildings.get(i);
          this.addRoomsToAdjacentCells(def);
-         if (!Core.gameMode.equals("LastStand") && def.rooms.size() > 2) {
+         if (def.rooms.size() > 2) {
             int randAlarm = 11;
             if (SandboxOptions.instance.doesPowerGridExist()) {
                randAlarm = 9;
@@ -1982,7 +1990,7 @@ public final class IsoMetaGrid {
       output.put((byte)79);
       output.put((byte)78);
       output.put((byte)69);
-      output.putInt(249);
+      output.putInt(251);
       HashMap<String, Integer> stringMap = this.saveStringMap(output, this.zones);
       output.putInt(this.zones.size());
       this.zones.forEach(zone -> zone.save(output, stringMap));
@@ -2005,7 +2013,7 @@ public final class IsoMetaGrid {
       output.put((byte)79);
       output.put((byte)78);
       output.put((byte)69);
-      output.putInt(249);
+      output.putInt(251);
       ArrayList<AnimalZone> animalZones = new ArrayList<>(this.animalZoneHandler.getZones());
       HashMap<String, Integer> stringMap = this.saveStringMap(output, animalZones);
       output.putInt(animalZones.size());
@@ -2102,18 +2110,18 @@ public final class IsoMetaGrid {
    }
 
    public void addRoomsToAdjacentCells(BuildingDef buildingDef) {
-      int cellX = buildingDef.x / 256;
-      int cellY = buildingDef.y / 256;
-      int cellX2 = (buildingDef.x2 - 1) / 256;
-      int cellY2 = (buildingDef.y2 - 1) / 256;
-      if (cellX2 != cellX || cellY2 != cellY) {
-         for (int dy = 0; dy <= 1; dy++) {
-            for (int dx = 0; dx <= 1; dx++) {
-               if (dx != 0 || dy != 0) {
-                  IsoMetaCell metaCell = this.getCellData(cellX + dx, cellY + dy);
+      int cellX1 = buildingDef.getCellX();
+      int cellY1 = buildingDef.getCellY();
+      int cellX2 = buildingDef.getCellX2();
+      int cellY2 = buildingDef.getCellY2();
+      if (cellX2 != cellX1 || cellY2 != cellY1) {
+         for (int cellY = cellY1; cellY <= cellY2; cellY++) {
+            for (int cellX = cellX1; cellX <= cellX2; cellX++) {
+               if (cellX != cellX1 || cellY != cellY1) {
+                  IsoMetaCell metaCell = this.getCellData(cellX, cellY);
                   if (metaCell != null) {
-                     metaCell.addRooms(buildingDef.rooms, (cellX + dx) * 256, (cellY + dy) * 256);
-                     metaCell.addRooms(buildingDef.emptyoutside, (cellX + dx) * 256, (cellY + dy) * 256);
+                     metaCell.addRooms(buildingDef.rooms, cellX * 256, cellY * 256);
+                     metaCell.addRooms(buildingDef.emptyoutside, cellX * 256, cellY * 256);
                   }
                }
             }
@@ -2122,17 +2130,17 @@ public final class IsoMetaGrid {
    }
 
    public void addRoomsToAdjacentCells(BuildingDef buildingDef, ArrayList<RoomDef> roomDefs) {
-      int cellX = PZMath.fastfloor(buildingDef.x / 256.0F);
-      int cellY = PZMath.fastfloor(buildingDef.y / 256.0F);
-      int cellX2 = (buildingDef.x2 - 1) / 256;
-      int cellY2 = (buildingDef.y2 - 1) / 256;
-      if (cellX2 != cellX || cellY2 != cellY) {
-         for (int dy = 0; dy <= 1; dy++) {
-            for (int dx = 0; dx <= 1; dx++) {
-               if (dx != 0 || dy != 0) {
-                  IsoMetaCell metaCell = this.getCellData(cellX + dx, cellY + dy);
+      int cellX1 = buildingDef.getCellX();
+      int cellY1 = buildingDef.getCellY();
+      int cellX2 = buildingDef.getCellX2();
+      int cellY2 = buildingDef.getCellY2();
+      if (cellX2 != cellX1 || cellY2 != cellY1) {
+         for (int cellY = cellY1; cellY <= cellY2; cellY++) {
+            for (int cellX = cellX1; cellX <= cellX2; cellX++) {
+               if (cellX != cellX1 || cellY != cellY1) {
+                  IsoMetaCell metaCell = this.getCellData(cellX, cellY);
                   if (metaCell != null) {
-                     metaCell.addRooms(roomDefs, (cellX + dx) * 256, (cellY + dy) * 256);
+                     metaCell.addRooms(roomDefs, cellX * 256, cellY * 256);
                   }
                }
             }

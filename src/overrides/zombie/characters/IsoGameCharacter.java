@@ -19,9 +19,14 @@ import java.util.NoSuchElementException;
 import java.util.Objects;
 import java.util.Stack;
 import java.util.Map.Entry;
+import java.util.function.Consumer;
+import java.util.function.Function;
+import java.util.function.Predicate;
 import org.joml.GeometryUtils;
 import org.joml.Vector2f;
 import org.joml.Vector3f;
+import org.jspecify.annotations.NonNull;
+import org.jspecify.annotations.Nullable;
 import org.lwjgl.util.vector.Quaternion;
 import se.krka.kahlua.vm.KahluaTable;
 import zombie.AmbientStreamManager;
@@ -56,10 +61,10 @@ import zombie.ai.sadisticAIDirector.SleepingEventData;
 import zombie.ai.states.AttackNetworkState;
 import zombie.ai.states.AttackState;
 import zombie.ai.states.BumpedState;
-import zombie.ai.states.ClimbDownSheetRopeState;
+import zombie.ai.states.ClimbDownState;
 import zombie.ai.states.ClimbOverFenceState;
 import zombie.ai.states.ClimbOverWallState;
-import zombie.ai.states.ClimbSheetRopeState;
+import zombie.ai.states.ClimbState;
 import zombie.ai.states.ClimbThroughWindowPositioningParams;
 import zombie.ai.states.ClimbThroughWindowState;
 import zombie.ai.states.CloseWindowState;
@@ -90,7 +95,8 @@ import zombie.ai.states.ZombieFallDownState;
 import zombie.ai.states.ZombieFallingState;
 import zombie.ai.states.ZombieHitReactionState;
 import zombie.ai.states.ZombieOnGroundState;
-import zombie.ai.states.ClimbSheetRopeState.ClimbData;
+import zombie.ai.states.ClimbState.ClimbData;
+import zombie.ai.states.ClimbState.LadderDirection;
 import zombie.ai.states.animals.AnimalIdleState;
 import zombie.ai.states.animals.AnimalWalkState;
 import zombie.audio.FMODParameter;
@@ -133,6 +139,7 @@ import zombie.chat.ChatElementOwner;
 import zombie.chat.ChatManager;
 import zombie.chat.ChatMessage;
 import zombie.combat.CombatConfigKey;
+import zombie.combat.HitReaction;
 import zombie.core.BoxedStaticValues;
 import zombie.core.Color;
 import zombie.core.Colors;
@@ -154,6 +161,8 @@ import zombie.core.physics.RagdollStateData;
 import zombie.core.profiling.AbstractPerformanceProfileProbe;
 import zombie.core.profiling.PerformanceProfileProbe;
 import zombie.core.properties.IsoObjectChange;
+import zombie.core.properties.IsoPropertyType;
+import zombie.core.properties.PropertyContainer;
 import zombie.core.raknet.UdpConnection;
 import zombie.core.random.Rand;
 import zombie.core.skinnedmodel.BaseGrappleable;
@@ -286,6 +295,7 @@ import zombie.iso.objects.RainManager;
 import zombie.iso.objects.ShadowParams;
 import zombie.iso.objects.IsoZombieGiblets.GibletType;
 import zombie.iso.objects.interfaces.BarricadeAble;
+import zombie.iso.objects.interfaces.GridSquareEdgeElement;
 import zombie.iso.sprite.IsoSprite;
 import zombie.iso.sprite.IsoSpriteInstance;
 import zombie.iso.sprite.IsoSpriteManager;
@@ -307,6 +317,8 @@ import zombie.network.fields.hit.HitInfo;
 import zombie.network.packets.INetworkPacket;
 import zombie.network.packets.SyncPlayerStatsPacket;
 import zombie.network.packets.VariableSyncPacket;
+import zombie.network.packets.character.PlayerDropHeldItemsPacket.Flag;
+import zombie.network.packets.character.PlayerDropHeldItemsPacket.Flags;
 import zombie.network.statistics.data.PerformanceStatistic;
 import zombie.pathfind.Path;
 import zombie.pathfind.PathFindBehavior2;
@@ -317,6 +329,7 @@ import zombie.radio.ZomboidRadio;
 import zombie.scripting.ScriptManager;
 import zombie.scripting.entity.components.crafting.CraftRecipe;
 import zombie.scripting.objects.CharacterTrait;
+import zombie.scripting.objects.HeldItemMaskKey;
 import zombie.scripting.objects.Item;
 import zombie.scripting.objects.ItemBodyLocation;
 import zombie.scripting.objects.ItemKey;
@@ -347,9 +360,9 @@ import zombie.util.FrameDelay;
 import zombie.util.Pool;
 import zombie.util.StringUtils;
 import zombie.util.Type;
+import zombie.util.flags.EnumByteFlags;
 import zombie.util.lambda.PZOptional;
 import zombie.util.lambda.Invokers.Params2.Boolean.ICallback;
-import zombie.util.list.PZArrayList;
 import zombie.util.list.PZArrayUtil;
 import zombie.vehicles.BaseVehicle;
 import zombie.vehicles.VehicleLight;
@@ -408,6 +421,7 @@ public abstract class IsoGameCharacter
    protected static final pzopt.Tl<ItemVisuals> pzoptTempItemVisuals = new pzopt.Tl<>(ItemVisuals::new); // pzopt: pzopt.Tl (zombie redesign, f8-zomb2)
    public static final float HUMANOID_WORLD_CHEST_HEIGHT = 0.495F;
    public static final float HUMANOID_SCREEN_CHEST_HEIGHT = 20.0F;
+   public static final float LADDER_END_TRANSITION_SAFE_SPEED = 0.08F;
    private final float extraLungeRange = 0.2F;
    private boolean headLookAround;
    private static final float maxHeadLookAngle = 0.348F;
@@ -594,12 +608,12 @@ public abstract class IsoGameCharacter
    private boolean deathDragDown;
    protected String hurtSound = "MaleZombieHurt";
    protected ItemContainer inventory = new ItemContainer();
-   protected InventoryItem leftHandItem;
+   protected InventoryItem primaryHandItem;
    protected boolean handItemShouldSendToClients;
    private int nextWander = 200;
    private boolean onFire;
    private int pathIndex;
-   protected InventoryItem rightHandItem;
+   protected InventoryItem secondaryHandItem;
    protected Color speakColour = new Color(1.0F, 1.0F, 1.0F, 1.0F);
    protected float slowFactor;
    protected float slowTimer;
@@ -693,8 +707,8 @@ public abstract class IsoGameCharacter
    private String animationFinishingState;
    private int sleepSpeechCnt;
    private Radio equipedRadio;
-   private InventoryItem leftHandCache;
-   private InventoryItem rightHandCache;
+   private InventoryItem primaryHandCache;
+   private InventoryItem secondaryHandCache;
    private InventoryItem backCache;
    private final ArrayList<IsoGameCharacter.ReadBook> readBooks = new ArrayList<>();
    public final IsoGameCharacter.LightInfo lightInfo = new IsoGameCharacter.LightInfo();
@@ -703,7 +717,7 @@ public abstract class IsoGameCharacter
    private final MapKnowledge mapKnowledge = new MapKnowledge();
    protected final AttackVars attackVars = new AttackVars();
    private boolean hasTarget;
-   private final PZArrayList<HitInfo> hitInfoList = new PZArrayList(HitInfo.class, 8);
+   private final ArrayList<HitInfo> hitInfoList = new ArrayList<>(8);
    private final PathFindBehavior2 pfb2 = new PathFindBehavior2(this);
    private final InventoryItem[] cacheEquiped = new InventoryItem[2];
    private boolean aimAtFloor;
@@ -742,7 +756,7 @@ public abstract class IsoGameCharacter
    private static final int BEARD_GROW_TIME_DAYS = 5;
    public float realx;
    public float realy;
-   public byte realz;
+   public float realz;
    public ZombieState realState = ZombieState.Idle;
    public String overridePrimaryHandModel;
    public String overrideSecondaryHandModel;
@@ -795,15 +809,18 @@ public abstract class IsoGameCharacter
    private long shadowTick = -1L;
    private float lastFitnessValue = CharacterStat.FITNESS.getDefaultValue();
    public final NetworkCharacter networkCharacter = new NetworkCharacter();
+   private boolean headCameraZ;
    private final Map<CharacterDiedListener, Boolean> onDiedListeners = new LinkedHashMap<>();
    private IsoDeadBody diedBody;
    private boolean nearWallCrouching;
    private final IsoGameCharacter.Recoil recoil = new IsoGameCharacter.Recoil();
    private static final double meleeWeaponMuscleStrainAdjustment = 0.65;
    private boolean usePhysicHitReaction;
-   private ClimbData climbData;
+   private final ClimbData climbData = new ClimbData();
    private final FallDamage fallDamage = new FallDamage();
    public IsoLightSource onFireLightSource;
+   private String secondaryHandMask = "";
+   private String primaryHandMask = "";
    private final IsoGameCharacter.LC_slideAwayFromWalls slideAwayFromWalls = new IsoGameCharacter.LC_slideAwayFromWalls();
    private static final int NAME_TAG_Y_OFFSET = 128;
    private static final ArrayList<IsoMovingObject> movingStatic = new ArrayList<>();
@@ -1033,6 +1050,28 @@ public abstract class IsoGameCharacter
       this.setVariable(
          "StompAnim", this::isPerformingStompAnimation, this::setPerformingStompAnimation, owner -> "Is the character performing a stomp animation."
       );
+      this.setVariable(
+         "canShoveWPrimary",
+         this::canPerformHandToHandCombatWithPrimary,
+         owner -> "Can the character hand-to-hand with their primary hand. ie. They are not holding a heavy or visible non-weapon."
+      );
+      this.setVariable(
+         "canShoveWSecondary",
+         this::canPerformHandToHandCombatWithSecondary,
+         owner -> "Can the character hand-to-hand with their secondary hand. ie. They are not holding a heavy or visible non-weapon."
+      );
+      this.setVariable(
+         "LeftHandMask",
+         this::getSecondaryHandMask,
+         this::setSecondaryHandMask,
+         owner -> "The Left-hand animation mask. Used while holding items like umbrellas, bags, and torches."
+      );
+      this.setVariable(
+         "RightHandMask",
+         this::getPrimaryHandMask,
+         this::setPrimaryHandMask,
+         owner -> "The Right-hand animation mask. Used while holding items like umbrellas, bags, and torches."
+      );
       this.setVariable("isStompAnim", this::isShoveStompAnim, this::setShoveStompAnim, owner -> "Is the character's current Shove actually a stomp.");
       this.setVariable(
          "PerformingHostileAnim",
@@ -1146,7 +1185,9 @@ public abstract class IsoGameCharacter
    }
 
    public final boolean isFalling() {
-      return (this.falling || this.lastFallSpeed > FallingConstants.isFallingThreshold) && this.getZ() > this.getMinFloorZ();
+      return Core.debug && DebugOptions.instance.cheat.player.ignoreFalling.getValue()
+         ? false
+         : (this.falling || this.lastFallSpeed > FallingConstants.isFallingThreshold) && this.getZ() > this.getMinFloorZ();
    }
 
    private int getMinFloorZ() {
@@ -1586,7 +1627,7 @@ public abstract class IsoGameCharacter
       // parameters go nowhere (emitterParamSkip) and the 30 ms tick of three empty emitters only moved their position.
       // One field read replaces the three emitters' nine list checks per zombie per frame. The flag cannot miss a sound:
       // every sound enters an FMODSoundEmitter through toStart, where the override raises it before this runs again.
-      if (this.pzoptSoundPrimed && !this.pzoptSoundBusy && pzopt.Config.EMITTER_IDLE_SKIP && pzopt.Overrides.enabled()) { // pzopt: emitterIdleSkip
+      if (this.pzoptSoundPrimed && !this.pzoptSoundBusy && pzopt.Config.EMITTER_IDLE_SKIP && pzopt.Overrides.enabled() && !this.isSoundListener()) { // pzopt: emitterIdleSkip (42.22: a sound listener ticks every frame)
          return; // pzopt: emitterIdleSkip
       }
 
@@ -1610,7 +1651,7 @@ public abstract class IsoGameCharacter
          this.getFMODParameters().update();
       }
 
-      if (IsoWorld.instance.emitterUpdate || this.emitter.hasSoundsToStart()) {
+      if (IsoWorld.instance.emitterUpdate || this.emitter.hasSoundsToStart() || this.isSoundListener()) {
          if (this.isZombie() && this.isProne()) {
             CombatManager.getBoneWorldPos(this, "Bip01_Head", tempVectorBonePos);
             this.emitter.set(tempVectorBonePos.x, tempVectorBonePos.y, this.getZ());
@@ -1625,6 +1666,10 @@ public abstract class IsoGameCharacter
             this.pzoptSoundBusy = !this.emitter.isClear(); // pzopt: emitterIdleSkip (all three emitters empty after the tick)
          }
       }
+   }
+
+   private boolean isSoundListener() {
+      return this.isAnimal() && IsoPlayer.isLocalPlayer(this);
    }
 
    protected void doDeferredMovement() {
@@ -1972,10 +2017,7 @@ public abstract class IsoGameCharacter
 
    private void restoreAnimatorStateToActionContext() {
       if (this.getActionContext().getCurrentState() != null) {
-         this.getAdvancedAnimator()
-            .setState(
-               this.getActionContext().getCurrentStateName(), PZArrayUtil.listConvert(this.getActionContext().getChildStates(), state -> state.getName())
-            );
+         this.getAdvancedAnimator().setState(this.getActionContext().getCurrentStateName(), this.getActionContext().getChildStates(ActionState::getName));
       }
    }
 
@@ -2170,10 +2212,6 @@ public abstract class IsoGameCharacter
                int spn = weapon.getSplatNumber();
                if (spn < 1) {
                   spn = 1;
-               }
-
-               if (Core.lastStand) {
-                  spn *= 3;
                }
 
                switch (SandboxOptions.instance.bloodLevel.getValue()) {
@@ -2554,14 +2592,12 @@ public abstract class IsoGameCharacter
    protected void playPainVoicesFromFallDamage(FallDamage fallDamage) {
    }
 
-   public <T> PZArrayList<ItemContainer> getContextWorldContainers(T paramToCompare, ICallback<T, ItemContainer> isValidPredicate) {
-      PZArrayList<ItemContainer> containerList = new PZArrayList(ItemContainer.class, 10);
+   public <T> List<ItemContainer> getContextWorldContainers(T paramToCompare, ICallback<T, ItemContainer> isValidPredicate) {
+      List<ItemContainer> containerList = new ArrayList<>(10);
       return this.getContextWorldContainers(paramToCompare, isValidPredicate, containerList);
    }
 
-   public <T> PZArrayList<ItemContainer> getContextWorldContainers(
-      T paramToCompare, ICallback<T, ItemContainer> isValidPredicate, PZArrayList<ItemContainer> containerList
-   ) {
+   public <T> List<ItemContainer> getContextWorldContainers(T paramToCompare, ICallback<T, ItemContainer> isValidPredicate, List<ItemContainer> containerList) {
       this.square.getAllContainers(paramToCompare, isValidPredicate, containerList);
       IsoDirections forwardDir = this.getForwardMovementIsoDirection();
       this.square.getAllContainersFromAdjacentSquare(forwardDir, paramToCompare, isValidPredicate, containerList);
@@ -2576,8 +2612,8 @@ public abstract class IsoGameCharacter
       return containerList;
    }
 
-   public <T> PZArrayList<ItemContainer> getContextWorldContainersInObjects(
-      IsoObject[] contextObjects, T paramToCompare, ICallback<T, ItemContainer> isValidPredicate, PZArrayList<ItemContainer> containerList
+   public <T> List<ItemContainer> getContextWorldContainersInObjects(
+      IsoObject[] contextObjects, T paramToCompare, ICallback<T, ItemContainer> isValidPredicate, List<ItemContainer> containerList
    ) {
       DebugType.General.noise("Getting ContextWorld Containers");
       if (contextObjects == null) {
@@ -2599,15 +2635,15 @@ public abstract class IsoGameCharacter
       return containerList;
    }
 
-   public PZArrayList<ItemContainer> getContextWorldSuitableContainersToDropCorpseInObjects(IsoObject[] contextObjects) {
-      return this.getContextWorldContainersInObjects(contextObjects, this, IsoGameCharacter::canDropCorpseInto, new PZArrayList(ItemContainer.class, 10));
+   public List<ItemContainer> getContextWorldSuitableContainersToDropCorpseInObjects(IsoObject[] contextObjects) {
+      return this.getContextWorldContainersInObjects(contextObjects, this, IsoGameCharacter::canDropCorpseInto, new ArrayList<>(10));
    }
 
-   public PZArrayList<ItemContainer> getSuitableContainersToDropCorpseInSquare(IsoGridSquare square) {
-      return this.getSuitableContainersToDropCorpseInSquare(square, new PZArrayList(ItemContainer.class, 10));
+   public List<ItemContainer> getSuitableContainersToDropCorpseInSquare(IsoGridSquare square) {
+      return this.getSuitableContainersToDropCorpseInSquare(square, new ArrayList<>(10));
    }
 
-   public PZArrayList<ItemContainer> getSuitableContainersToDropCorpseInSquare(IsoGridSquare square, PZArrayList<ItemContainer> foundContainers) {
+   public List<ItemContainer> getSuitableContainersToDropCorpseInSquare(IsoGridSquare square, List<ItemContainer> foundContainers) {
       if (square == null) {
          return foundContainers;
       } else {
@@ -2617,24 +2653,24 @@ public abstract class IsoGameCharacter
       }
    }
 
-   public PZArrayList<ItemContainer> getSuitableContainersToDropCorpse() {
-      return this.getSuitableContainersToDropCorpse(new PZArrayList(ItemContainer.class, 10));
+   public List<ItemContainer> getSuitableContainersToDropCorpse() {
+      return this.getSuitableContainersToDropCorpse(new ArrayList<>(10));
    }
 
-   public PZArrayList<ItemContainer> getSuitableContainersToDropCorpse(PZArrayList<ItemContainer> foundContainers) {
+   public List<ItemContainer> getSuitableContainersToDropCorpse(List<ItemContainer> foundContainers) {
       this.getContextWorldContainers(this, IsoGameCharacter::canDropCorpseInto, foundContainers);
       return foundContainers;
    }
 
-   public PZArrayList<ItemContainer> getContextWorldContainersWithHumanCorpse(IsoObject[] contextObjects) {
-      return this.getContextWorldContainersInObjects(contextObjects, this, IsoGameCharacter::canGrabCorpseFrom, new PZArrayList(ItemContainer.class, 10));
+   public List<ItemContainer> getContextWorldContainersWithHumanCorpse(IsoObject[] contextObjects) {
+      return this.getContextWorldContainersInObjects(contextObjects, this, IsoGameCharacter::canGrabCorpseFrom, new ArrayList<>(10));
    }
 
-   public PZArrayList<ItemContainer> getSuitableContainersWithHumanCorpseInSquare(IsoGridSquare square) {
-      return this.getSuitableContainersWithHumanCorpseInSquare(square, new PZArrayList(ItemContainer.class, 10));
+   public List<ItemContainer> getSuitableContainersWithHumanCorpseInSquare(IsoGridSquare square) {
+      return this.getSuitableContainersWithHumanCorpseInSquare(square, new ArrayList<>(10));
    }
 
-   public PZArrayList<ItemContainer> getSuitableContainersWithHumanCorpseInSquare(IsoGridSquare square, PZArrayList<ItemContainer> foundContainers) {
+   public List<ItemContainer> getSuitableContainersWithHumanCorpseInSquare(IsoGridSquare square, List<ItemContainer> foundContainers) {
       return square.getAllContainers(this, IsoGameCharacter::canGrabCorpseFrom, foundContainers);
    }
 
@@ -3316,48 +3352,48 @@ public abstract class IsoGameCharacter
    }
 
    public boolean isPrimaryEquipped(String item) {
-      return this.leftHandItem == null ? false : this.leftHandItem.getFullType().equals(item) || this.leftHandItem.getType().equals(item);
+      return this.primaryHandItem == null ? false : this.primaryHandItem.getFullType().equals(item) || this.primaryHandItem.getType().equals(item);
    }
 
    public InventoryItem getPrimaryHandItem() {
-      return this.leftHandItem;
+      return this.primaryHandItem;
    }
 
-   public void setPrimaryHandItem(InventoryItem leftHandItem) {
-      if (this.leftHandItem != leftHandItem) {
-         if (leftHandItem == null && this.getPrimaryHandItem() instanceof AnimalInventoryItem) {
+   public void setPrimaryHandItem(InventoryItem handItem) {
+      if (this.primaryHandItem != handItem) {
+         if (handItem == null && this.getPrimaryHandItem() instanceof AnimalInventoryItem) {
             ((AnimalInventoryItem)this.getPrimaryHandItem()).getAnimal().heldBy = null;
          }
 
          if (this instanceof IsoPlayer player) {
-            player.checkAnimalAttachedToRope(leftHandItem);
+            player.checkAnimalAttachedToRope(handItem);
          }
 
-         if (leftHandItem == this.getSecondaryHandItem()) {
-            this.setEquipParent(this.leftHandItem, leftHandItem, false);
+         if (handItem == this.getSecondaryHandItem()) {
+            this.setEquipParent(this.primaryHandItem, handItem, false);
          } else {
-            this.setEquipParent(this.leftHandItem, leftHandItem);
+            this.setEquipParent(this.primaryHandItem, handItem);
          }
 
-         if (leftHandItem instanceof HandWeapon handWeapon) {
+         if (handItem instanceof HandWeapon handWeapon) {
             this.setUseHandWeapon(handWeapon);
          } else {
             this.setUseHandWeapon(null);
          }
 
-         if (this.leftHandItem instanceof HandWeapon || leftHandItem instanceof HandWeapon) {
+         if (this.primaryHandItem instanceof HandWeapon || handItem instanceof HandWeapon) {
             BallisticsController ballisticsController = this.getBallisticsController();
             if (ballisticsController != null) {
                ballisticsController.clearCacheTargets();
             }
          }
 
-         this.leftHandItem = leftHandItem;
+         this.primaryHandItem = handItem;
          this.handItemShouldSendToClients = true;
-         LuaEventManager.triggerEvent("OnEquipPrimary", this, leftHandItem);
+         LuaEventManager.triggerEvent("OnEquipPrimary", this, handItem);
          this.resetEquippedHandsModels();
          this.setVariable("Weapon", WeaponType.getWeaponType(this).getType());
-         if (leftHandItem instanceof AnimalInventoryItem animalInventoryItem && this instanceof IsoPlayer) {
+         if (handItem instanceof AnimalInventoryItem animalInventoryItem && this instanceof IsoPlayer) {
             animalInventoryItem.getAnimal().heldBy = (IsoPlayer)this;
          }
       }
@@ -3430,10 +3466,7 @@ public abstract class IsoGameCharacter
                }
 
                this.getInventory().Remove(itemCur);
-               float dropX = Rand.Next(0.1F, 0.9F);
-               float dropY = Rand.Next(0.1F, 0.9F);
-               float dropZ = sq.getApparentZ(dropX, dropY) - sq.getZ();
-               sq.AddWorldInventoryItem(itemCur, dropX, dropY, dropZ);
+               performDropItemOnSquare(sq, itemCur);
             }
          }
 
@@ -3449,17 +3482,12 @@ public abstract class IsoGameCharacter
             this.clothingWetness.changed = true;
          }
 
-         if (this instanceof IsoPlayer) {
-            if (GameServer.server) {
-               INetworkPacket.sendToAll(PacketType.SyncClothing, new Object[]{this});
-               INetworkPacket.sendToAll(PacketType.SyncVisuals, new Object[]{this});
-            } else if (GameClient.client && GameClient.connection.isReady()) {
-               INetworkPacket.send(PacketType.SyncClothing, new Object[]{this});
-            }
-         }
-
+         this.syncClothing();
          this.onWornItemsChanged();
       }
+   }
+
+   public void syncClothing() {
    }
 
    public void removeWornItem(InventoryItem item) {
@@ -3681,23 +3709,27 @@ public abstract class IsoGameCharacter
    }
 
    public InventoryItem getSecondaryHandItem() {
-      return this.rightHandItem;
+      return this.secondaryHandItem;
    }
 
-   public void setSecondaryHandItem(InventoryItem rightHandItem) {
-      if (this.rightHandItem != rightHandItem) {
-         if (rightHandItem == this.getPrimaryHandItem()) {
-            this.setEquipParent(this.rightHandItem, rightHandItem, false);
+   public void setSecondaryHandItem(InventoryItem handItem) {
+      if (this.secondaryHandItem != handItem) {
+         if (handItem == this.getPrimaryHandItem()) {
+            this.setEquipParent(this.secondaryHandItem, handItem, false);
          } else {
-            this.setEquipParent(this.rightHandItem, rightHandItem);
+            this.setEquipParent(this.secondaryHandItem, handItem);
          }
 
-         this.rightHandItem = rightHandItem;
+         this.secondaryHandItem = handItem;
          this.handItemShouldSendToClients = true;
-         LuaEventManager.triggerEvent("OnEquipSecondary", this, rightHandItem);
+         LuaEventManager.triggerEvent("OnEquipSecondary", this, handItem);
          this.resetEquippedHandsModels();
          this.setVariable("Weapon", WeaponType.getWeaponType(this).getType());
       }
+   }
+
+   private boolean hasHandItems() {
+      return this.getPrimaryHandItem() != null || this.getSecondaryHandItem() != null;
    }
 
    public boolean isHandItem(InventoryItem item) {
@@ -3727,6 +3759,10 @@ public abstract class IsoGameCharacter
       }
 
       return true;
+   }
+
+   public Flags getItemDropFlags(InventoryItem item) {
+      return this.isPrimaryHandItem(item) ? Flags.dropPrimary : (this.isSecondaryHandItem(item) ? Flags.dropSecondary : null);
    }
 
    public Color getSpeakColour() {
@@ -4187,7 +4223,7 @@ public abstract class IsoGameCharacter
    }
 
    protected void damageWhileInTrees() {
-      if (!GameClient.client && !this.isZombie() && !"Tutorial".equals(Core.gameMode)) {
+      if (!GameClient.client && !this.isZombie() && !Core.getInstance().isTutorial()) {
          int rand = 50;
          int part = Rand.Next(0, BodyPartType.ToIndex(BodyPartType.MAX));
          if (this.isRunning()) {
@@ -4757,7 +4793,7 @@ public abstract class IsoGameCharacter
       IsoGameCharacter.PerkInfo info = this.getPerkInfo(perk);
       if (info != null) {
          info.level++;
-         if (player != null && !"Tutorial".equals(Core.gameMode) && this.getHoursSurvived() > 0.016666666666666666) {
+         if (player != null && !Core.getInstance().isTutorial() && this.getHoursSurvived() > 0.016666666666666666) {
             HaloTextHelper.addTextWithArrow(player, "+1 " + perk.getName(), "[br/]", true, HaloTextHelper.getGoodColor());
          }
 
@@ -4778,7 +4814,7 @@ public abstract class IsoGameCharacter
          info.perk = perk;
          info.level = 1;
          this.perkList.add(info);
-         if (player != null && !"Tutorial".equals(Core.gameMode) && this.getHoursSurvived() > 0.016666666666666666) {
+         if (player != null && !Core.getInstance().isTutorial() && this.getHoursSurvived() > 0.016666666666666666) {
             HaloTextHelper.addTextWithArrow(player, "+1 " + perk.getName(), "[br/]", true, HaloTextHelper.getGoodColor());
          }
 
@@ -5005,13 +5041,15 @@ public abstract class IsoGameCharacter
          string = string.split("\\.")[1];
       }
 
-      return this.leftHandItem != null && this.leftHandItem.getType().equals(string)
+      return this.primaryHandItem != null && this.primaryHandItem.getType().equals(string)
          ? true
-         : this.rightHandItem != null && this.rightHandItem.getType().equals(string);
+         : this.secondaryHandItem != null && this.secondaryHandItem.getType().equals(string);
    }
 
    public boolean hasEquippedTag(ItemTag itemTag) {
-      return this.leftHandItem != null && this.leftHandItem.hasTag(itemTag) ? true : this.rightHandItem != null && this.rightHandItem.hasTag(itemTag);
+      return this.primaryHandItem != null && this.primaryHandItem.hasTag(itemTag)
+         ? true
+         : this.secondaryHandItem != null && this.secondaryHandItem.hasTag(itemTag);
    }
 
    public boolean hasWornTag(ItemTag itemTag) {
@@ -5055,7 +5093,7 @@ public abstract class IsoGameCharacter
       boolean bMegaphone = item != null && item.hasTag(ItemTag.MEGAPHONE);
       int radius = bMegaphone ? 90 : 30;
       IsoPlayer player = (IsoPlayer)Type.tryCastTo(this, IsoPlayer.class);
-      if (Core.getInstance().getGameMode().equals("Tutorial")) {
+      if (Core.getInstance().isTutorial()) {
          text = Translator.getText("IGUI_PlayerText_CalloutTutorial", new Object[0]);
          if (player != null) {
             player.transmitPlayerVoiceSound("ShoutHey");
@@ -5153,22 +5191,22 @@ public abstract class IsoGameCharacter
          ArrayList<InventoryItem> items = this.inventory.includingObsoleteItems;
          int n = input.getInt();
          if (n >= 0 && n < items.size()) {
-            this.leftHandItem = items.get(n);
+            this.primaryHandItem = items.get(n);
          }
 
          n = input.getInt();
          if (n >= 0 && n < items.size()) {
-            this.rightHandItem = items.get(n);
+            this.secondaryHandItem = items.get(n);
          }
 
-         this.setEquipParent(null, this.leftHandItem);
-         if (this.rightHandItem == this.leftHandItem) {
-            this.setEquipParent(null, this.rightHandItem, false);
+         this.setEquipParent(null, this.primaryHandItem);
+         if (this.secondaryHandItem == this.primaryHandItem) {
+            this.setEquipParent(null, this.secondaryHandItem, false);
          } else {
-            this.setEquipParent(null, this.rightHandItem);
+            this.setEquipParent(null, this.secondaryHandItem);
          }
 
-         if (this.leftHandItem instanceof HandWeapon handWeapon) {
+         if (this.primaryHandItem instanceof HandWeapon handWeapon) {
             this.setUseHandWeapon(handWeapon);
          } else {
             this.setUseHandWeapon(null);
@@ -5289,14 +5327,14 @@ public abstract class IsoGameCharacter
          this.stats.save(output);
          this.getBodyDamage().save(output);
          this.xp.save(output);
-         if (this.leftHandItem != null) {
-            output.putInt(this.inventory.getItems().indexOf(this.leftHandItem));
+         if (this.primaryHandItem != null) {
+            output.putInt(this.inventory.getItems().indexOf(this.primaryHandItem));
          } else {
             output.putInt(-1);
          }
 
-         if (this.rightHandItem != null) {
-            output.putInt(this.inventory.getItems().indexOf(this.rightHandItem));
+         if (this.secondaryHandItem != null) {
+            output.putInt(this.inventory.getItems().indexOf(this.secondaryHandItem));
          } else {
             output.putInt(-1);
          }
@@ -5902,7 +5940,7 @@ public abstract class IsoGameCharacter
    }
 
    public String getPrimaryHandType() {
-      return this.leftHandItem == null ? null : this.leftHandItem.getType();
+      return this.primaryHandItem == null ? null : this.primaryHandItem.getType();
    }
 
    public float getChestHeight() {
@@ -5937,7 +5975,7 @@ public abstract class IsoGameCharacter
    }
 
    public String getSecondaryHandType() {
-      return this.rightHandItem == null ? null : this.rightHandItem.getType();
+      return this.secondaryHandItem == null ? null : this.secondaryHandItem.getType();
    }
 
    public boolean HasItem(String string) {
@@ -6184,10 +6222,10 @@ public abstract class IsoGameCharacter
    public boolean IsAttackRange(float x, float y, float z) {
       float maxrange = 1.0F;
       float minrange = 0.0F;
-      if (this.leftHandItem != null && this.leftHandItem instanceof HandWeapon handWeapon) {
+      if (this.primaryHandItem != null && this.primaryHandItem instanceof HandWeapon handWeapon) {
          maxrange = handWeapon.getMaxRange(this);
          minrange = handWeapon.getMinRange();
-         maxrange *= ((HandWeapon)this.leftHandItem).getRangeMod(this);
+         maxrange *= ((HandWeapon)this.primaryHandItem).getRangeMod(this);
       }
 
       if (Math.abs(z - this.getZ()) > 0.3F) {
@@ -6331,7 +6369,7 @@ public abstract class IsoGameCharacter
             return false;
          }
 
-         InventoryItem attackItem = this.leftHandItem;
+         InventoryItem attackItem = this.primaryHandItem;
          if (attackItem instanceof HandWeapon handWeapon && attackItem.getSwingAnim() != null) {
             this.setUseHandWeapon(handWeapon);
          }
@@ -6342,7 +6380,7 @@ public abstract class IsoGameCharacter
 
          if (this.useHandWeapon.getCondition() <= 0) {
             this.setUseHandWeapon(null);
-            if (this.rightHandItem == this.leftHandItem) {
+            if (this.secondaryHandItem == this.primaryHandItem) {
                this.setSecondaryHandItem(null);
             }
 
@@ -6513,11 +6551,11 @@ public abstract class IsoGameCharacter
                      lastRenderedRendered = lastRendered;
                      lastRendered = this;
                      this.checkUpdateModelTextures();
-                     float scale = Core.tileScale;
-                     float offsetX = this.offsetX + 1.0F * scale;
-                     float offsetY = this.offsetY + -89.0F * scale;
+                     float scale = 2.0F;
+                     float offsetX = this.offsetX + 2.0F;
+                     float offsetY = this.offsetY + -178.0F;
                      if (this.sprite != null) {
-                        this.def.setScale(scale, scale);
+                        this.def.setScale(2.0F, 2.0F);
                         if (!this.useParts) {
                            this.sprite.render(this.def, this, x, y, z, this.getForwardIsoDirection(), offsetX, offsetY, inf, true);
                         } else if (this.legsSprite.hasActiveModel()) {
@@ -6544,7 +6582,7 @@ public abstract class IsoGameCharacter
                            inf.a = spr.alpha;
                            spr.SetTargetAlpha(this.getTargetAlpha());
                            if (this.isOnFire()) {
-                              spr.getParentSprite().soffX = (short)(this.offsetX + 1.0F * scale);
+                              spr.getParentSprite().soffX = (short)(this.offsetX + 2.0F);
                               float sprX = this.getX();
                               float sprY = this.getY();
                               int offY = 40;
@@ -6555,7 +6593,7 @@ public abstract class IsoGameCharacter
                                  offY = (int)((tempVectorBonePos.z - this.getZ()) * 96.0F + (this.isProne() ? 0 : 10));
                               }
 
-                              spr.getParentSprite().soffY = (short)(this.offsetY + -89.0F * scale - offY * scale);
+                              spr.getParentSprite().soffY = (short)(this.offsetY + -178.0F - offY * 2.0F);
                               float dxy = this.isProne() ? 0.25F : 0.5F;
                               float dz = 0.0F;
                               inf.set(1.0F, 1.0F, 1.0F, inf.a);
@@ -6608,11 +6646,11 @@ public abstract class IsoGameCharacter
          this.textureCreator.init(this);
       }
 
-      float scale = Core.tileScale;
-      float offsetX = this.offsetX + 1.0F * scale;
-      float offsetY = this.offsetY + -89.0F * scale;
+      float scale = 2.0F;
+      float offsetX = this.offsetX + 2.0F;
+      float offsetY = this.offsetY + -178.0F;
       if (this.sprite != null) {
-         this.def.setScale(scale, scale);
+         this.def.setScale(2.0F, 2.0F);
          inf.r = 1.0F;
          inf.g = 1.0F;
          inf.b = 1.0F;
@@ -7336,8 +7374,8 @@ public abstract class IsoGameCharacter
          float zoom = Core.getInstance().getZoom(playerIndex);
          BaseVehicle vehicle = this.getVehicle();
          if (vehicle == null || !vehicle.getNameCoordForPlayer(this, zoom, tempVector2_2)) {
-            float nameOffY = 128 / (2 / Core.tileScale);
-            getNameCoords(renderX, renderY, renderZ, this.offsetX, this.offsetY + nameOffY, zoom, tempVector2_2);
+            float nameOffY = 128.0F;
+            getNameCoords(renderX, renderY, renderZ, this.offsetX, this.offsetY + 128.0F, zoom, tempVector2_2);
          }
 
          float sx = tempVector2_2.x;
@@ -7514,7 +7552,7 @@ public abstract class IsoGameCharacter
       }
 
       if (DebugOptions.instance.character.debug.render.climbRope.getValue()) {
-         ClimbSheetRopeState.instance().debug(this);
+         ClimbState.instance().debug(this);
       }
 
       if (this.getNetworkCharacterAI().getBooleanDebugOptions().enable.getValue() || GameServer.server && GameServer.guiCommandline) {
@@ -7768,11 +7806,13 @@ public abstract class IsoGameCharacter
    }
 
    private void radioEquipedCheck() {
-      if (this.leftHandItem != this.leftHandCache) {
-         this.leftHandCache = this.leftHandItem;
-         if (this.leftHandItem != null && (this.equipedRadio == null || this.equipedRadio != this.rightHandItem) && this.leftHandItem instanceof Radio radio) {
+      if (this.primaryHandItem != this.primaryHandCache) {
+         this.primaryHandCache = this.primaryHandItem;
+         if (this.primaryHandItem != null
+            && (this.equipedRadio == null || this.equipedRadio != this.secondaryHandItem)
+            && this.primaryHandItem instanceof Radio radio) {
             this.equipedRadio = radio;
-         } else if (this.equipedRadio != null && this.equipedRadio != this.rightHandItem && this.equipedRadio != this.getClothingItem_Back()) {
+         } else if (this.equipedRadio != null && this.equipedRadio != this.secondaryHandItem && this.equipedRadio != this.getClothingItem_Back()) {
             if (this.equipedRadio.getDeviceData() != null) {
                this.equipedRadio.getDeviceData().cleanSoundsAndEmitter();
             }
@@ -7781,11 +7821,11 @@ public abstract class IsoGameCharacter
          }
       }
 
-      if (this.rightHandItem != this.rightHandCache) {
-         this.rightHandCache = this.rightHandItem;
-         if (this.rightHandItem != null && this.rightHandItem instanceof Radio radio) {
+      if (this.secondaryHandItem != this.secondaryHandCache) {
+         this.secondaryHandCache = this.secondaryHandItem;
+         if (this.secondaryHandItem != null && this.secondaryHandItem instanceof Radio radio) {
             this.equipedRadio = radio;
-         } else if (this.equipedRadio != null && this.equipedRadio != this.leftHandItem && this.equipedRadio != this.getClothingItem_Back()) {
+         } else if (this.equipedRadio != null && this.equipedRadio != this.primaryHandItem && this.equipedRadio != this.getClothingItem_Back()) {
             if (this.equipedRadio.getDeviceData() != null) {
                this.equipedRadio.getDeviceData().cleanSoundsAndEmitter();
             }
@@ -7798,7 +7838,7 @@ public abstract class IsoGameCharacter
          this.backCache = this.getClothingItem_Back();
          if (this.getClothingItem_Back() != null && this.getClothingItem_Back() instanceof Radio) {
             this.equipedRadio = (Radio)this.getClothingItem_Back();
-         } else if (this.equipedRadio != null && this.equipedRadio != this.leftHandItem && this.equipedRadio != this.rightHandItem) {
+         } else if (this.equipedRadio != null && this.equipedRadio != this.primaryHandItem && this.equipedRadio != this.secondaryHandItem) {
             if (this.equipedRadio.getDeviceData() != null) {
                this.equipedRadio.getDeviceData().cleanSoundsAndEmitter();
             }
@@ -7925,7 +7965,7 @@ public abstract class IsoGameCharacter
                }
 
                for (int i = 0; i < this.hitInfoList.size(); i++) {
-                  HitInfo hitInfo = (HitInfo)this.hitInfoList.get(i);
+                  HitInfo hitInfo = this.hitInfoList.get(i);
                   IsoMovingObject obj = hitInfo.getObject();
                   if (obj != null) {
                      int chance = hitInfo.chance;
@@ -8018,14 +8058,14 @@ public abstract class IsoGameCharacter
    public void SetOnFire() {
       if (!this.onFire) {
          this.setOnFire(true);
-         float scale = Core.tileScale / 2.0F;
+         float scale = 1.0F;
          this.AttachAnim(
             "Fire",
             "01",
             30,
             0.5F,
-            (int)(-(this.offsetX + 1.0F * scale)) + 8 - Rand.Next(16),
-            (int)(-(this.offsetY + -89.0F * scale)) + (int)((10 + Rand.Next(20)) * scale),
+            (int)(-(this.offsetX + 1.0F)) + 8 - Rand.Next(16),
+            (int)(-(this.offsetY + -89.0F)) + (int)((10 + Rand.Next(20)) * 1.0F),
             true,
             0,
             false,
@@ -8038,10 +8078,6 @@ public abstract class IsoGameCharacter
             ((BodyPart)this.getBodyDamage().getBodyParts().get(partIndex)).setBurned();
          }
 
-         if (scale == 2.0F) {
-            int n = this.attachedAnimSprite.size() - 1;
-            ((IsoSpriteInstance)this.attachedAnimSprite.get(n)).setScale(scale, scale);
-         }
 
          if (!this.getEmitter().isPlaying("BurningFlesh")) {
             this.getEmitter().playSoundImpl("BurningFlesh", this);
@@ -8212,6 +8248,9 @@ public abstract class IsoGameCharacter
       }
    }
 
+   public void forceOpenWindowOrDoor(IsoObject openableObject) {
+   }
+
    public void climbThroughWindow(IsoWindow w) {
       if (w.canClimbThrough(this)) {
          this.dropHeavyItems();
@@ -8268,19 +8307,35 @@ public abstract class IsoGameCharacter
       }
    }
 
-   public void climbSheetRope() {
-      if (this.canClimbSheetRope(this.current)) {
+   public void climb() {
+      boolean climbSheetRope = this.canClimbSheetRope(this.current);
+      IsoObject ladder = this.current.getLadder();
+      if (climbSheetRope || ladder != null) {
          this.dropHeavyItems();
-         this.clear(ClimbSheetRopeState.class);
-         this.getActionContext().reportEvent("EventClimbRope");
+         this.clear(ClimbState.class);
+         if (climbSheetRope) {
+            this.getActionContext().reportEvent("EventClimbRope");
+         } else {
+            this.setVariableEnum("ladderDirection", LadderDirection.UP);
+            this.set(ClimbState.CLIMBING_LADDER, ladder);
+            this.getActionContext().reportEvent("EventClimbLadder");
+         }
       }
    }
 
-   public void climbDownSheetRope() {
-      if (this.canClimbDownSheetRope(this.current)) {
+   public void climbDown() {
+      boolean climbSheetRope = this.canClimbDownSheetRope(this.current);
+      IsoObject ladder = this.current.getLadderUnder();
+      if (climbSheetRope || ladder != null) {
          this.dropHeavyItems();
-         this.clear(ClimbDownSheetRopeState.class);
-         this.getActionContext().reportEvent("EventClimbDownRope");
+         this.clear(ClimbDownState.class);
+         if (climbSheetRope) {
+            this.getActionContext().reportEvent("EventClimbDownRope");
+         } else {
+            this.setVariableEnum("ladderDirection", LadderDirection.DOWN);
+            this.set(ClimbDownState.CLIMBING_LADDER, ladder);
+            this.getActionContext().reportEvent("EventClimbDownLadder");
+         }
       }
    }
 
@@ -8312,6 +8367,37 @@ public abstract class IsoGameCharacter
       }
 
       return false;
+   }
+
+   public IsoObject getClimbLadderDown(IsoGridSquare targetGridSquare) {
+      if (targetGridSquare != null && this.getCurrentSquare() != null) {
+         IsoObject ladder = targetGridSquare.getLadderUnder();
+         if (ladder != null && ladder.getSquare() != null) {
+            IsoGridSquare squareAbove = ladder.getSquare().getSquareAbove();
+            if (squareAbove != null && squareAbove.isSolidFloor()) {
+               return null;
+            } else {
+               return squareAbove != null && squareAbove.getLadder() != null ? null : ladder;
+            }
+         } else {
+            return null;
+         }
+      } else {
+         return null;
+      }
+   }
+
+   public IsoObject getClimbLadder(IsoGridSquare targetGridSquare) {
+      if (targetGridSquare != null && this.getCurrentSquare() != null) {
+         IsoObject ladder = targetGridSquare.getLadder();
+         if (ladder == null) {
+            return null;
+         } else {
+            return !targetGridSquare.isSolidFloor() ? null : ladder;
+         }
+      } else {
+         return null;
+      }
    }
 
    public boolean canClimbDownSheetRopeInCurrentSquare() {
@@ -8350,6 +8436,85 @@ public abstract class IsoGameCharacter
       } else {
          return this.getX() >= square.getX() ? IsoDirections.W : IsoDirections.E;
       }
+   }
+
+   public boolean isClimbingDownLadder() {
+      return this.get(ClimbDownState.CLIMBING_LADDER) != null;
+   }
+
+   public void applyIdealDirection(boolean isClimbing) {
+      if (!isClimbing || !this.getVariableBoolean("climbLadderEnd") && this.getVariableBoolean("climbLadderLoop")) {
+         float minDeviation = 1.0E-4F;
+         float deceleration = 4.0F;
+         ClimbData climbData = this.getClimbData();
+         int tileX = PZMath.fastfloor(this.getX());
+         int tileY = PZMath.fastfloor(this.getY());
+         float ox = this.getX() - tileX;
+         float oy = this.getY() - tileY;
+         if (Math.abs(ox - climbData.idealx) > 1.0E-4F) {
+            float dif = (climbData.idealx - ox) / 4.0F;
+            ox += dif;
+            this.setX(tileX + ox);
+         }
+
+         if (Math.abs(oy - climbData.idealy) > 1.0E-4F) {
+            float dif = (climbData.idealy - oy) / 4.0F;
+            oy += dif;
+            this.setY(tileY + oy);
+         }
+
+         this.setNextX(this.getX());
+         this.setNextY(this.getY());
+      }
+   }
+
+   private void setIdealPosition(ClimbData climbData, IsoDirections direction, float x, float y) {
+      this.setDir(direction);
+      climbData.idealx = x;
+      climbData.idealy = y;
+   }
+
+   public void setIdealDirection(boolean isClimbing, IsoObject ladder) {
+      ClimbData climbData = this.getClimbData();
+      if (isClimbing) {
+         climbData.idealx = 0.54F;
+         climbData.idealy = 0.6F;
+         PropertyContainer properties = ladder.getProperties();
+         if (properties.has(IsoPropertyType.LADDER_N)) {
+            this.setDir(IsoDirections.N);
+         } else if (properties.has(IsoPropertyType.LADDER_W)) {
+            this.setDir(IsoDirections.W);
+         } else if (properties.has(IsoPropertyType.LADDER_S)) {
+            this.setDir(IsoDirections.S);
+         } else if (properties.has(IsoPropertyType.LADDER_E)) {
+            this.setDir(IsoDirections.E);
+         }
+      } else {
+         PropertyContainer properties = this.getCurrentSquare().getProperties();
+         if (properties.has(IsoFlagType.climbSheetE) || properties.has(IsoFlagType.climbSheetTopE)) {
+            this.setIdealPosition(climbData, IsoDirections.E, 0.5417F, 0.3144F);
+         } else if (properties.has(IsoFlagType.climbSheetW) || properties.has(IsoFlagType.climbSheetTopW)) {
+            this.setIdealPosition(climbData, IsoDirections.W, 0.4F, 0.7F);
+         } else if (properties.has(IsoFlagType.climbSheetS) || properties.has(IsoFlagType.climbSheetTopS)) {
+            this.setIdealPosition(climbData, IsoDirections.S, 0.118F, 0.5756F);
+         } else if (properties.has(IsoFlagType.climbSheetN) || properties.has(IsoFlagType.climbSheetTopN)) {
+            this.setIdealPosition(climbData, IsoDirections.N, 0.54F, 0.39F);
+         }
+      }
+   }
+
+   public void climbIdleLadder() {
+      this.setVariableEnum("ladderDirection", LadderDirection.IDLE);
+   }
+
+   public void finishClimbingLadder() {
+      this.clearVariable("climbLadderLoop");
+      this.setVariable("climbLadderEnd", true);
+   }
+
+   public float getClimbZ() {
+      float speedRate = 2.0F;
+      return this.realz + (this.getZ() - this.realz) * (float)Math.exp(-2.0F * GameTime.getInstance().getTimeDelta());
    }
 
    public void climbThroughWindow(IsoThumpable w) {
@@ -8606,8 +8771,8 @@ public abstract class IsoGameCharacter
    public void updateHandEquips() {
       if (GameServer.server) {
          INetworkPacket.sendToRelative(PacketType.Equip, this.getX(), this.getY(), new Object[]{this});
-      } else {
-         INetworkPacket.send(PacketType.Equip, new Object[]{this});
+      } else if (this instanceof IsoPlayer player && player.isLocalPlayer()) {
+         INetworkPacket.send(PacketType.Equip, new Object[]{player});
       }
 
       this.handItemShouldSendToClients = false;
@@ -9316,8 +9481,8 @@ public abstract class IsoGameCharacter
             if (updated) {
                this.resetModelNextFrame();
                LuaEventManager.triggerEvent("OnClothingUpdated", this);
-               if (GameClient.client) {
-                  GameClient.instance.sendVisual((IsoPlayer)this);
+               if (GameClient.client && this instanceof IsoPlayer player) {
+                  GameClient.instance.sendVisual(player);
                }
             }
          }
@@ -9332,7 +9497,7 @@ public abstract class IsoGameCharacter
       if (!this.shouldBeFalling()) {
          this.setFallTime(0.0F);
          this.lastFallSpeed = 0.0F;
-         this.falling = false;
+         this.setbFalling(false);
          this.isOnGround = true;
       } else {
          float dt = GameTime.getInstance().getTimeDelta();
@@ -9354,13 +9519,13 @@ public abstract class IsoGameCharacter
             this.DoLand(impactSpeed);
             this.setFallTime(0.0F);
             this.lastFallSpeed = 0.0F;
-            this.falling = false;
+            this.setbFalling(false);
             this.isOnGround = true;
          } else {
             this.setZ(newZ);
             this.fallTime = fallSpeed / 5.0010414F;
             this.lastFallSpeed = fallSpeed;
-            this.falling = FallingConstants.isFall(fallSpeed);
+            this.setbFalling(FallingConstants.isFall(fallSpeed));
             this.isOnGround = false;
          }
 
@@ -9724,7 +9889,7 @@ public abstract class IsoGameCharacter
       runSpeed *= this.fullSpeedMod;
       runSpeed += this.getPerkLevel(Perks.Sprinting) / 20.0F;
       runSpeed -= Math.abs(injurySpeed / 1.5F);
-      if ("Tutorial".equals(Core.gameMode)) {
+      if (Core.getInstance().isTutorial()) {
          runSpeed = Math.max(1.0F, runSpeed);
       }
 
@@ -9824,7 +9989,7 @@ public abstract class IsoGameCharacter
          IsoObject best = null;
 
          for (int i = 0; i < sq.getObjects().size(); i++) {
-            IsoObject obj = (IsoObject)sq.getObjects().get(i);
+            IsoObject obj = sq.getObjects().get(i);
             if (obj.sprite != null && obj.sprite.getProperties().has(IsoFlagType.solidfloor) && best == null) {
                best = obj;
             }
@@ -10185,13 +10350,17 @@ public abstract class IsoGameCharacter
    }
 
    public boolean faceLocationF(float x, float y) {
-      float diffX = x - this.getX();
-      float diffY = y - this.getY();
-      if (PZMath.equal(diffX, 0.0F) && PZMath.equal(diffY, 0.0F)) {
-         DebugType.FaceLocationFix.printStackTrace(LogSeverity.Warning, -1, "faceLocationF at itself!", new Object[0]);
-         return false;
+      if (!this.isCurrentState(ClimbDownState.instance()) && !this.isCurrentState(ClimbState.instance())) {
+         float diffX = x - this.getX();
+         float diffY = y - this.getY();
+         if (PZMath.equal(diffX, 0.0F) && PZMath.equal(diffY, 0.0F)) {
+            DebugType.FaceLocationFix.printStackTrace(LogSeverity.Warning, -1, "faceLocationF at itself!", new Object[0]);
+            return false;
+         } else {
+            this.setForwardDirection(diffX, diffY);
+            return true;
+         }
       } else {
-         this.setForwardDirection(diffX, diffY);
          return true;
       }
    }
@@ -10301,42 +10470,54 @@ public abstract class IsoGameCharacter
       return this.getAttachedItems().contains(item);
    }
 
+   public void faceThisEdgeElement(GridSquareEdgeElement edgeElement) {
+      if (edgeElement instanceof IsoObject isoObject) {
+         this.faceThisObject(isoObject);
+      } else if (this.current == edgeElement.getSquare()) {
+         this.setForwardIsoDirection(edgeElement.isNorth() ? IsoDirections.N : IsoDirections.W);
+      } else if (this.current == edgeElement.getOppositeSquare()) {
+         this.setForwardIsoDirection(edgeElement.isNorth() ? IsoDirections.S : IsoDirections.E);
+      }
+   }
+
    public void faceThisObject(IsoObject object) {
       if (object instanceof IsoGameCharacter) {
          this.faceThisObjectAlt(object);
       } else if (object != null && object.getObjectIndex() != -1) {
-         Vector2 facingPosition = pzopt.UpdateBatch.tempoScratch(); // pzopt: entityUpdateParallel -- the static tempo scratch is shared by every character on every thread (faceThisObject through the batch threw the zero-length exception in run lou-pipe-off); per-thread scratch, identical output single-threaded
-         BaseVehicle objVehicle = (BaseVehicle)Type.tryCastTo(object, BaseVehicle.class);
-         BarricadeAble barricadeAble = (BarricadeAble)Type.tryCastTo(object, BarricadeAble.class);
-         if (objVehicle != null) {
-            objVehicle.getFacingPosition(this, facingPosition);
-            facingPosition.x = facingPosition.x - this.getX();
-            facingPosition.y = facingPosition.y - this.getY();
-            this.DirectionFromVector(facingPosition);
-            facingPosition.normalize();
-            this.setForwardDirection(facingPosition.x, facingPosition.y);
-         } else if (barricadeAble != null && this.current == barricadeAble.getSquare()) {
-            this.setForwardIsoDirection(barricadeAble.getNorth() ? IsoDirections.N : IsoDirections.W);
-         } else if (barricadeAble != null && this.current == barricadeAble.getOppositeSquare()) {
-            this.setForwardIsoDirection(barricadeAble.getNorth() ? IsoDirections.S : IsoDirections.E);
-         } else {
-            if (object.hasSpriteGrid()) {
-               object = object.getClosestSpriteGridObject(this.getX(), this.getY());
-            }
-
-            object.getFacingPosition(facingPosition);
-            facingPosition.x = facingPosition.x - this.getX();
-            facingPosition.y = facingPosition.y - this.getY();
-            facingPosition.normalize();
-            this.DirectionFromVector(facingPosition);
-            if (facingPosition.getLength() > 0.0F) {
+         if (!this.isCurrentState(ClimbDownState.instance()) && !this.isCurrentState(ClimbState.instance())) {
+            Vector2 facingPosition = pzopt.UpdateBatch.tempoScratch(); // pzopt: entityUpdateParallel -- the static tempo scratch is shared by every character on every thread (faceThisObject through the batch threw the zero-length exception in run lou-pipe-off); per-thread scratch, identical output single-threaded
+            BaseVehicle objVehicle = (BaseVehicle)Type.tryCastTo(object, BaseVehicle.class);
+            BarricadeAble barricadeAble = (BarricadeAble)Type.tryCastTo(object, BarricadeAble.class);
+            if (objVehicle != null) {
+               objVehicle.getFacingPosition(this, facingPosition);
+               facingPosition.x = facingPosition.x - this.getX();
+               facingPosition.y = facingPosition.y - this.getY();
+               this.DirectionFromVector(facingPosition);
+               facingPosition.normalize();
                this.setForwardDirection(facingPosition.x, facingPosition.y);
-            }
-         }
+            } else if (barricadeAble != null && this.current == barricadeAble.getSquare()) {
+               this.setForwardIsoDirection(barricadeAble.isNorth() ? IsoDirections.N : IsoDirections.W);
+            } else if (barricadeAble != null && this.current == barricadeAble.getOppositeSquare()) {
+               this.setForwardIsoDirection(barricadeAble.isNorth() ? IsoDirections.S : IsoDirections.E);
+            } else {
+               if (object.hasSpriteGrid()) {
+                  object = object.getClosestSpriteGridObject(this.getX(), this.getY());
+               }
 
-         AnimationPlayer animationPlayer = this.getAnimationPlayer();
-         if (animationPlayer != null && animationPlayer.isReady()) {
-            animationPlayer.updateForwardDirection(this);
+               object.getFacingPosition(facingPosition);
+               facingPosition.x = facingPosition.x - this.getX();
+               facingPosition.y = facingPosition.y - this.getY();
+               facingPosition.normalize();
+               this.DirectionFromVector(facingPosition);
+               if (facingPosition.getLength() > 0.0F) {
+                  this.setForwardDirection(facingPosition.x, facingPosition.y);
+               }
+            }
+
+            AnimationPlayer animationPlayer = this.getAnimationPlayer();
+            if (animationPlayer != null && animationPlayer.isReady()) {
+               animationPlayer.updateForwardDirection(this);
+            }
          }
       }
    }
@@ -11513,92 +11694,54 @@ public abstract class IsoGameCharacter
    }
 
    public void dropHandItems() {
-      if (!"Tutorial".equals(Core.gameMode)) {
+      if (!Core.getInstance().isTutorial()) {
          if (!(this instanceof IsoPlayer player && !player.isLocalPlayer())) {
             this.dropHeavyItems();
-            IsoGridSquare sq = this.getCurrentSquare();
-            if (sq != null) {
-               InventoryItem item1 = this.getPrimaryHandItem();
-               InventoryItem item2 = this.getSecondaryHandItem();
-               if (item1 != null || item2 != null) {
-                  sq = this.getSolidFloorAt(sq.x, sq.y, sq.z);
-                  if (sq != null) {
-                     if (item1 != null) {
-                        this.setPrimaryHandItem(null);
-                        if (!GameClient.client) {
-                           this.getInventory().DoRemoveItem(item1);
-                           float dropX = Rand.Next(0.1F, 0.9F);
-                           float dropY = Rand.Next(0.1F, 0.9F);
-                           float dropZ = sq.getApparentZ(dropX, dropY) - sq.getZ();
-                           sq.AddWorldInventoryItem(item1, dropX, dropY, dropZ);
-                           LuaEventManager.triggerEvent("OnContainerUpdate");
-                        }
-
-                        LuaEventManager.triggerEvent("onItemFall", item1);
-                        this.playDropItemSound(item1);
-                     }
-
-                     if (item2 != null) {
-                        this.setSecondaryHandItem(null);
-                        boolean inBothHand = item2 == item1;
-                        if (!inBothHand) {
-                           if (!GameClient.client) {
-                              this.getInventory().DoRemoveItem(item2);
-                              float dropX = Rand.Next(0.1F, 0.9F);
-                              float dropY = Rand.Next(0.1F, 0.9F);
-                              float dropZ = sq.getApparentZ(dropX, dropY) - sq.getZ();
-                              sq.AddWorldInventoryItem(item2, dropX, dropY, dropZ);
-                              LuaEventManager.triggerEvent("OnContainerUpdate");
-                           }
-
-                           LuaEventManager.triggerEvent("onItemFall", item2);
-                           this.playDropItemSound(item2);
-                        }
-                     }
-
-                     if (GameClient.client && this.isLocal()) {
-                        INetworkPacket.send(PacketType.PlayerDropHeldItems, new Object[]{this, sq.x, sq.y, sq.z, false});
-                        INetworkPacket.send(PacketType.Equip, new Object[]{this});
-                     }
-                  }
-               }
-            }
+            this.tryPerformDropHeldItem(this::dropHandItemsInternal);
          }
       }
    }
 
-   public void dropHeldItems(int x, int y, int z, boolean heavy, boolean isThrow) {
+   public void dropHeldItemsServer() {
       if (GameServer.server) {
-         InventoryItem item1 = this.getPrimaryHandItem();
-         InventoryItem item2 = this.getSecondaryHandItem();
-         if (item1 != null || item2 != null) {
-            IsoGridSquare sq = this.getSolidFloorAt(x, y, z);
-            if (sq != null) {
-               boolean drop1 = heavy ? this.isHeavyItem(item1) : item1 != null;
-               if (drop1) {
-                  this.setPrimaryHandItem(null);
-                  this.getInventory().DoRemoveItem(item1);
-                  GameServer.sendRemoveItemFromContainer(this.getInventory(), item1);
-                  if (!isThrow) {
-                     float dropX = Rand.Next(0.1F, 0.9F);
-                     float dropY = Rand.Next(0.1F, 0.9F);
-                     float dropZ = sq.getApparentZ(dropX, dropY) - sq.getZ();
-                     sq.AddWorldInventoryItem(item1, dropX, dropY, dropZ);
-                  }
-               }
+         IsoGridSquare square = this.getCurrentSquare();
+         if (square != null) {
+            this.dropHeldItemsServer(square.x, square.y, square.z, Flags.dropBothHeldItems.getFlags());
+         }
+      }
+   }
 
-               if (!isThrow) {
-                  boolean drop2 = heavy ? this.isHeavyItem(item2) : item2 != null;
-                  if (drop2) {
-                     this.setSecondaryHandItem(null);
-                     boolean inBothHand = item2 == item1;
-                     if (!inBothHand) {
-                        this.getInventory().DoRemoveItem(item2);
-                        GameServer.sendRemoveItemFromContainer(this.getInventory(), item2);
-                        float dropX = Rand.Next(0.1F, 0.9F);
-                        float dropY = Rand.Next(0.1F, 0.9F);
-                        float dropZ = sq.getApparentZ(dropX, dropY) - sq.getZ();
-                        sq.AddWorldInventoryItem(item2, dropX, dropY, dropZ);
+   public void dropHeldItemsServer(int x, int y, int z, EnumByteFlags<Flag> flags) {
+      if (GameServer.server) {
+         if (this.hasHandItems()) {
+            IsoGridSquare onSquare = this.getSolidFloorAt(x, y, z);
+            if (onSquare != null) {
+               boolean dropPrimary = flags.has(Flag.dropPrimary);
+               boolean dropSecondary = flags.has(Flag.dropSecondary);
+               if (dropPrimary || dropSecondary) {
+                  if (dropPrimary) {
+                     InventoryItem handItem = this.getPrimaryHandItem();
+                     if (handItem != null) {
+                        boolean inBothHand = this.isItemInBothHands(handItem);
+                        this.setPrimaryHandItem(null);
+                        if (inBothHand) {
+                           this.setSecondaryHandItem(null);
+                        }
+
+                        this.onDroppedHandItemServer(onSquare, handItem, flags);
+                     }
+                  }
+
+                  if (dropSecondary) {
+                     InventoryItem handItem = this.getSecondaryHandItem();
+                     if (handItem != null) {
+                        boolean inBothHand = this.isItemInBothHands(handItem);
+                        this.setSecondaryHandItem(null);
+                        if (inBothHand) {
+                           this.setPrimaryHandItem(null);
+                        }
+
+                        this.onDroppedHandItemServer(onSquare, handItem, flags);
                      }
                   }
                }
@@ -12448,7 +12591,12 @@ public abstract class IsoGameCharacter
    }
 
    public boolean isTimedActionInstant() {
-      return Core.debug && DebugOptions.instance.cheat.timedAction.instant.getValue() ? true : this.isTimedActionInstantCheat();
+      if (!Role.hasCapability(this, Capability.UseTimedActionInstantCheat)) {
+         this.getCheats().set(CheatType.TIMED_ACTION_INSTANT, false);
+         return false;
+      } else {
+         return Core.debug && DebugOptions.instance.cheat.timedAction.instant.getValue() ? true : this.isTimedActionInstantCheat();
+      }
    }
 
    public boolean isShowAdminTag() {
@@ -13541,7 +13689,7 @@ public abstract class IsoGameCharacter
          return false;
       }
 
-      if ("Tutorial".equals(Core.gameMode)) {
+      if (Core.getInstance().isTutorial()) {
          return true;
       }
 
@@ -13645,7 +13793,7 @@ public abstract class IsoGameCharacter
    public boolean testDefense(IsoZombie zomb) {
       if (this.testDotSide(zomb).equals("FRONT") && !zomb.crawling && this.getSurroundingAttackingZombies() <= 3) {
          int defendChance = 0;
-         if ("KnifeDeath".equals(this.getVariableString("ZombieHitReaction"))) {
+         if (HitReaction.KNIFE_DEATH.getValue().equals(this.getVariableString("ZombieHitReaction"))) {
             defendChance += 30;
          }
 
@@ -13879,7 +14027,7 @@ public abstract class IsoGameCharacter
    }
 
    public String getFireMode() {
-      return this.leftHandItem instanceof HandWeapon weapon ? weapon.getFireMode() : "";
+      return this.primaryHandItem instanceof HandWeapon weapon ? weapon.getFireMode() : "";
    }
 
    public boolean isAiming() {
@@ -13912,15 +14060,15 @@ public abstract class IsoGameCharacter
 
    public void resetBeardGrowingTime() {
       this.beardGrowTiming = (float)this.getHoursSurvived();
-      if (GameClient.client && this instanceof IsoPlayer) {
-         GameClient.instance.sendVisual((IsoPlayer)this);
+      if (GameClient.client && this instanceof IsoPlayer player) {
+         GameClient.instance.sendVisual(player);
       }
    }
 
    public void resetHairGrowingTime() {
       this.hairGrowTiming = (float)this.getHoursSurvived();
-      if (GameClient.client && this instanceof IsoPlayer) {
-         GameClient.instance.sendVisual((IsoPlayer)this);
+      if (GameClient.client && this instanceof IsoPlayer player) {
+         GameClient.instance.sendVisual(player);
       }
    }
 
@@ -14345,71 +14493,177 @@ public abstract class IsoGameCharacter
       return null;
    }
 
-   public void dropHeavyItems() {
-      IsoGridSquare sq = this.getCurrentSquare();
-      if (sq != null) {
-         InventoryItem item1 = this.getPrimaryHandItem();
-         InventoryItem item2 = this.getSecondaryHandItem();
-         if (item1 != null || item2 != null) {
-            sq = this.getSolidFloorAt(sq.x, sq.y, sq.z);
-            if (sq != null) {
-               if (this.isHeavyItem(item1)) {
-                  this.setPrimaryHandItem(null);
-                  if (!GameClient.client) {
-                     this.getInventory().DoRemoveItem(item1);
-                     float dropX = Rand.Next(0.1F, 0.9F);
-                     float dropY = Rand.Next(0.1F, 0.9F);
-                     float dropZ = sq.getApparentZ(dropX, dropY) - sq.getZ();
-                     sq.AddWorldInventoryItem(item1, dropX, dropY, dropZ);
-                     LuaEventManager.triggerEvent("OnContainerUpdate");
-                  }
-
-                  LuaEventManager.triggerEvent("onItemFall", item1);
-                  this.playDropItemSound(item1);
-               }
-
-               if (this.isHeavyItem(item2)) {
-                  this.setSecondaryHandItem(null);
-                  boolean inBothHand = item1 == item2;
-                  if (!inBothHand) {
-                     if (!GameClient.client) {
-                        this.getInventory().DoRemoveItem(item2);
-                        float dropX = Rand.Next(0.1F, 0.9F);
-                        float dropY = Rand.Next(0.1F, 0.9F);
-                        float dropZ = sq.getApparentZ(dropX, dropY) - sq.getZ();
-                        sq.AddWorldInventoryItem(item2, dropX, dropY, dropZ);
-                        LuaEventManager.triggerEvent("OnContainerUpdate");
-                     }
-
-                     LuaEventManager.triggerEvent("onItemFall", item2);
-                     this.playDropItemSound(item2);
-                  }
-               }
-
-               if (GameClient.client && this.isLocal()) {
-                  INetworkPacket.send(PacketType.PlayerDropHeldItems, new Object[]{this, sq.x, sq.y, sq.z, true});
-                  INetworkPacket.send(PacketType.Equip, new Object[]{this});
-               }
-            }
-         }
+   public String getPrimaryHandMask() {
+      if (!StringUtils.isNullOrEmpty(this.primaryHandMask)) {
+         return this.primaryHandMask;
+      } else {
+         return this.canPerformHandToHandCombatWithPrimary()
+            ? ""
+            : this.getHandMaskForItem(this.getPrimaryHandItem(), zombie.scripting.objects.HeldItemMaskKey.Entry::primary);
       }
    }
 
-   public boolean isHeavyItem(InventoryItem item) {
-      if (item == null) {
+   public String getSecondaryHandMask() {
+      if (!StringUtils.isNullOrEmpty(this.secondaryHandMask)) {
+         return this.secondaryHandMask;
+      } else {
+         return this.canPerformHandToHandCombatWithSecondary()
+            ? ""
+            : this.getHandMaskForItem(this.getSecondaryHandItem(), zombie.scripting.objects.HeldItemMaskKey.Entry::secondary);
+      }
+   }
+
+   private String getHandMaskForItem(InventoryItem handItem, Function<zombie.scripting.objects.HeldItemMaskKey.Entry, String> dexGetter) {
+      if (handItem != null) {
+         if (handItem.hasTag(ItemTag.HELD_ITEM_MASK_BAG)) {
+            return dexGetter.apply(HeldItemMaskKey.HOLDING_BAG);
+         }
+
+         if (handItem.hasTag(ItemTag.HELD_ITEM_MASK_BUCKET)) {
+            return dexGetter.apply(HeldItemMaskKey.HOLDING_BUCKET);
+         }
+
+         if (handItem.hasTag(ItemTag.HELD_ITEM_MASK_TORCH)) {
+            return dexGetter.apply(HeldItemMaskKey.HOLDING_TORCH);
+         }
+
+         if (this.isItemInBothHands(handItem)) {
+            if (InventoryItem.isHeavyItem(handItem)) {
+               return dexGetter.apply(HeldItemMaskKey.HOLDING_HEAVY_BOTH_HANDS);
+            }
+
+            return dexGetter.apply(HeldItemMaskKey.HOLDING_BOTH_HANDS);
+         }
+      }
+
+      return dexGetter.apply(HeldItemMaskKey.HOLDING_TORCH);
+   }
+
+   public void setSecondaryHandMask(String newVal) {
+      this.secondaryHandMask = StringUtils.isNullOrWhitespace(newVal) ? "" : newVal;
+   }
+
+   public void setPrimaryHandMask(String newVal) {
+      this.primaryHandMask = StringUtils.isNullOrWhitespace(newVal) ? "" : newVal;
+   }
+
+   public boolean canPerformHandToHandCombat() {
+      return this.canPerformHandToHandCombatWithPrimary() || this.canPerformHandToHandCombatWithSecondary();
+   }
+
+   public boolean canPerformHandToHandCombatWithPrimary() {
+      return InventoryItem.canPerformHandToHandWithItem(this.getPrimaryHandItem(), InventoryItem::getItemReplacementPrimaryHand, this.primaryHandModel);
+   }
+
+   public boolean canPerformHandToHandCombatWithSecondary() {
+      return InventoryItem.canPerformHandToHandWithItem(this.getSecondaryHandItem(), InventoryItem::getItemReplacementSecondHand, this.secondaryHandModel);
+   }
+
+   public void dropHandItemForHandToHand() {
+      if (!this.canPerformHandToHandCombat() && !this.isSeatedInVehicle()) {
+         this.dropPrimaryHandItem();
+      }
+   }
+
+   public void dropHeavyItems() {
+      this.tryPerformDropHeldItem(this::dropHeavyItemsInternal);
+   }
+
+   public void dropPrimaryHandItem() {
+      this.tryPerformDropHeldItem(this::dropPrimaryHandItemInternal);
+   }
+
+   public void dropSecondaryHandItem() {
+      this.tryPerformDropHeldItem(this::dropSecondaryHandItemInternal);
+   }
+
+   private boolean tryPerformDropHeldItem(Predicate<IsoGridSquare> performDrop) {
+      IsoGridSquare dropOnSquare = this.getDropOnSquare();
+      if (dropOnSquare == null) {
          return false;
-      } else if (item instanceof InventoryContainer) {
-         return true;
-      } else if (item.hasTag(ItemTag.HEAVY_ITEM)) {
+      }
+
+      if (GameClient.client && this.isLocal()) {
+         INetworkPacket.send(PacketType.Equip, new Object[]{this});
+      }
+
+      return performDrop.test(dropOnSquare);
+   }
+
+   private boolean dropHeavyItemsInternal(IsoGridSquare dropOnSquare) {
+      boolean droppedPrimary = InventoryItem.isHeavyItem(this.getPrimaryHandItem()) && this.dropPrimaryHandItemInternal(dropOnSquare);
+      boolean droppedSecondary = InventoryItem.isHeavyItem(this.getSecondaryHandItem()) && this.dropSecondaryHandItemInternal(dropOnSquare);
+      return droppedPrimary || droppedSecondary;
+   }
+
+   private boolean dropHandItemsInternal(IsoGridSquare dropOnSquare) {
+      boolean droppedPrimary = this.dropPrimaryHandItemInternal(dropOnSquare);
+      boolean droppedSecondary = this.dropSecondaryHandItemInternal(dropOnSquare);
+      return droppedPrimary || droppedSecondary;
+   }
+
+   private boolean dropPrimaryHandItemInternal(IsoGridSquare dropOnSquare) {
+      return this.tryDropHandItem(this.getPrimaryHandItem(), dropOnSquare, handItem -> {
+         this.setPrimaryHandItem(null);
+         if (this.getSecondaryHandItem() == handItem) {
+            this.setSecondaryHandItem(null);
+         }
+      });
+   }
+
+   private boolean dropSecondaryHandItemInternal(IsoGridSquare dropOnSquare) {
+      return this.tryDropHandItem(this.getSecondaryHandItem(), dropOnSquare, handItem -> {
+         this.setSecondaryHandItem(null);
+         if (this.getPrimaryHandItem() == handItem) {
+            this.setPrimaryHandItem(null);
+         }
+      });
+   }
+
+   private @Nullable IsoGridSquare getDropOnSquare() {
+      IsoGridSquare currentSq = this.getCurrentSquare();
+      return currentSq != null ? this.getSolidFloorAt(currentSq.x, currentSq.y, currentSq.z) : null;
+   }
+
+   private boolean tryDropHandItem(InventoryItem handItem, IsoGridSquare dropOnSquare, Consumer<InventoryItem> onSuccess) {
+      if (handItem != null && dropOnSquare != null) {
+         Flags itemDropFlags = this.getItemDropFlags(handItem);
+         onSuccess.accept(handItem);
+         this.onDroppedHandItem(dropOnSquare, handItem, itemDropFlags.getFlags());
          return true;
       } else {
-         return !"CorpseMale".equals(item.getType())
-               && !"CorpseFemale".equals(item.getType())
-               && !"Animal".equals(item.getType())
-               && !"CorpseAnimal".equals(item.getType())
-            ? item.getType().equals("Generator")
-            : true;
+         return false;
       }
+   }
+
+   private void onDroppedHandItem(@NonNull IsoGridSquare onSquare, @NonNull InventoryItem droppedHandItem, EnumByteFlags<Flag> itemDropFlags) {
+      if (!GameClient.client) {
+         this.getInventory().DoRemoveItem(droppedHandItem);
+         performDropItemOnSquare(onSquare, droppedHandItem);
+         LuaEventManager.triggerEvent("OnContainerUpdate");
+      }
+
+      LuaEventManager.triggerEvent("onItemFall", droppedHandItem);
+      this.playDropItemSound(droppedHandItem);
+      if (GameClient.client && this.isLocal()) {
+         INetworkPacket.send(PacketType.PlayerDropHeldItems, new Object[]{this, onSquare.x, onSquare.y, onSquare.z, itemDropFlags});
+      }
+   }
+
+   private void onDroppedHandItemServer(@NonNull IsoGridSquare onSquare, @NonNull InventoryItem droppedHandItem, EnumByteFlags<Flag> itemDropFlags) {
+      boolean isThrow = itemDropFlags.has(Flag.isThrow);
+      this.getInventory().DoRemoveItem(droppedHandItem);
+      GameServer.sendRemoveItemFromContainer(this.getInventory(), droppedHandItem);
+      if (!isThrow) {
+         performDropItemOnSquare(onSquare, droppedHandItem);
+      }
+   }
+
+   private static void performDropItemOnSquare(IsoGridSquare onSquare, InventoryItem droppedHandItem) {
+      float dropX = Rand.Next(0.1F, 0.9F);
+      float dropY = Rand.Next(0.1F, 0.9F);
+      float dropZ = onSquare.getApparentZ(dropX, dropY) - onSquare.getZ();
+      onSquare.AddWorldInventoryItem(droppedHandItem, dropX, dropY, dropZ);
    }
 
    public boolean isCanShout() {
@@ -14598,12 +14852,12 @@ public abstract class IsoGameCharacter
    }
 
    public void updateEquippedItemSounds() {
-      if (this.leftHandItem != null) {
-         this.leftHandItem.updateEquippedAndActivatedSound();
+      if (this.primaryHandItem != null) {
+         this.primaryHandItem.updateEquippedAndActivatedSound();
       }
 
-      if (this.rightHandItem != null) {
-         this.rightHandItem.updateEquippedAndActivatedSound();
+      if (this.secondaryHandItem != null) {
+         this.secondaryHandItem.updateEquippedAndActivatedSound();
       }
 
       WornItems wornItems1 = this.getWornItems();
@@ -14689,10 +14943,6 @@ public abstract class IsoGameCharacter
                spn = 1;
             }
 
-            if (Core.lastStand) {
-               spn *= 3;
-            }
-
             switch (SandboxOptions.instance.bloodLevel.getValue()) {
                case 2:
                   spn /= 2;
@@ -14754,7 +15004,7 @@ public abstract class IsoGameCharacter
             }
          }
       } catch (IOException e) {
-         DebugType.Multiplayer.printException(e, "ReadInventory error id=" + this.getOnlineID(), LogSeverity.Error);
+         ExceptionLogger.logException(e);
       }
    }
 
@@ -14799,10 +15049,7 @@ public abstract class IsoGameCharacter
                this.getNetworkCharacterAI().onDied();
             } else {
                if (GameServer.server) {
-                  IsoGridSquare square = this.getCurrentSquare();
-                  if (square != null) {
-                     this.dropHeldItems(square.x, square.y, square.z, false, false);
-                  }
+                  this.dropHeldItemsServer();
                }
 
                this.becomeCorpse();
@@ -14948,7 +15195,7 @@ public abstract class IsoGameCharacter
                if (driver.isLocal()) {
                   if ((hitVars.anyDamage() || hitVars.isAnimalHit()) && this.getNetworkCharacterAI().hasHitIntervalPassed()) {
                      this.getNetworkCharacterAI().resetHitInterval();
-                     GameClient.sendVehicleHit(driver, this, hitByVehicle, hitVars.damageToPedestrian, hitVars.isTargetHitFromBehind, hitVars.hitSpeed);
+                     GameClient.sendVehicleHit(driver, this, hitByVehicle, hitVars.isTargetHitFromBehind);
                   }
                } else {
                   this.getNetworkCharacterAI().hitByVehicle();
@@ -15997,7 +16244,7 @@ public abstract class IsoGameCharacter
             font, sx, sy + (var36 = dy + 14.0F), String.format("Class state: %s ( %s )", this.getCurrentStateName(), subStateName), c.r, c.g, c.b, c.a
          );
          String childStateName = "";
-         if (!this.getActionContext().getChildStates().isEmpty() && this.getActionContext().getChildStateAt(0) != null) {
+         if (this.getActionContext().hasChildStates() && this.getActionContext().getChildStateAt(0) != null) {
             childStateName = this.getActionContext().getChildStateAt(0).getName();
          }
 
@@ -16372,7 +16619,7 @@ public abstract class IsoGameCharacter
       return object.isGenericCraftingSurface() && this.getSquare().canReachTo(object.getSquare());
    }
 
-   public PZArrayList<HitInfo> getHitInfoList() {
+   public ArrayList<HitInfo> getHitInfoList() {
       return this.hitInfoList;
    }
 
@@ -16404,6 +16651,10 @@ public abstract class IsoGameCharacter
 
    public boolean isUnarmed() {
       return this.getUseHandWeapon() == null && !(this.getPrimaryHandItem() instanceof HandWeapon);
+   }
+
+   public boolean isNotHoldingHandWeapon() {
+      return !(this.getPrimaryHandItem() instanceof HandWeapon) && !(this.getSecondaryHandItem() instanceof HandWeapon);
    }
 
    public boolean isMeleeWeaponEquipped() {
@@ -16647,7 +16898,7 @@ public abstract class IsoGameCharacter
 
    public boolean isClimbingRope() {
       return this.getCurrentState() != null
-         && (this.getCurrentState().equals(ClimbSheetRopeState.instance()) || this.getCurrentState().equals(ClimbDownSheetRopeState.instance()));
+         && (this.getCurrentState().equals(ClimbState.instance()) || this.getCurrentState().equals(ClimbDownState.instance()));
    }
 
    public void fallFromRope() {
@@ -16669,6 +16920,10 @@ public abstract class IsoGameCharacter
    }
 
    public float getClimbRopeSpeed(boolean down) {
+      if (this.isInLadderEndTransition()) {
+         return 0.08F;
+      }
+
       int effectiveStrength = Math.max(this.getPerkLevel(Perks.Strength), this.getPerkLevel(Perks.Fitness))
          - (
             this.getMoodles().getMoodleLevel(MoodleType.DRUNK)
@@ -16740,6 +16995,10 @@ public abstract class IsoGameCharacter
       }
 
       return climbSpeed * 0.5F;
+   }
+
+   private boolean isInLadderEndTransition() {
+      return this.getVariableBoolean("climbLadderEnd");
    }
 
    public void setClimbRopeTime(float time) {
@@ -16838,8 +17097,8 @@ public abstract class IsoGameCharacter
       this.teleportTo((int)newX, (int)newY, 0);
    }
 
-   public void teleportTo(float newX, float newY, int newZ) {
-      this.teleportTo(PZMath.fastfloor(newX), PZMath.fastfloor(newY), newZ);
+   public void teleportTo(float newX, float newY, float newZ) {
+      this.teleportTo(PZMath.fastfloor(newX), PZMath.fastfloor(newY), PZMath.fastfloor(newZ));
    }
 
    public void teleportTo(int newX, int newY, int newZ) {
@@ -16897,10 +17156,6 @@ public abstract class IsoGameCharacter
 
    public ClimbData getClimbData() {
       return this.climbData;
-   }
-
-   public void setClimbData(ClimbData climbData) {
-      this.climbData = climbData;
    }
 
    public float getIdleSquareTime() {
@@ -17075,6 +17330,10 @@ public abstract class IsoGameCharacter
       return this.getInventory().getFreeCapacity(this);
    }
 
+   public boolean isClimbingLadder() {
+      return this.get(ClimbState.CLIMBING_LADDER) != null;
+   }
+
    public void onFireLightSourceCheck() {
       if (!this.onFire) {
          if (this.onFireLightSource != null) {
@@ -17111,10 +17370,10 @@ public abstract class IsoGameCharacter
    protected void createFallingItem(InventoryItem item) {
       float x = this.getX();
       float y = this.getY();
-      float z = this.getZ();
+      float z = this.getFallZ();
       if (GameServer.server) {
          IsoGridSquare square = this.getCell().getGridSquare(x, y, z);
-         square.AddWorldInventoryItem(item, x % 1.0F, y % 1.0F, z, false);
+         square.AddWorldInventoryItem(item, x % 1.0F, y % 1.0F, z - square.getZ(), false);
          INetworkPacket.sendToRelative(PacketType.ZombieHelmetFalling, x, y, new Object[]{this, item, x, y, z});
       } else {
          new IsoFallingClothing(this.getCell(), x, y, z + 0.4F, Rand.Next(-0.2F, 0.2F), Rand.Next(-0.2F, 0.2F), item);
@@ -17133,6 +17392,68 @@ public abstract class IsoGameCharacter
                }
             }
          }
+      }
+   }
+
+   public boolean isHeadCameraZ() {
+      return this.headCameraZ;
+   }
+
+   public void setHeadCameraZ(boolean value) {
+      this.headCameraZ = value;
+   }
+
+   public int getBaseForceOpenChance() {
+      return switch (this.getPerkLevel(Perks.Strength)) {
+         case 2, 3 -> 4;
+         case 4, 5 -> 6;
+         case 6, 7 -> 10;
+         case 8, 9, 10 -> 20;
+         default -> 1;
+      };
+   }
+
+   public void exertForForcing() {
+      switch (this.getPerkLevel(Perks.Fitness)) {
+         case 0:
+            this.exert(0.011F);
+            break;
+         case 1:
+            this.exert(0.01F);
+            break;
+         case 2:
+            this.exert(0.009F);
+            break;
+         case 3:
+            this.exert(0.008F);
+            break;
+         case 4:
+            this.exert(0.007F);
+            break;
+         case 5:
+            this.exert(0.006F);
+            break;
+         case 6:
+            this.exert(0.005F);
+            break;
+         case 7:
+            this.exert(0.004F);
+            break;
+         case 8:
+            this.exert(0.003F);
+            break;
+         case 9:
+            this.exert(0.0025F);
+            break;
+         case 10:
+            this.exert(0.002F);
+            break;
+         default:
+            this.exert(0.012F);
+      }
+
+      if (this.getPrimaryHandItem() instanceof HandWeapon handWeapon && (!this.hasTrait(CharacterTrait.BURGLAR) || Rand.Next(100) < 50)) {
+         this.addCombatMuscleStrain(handWeapon);
       }
    }
 
@@ -17188,8 +17509,13 @@ public abstract class IsoGameCharacter
                               this.addBandageModel(chr, bandageType);
                            }
                         } else {
-                           this.removeBandageModel(chr, bandageType);
-                           this.removeBandageModel(chr, bandageTypeBlood);
+                           if (this.removeBandageModel(chr, bandageType)) {
+                              chr.syncClothing();
+                           }
+
+                           if (this.removeBandageModel(chr, bandageTypeBlood)) {
+                              chr.syncClothing();
+                           }
                         }
                      }
 
@@ -17201,8 +17527,8 @@ public abstract class IsoGameCharacter
                            }
 
                            this.addBandageModel(chr, woundType);
-                        } else {
-                           this.removeBandageModel(chr, bodyPart.getType().getBiteWoundModel(chr.getCharacterGender()));
+                        } else if (this.removeBandageModel(chr, bodyPart.getType().getBiteWoundModel(chr.getCharacterGender()))) {
+                           chr.syncClothing();
                         }
                      }
 
@@ -17214,8 +17540,8 @@ public abstract class IsoGameCharacter
                            }
 
                            this.addBandageModel(chr, woundType);
-                        } else {
-                           this.removeBandageModel(chr, bodyPart.getType().getScratchWoundModel(chr.getCharacterGender()));
+                        } else if (this.removeBandageModel(chr, bodyPart.getType().getScratchWoundModel(chr.getCharacterGender()))) {
+                           chr.syncClothing();
                         }
                      }
 
@@ -17225,8 +17551,8 @@ public abstract class IsoGameCharacter
                            if (!StringUtils.isNullOrWhitespace(woundType)) {
                               this.addBandageModel(chr, woundType);
                            }
-                        } else {
-                           this.removeBandageModel(chr, bodyPart.getType().getCutWoundModel(chr.getCharacterGender()));
+                        } else if (this.removeBandageModel(chr, bodyPart.getType().getCutWoundModel(chr.getCharacterGender()))) {
+                           chr.syncClothing();
                         }
                      }
                   }
@@ -17245,14 +17571,17 @@ public abstract class IsoGameCharacter
          }
       }
 
-      private void removeBandageModel(IsoGameCharacter chr, String bandageType) {
+      private boolean removeBandageModel(IsoGameCharacter chr, String bandageType) {
          InventoryItem item = (InventoryItem)this.itemMap.get(bandageType);
-         if (item != null) {
-            chr.getWornItems().remove(item);
-            chr.getInventory().Remove(item);
-            chr.resetModelNextFrame();
-            chr.onWornItemsChanged();
+         if (item == null) {
+            return false;
          }
+
+         chr.getWornItems().remove(item);
+         chr.getInventory().Remove(item);
+         chr.resetModelNextFrame();
+         chr.onWornItemsChanged();
+         return true;
       }
    }
 

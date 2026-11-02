@@ -135,7 +135,7 @@ public final class FBORenderTrees extends GenericDrawer {
       cy += defy;
       Matrix4f modelView = Core.getInstance().modelViewMatrixStack.alloc();
       modelView.scaling(Core.scale);
-      modelView.scale(Core.tileScale / 2.0F);
+      modelView.scale(1.0F);
       modelView.rotate((float) (Math.PI / 6), 1.0F, 0.0F, 0.0F);
       modelView.rotate((float) (Math.PI * 3.0 / 4.0), 0.0F, 1.0F, 0.0F);
       double difX = ox - cx;
@@ -208,11 +208,11 @@ public final class FBORenderTrees extends GenericDrawer {
    }
 
    private void renderTreeTextures(FBORenderTrees.Tree tree, boolean bUseShader) {
-      int floorHeight = 32 * Core.tileScale;
-      float dyFloor = floorHeight / 2.0F;
+      int floorHeight = 64;
+      float dyFloor = 32.0F;
       if (tree.texture != null) {
          float y1 = tree.texture.getOffsetY();
-         float y2 = PZMath.min(tree.texture.getHeightOrig() - dyFloor, tree.texture.getOffsetY() + tree.texture.getHeight());
+         float y2 = PZMath.min(tree.texture.getHeightOrig() - 32.0F, tree.texture.getOffsetY() + tree.texture.getHeight());
          float y3 = tree.texture.getOffsetY() + tree.texture.getHeight();
          this.renderTexture(tree, tree.texture, y1, y2, bUseShader);
          this.renderTexture(tree, tree.texture, y2, y3, bUseShader);
@@ -278,13 +278,13 @@ public final class FBORenderTrees extends GenericDrawer {
       vbor.setUserDepth(targetDepth);
       int unitsX;
       int unitsY;
-      if (tex.getWidthOrig() == FBORenderChunk.JUMBO_L_WIDTH) {
+      if (tex.getWidthOrig() == 384) {
          unitsX = 6;
          unitsY = 8;
-      } else if (tex.getWidthOrig() == FBORenderChunk.JUMBO_XL_WIDTH) {
+      } else if (tex.getWidthOrig() == 640) {
          unitsX = 10;
          unitsY = 12;
-      } else if (tex.getWidthOrig() == FBORenderChunk.JUMBO_XXL_WIDTH) {
+      } else if (tex.getWidthOrig() == 896) {
          unitsX = 14;
          unitsY = 16;
       } else {

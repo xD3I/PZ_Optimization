@@ -908,7 +908,7 @@ public final class ChunkAo {
             int y = dy < 0 ? 0 : dy > 0 ? 7 : i;
             zombie.iso.IsoGridSquare sq = c.getGridSquare(x, y, z);
             if (sq != null) {
-               zombie.util.list.PZArrayList<zombie.iso.IsoObject> objects = sq.getObjects();
+               java.util.List<zombie.iso.IsoObject> objects = sq.getObjects();
                for (int k = 0; k < objects.size(); k++) {
                   zombie.iso.IsoObject o = objects.get(k);
                   if (o != null && (!o.isFloor() || o.hasAttachedAnimSprites())) { // grass and bushes often hang off the floor object
@@ -996,7 +996,7 @@ public final class ChunkAo {
             if (sq == null) {
                continue;
             }
-            zombie.util.list.PZArrayList<zombie.iso.IsoObject> objects = sq.getObjects();
+            java.util.List<zombie.iso.IsoObject> objects = sq.getObjects();
             for (int k = 0; k < objects.size(); k++) {
                zombie.iso.IsoObject o = objects.get(k);
                if (o != null && (!o.isFloor() || o.hasAttachedAnimSprites())) {
@@ -1115,7 +1115,7 @@ public final class ChunkAo {
                if (sq == null) {
                   continue;
                }
-               zombie.util.list.PZArrayList<zombie.iso.IsoObject> objects = sq.getObjects();
+               java.util.List<zombie.iso.IsoObject> objects = sq.getObjects();
                for (int k = 0; k < objects.size(); k++) {
                   zombie.iso.IsoObject o = objects.get(k);
                   if (o != null && (!o.isFloor() || o.hasAttachedAnimSprites())) { // grass and bushes often hang off the floor object
@@ -1185,7 +1185,7 @@ public final class ChunkAo {
                if (sq == null) {
                   continue;
                }
-               zombie.util.list.PZArrayList<IsoObject> objs = sq.getObjects();
+               java.util.List<IsoObject> objs = sq.getObjects(); // 42.22: a List (PZArrayList is gone)
                int block = 0;
                int top = 0;
                for (int i = 0; i < objs.size(); i++) {
@@ -1430,10 +1430,9 @@ public final class ChunkAo {
 
    /** A bush or hedge on the square: its top in quarter levels above level 0 (half a level), else 0. */
    private static int bushTop(IsoGridSquare sq, int z) {
-      IsoObject[] objects = (IsoObject[])sq.getObjects().getElements();
-      int count = sq.getObjects().size();
-      for (int i = 0; i < count; i++) {
-         IsoObject o = objects[i];
+      java.util.List<IsoObject> objects = sq.getObjects(); // 42.22: a List (PZArrayList is gone)
+      for (int i = 0; i < objects.size(); i++) {
+         IsoObject o = objects.get(i);
          if (!(o instanceof IsoTree) && o.getSprite() != null && o.getSprite().isBush) {
             return z * 4 + 2;
          }
@@ -1790,10 +1789,9 @@ public final class ChunkAo {
                if (sq == null) {
                   continue;
                }
-               IsoObject[] objects = (IsoObject[])sq.getObjects().getElements();
-               int count = sq.getObjects().size();
-               for (int i = 0; i < count; i++) {
-                  IsoObject o = objects[i];
+               java.util.List<IsoObject> objects = sq.getObjects(); // 42.22: a List (PZArrayList is gone)
+               for (int i = 0; i < objects.size(); i++) {
+                  IsoObject o = objects.get(i);
                   if (o instanceof IsoTree) {
                      for (int k = -TREE_REACH; k <= TREE_REACH; k++) {
                         any |= markVegetation(veg, 3, x + k - x0, y - k - y0);
@@ -2090,7 +2088,7 @@ public final class ChunkAo {
 
    /** Does a roof tile stand on this square? */
    private static boolean roof(IsoGridSquare sq) {
-      zombie.util.list.PZArrayList<IsoObject> objects = sq.getObjects();
+      java.util.List<IsoObject> objects = sq.getObjects();
       for (int k = 0; k < objects.size(); k++) {
          IsoObject o = objects.get(k);
          if (o != null && roofSprite(o.getSprite())) {

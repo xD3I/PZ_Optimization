@@ -833,8 +833,8 @@ public final class WorldStreamer {
                );
                if (sq1.getObjects().size() == sq2.getObjects().size()) {
                   for (int i = 0; i < sq1.getObjects().size(); i++) {
-                     IsoObject obj1 = (IsoObject)sq1.getObjects().get(i);
-                     IsoObject obj2 = (IsoObject)sq2.getObjects().get(i);
+                     IsoObject obj1 = sq1.getObjects().get(i);
+                     IsoObject obj2 = sq2.getObjects().get(i);
                      this.bb1.clear();
                      obj1.save(this.bb1);
                      this.bb1.flip();
@@ -848,7 +848,7 @@ public final class WorldStreamer {
                   }
                } else {
                   for (int i = 0; i < sq1.getObjects().size(); i++) {
-                     IsoObject obj = (IsoObject)sq1.getObjects().get(i);
+                     IsoObject obj = sq1.getObjects().get(i);
                      DebugLog.log("  " + obj.getClass().getName() + " " + obj.getName() + " " + (obj.sprite == null ? "no sprite" : obj.sprite.name));
                   }
                }

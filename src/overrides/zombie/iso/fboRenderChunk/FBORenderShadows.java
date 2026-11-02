@@ -282,7 +282,7 @@ public final class FBORenderShadows {
          float v3 = 1.0F;
          Matrix4f modelView = Core.getInstance().modelViewMatrixStack.alloc();
          modelView.scaling(Core.scale);
-         modelView.scale(Core.tileScale / 2.0F);
+         modelView.scale(1.0F);
          modelView.rotate((float) (Math.PI / 6), 1.0F, 0.0F, 0.0F);
          modelView.rotate((float) (Math.PI * 3.0 / 4.0), 0.0F, 1.0F, 0.0F);
          double difX = shadow.ox - cx;

@@ -140,7 +140,7 @@ public final class RBTrashed extends RandomizedBuildingBase {
 
                if (sq != null && z == 0 && sq.getRoom() == null) {
                   for (int o = 0; o < sq.getObjects().size(); o++) {
-                     IsoObject obj = (IsoObject)sq.getObjects().get(o);
+                     IsoObject obj = sq.getObjects().get(o);
                      if (obj instanceof IsoDoor door
                         && !door.getProperties().has(IsoPropertyType.DOUBLE_DOOR)
                         && !door.getProperties().has(IsoPropertyType.GARAGE_DOOR)
@@ -193,7 +193,7 @@ public final class RBTrashed extends RandomizedBuildingBase {
                   }
 
                   for (int o = 0; o < sq.getObjects().size(); o++) {
-                     IsoObject obj = (IsoObject)sq.getObjects().get(o);
+                     IsoObject obj = sq.getObjects().get(o);
                      if (obj instanceof IsoDoor door
                         && !door.getProperties().has(IsoPropertyType.DOUBLE_DOOR)
                         && !door.getProperties().has(IsoPropertyType.GARAGE_DOOR)

@@ -193,9 +193,9 @@ public final class Sway {
    public static int plantCode(IsoGridSquare sq) {
       IsoObject best = null;
       IsoObject floor = sq.getFloor();
-      IsoObject[] objs = (IsoObject[])sq.getObjects().getElements();
-      for (int i = 0, n = sq.getObjects().size(); i < n; i++) {
-         IsoObject o = objs[i];
+      java.util.List<IsoObject> objs = sq.getObjects(); // 42.22: a List (PZArrayList is gone)
+      for (int i = 0, n = objs.size(); i < n; i++) {
+         IsoObject o = objs.get(i);
          IsoSprite s = o == null || o == floor || o instanceof IsoTree ? null : o.getSprite();
          if (s == null || !(s.moveWithWind || s.isBush)) {
             continue;

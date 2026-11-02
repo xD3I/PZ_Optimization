@@ -601,9 +601,9 @@ public final class IsoPuddles {
                rtct.renderChunkY = IsoUtils.YToScreen(renderChunk.chunk.wx * 8, renderChunk.chunk.wy * 8, z, 0);
                rtct.renderChunkWidth = renderChunk.w;
                rtct.renderChunkHeight = renderChunk.h;
-               int chunkFloorYSpan = FBORenderChunk.FLOOR_HEIGHT * 8;
+               int chunkFloorYSpan = 512;
                int numLevels = renderChunk.getTopLevel() - renderChunk.getMinLevel() + 1;
-               rtct.renderChunkBottom = chunkFloorYSpan + numLevels * FBORenderChunk.PIXELS_PER_LEVEL;
+               rtct.renderChunkBottom = 512 + numLevels * 192;
                rtct.renderChunkBottom = rtct.renderChunkBottom + FBORenderLevels.extraHeightForJumboTrees(renderChunk.getMinLevel(), renderChunk.getTopLevel());
                rtct.renderChunkMinZ = renderChunk.getMinLevel();
                rtct.highRes = renderChunk.highRes;
@@ -822,25 +822,11 @@ public final class IsoPuddles {
          GL11.glPushClientAttrib(-1);
          GL11.glPushAttrib(1048575);
          Matrix4f projection = Core.getInstance().projectionMatrixStack.alloc();
-         int chunkFloorYSpan = FBORenderChunk.FLOOR_HEIGHT * 8;
+         int chunkFloorYSpan = 512;
          if (this.highRes) {
-            projection.setOrtho(
-               -this.renderChunkWidth / 4.0F,
-               this.renderChunkWidth / 4.0F,
-               -chunkFloorYSpan / 2.0F + 256.0F - this.z * FBORenderChunk.PIXELS_PER_LEVEL,
-               chunkFloorYSpan / 2.0F + 256.0F - this.z * FBORenderChunk.PIXELS_PER_LEVEL,
-               -1.0F,
-               1.0F
-            );
+            projection.setOrtho(-this.renderChunkWidth / 4.0F, this.renderChunkWidth / 4.0F, 0.0F - this.z * 192, 512.0F - this.z * 192, -1.0F, 1.0F);
          } else {
-            projection.setOrtho(
-               -this.renderChunkWidth / 2.0F,
-               this.renderChunkWidth / 2.0F,
-               -chunkFloorYSpan / 2.0F + 256.0F - this.z * FBORenderChunk.PIXELS_PER_LEVEL,
-               chunkFloorYSpan / 2.0F + 256.0F - this.z * FBORenderChunk.PIXELS_PER_LEVEL,
-               -1.0F,
-               1.0F
-            );
+            projection.setOrtho(-this.renderChunkWidth / 2.0F, this.renderChunkWidth / 2.0F, 0.0F - this.z * 192, 512.0F - this.z * 192, -1.0F, 1.0F);
          }
 
          Core.getInstance().projectionMatrixStack.push(projection);
@@ -848,19 +834,9 @@ public final class IsoPuddles {
          modelView.identity();
          Core.getInstance().modelViewMatrixStack.push(modelView);
          if (this.highRes) {
-            GL11.glViewport(
-               0,
-               (this.renderChunkBottom - chunkFloorYSpan - (this.z - this.renderChunkMinZ) * FBORenderChunk.PIXELS_PER_LEVEL) * 2,
-               this.renderChunkWidth,
-               chunkFloorYSpan * 2
-            );
+            GL11.glViewport(0, (this.renderChunkBottom - 512 - (this.z - this.renderChunkMinZ) * 192) * 2, this.renderChunkWidth, 1024);
          } else {
-            GL11.glViewport(
-               0,
-               this.renderChunkBottom - chunkFloorYSpan - (this.z - this.renderChunkMinZ) * FBORenderChunk.PIXELS_PER_LEVEL,
-               this.renderChunkWidth,
-               chunkFloorYSpan
-            );
+            GL11.glViewport(0, this.renderChunkBottom - 512 - (this.z - this.renderChunkMinZ) * 192, this.renderChunkWidth, 512);
          }
 
          int shaderID = IsoPuddles.getInstance().effect.getID();
@@ -872,25 +848,13 @@ public final class IsoPuddles {
             float offsetX = this.renderChunkX;
             float offsetY = -this.renderChunkY;
             if (this.highRes) {
-               GL20.glUniform4f(waterOffset, offsetX - 90000.0F, offsetY - 640000.0F, this.renderChunkWidth / 2, chunkFloorYSpan);
+               GL20.glUniform4f(waterOffset, offsetX - 90000.0F, offsetY - 640000.0F, this.renderChunkWidth / 2, 512.0F);
                int waterViewport = GL20.glGetUniformLocation(shaderID, "WViewport");
-               GL20.glUniform4f(
-                  waterViewport,
-                  0.0F,
-                  (this.renderChunkBottom - chunkFloorYSpan - (this.z - this.renderChunkMinZ) * FBORenderChunk.PIXELS_PER_LEVEL) * 2,
-                  this.renderChunkWidth,
-                  chunkFloorYSpan * 2
-               );
+               GL20.glUniform4f(waterViewport, 0.0F, (this.renderChunkBottom - 512 - (this.z - this.renderChunkMinZ) * 192) * 2, this.renderChunkWidth, 1024.0F);
             } else {
-               GL20.glUniform4f(waterOffset, offsetX - 90000.0F, offsetY - 640000.0F, this.renderChunkWidth, chunkFloorYSpan);
+               GL20.glUniform4f(waterOffset, offsetX - 90000.0F, offsetY - 640000.0F, this.renderChunkWidth, 512.0F);
                int waterViewport = GL20.glGetUniformLocation(shaderID, "WViewport");
-               GL20.glUniform4f(
-                  waterViewport,
-                  0.0F,
-                  this.renderChunkBottom - chunkFloorYSpan - (this.z - this.renderChunkMinZ) * FBORenderChunk.PIXELS_PER_LEVEL,
-                  this.renderChunkWidth,
-                  chunkFloorYSpan
-               );
+               GL20.glUniform4f(waterViewport, 0.0F, this.renderChunkBottom - 512 - (this.z - this.renderChunkMinZ) * 192, this.renderChunkWidth, 512.0F);
             }
          }
 

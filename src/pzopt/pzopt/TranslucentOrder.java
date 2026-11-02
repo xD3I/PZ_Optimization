@@ -3,7 +3,7 @@ package pzopt;
 import java.util.List;
 import zombie.iso.IsoChunk;
 import zombie.iso.IsoGridSquare;
-import zombie.util.list.PZArrayList;
+import java.util.ArrayList;
 
 /**
  * The per-frame translucent pass's square order, kept per chunk level ({@code translucentOrderCache}, 2026-09-27, the
@@ -59,7 +59,7 @@ public final class TranslucentOrder {
 
    /** Game thread: fills {@code out} with the kept order when the three lists are unchanged; false = run the stock merge. */
    public static boolean reuse(IsoChunk c, int playerIndex, int level, List<IsoGridSquare> items, List<IsoGridSquare> outlines,
-         List<IsoGridSquare> objects, PZArrayList<IsoGridSquare> out) {
+         List<IsoGridSquare> objects, ArrayList<IsoGridSquare> out) {
       Entry e = entry(c, playerIndex, level, false);
       if (e == null || e.nItems != items.size() || e.nOutlines != outlines.size() || e.nObjects != objects.size()) {
          return false;
@@ -82,7 +82,7 @@ public final class TranslucentOrder {
    public static long checks, mismatches;
 
    /** devTlOrderCheck: the stock merge and stable sort of the same three lists, compared with the reused order. */
-   private static void check(List<IsoGridSquare> items, List<IsoGridSquare> outlines, List<IsoGridSquare> objects, PZArrayList<IsoGridSquare> reusedOrder) {
+   private static void check(List<IsoGridSquare> items, List<IsoGridSquare> outlines, List<IsoGridSquare> objects, ArrayList<IsoGridSquare> reusedOrder) {
       java.util.ArrayList<IsoGridSquare> m = new java.util.ArrayList<>(items);
       for (IsoGridSquare sq : outlines) {
          if (!m.contains(sq)) {
@@ -119,7 +119,7 @@ public final class TranslucentOrder {
 
    /** Game thread, after the stock merge and sort: keep the inputs and the result. */
    public static void store(IsoChunk c, int playerIndex, int level, List<IsoGridSquare> items, List<IsoGridSquare> outlines,
-         List<IsoGridSquare> objects, PZArrayList<IsoGridSquare> sorted) {
+         List<IsoGridSquare> objects, ArrayList<IsoGridSquare> sorted) {
       Entry e = entry(c, playerIndex, level, true);
       if (e == null) {
          return;

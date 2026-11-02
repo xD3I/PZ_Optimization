@@ -215,10 +215,10 @@ public final class GroundTiles {
             }
          }
       }
-      IsoObject[] objs = (IsoObject[])sq.getObjects().getElements();
+      java.util.List<IsoObject> objs = sq.getObjects(); // 42.22: a List (PZArrayList is gone)
       int n = sq.getObjects().size();
       for (int i = 0; i < n; i++) {
-         IsoObject o = objs[i];
+         IsoObject o = objs.get(i);
          if (o == null || o == floor) {
             continue;
          }

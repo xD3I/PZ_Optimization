@@ -2,6 +2,7 @@ package zombie.ai;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.Consumer;
 import zombie.UpdateSchedulerSimulationLevel;
 import zombie.Lua.LuaEventManager;
 import zombie.ai.states.StateManager;
@@ -138,6 +139,34 @@ public final class StateMachine {
 
    public State getSubStateAt(int idx) {
       return this.subStates.get(idx).getState();
+   }
+
+   public void visitSubStates(Consumer<State> visitor) {
+      PZArrayUtil.forEach(this.subStates, visitor, StateMachine.SubstateSlot::visitState);
+   }
+
+   public boolean statesMatch(State rootState, List<State> subStates) {
+      return rootState == this.getCurrent() && this.subStatesMatch(subStates);
+   }
+
+   private boolean subStatesMatch(List<State> subStates) {
+      if (subStates.size() != this.getSubStateCount()) {
+         return false;
+      }
+
+      boolean equals = true;
+      int i = 0;
+
+      for (int count = this.getSubStateCount(); i < count; i++) {
+         State valA = this.getSubStateAt(i);
+         State valB = subStates.get(i);
+         if (valA != valB) {
+            equals = false;
+            break;
+         }
+      }
+
+      return equals;
    }
 
    public void revertToPreviousState(State sender) {
@@ -278,6 +307,10 @@ public final class StateMachine {
 
       public State getState() {
          return this.state;
+      }
+
+      public void visitState(Consumer<State> visitor) {
+         visitor.accept(this.state);
       }
 
       void setState(State state) {

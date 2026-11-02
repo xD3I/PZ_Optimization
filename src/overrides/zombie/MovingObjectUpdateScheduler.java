@@ -60,6 +60,10 @@ public final class MovingObjectUpdateScheduler {
       float averageFps = GameWindow.averageFPS;
       if (GameServer.server) {
          ZombieCountOptimiser.prepareZombiesForDeletion();
+
+         for (IsoPlayer isoPlayer : GameServer.IDToPlayerMap.values()) {
+            isoPlayer.getStats().numChasingZombies = 0;
+         }
       }
 
       if (!GameServer.server && this.isEnabled && pzopt.SchedulerClassify.enabled()) { // pzopt: schedulerClassifyParallel
@@ -69,6 +73,10 @@ public final class MovingObjectUpdateScheduler {
 
       for (IsoMovingObject isoMovingObject : IsoWorld.instance.getCell().getObjectList()) {
          if (GameServer.server && isoMovingObject instanceof IsoZombie isoZombie) {
+            if (isoZombie.target instanceof IsoPlayer isoPlayer && !isoPlayer.isAnimal()) {
+               isoPlayer.getStats().numChasingZombies++;
+            }
+
             if (GameServer.guiCommandline) {
                isoZombie.updateForServerGui();
             }

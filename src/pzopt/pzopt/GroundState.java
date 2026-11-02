@@ -411,7 +411,8 @@ public final class GroundState {
       }
       activeNow = true;
       BIND_ON = true;
-      String gm = zombie.core.Core.gameMode, gw = zombie.core.Core.gameSaveWorld;
+      zombie.core.GameMode mode = zombie.core.Core.getInstance().getGameMode(); // 42.22: an object (Core.gameMode was a String)
+      String gm = mode == null ? null : mode.toString(), gw = zombie.core.Core.gameSaveWorld; // toString is the mode's own id String, so the identity test below holds
       if (gm != sidMode || gw != sidWorld) { // pzopt ground-tracks 2026-10-24: the save id built only when it changes
          sidMode = gm;
          sidWorld = gw;

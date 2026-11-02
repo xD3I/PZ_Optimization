@@ -403,7 +403,7 @@ public final class Mirrors {
          if (curtain != null && !curtain.IsOpen() && curtain.square == sq) {
             return false; // a closed curtain on the camera side of the pane (drawn over it in the same pass)
          }
-         capAxis = w.getNorth() ? 0 : 1;
+         capAxis = w.isNorth() ? 0 : 1;
          capC = capAxis == 0 ? sq.y : sq.x;
          capMirror = false;
          capInfo = null;

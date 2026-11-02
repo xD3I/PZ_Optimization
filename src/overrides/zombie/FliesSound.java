@@ -4,7 +4,6 @@ import java.util.ArrayList;
 import zombie.audio.BaseSoundEmitter;
 import zombie.characters.IsoPlayer;
 import zombie.characters.BodyDamage.BodyDamage;
-import zombie.core.Core;
 import zombie.core.SpriteRenderer;
 import zombie.core.math.PZMath;
 import zombie.debug.DebugType;
@@ -96,10 +95,10 @@ public final class FliesSound {
    }
 
    private void paintSquare(int x, int y, int z, float r, float g, float b, float a) {
-      int scale = Core.tileScale;
+      int scale = 2;
       int sx = (int)IsoUtils.XToScreenExact(x, y + 1, z, 0);
       int sy = (int)IsoUtils.YToScreenExact(x, y + 1, z, 0);
-      SpriteRenderer.instance.renderPoly(sx, sy, sx + 32 * scale, sy - 16 * scale, sx + 64 * scale, sy, sx + 32 * scale, sy + 16 * scale, r, g, b, a);
+      SpriteRenderer.instance.renderPoly(sx, sy, sx + 64, sy - 32, sx + 128, sy, sx + 64, sy + 32, r, g, b, a);
    }
 
    public void chunkLoaded(IsoChunk chunk) {

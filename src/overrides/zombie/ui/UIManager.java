@@ -220,7 +220,7 @@ public final class UIManager {
       setLastPicked(null);
       rightDownObject = null;
       if (IsoPlayer.getInstance() != null) {
-         if (!Core.gameMode.equals("LastStand") && !GameClient.client) {
+         if (!GameClient.client) {
             getUI().add(getSpeedControls());
          }
 
@@ -232,10 +232,7 @@ public final class UIManager {
                setClock(new Clock(Core.getInstance().getOffscreenWidth(0) - 91, 10));
             }
 
-            if (!Core.gameMode.equals("LastStand")) {
-               getUI().add(getClock());
-            }
-
+            getUI().add(getClock());
             getUI().add(getToolTip());
             setDebugConsole(new UIDebugConsole(20, Core.getInstance().getScreenHeight() - 265));
             debugConsole.setY(Core.getInstance().getScreenHeight() - debugConsole.getHeight() - 20.0);

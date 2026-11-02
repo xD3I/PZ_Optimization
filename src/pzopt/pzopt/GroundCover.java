@@ -609,10 +609,10 @@ public final class GroundCover {
             } else if ((e & 3) != 0) {
                ht = 1.0F; // a fence or a low wall
             }
-            IsoObject[] objs = sq.getObjects().getElements();
+            java.util.List<IsoObject> objs = sq.getObjects(); // 42.22: a List (PZArrayList is gone)
             int n = sq.getObjects().size();
             for (int k = 0; k < n; k++) {
-               if (objs[k] instanceof IsoTree t && t.sprite != null) {
+               if (objs.get(k) instanceof IsoTree t && t.sprite != null) {
                   Tree tr = new Tree();
                   int size = Math.max(1, t.getSize());
                   tr.x = x + 0.5F;

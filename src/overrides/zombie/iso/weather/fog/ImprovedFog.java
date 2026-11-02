@@ -751,12 +751,12 @@ public class ImprovedFog {
          float sy = IsoUtils.YToScreenExact(f.startX, f.startY, f.z, 0);
          float ex = IsoUtils.XToScreenExact(f.endX, f.endY, f.z, 0);
          float ey = IsoUtils.YToScreenExact(f.endX, f.endY, f.z, 0);
-         sx -= 32.0F * Core.tileScale;
-         sy -= 80.0F * Core.tileScale;
-         ex += 32.0F * Core.tileScale;
-         float height = 96.0F * Core.tileScale;
+         sx -= 64.0F;
+         sy -= 160.0F;
+         ex += 64.0F;
+         float height = 192.0F;
          float segmentTileWidth = 6.0F;
-         float widthTiles = (ex - sx) / (64.0F * Core.tileScale);
+         float widthTiles = (ex - sx) / 128.0F;
          float offset = f.startX % 6.0F;
          float uvOffset = offset / 6.0F;
          float uvWidth = widthTiles / 6.0F;
@@ -768,8 +768,8 @@ public class ImprovedFog {
          IndieGL.glBlendFunc(770, 771);
          if (FogShader.instance.StartShader()) {
             FogShader.instance.setScreenInfo(screenWidth, screenHeight, zoom, zLayer > 0 ? secondLayerAlpha : 1.0F);
-            FogShader.instance.setTextureInfo(drawDebugColors ? 1.0F : 0.0F, octaves, alpha, Core.tileScale);
-            FogShader.instance.setRectangleInfo((int)sx, (int)sy, (int)(ex - sx), (int)height);
+            FogShader.instance.setTextureInfo(drawDebugColors ? 1.0F : 0.0F, octaves, alpha, 2.0F);
+            FogShader.instance.setRectangleInfo((int)sx, (int)sy, (int)(ex - sx), 192.0F);
             FogShader.instance.setWorldOffset(worldOffsetX, worldOffsetY, rightClickOffX, rightClickOffY);
             FogShader.instance.setScalingInfo(scalingX, scalingY, zLayer, highQuality ? 0.0F : 1.0F);
             FogShader.instance.setColorInfo(colorR, colorG, colorB, 1.0F);
@@ -803,7 +803,7 @@ public class ImprovedFog {
             }
 
             SpriteRenderer.instance
-               .render(noiseTexture, (int)sx, (int)sy, (int)(ex - sx), (int)height, 1.0F, 1.0F, 1.0F, alpha, u0, 0.0F, u1, 0.0F, u1, 1.0F, u0, 1.0F);
+               .render(noiseTexture, (int)sx, (int)sy, (int)(ex - sx), 192.0F, 1.0F, 1.0F, 1.0F, alpha, u0, 0.0F, u1, 0.0F, u1, 1.0F, u0, 1.0F);
             IndieGL.EndShader();
          }
       }
@@ -834,12 +834,12 @@ public class ImprovedFog {
             float sy = IsoUtils.YToScreenExact(f.startX, f.startY, f.z, 0);
             float ex = IsoUtils.XToScreenExact(f.endX, f.endY, f.z, 0);
             float ey = IsoUtils.YToScreenExact(f.endX, f.endY, f.z, 0);
-            sx -= 32.0F * Core.tileScale;
-            sy -= 80.0F * Core.tileScale;
-            ex += 32.0F * Core.tileScale;
-            float height = 96.0F * Core.tileScale;
+            sx -= 64.0F;
+            sy -= 160.0F;
+            ex += 64.0F;
+            float height = 192.0F;
             float segmentTileWidth = 6.0F;
-            float widthTiles = (ex - sx) / (64.0F * Core.tileScale);
+            float widthTiles = (ex - sx) / 128.0F;
             float offset = f.startX % 6.0F;
             float uvOffset = offset / 6.0F;
             float uvWidth = widthTiles / 6.0F;
@@ -883,7 +883,7 @@ public class ImprovedFog {
                sx,
                sy,
                ex,
-               sy + height,
+               sy + 192.0F,
                u0,
                0.0F,
                u1,
@@ -959,7 +959,7 @@ public class ImprovedFog {
       drawer.textureInfo1 = drawDebugColors ? 1.0F : 0.0F;
       drawer.textureInfo2 = octaves;
       drawer.textureInfo3 = baseAlpha;
-      drawer.textureInfo4 = Core.tileScale;
+      drawer.textureInfo4 = 2.0F;
       drawer.worldOffset1 = worldOffsetX;
       drawer.worldOffset2 = worldOffsetY;
       drawer.worldOffset3 = rightClickOffX;

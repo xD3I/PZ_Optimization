@@ -1895,7 +1895,7 @@ public final class PixelLight {
 
    /** pplUnseenBlend: the square holds a sprite stock draws with the ambient whatever its light (roofs). */
    private static boolean hasForceAmbient(IsoGridSquare sq) {
-      zombie.util.list.PZArrayList<zombie.iso.IsoObject> objs = sq.getObjects();
+      java.util.List<zombie.iso.IsoObject> objs = sq.getObjects(); // 42.22: a List (PZArrayList is gone)
       for (int i = 0; i < objs.size(); i++) {
          zombie.iso.IsoObject o = objs.get(i);
          if (o != null && o.sprite != null && o.sprite.forceAmbient) {

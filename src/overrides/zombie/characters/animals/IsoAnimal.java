@@ -584,7 +584,7 @@ public class IsoAnimal extends IsoPlayer implements IAnimalVisual {
             this.attachBackToMotherTimer = 0.0F;
 
             for (int k = 0; k < this.connectedDZone.size(); k++) {
-               if (this.findMotherAndAttach(this.connectedDZone.get(k).getAnimals())) {
+               if (this.findMotherAndAttach(this.connectedDZone.get(k).getAnimalsInZone())) {
                   return;
                }
             }
@@ -594,9 +594,8 @@ public class IsoAnimal extends IsoPlayer implements IAnimalVisual {
       }
    }
 
-   private boolean findMotherAndAttach(List<IsoAnimal> animals) {
-      for (int i = 0; i < animals.size(); i++) {
-         IsoAnimal animal = animals.get(i);
+   private boolean findMotherAndAttach(Collection<IsoAnimal> animals) {
+      for (IsoAnimal animal : animals) {
          if (animal.animalId == this.attachBackToMother) {
             this.setMother(animal);
             this.attachBackToMother = 0;
@@ -632,10 +631,6 @@ public class IsoAnimal extends IsoPlayer implements IAnimalVisual {
 
       DesignationZone zone = (DesignationZone)this.connectedDZone.get(Rand.Next(0, this.connectedDZone.size()));
       return zone.getRandomSquare();
-   }
-
-   public DesignationZone getZone() {
-      return this.connectedDZone.isEmpty() ? null : (DesignationZone)this.connectedDZone.get(Rand.Next(0, this.connectedDZone.size()));
    }
 
    public void stopAllMovementNow() {
@@ -1695,6 +1690,7 @@ public class IsoAnimal extends IsoPlayer implements IAnimalVisual {
    public void updateStatsAway(int hours) {
       this.fromMeta = false;
       if (!this.isWild()) {
+         DebugType.Animal.println("Animal %s wasn't seen for %d hours, updating stats".formatted(this.getFullName(), hours));
          this.zoneCheckTimer = 0.0F;
          this.checkZone();
          int age = this.getData().getAge();
