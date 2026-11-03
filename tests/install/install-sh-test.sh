@@ -84,5 +84,53 @@ check '[[ ! -e "$G/zombie/core/PerformanceSettings.class" && ! -e "$G/pzopt" && 
 check '[[ "$(cat "$G/zombie/iso/IsoChunkMap.class")" == "Better Vehicle Dynamics" ]]' "the scan keeps the other mod's file"
 check '[[ -f "$G/media/lua/client/Stock.lua" ]]' "the scan keeps stock files"
 
+# 6. download from release API with large payload (> 128 KB, avoids Argument list too long on Linux)
+ZIP="$T/mock.zip"
+(cd "$R" && python3 -c '
+import zipfile, os, sys
+with zipfile.ZipFile(sys.argv[1], "w") as z:
+    for root, dirs, files in os.walk("."):
+        for f in files:
+            p = os.path.relpath(os.path.join(root, f), ".")
+            z.write(p)
+' "$ZIP")
+BIN="$T/bin"
+mkdir -p "$BIN"
+cat << 'MOCK' > "$BIN/curl"
+#!/usr/bin/env bash
+out=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -o) out="$2"; shift 2 ;;
+    *)
+      if [[ "$1" == *"/releases/latest"* ]]; then
+        echo '{"tag_name":"v-latest","assets":[]}'
+        exit 0
+      elif [[ "$1" == *"/releases?per_page=50"* ]]; then
+        python3 -c '
+import json
+assets = [{"name": "pzopt-4a0e9546ec-classes.zip", "url": "mock://asset"}]
+items = [{"tag_name": f"v{i}", "published_at": f"2026-10-{i:02d}T00:00:00Z", "assets": assets if i == 5 else [{"name": "other.zip", "url": "http://x" * 2000}]} for i in range(50)]
+print(json.dumps(items))
+'
+        exit 0
+      fi
+      shift
+      ;;
+  esac
+done
+if [[ -n "$out" ]]; then
+  cp "$MOCK_ZIP" "$out"
+else
+  cat "$MOCK_ZIP"
+fi
+MOCK
+chmod +x "$BIN/curl"
+# remove workshop copy and other mod class so install.sh downloads release zip cleanly
+rm -rf "$W" "$G/zombie"
+MOCK_ZIP="$ZIP" PATH="$BIN:$PATH" run; rc=$?
+check '[[ $rc -eq 0 ]]' "download and install with >128KB releases JSON succeeds: $(cat "$T/out")"
+check '[[ -f "$G/zombie/iso/IsoChunkMap.class" ]]' "mock release classes installed"
+
 [[ $fail -eq 0 ]] && echo "install-sh-test ok"
 exit $fail
