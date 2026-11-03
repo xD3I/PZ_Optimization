@@ -407,17 +407,22 @@ elif [[ -z "$zip" ]]; then
     rels=$(curl -fsSL ${auth[@]+"${auth[@]}"} -H "Accept: application/vnd.github+json" "$api?per_page=50") || die "could not list releases of $REPO_SLUG"
     [[ -n "$latest" ]] && rels="[$latest,${rels#[}"
     if command -v python3 >/dev/null; then
-      found=$(python3 - "$rels" "$pattern" "$tag" <<'EOF2'
-import json,sys
-rels,pattern,tag=json.loads(sys.argv[1]),sys.argv[2],sys.argv[3]
-rels=[rels[0]]+sorted(rels[1:],key=lambda r:r.get("published_at") or "",reverse=True)
+      found=$(printf '%s' "$rels" | python3 -c '
+import json, sys
+rels = json.load(sys.stdin)
+pattern, tag = sys.argv[1], sys.argv[2]
+if not isinstance(rels, list) or not rels:
+    sys.exit(1)
+rels = [rels[0]] + sorted(rels[1:], key=lambda r: r.get("published_at") or "", reverse=True)
 for r in rels:
-    if tag and r["tag_name"]!=tag: continue
-    for a in r["assets"]:
-        if a["name"]==pattern: print(r["tag_name"], a["url"]); sys.exit(0)
+    if tag and r.get("tag_name") != tag:
+        continue
+    for a in r.get("assets", []):
+        if a.get("name") == pattern:
+            print(r["tag_name"], a["url"])
+            sys.exit(0)
 sys.exit(1)
-EOF2
-) || die "no release has $pattern (your game revision $REV is a build these classes were not built for)"
+' "$pattern" "$tag") || die "no release has $pattern (your game revision $REV is a build these classes were not built for)"
     else
       # no python3 (a Mac without the Command Line Tools): each asset object starts with its API url and
       # carries its name a few fields later; the release's tag_name precedes its assets array
