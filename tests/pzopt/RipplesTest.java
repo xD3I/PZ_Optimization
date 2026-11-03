@@ -32,6 +32,13 @@ public class RipplesTest {
          }
       }
 
+      // Rain crest shading must not give native-excluded puddle pixels nonzero alpha.
+      // RainMaskGpuTest exercises the resulting HQ/MQ/LQ pixels with a real driver when opted in.
+      for (boolean binding : new boolean[] {false, true}) {
+         String rain = RainRipples.glsl(binding);
+         Check.check(rain.contains("pzRainSlope(fc) * pzRainP.z * clamp(puddlesDirNone, 0.0, 1.0)"),
+               "rain slope respects the native puddle exclusion mask before normals and crest shading");
+      }
       // the shaders
       File jar = new File(zombie.core.Core.class.getProtectionDomain().getCodeSource().getLocation().toURI());
       Path shaders = jar.toPath().getParent().resolve("media/shaders");
