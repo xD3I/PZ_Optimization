@@ -5,6 +5,7 @@ import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import org.joml.Matrix4f;
 import org.lwjgl.opengl.GL11;
+import org.lwjgl.opengl.GL13;
 import org.lwjgl.opengl.GL15;
 import org.lwjgl.opengl.GL20;
 import org.lwjglx.BufferUtils;
@@ -99,6 +100,7 @@ public final class RainTiles {
             this.vbo = GL15.glGenBuffers();
          }
          program.Start();
+         GL13.glActiveTexture(GL13.GL_TEXTURE0); // match VBORenderer.flush before binding the particle texture
          VertexBufferObject.setModelViewProjection(program); // also caches the stack matrices on the program
          base.set(program.projection).mul(program.modelView);
          program.setValue("userDepth", 0.0F);
