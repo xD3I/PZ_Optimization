@@ -38,8 +38,8 @@ all for this report.
 - `build.sh`: audit 9,539 unedited methods, 0 mismatches. `test.sh`: all pass, 121 JVMs through the agent. `install-sh-test.sh` passes.
 - `harness/run.sh --mode verify --quit-after 100 --launcher direct` (`agent-smoke2-20261104-184514`): 84 overrides active, 0 disabled,
   0 signer errors, 0 linkage errors, the bench save rendered, quit reached at frame 3003, jar checksum unchanged.
-  **That run had the class path jar-first** to step around PZ_Controller's loose class (below). The shipped `.`-first order was checked
-  by loading all 482 classes minus that one, not by a game run.
+  That run had the class path jar-first to step around PZ_Controller's loose class (below). `agent-smoke3` repeated it in the shipped
+  `.`-first order after `pzctl.sh uninstall`.
 - Fail-safes, class loading only: a revision mismatch gives stock classes and one log line; a launcher without the argument gives stock
   classes, nothing refused.
 
