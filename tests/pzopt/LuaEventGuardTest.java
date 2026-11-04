@@ -203,6 +203,9 @@ public class LuaEventGuardTest {
       }
       cmd.add("-cp");
       cmd.add(System.getProperty("java.class.path"));
+      // a signed game jar: the overrides load through the agent (scripts/test.sh), the relaunch needs it too
+      cmd.addAll(cmd.size() - 2, java.lang.management.ManagementFactory.getRuntimeMXBean().getInputArguments().stream()
+            .filter(a -> a.startsWith("-javaagent:")).toList());
       cmd.add(LuaEventGuardTest.class.getName());
 
       Process p = new ProcessBuilder(cmd).redirectErrorStream(true).start();

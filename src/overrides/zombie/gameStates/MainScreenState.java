@@ -43,6 +43,7 @@ import zombie.characters.IsoPlayer;
 import zombie.core.BoxedStaticValues;
 import zombie.core.Color;
 import zombie.core.Core;
+import zombie.core.IntegrityReport;
 import zombie.core.ProxyPrintStream;
 import zombie.core.SpriteRenderer;
 import zombie.core.Translator;
@@ -127,6 +128,7 @@ public final class MainScreenState extends GameState {
    private VideoTexture videoTex;
    private static final long MIN_MEM_VIDEO_EFFECTS = 8589934592L;
    private static boolean mainHasRan;
+   private static boolean versionWrittenWhilePending;
    public static MainScreenState instance;
    public boolean showLogo;
    private float fadeAlpha;
@@ -197,6 +199,7 @@ public final class MainScreenState extends GameState {
       RandLua.INSTANCE.init();
       DebugLog.getInstance().init();
       LoggerManager.init();
+      IntegrityReport.collectInBackground(MainScreenState::rewriteVersionIfPending);
       JAssImpImporter.Init();
       SimpleDateFormat sdf = new SimpleDateFormat("dd-MM-yyyy HH:mm:ss");
       System.out.println(sdf.format(Calendar.getInstance().getTime()));
@@ -319,10 +322,17 @@ public final class MainScreenState extends GameState {
       }
    }
 
-   private static void writeOutCurrentVersion() {
-      String versionStr = "revision=%s pzbullet=%s".formatted("e013dbb529", Bullet.getPZBulletVersion());
+   private static synchronized void rewriteVersionIfPending() {
+      if (versionWrittenWhilePending) {
+         writeOutCurrentVersion();
+      }
+   }
+
+   private static synchronized void writeOutCurrentVersion() {
+      versionWrittenWhilePending = IntegrityReport.current() == null;
+      String versionStr = "revision=%s pzbullet=%s".formatted("71e8410c42", Bullet.getPZBulletVersion());
       DebugType.General.println("version=" + Core.getInstance().getVersion() + " demo=false");
-      if (!"e013dbb529".isEmpty()) {
+      if (!"71e8410c42".isEmpty()) {
          DebugType.General.println(versionStr);
       }
 
@@ -330,7 +340,7 @@ public final class MainScreenState extends GameState {
          String versionFileName = ZomboidFileSystem.instance.getCacheDirSub("version.txt");
          FileWriter versionFileWriter = new FileWriter(versionFileName, false);
          versionFileWriter.write(Core.getInstance().getVersion() + "");
-         if (!"e013dbb529".isEmpty()) {
+         if (!"71e8410c42".isEmpty()) {
             versionFileWriter.write(10);
             versionFileWriter.write(versionStr);
          }

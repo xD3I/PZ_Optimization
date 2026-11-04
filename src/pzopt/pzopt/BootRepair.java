@@ -142,6 +142,7 @@ public final class BootRepair {
          boolean aot = false;
          boolean gc = false;
          try {
+            AotCache.removeAgentArg(game);
             aot = AotCache.resetLauncher(game);
             gc = copy == null && GcChoice.undo(game);
          } catch (Exception e) {

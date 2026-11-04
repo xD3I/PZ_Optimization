@@ -356,3 +356,29 @@ jar_sha=$(sha256sum "$JAR" | cut -d' ' -f1)
 
 n=$(find "$OUT" -name '*.class' | wc -l)
 echo "built $n class files into build/classes for game revision $revision"
+
+# The game's integrity report must keep running (42.22.1 on, docs/findings-signed-jar-2026-11-04.md). MainScreenState's main
+# carries pzopt edits, so the bytecode audit skips it: this is the check that the merge kept the report's start.
+if unzip -Z1 "$JAR" zombie/core/IntegrityReport.class >/dev/null 2>&1; then
+  for c in "${OVERRIDES[@]}"; do
+    [[ "$c" != zombie/core/IntegrityReport* ]] || { echo "$c must not be overridden: it is the game's integrity report" >&2; exit 1; }
+  done
+  javap -J-XX:-UsePerfData -J-Xlog:disable -p -c -cp "$OUT:$JAR" zombie.gameStates.MainScreenState | grep 'zombie/core/IntegrityReport.collectInBackground' >/dev/null \
+    || { echo "the MainScreenState override does not start the game's IntegrityReport as the jar does" >&2; exit 1; }
+  [[ ! -f "$OUT/zombie/core/IntegrityReport.class" ]] || { echo "build/classes holds a zombie/core/IntegrityReport.class" >&2; exit 1; }
+fi
+
+# A signed jar (42.22.1 on): unsigned classes in its packages stop the game before main, so ours leave the class path root
+# for pzopt/overrides/ and src/agent's Java agent supplies them when the jar's classes load. An unsigned jar builds as before.
+if unzip -Z1 "$JAR" 'META-INF/*' 2>/dev/null | grep -E '^META-INF/[^/]+\.SF$' >/dev/null; then
+  echo "projectzomboid.jar is signed: the overrides load through the agent"
+  ( cd "$OUT" && find . -name '*.class' -not -path './pzopt/*' -not -path './media/*' | sed 's|^\./||' ) | while IFS= read -r f; do
+    mkdir -p "$OUT/pzopt/overrides/$(dirname "$f")"
+    mv "$OUT/$f" "$OUT/pzopt/overrides/$f"
+  done
+  find "$OUT" -mindepth 1 -type d -empty -not -path "$OUT/pzopt/*" -delete
+  rm -rf "$BUILD/agent"; mkdir -p "$BUILD/agent/classes" "$OUT/pzopt/agent"
+  javac --release "$RELEASE" -nowarn -Xlint:-options -g -d "$BUILD/agent/classes" "$SRC/agent/pzoptagent/Agent.java"
+  printf 'Premain-Class: pzoptagent.Agent\n' > "$BUILD/agent/manifest.txt"
+  jar cfm "$OUT/pzopt/agent/pzopt-agent.jar" "$BUILD/agent/manifest.txt" -C "$BUILD/agent/classes" .
+fi

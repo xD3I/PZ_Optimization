@@ -778,6 +778,7 @@ public final class Updater {
       }
       Map<String, String> installed = UpdateDelta.apply(p.names, p.changed, dir, previousFiles(dir), previousHashes(dir), pool());
       writeManifest(dir, rev, installed);
+      AotCache.onInstallChanged(dir);
       return installed;
    }
 

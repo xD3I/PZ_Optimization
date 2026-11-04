@@ -55,6 +55,7 @@ public final class AotCache {
    static final String STATE = "pzopt/aot/state.properties";
    private static final String OPT_OUT = "-XX:AOTCacheOutput=" + CACHE;
    private static final String OPT_USE = "-XX:AOTCache=" + CACHE;
+   static final String OPT_AGENT = "-javaagent:pzopt/agent/pzopt-agent.jar";
    private static final String OPT_LOG = "-Xlog:aot=info:file=" + LOG + "::filecount=0";
    /** aotNoIndy: the pair that keeps the cache assembly off the archived-heap crash (Config.AOT_NO_INDY). */
    static final String OPT_UNLOCK_DIAG = "-XX:+UnlockDiagnosticVMOptions";
@@ -127,7 +128,9 @@ public final class AotCache {
    }
 
    private static boolean wanted() {
-      return Config.AOT_CACHE && Overrides.enabled() && (HarnessFlags.get("mode") == null || Config.DEV_AOT_CACHE_HARNESS);
+      // a signed game jar: the cache form's pzopt.jar first on the class path would stop the game before main, as loose classes do
+      return Config.AOT_CACHE && Overrides.enabled() && zombie.GitVersion.class.getSigners() == null
+            && (HarnessFlags.get("mode") == null || Config.DEV_AOT_CACHE_HARNESS);
    }
 
    static void step() throws Exception {
@@ -377,9 +380,57 @@ public final class AotCache {
       return true;
    }
 
+   /**
+    * A signed game's agent (src/agent): out of the launcher before its jar goes, or the JVM refuses to start. Only for an uninstall
+    * or an update. Never from resetLauncher: step() calls that at every boot, and the mod would switch itself off after one launch.
+    */
+   public static boolean removeAgentArg(Path game) throws IOException {
+      Path json = game.resolve("ProjectZomboid64.json");
+      if (!Files.isRegularFile(json)) {
+         return false;
+      }
+      JSONObject j = new JSONObject(Files.readString(json, StandardCharsets.UTF_8));
+      JSONArray args = j.optJSONArray("vmArgs");
+      boolean found = false;
+      for (int i = args == null ? -1 : args.length() - 1; i >= 0; i--) {
+         if (OPT_AGENT.equals(args.optString(i))) {
+            args.remove(i);
+            found = true;
+         }
+      }
+      if (found) {
+         save(game, j);
+      }
+      return found;
+   }
+
+   /** pzopt.Updater, after the new files are in: the argument back when this release loads through the agent. */
+   public static void onInstallChanged(Path game) {
+      try {
+         Path json = game.resolve("ProjectZomboid64.json");
+         if (!Files.isRegularFile(game.resolve("pzopt/agent/pzopt-agent.jar")) || !Files.isRegularFile(json)) {
+            return;
+         }
+         JSONObject j = new JSONObject(Files.readString(json, StandardCharsets.UTF_8));
+         JSONArray args = j.getJSONArray("vmArgs");
+         JSONArray out = new JSONArray();
+         out.put(OPT_AGENT);
+         for (int i = 0; i < args.length(); i++) {
+            if (!OPT_AGENT.equals(args.optString(i))) {
+               out.put(args.get(i));
+            }
+         }
+         j.put("vmArgs", out);
+         save(game, j);
+      } catch (Throwable t) {
+         Log.warn("agent: launcher argument after the update: " + t);
+      }
+   }
+
    /** pzopt.Updater, before it replaces the loose files: loose launcher, no jar, no cache. */
    public static void onInstallChanging(Path game) {
       try {
+         removeAgentArg(game);
          resetLauncher(game);
          Files.deleteIfExists(game.resolve(JAR));
          Files.deleteIfExists(game.resolve(CACHE));

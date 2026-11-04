@@ -55,6 +55,22 @@ public class AotCacheTest {
       }
 
       Check.check(!AotCache.resetLauncher(game), "a loose launcher is left alone");
+      // the signed game's agent argument: step() resets the launcher at every boot, that must not take it out (the mod would
+      // switch itself off after one launch); an uninstall or an update does
+      Path agentJar = game.resolve("pzopt/agent/pzopt-agent.jar");
+      Files.createDirectories(agentJar.getParent());
+      Files.writeString(agentJar, "agent");
+      AotCache.onInstallChanged(game);
+      AotCache.onInstallChanged(game);
+      String agentForm = Files.readString(game.resolve("ProjectZomboid64.json"));
+      Check.check(agentForm.indexOf(AotCache.OPT_AGENT) >= 0 && agentForm.indexOf(AotCache.OPT_AGENT) == agentForm.lastIndexOf(AotCache.OPT_AGENT), "the agent argument goes in once");
+      Check.check(!AotCache.resetLauncher(game), "the agent argument is not a cache form");
+      Check.check(Files.readString(game.resolve("ProjectZomboid64.json")).contains(AotCache.OPT_AGENT), "the boot's launcher reset keeps the agent argument");
+      Check.check(AotCache.removeAgentArg(game), "an uninstall takes the agent argument out");
+      Check.check(!Files.readString(game.resolve("ProjectZomboid64.json")).contains(AotCache.OPT_AGENT), "the agent argument is gone");
+      Check.check(!AotCache.removeAgentArg(game), "nothing left to take out");
+      Files.delete(agentJar);
+      Files.delete(agentJar.getParent());
       AotCache.writeLauncher(game, "-XX:AOTCacheOutput=" + AotCache.CACHE);
       JSONObject j = read(game);
       JSONArray cp = j.getJSONArray("classpath");

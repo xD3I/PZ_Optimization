@@ -150,7 +150,9 @@ public class LuaEventReplayTest {
             + replayCalls.size() + ": " + replayCalls);
 
       // ── bytecode pin 2: every triggerEvent overload's guard routes to the capture funnel ──
-      ClassModel lem = ClassFile.of().parse(Files.readAllBytes(Path.of("build/classes/zombie/Lua/LuaEventManager.class")));
+      ClassModel lem = ClassFile.of().parse(Files.readAllBytes(Files.isRegularFile(Path.of("build/classes/zombie/Lua/LuaEventManager.class"))
+            ? Path.of("build/classes/zombie/Lua/LuaEventManager.class") // the loose layout of an unsigned game jar
+            : Path.of("build/classes/pzopt/overrides/zombie/Lua/LuaEventManager.class")));
       int overloads = 0;
       int captureRouted = 0;
       for (MethodModel m : lem.methods()) {

@@ -9012,3 +9012,9 @@ section, both kept). Master's new code read the square object list as the remove
 above: `ChunkAo` (the block scan in the AO job), `PixelLight.hasForceAmbient` (pplUnseenBlend), `Sway` (the square's swaying
 sprite, `getElements()` array read -> `List.get`). No other 42.22-removed API (`isNorth()`, `getGameMode()`,
 `getSkyLightLevel()`, `getOptionTexture2x`, Last Stand) appears in master's additions since `22f546a7`.
+
+## Port to Build 42.22.1 (2026-11-04, pre-release, revision `71e8410c42`, branch `integrity-agent`)
+
+Only `MainScreenState` changed among the shadowed classes (466 of 469 byte-identical to `e013dbb529`). `git merge-file` of 42.22.1's Vineflower
+output, clean: the `IntegrityReport.collectInBackground` start in `main`, `rewriteVersionIfPending`, the synchronized
+`writeOutCurrentVersion`. The jar is signed from this build on, so the overrides load through a Java agent: `docs/findings-signed-jar-2026-11-04.md`.

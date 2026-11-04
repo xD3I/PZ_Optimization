@@ -89,7 +89,29 @@ check() {
 
 # A launcher JSON in pzopt's AOT-cache form (pzopt.AotCache: the overrides from pzopt/aot/pzopt.jar, -XX:AOTCache*)
 # goes back to the loose classes, and the jar and cache go: the loose files are about to change.
+# The launcher argument of a signed game's agent (src/agent): out before its jar goes, or the JVM refuses to start.
+strip_agent() {
+  [[ -f "$LAUNCHER_JSON" ]] || return 0
+  python3 - "$LAUNCHER_JSON" <<'PYEOF'
+import json,sys
+p=sys.argv[1]; j=json.load(open(p)); a="-javaagent:pzopt/agent/pzopt-agent.jar"; v=j.get("vmArgs",[])
+if a in v:
+    j["vmArgs"]=[x for x in v if x!=a]; json.dump(j,open(p,"w"),indent="\t"); print("launcher: the PZ Optimization agent removed")
+PYEOF
+}
+
+add_agent() {
+  [[ -f "$PZ_DIR/pzopt/agent/pzopt-agent.jar" ]] || return 0
+  python3 - "$LAUNCHER_JSON" <<'PYEOF'
+import json,sys
+p=sys.argv[1]; j=json.load(open(p)); a="-javaagent:pzopt/agent/pzopt-agent.jar"; v=j.get("vmArgs",[])
+if a not in v:
+    j["vmArgs"]=[a]+v; json.dump(j,open(p,"w"),indent="\t"); print("launcher: the PZ Optimization agent added (signed game jar)")
+PYEOF
+}
+
 reset_aot() {
+  strip_agent
   if [[ -f "$LAUNCHER_JSON" ]]; then
     python3 - "$LAUNCHER_JSON" <<'PYEOF'
 import json,sys
@@ -198,6 +220,7 @@ install_overrides() {
     echo "wrote $rel"
   done < <(cd "$CLASSES" && find . -type f | sed 's|^\./||' | sort)
   mv "$tmp" "$MANIFEST"
+  add_agent
   jar_after=$(sha256sum "$JAR" | cut -d' ' -f1)
   [[ "$jar_before" == "$jar_after" ]] || die "projectzomboid.jar checksum changed during install (this should be impossible)"
   echo "installed $(grep -vc '^#' "$MANIFEST") files; projectzomboid.jar untouched (sha256 $jar_after)"

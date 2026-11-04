@@ -127,7 +127,44 @@ is_ours() {
 
 # A launcher JSON that pzopt's AOT-cache mode (pzopt.AotCache) switched to its jar form goes back to the loose
 # classes ("." first, no AOT options), and the jar and cache go: the loose files are about to change.
+# The launcher argument of a signed game's agent (src/agent): out before its jar goes, or the JVM refuses to start.
+# Inserted first in vmArgs, so the sed form never leaves a dangling comma.
+strip_agent() {
+  [[ -f "$JSON" ]] || return 0
+  grep -q 'pzopt-agent\.jar' "$JSON" || return 0
+  if command -v python3 >/dev/null; then
+    python3 - "$JSON" <<'PYEOF'
+import json,sys
+p=sys.argv[1]; j=json.load(open(p)); a="-javaagent:pzopt/agent/pzopt-agent.jar"; v=j.get("vmArgs",[])
+if a in v:
+    j["vmArgs"]=[x for x in v if x!=a]; json.dump(j,open(p,"w"),indent="\t"); print("launcher: the PZ Optimization agent removed")
+PYEOF
+  else
+    sed -i -E 's#"-javaagent:pzopt/agent/pzopt-agent\.jar",?[[:space:]]*##' "$JSON"; echo "launcher: the PZ Optimization agent removed"
+  fi
+}
+
+add_agent() {
+  [[ -f "$dir/pzopt/agent/pzopt-agent.jar" ]] || return 0
+  if [[ ! -f "$JSON" ]]; then
+    echo "warning: this game's jar is signed and macOS has no launcher JSON for the agent: the game runs without PZ Optimization" >&2
+    return 0
+  fi
+  grep -q 'pzopt-agent\.jar' "$JSON" && return 0
+  if command -v python3 >/dev/null; then
+    python3 - "$JSON" <<'PYEOF'
+import json,sys
+p=sys.argv[1]; j=json.load(open(p)); a="-javaagent:pzopt/agent/pzopt-agent.jar"; v=j.get("vmArgs",[])
+if a not in v:
+    j["vmArgs"]=[a]+v; json.dump(j,open(p,"w"),indent="\t"); print("launcher: the PZ Optimization agent added (signed game jar)")
+PYEOF
+  else
+    sed -i -E 's#"vmArgs"[[:space:]]*:[[:space:]]*\[#&"-javaagent:pzopt/agent/pzopt-agent.jar",#' "$JSON"; echo "launcher: the PZ Optimization agent added (signed game jar)"
+  fi
+}
+
 reset_aot() {
+  strip_agent
   if [[ -f "$JSON" ]]; then
     if command -v python3 >/dev/null; then
       python3 - "$JSON" <<'PYEOF'
@@ -513,6 +550,7 @@ if [[ -n "$from" ]]; then copy_dir "$from" "$dir"; else extract_zip "$zip" "$dir
   echo "$stamp"
   while IFS= read -r rel; do echo "$rel $(sha256 "$dir/$rel")"; done <<< "$files"
 } > "$MANIFEST"
+add_agent
 jar_after=$(sha256 "$JAR")
 [[ "$jar_before" == "$jar_after" ]] || die "projectzomboid.jar changed during install (this should be impossible)"
 [[ -n "${tmp:-}" ]] && rm -rf "$tmp"

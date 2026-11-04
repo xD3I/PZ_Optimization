@@ -72,6 +72,7 @@ public final class Uninstall {
       Path dir = Updater.gameDir();
       try {
          AotCache.awaitBootWrites(10_000); // the boot's own JSON writes first, so none lands after the undo
+         AotCache.removeAgentArg(dir);
          boolean aot = AotCache.resetLauncher(dir);
          boolean gc = GcChoice.undo(dir);
          Plan plan = plan(dir);

@@ -84,5 +84,25 @@ check '[[ ! -e "$G/zombie/core/PerformanceSettings.class" && ! -e "$G/pzopt" && 
 check '[[ "$(cat "$G/zombie/iso/IsoChunkMap.class")" == "Better Vehicle Dynamics" ]]' "the scan keeps the other mod's file"
 check '[[ -f "$G/media/lua/client/Stock.lua" ]]' "the scan keeps stock files"
 
+# A signed game's release (pzopt/agent/pzopt-agent.jar): the launcher argument goes in with the install, exactly once, and
+# out with every removal, or the JVM would refuse to start without the agent's jar.
+rm -f "$G/zombie/iso/IsoChunkMap.class"
+mkdir -p "$R/pzopt/agent" "$R/pzopt/overrides/zombie/iso"; printf 'agent jar' > "$R/pzopt/agent/pzopt-agent.jar"
+printf 'calls pzopt/Overrides' > "$R/pzopt/overrides/zombie/iso/IsoCell.class"
+(cd "$R" && rm -f pzopt-files.txt; find . -type f | sed 's#^\./##' | LC_ALL=C sort; echo pzopt-files.txt) > "$T/list" && mv "$T/list" "$R/pzopt-files.txt"
+agents() { grep -o 'javaagent:pzopt/agent/pzopt-agent.jar' "$G/ProjectZomboid64.json" | wc -l | tr -d ' '; }
+run --from "$R"; rc=$?
+check '[[ $rc -eq 0 && "$(agents)" == 1 ]]' "the install adds the agent argument once: $(cat "$T/out")"
+python3 -c 'import json,sys; v=json.load(open(sys.argv[1]))["vmArgs"]; sys.exit(0 if v[0].startswith("-javaagent:") and "-Xmx3072m" in v else 1)' "$G/ProjectZomboid64.json"
+check '[[ $? -eq 0 ]]' "the agent argument comes first, the player's arguments stay"
+run --from "$R"; rc=$?
+check '[[ $rc -eq 0 && "$(agents)" == 1 ]]' "a reinstall keeps one agent argument: $(cat "$T/out")"
+run --uninstall; rc=$?
+check '[[ $rc -eq 0 && "$(agents)" == 0 && ! -e "$G/pzopt" ]]' "the uninstall removes the argument and the agent: $(cat "$T/out")"
+mkdir -p "$G/pzopt/agent"; printf 'agent jar' > "$G/pzopt/agent/pzopt-agent.jar"
+python3 -c 'import json,sys; p=sys.argv[1]; j=json.load(open(p)); j["vmArgs"].insert(0,"-javaagent:pzopt/agent/pzopt-agent.jar"); json.dump(j,open(p,"w"))' "$G/ProjectZomboid64.json"
+run --uninstall; rc=$?
+check '[[ $rc -eq 0 && "$(agents)" == 0 ]]' "an uninstall without a list removes the argument too: $(cat "$T/out")"
+
 [[ $fail -eq 0 ]] && echo "install-sh-test ok"
 exit $fail

@@ -167,7 +167,29 @@ function Find-WorkshopCopy([switch]$AnyRevision) {
 
 # A launcher JSON that pzopt's AOT-cache mode (pzopt.AotCache) switched to its jar form goes back to the loose
 # classes ("." first, no AOT options), and the jar and cache go: the loose files are about to change.
+# The launcher argument of a signed game's agent (src/agent): out before its jar goes, or the JVM refuses to start.
+$AgentArg = '-javaagent:pzopt/agent/pzopt-agent.jar'
+function Remove-AgentArg {
+  if (-not (Test-Path -LiteralPath $Json)) { return }
+  $j = Get-Content -LiteralPath $Json -Raw | ConvertFrom-Json
+  if (@($j.vmArgs) -contains $AgentArg) {
+    $j.vmArgs = @($j.vmArgs | Where-Object { $_ -ne $AgentArg })
+    [IO.File]::WriteAllText($Json, ($j | ConvertTo-Json -Depth 10), (New-Object Text.UTF8Encoding $false))
+    Write-Host 'launcher: the PZ Optimization agent removed'
+  }
+}
+function Add-AgentArg {
+  if (-not (Test-Path -LiteralPath (Join-Path $Dir 'pzopt\agent\pzopt-agent.jar'))) { return }
+  $j = Get-Content -LiteralPath $Json -Raw | ConvertFrom-Json
+  if (@($j.vmArgs) -notcontains $AgentArg) {
+    $j.vmArgs = @($AgentArg) + @($j.vmArgs)
+    [IO.File]::WriteAllText($Json, ($j | ConvertTo-Json -Depth 10), (New-Object Text.UTF8Encoding $false))
+    Write-Host 'launcher: the PZ Optimization agent added (signed game jar)'
+  }
+}
+
 function Reset-Aot {
+  Remove-AgentArg
   if (Test-Path -LiteralPath $Json) {
     $j = Get-Content -LiteralPath $Json -Raw | ConvertFrom-Json
     $jar = 'pzopt/aot/pzopt.jar'
@@ -538,6 +560,7 @@ try {
 $out = @('# files written by install.ps1 - do not edit', $stamp)
 foreach ($rel in $files) { $out += "$rel $(Get-Sha256 (Join-Path $Dir ($rel -replace '/', [IO.Path]::DirectorySeparatorChar)))" }
 [System.IO.File]::WriteAllLines($Manifest, $out)
+Add-AgentArg
 if ((Get-Sha256 $Jar) -ne $jarBefore) { Fail 'projectzomboid.jar changed during install (this should be impossible)' }
 if ($tmp) { Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue }
 
