@@ -104,5 +104,13 @@ python3 -c 'import json,sys; p=sys.argv[1]; j=json.load(open(p)); j["vmArgs"].in
 run --uninstall; rc=$?
 check '[[ $rc -eq 0 && "$(agents)" == 0 ]]' "an uninstall without a list removes the argument too: $(cat "$T/out")"
 
+# scripts/pzopt.sh install on an installed game refuses, and the launcher keeps the agent: stripping it first left the mod
+# off at the next launch with nothing said (2026-11-05)
+printf '# files\n' > "$G/pzopt-installed.txt"
+python3 -c 'import json,sys; p=sys.argv[1]; j=json.load(open(p)); j["vmArgs"].insert(0,"-javaagent:pzopt/agent/pzopt-agent.jar"); json.dump(j,open(p,"w"))' "$G/ProjectZomboid64.json"
+PZ_DIR="$G" bash "$REPO/scripts/pzopt.sh" install > "$T/out" 2>&1; rc=$?
+check '[[ $rc -ne 0 && "$(agents)" == 1 ]] && grep -q "already installed" "$T/out"' "a refused pzopt.sh install keeps the agent argument (rc=$rc, $(agents)): $(cat "$T/out")"
+rm -f "$G/pzopt-installed.txt"
+
 [[ $fail -eq 0 ]] && echo "install-sh-test ok"
 exit $fail

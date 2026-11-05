@@ -198,9 +198,10 @@ PYEOF
 }
 
 install_overrides() {
+  # before reset_aot: it removes the agent argument, and a refused install must leave the working install as it was
+  [[ -f "$MANIFEST" ]] && { echo "already installed (see: $0 status); uninstall first" >&2; exit 1; }
   reset_aot
   check
-  [[ -f "$MANIFEST" ]] && { echo "already installed (see: $0 status); uninstall first" >&2; exit 1; }
   local jar_before jar_after
   jar_before=$(sha256sum "$JAR" | cut -d' ' -f1)
   local tmp; tmp=$(mktemp)
