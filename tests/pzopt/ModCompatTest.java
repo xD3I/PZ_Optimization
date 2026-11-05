@@ -35,6 +35,14 @@ public class ModCompatTest {
    }
 
    public static void main(String[] args) throws Exception {
+      // the agents that load the mods on a signed jar are not Java mods (renderLastFast stayed off with them, 2026-11-05)
+      Check.check(ModCompat.loaderAgent("pzopt/agent/pzopt-agent.jar") && ModCompat.loaderAgent("pzctl/agent/pzctl-agent.jar")
+            && ModCompat.loaderAgent("/game/pzopt/agent/pzopt-agent.jar") && ModCompat.loaderAgent("C:\\game\\pzopt\\agent\\pzopt-agent.jar"),
+            "our loader agents are recognised");
+      Check.check(!ModCompat.loaderAgent("pzmulticore.jar") && !ModCompat.loaderAgent("mods/x/pzopt-agent.jar")
+            && !ModCompat.loaderAgent("other/agent/pzctl-agent.jar") && !ModCompat.loaderAgent("xpzopt/agent/pzopt-agent.jar"),
+            "another agent stays a Java mod, whatever its file name");
+      Check.check(!ModCompat.sources().containsKey("pzopt-agent.jar"), "this JVM's own agent (scripts/test.sh) is not a scanned source");
       Map<String, Map<String, String[]>> edited = new HashMap<>();
       ModCompat.parseEdited("# header\nzombie/iso/WorldStreamer#stop=wake\nzombie/iso/WorldStreamer#threadLoop=wake,centerFirstLoad\n"
             + "zombie/iso/IsoChunkMap#updateInternal=chunkHandoffSlack\nzombie/iso/IsoChunk#recalcPooled=\n", edited);

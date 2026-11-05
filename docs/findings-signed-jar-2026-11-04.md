@@ -27,6 +27,8 @@ all for this report.
 - **We do not hide from the report, and nothing touches `IntegrityReport`.** The game reports `classpath=1612,agents=1` with the mod
   on. `build.sh` fails if `IntegrityReport` joins the overrides or our `MainScreenState` stops starting it (the audit skips `main`,
   which carries pzopt edits).
+- `ModCompat` skips this agent and PZ_Controller's (`loaderAgent`): any other `-javaagent` turns `renderLastFast` off, these two only
+  load the mods. The game's report still counts them.
 - `AotCache` stays off on a signed jar: the cache form's `pzopt/aot/pzopt.jar` first on the class path would stop the game like loose
   classes do. Startup loses the AOT cache; not measured.
 - The argument leaves in `removeAgentArg` (Uninstall, BootRepair, the Updater before it swaps files) and `strip_agent` /

@@ -421,6 +421,17 @@ public final class ModCompat {
 
    // ── what the launch loads ──────────────────────────────────────────────────────────────────────────────────
 
+   /**
+    * The agents that only load this mod and PZ_Controller on a signed game jar (src/agent): not Java mods for this scan,
+    * or the loader alone would turn pzopt.RenderLast off. PZ_Controller's replaces only AimingReticle and adds no
+    * IUpdater. Only this scan skips them; the game's IntegrityReport still counts them.
+    */
+   static boolean loaderAgent(String path) {
+      String p = path.replace('\\', '/');
+      return p.equals("pzopt/agent/pzopt-agent.jar") || p.endsWith("/pzopt/agent/pzopt-agent.jar")
+            || p.equals("pzctl/agent/pzctl-agent.jar") || p.endsWith("/pzctl/agent/pzctl-agent.jar");
+   }
+
    /** source name -> jars: the -javaagent jars, then every jar of each enabled mod. */
    static Map<String, List<File>> sources() {
       Map<String, List<File>> out = new LinkedHashMap<>();
@@ -430,6 +441,9 @@ public final class ModCompat {
             if (arg.startsWith("-javaagent:")) {
                String path = arg.substring("-javaagent:".length());
                int eq = path.indexOf('=');
+               if (loaderAgent(eq >= 0 ? path.substring(0, eq) : path)) {
+                  continue;
+               }
                File jar = new File(eq >= 0 ? path.substring(0, eq) : path);
                String owner = ownerMod(jar, modDirs);
                String source = owner != null ? owner : jar.getName();
