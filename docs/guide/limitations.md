@@ -20,7 +20,8 @@
   installer puts ours first again. Windows with `zbNative` is not tested.
 - **macOS needs a Steam launch option** since 42.22 (the jar is signed and the Mac app has no launcher file for the agent):
   [install guide](install.md#macos-the-launch-option). Without it the game runs stock. Not yet tested on a Mac.
-- **Dedicated servers** do not get the agent and run stock.
+- **Dedicated servers** do not get the agent and run stock. A game you host from the main menu (Host) does: its server is
+  started with the same agent as your game.
 - **AOT cache off** on the signed jar (42.22.1 on): the cache's jar form would put loose classes ahead of the signed jar.
   Startup without it is not measured.
   The Lua-only performance mods [measured](benchmarks.md#against-the-other-performance-mods) are harmless but add

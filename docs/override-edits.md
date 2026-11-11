@@ -9018,3 +9018,26 @@ sprite, `getElements()` array read -> `List.get`). No other 42.22-removed API (`
 Only `MainScreenState` changed among the shadowed classes (466 of 469 byte-identical to `e013dbb529`). `git merge-file` of 42.22.1's Vineflower
 output, clean: the `IntegrityReport.collectInBackground` start in `main`, `rewriteVersionIfPending`, the synchronized
 `writeOutCurrentVersion`. The jar is signed from this build on, so the overrides load through a Java agent: `docs/findings-signed-jar-2026-11-04.md`.
+
+## Hosted server gets the agent (2026-11-11, Discord report, dido100400)
+
+`zombie.network.CoopMaster` is a new override. Hosting from the main menu on 42.22.2 failed with "File doesn't exist on the
+client: media/lua/shared/pzopt/pzopt_keybinding.lua". `launchServer` starts the hosted server as a second JVM from
+the game's own `jre64/bin/java`, with the client's class path and a short list of options of its own. Before 42.22 that
+class path loaded our classes from the game folder, so the server ran them too. With the signed jar they load only
+through the Java agent, which that command never names, so the hosted server ran stock. Our client leaves the pzopt Lua
+files out of the multiplayer Lua checksum (`NetChecksum`, `luaChecksumExempt`); the stock server counted them, and its
+file-by-file comparison found a file the client did not report. Players joining that server failed the same way, with or
+without PZ Optimization.
+
+The one edit, in `launchServer` just before the process is built, hands the command to `pzopt.CoopAgent`. That adds the
+`-javaagent:...pzopt-agent.jar` argument this launch was started with, as an absolute path, right after the java
+executable. When the agent came from `JAVA_TOOL_OPTIONS` (the macOS launch option) nothing is added: the server inherits
+the environment. The server's `java` sits in `jre64/bin`, so Windows finds the agent's libraries there without
+`pzopt-launch.cmd`. `-Dpzopt.coopServerAgent=false` keeps the hosted server stock. Every other method is Vineflower's
+output, unedited (audit: 0 mismatches).
+
+Check on the flip (dedicated server from the game folder, throwaway user folder): a stock server's Lua checksum
+`a3708b0c...`, a server with the agent `c5358d4a...` (54 overrides active), the same as a stock server with the pzopt Lua
+folders moved away. So the server and every client agree, vanilla clients included. Test: `tests/pzopt/CoopAgentTest`.
+Clicking Host in the menu was not run here.
