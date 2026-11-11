@@ -110,6 +110,15 @@ printf '# files\n' > "$G/pzopt-installed.txt"
 python3 -c 'import json,sys; p=sys.argv[1]; j=json.load(open(p)); j["vmArgs"].insert(0,"-javaagent:pzopt/agent/pzopt-agent.jar"); json.dump(j,open(p,"w"))' "$G/ProjectZomboid64.json"
 PZ_DIR="$G" bash "$REPO/scripts/pzopt.sh" install > "$T/out" 2>&1; rc=$?
 check '[[ $rc -ne 0 && "$(agents)" == 1 ]] && grep -q "already installed" "$T/out"' "a refused pzopt.sh install keeps the agent argument (rc=$rc, $(agents)): $(cat "$T/out")"
+
+# pzopt.sh status names the agent argument: files without it run stock on a signed jar (2026-11-11)
+mkdir -p "$G/pzopt/agent"; printf 'agent jar' > "$G/pzopt/agent/pzopt-agent.jar"
+PZ_DIR="$G" bash "$REPO/scripts/pzopt.sh" status > "$T/out" 2>&1
+check 'grep -q "^agent: *in ProjectZomboid64.json vmArgs" "$T/out"' "status reports the agent argument: $(cat "$T/out")"
+python3 -c 'import json,sys; p=sys.argv[1]; j=json.load(open(p)); j["vmArgs"]=[x for x in j["vmArgs"] if not x.startswith("-javaagent:")]; json.dump(j,open(p,"w"))' "$G/ProjectZomboid64.json"
+PZ_DIR="$G" bash "$REPO/scripts/pzopt.sh" status > "$T/out" 2>&1
+check 'grep -q "^agent: *MISSING" "$T/out"' "status reports a missing agent argument: $(cat "$T/out")"
+rm -rf "$G/pzopt/agent"
 rm -f "$G/pzopt-installed.txt"
 
 [[ $fail -eq 0 ]] && echo "install-sh-test ok"

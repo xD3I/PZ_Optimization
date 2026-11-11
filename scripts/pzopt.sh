@@ -263,6 +263,16 @@ status() {
   fi
   echo "installed:       yes"
   echo "installed for:   $(sed -n 's/^# revision=\([^ ]*\).*/\1/p' "$MANIFEST")"
+  # A signed jar (42.22.1 on) loads the overrides only through the agent: files without the launcher argument run stock.
+  if [[ ! -f "$PZ_DIR/pzopt/agent/pzopt-agent.jar" ]]; then
+    echo "agent:           not installed (unsigned jar: loose classes)"
+  elif [[ ! -f "$LAUNCHER_JSON" ]]; then
+    echo "agent:           no $LAUNCHER_JSON (macOS: the Steam launch option JAVA_TOOL_OPTIONS=-javaagent:...)"
+  elif grep -q '"-javaagent:pzopt/agent/pzopt-agent\.jar"' "$LAUNCHER_JSON"; then
+    echo "agent:           in $(basename "$LAUNCHER_JSON") vmArgs"
+  else
+    echo "agent:           MISSING from $(basename "$LAUNCHER_JSON") vmArgs: the game runs stock (scripts/pzopt.sh reinstall)"
+  fi
   echo "files:"
   while read -r rel sha; do
     [[ "$rel" == \#* || -z "$rel" ]] && continue

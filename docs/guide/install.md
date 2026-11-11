@@ -183,7 +183,7 @@ the whole fix.
 
 ## Method D: build from source (Linux)
 
-For changing the code. Needs a JDK 25 or newer (`javac`, `javap`), Python 3, `git`, `bash`.
+For changing the code. Needs a JDK 25 or newer (`javac`, `javap`, `jar`), Python 3, `git`, `bash`, `unzip`.
 
 ```sh
 sudo pacman -S jdk-openjdk            # Arch / CachyOS
@@ -192,16 +192,23 @@ sudo dnf install java-latest-openjdk-devel   # Fedora
 
 git clone https://github.com/xD3I/PZ_Optimization.git
 cd PZ_Optimization
-scripts/build.sh          # compiles src/ against your jar, checks the stock class signatures
-scripts/pzopt.sh install  # copies build/classes/ in, records pzopt-installed.txt
-scripts/pzopt.sh status   # must say installed: yes, no MISSING / MODIFIED
+scripts/build.sh          # compiles src/ against your jar; checks signatures, bytecode parity, the integrity report;
+                          # on the signed jar also builds pzopt/agent/pzopt-agent.jar
+scripts/pzopt.sh install  # copies build/classes/ in, records pzopt-installed.txt,
+                          # adds -javaagent:pzopt/agent/pzopt-agent.jar to ProjectZomboid64.json
+scripts/pzopt.sh status   # must say installed: yes, agent: in ProjectZomboid64.json vmArgs, no MISSING / MODIFIED
 ```
 
 If the game is not in `/games/steamapps/common/ProjectZomboid`, export `PZ_ROOT` first
 (the folder that contains `projectzomboid/` with the jar and `ProjectZomboid64.json`):
-`export PZ_ROOT="$HOME/.local/share/Steam/steamapps/common/ProjectZomboid"`. `build.sh` ends
-with `built N class files into build/classes for game revision 3d39148846` and fails
-loudly on a revision or signature mismatch. `scripts/test.sh` runs the JVM-only unit tests
+`export PZ_ROOT="$HOME/.local/share/Steam/steamapps/common/ProjectZomboid"`. On 42.22.2 `build.sh` ends
+with `built N class files into build/classes for game revision 3d39148846` and then
+`projectzomboid.jar is signed: the overrides load through the agent`: the game's classes move to
+`build/classes/pzopt/overrides/` and the agent jar is built beside them. It fails loudly on a revision,
+signature or bytecode-parity mismatch. `pzopt.sh status` prints `agent: MISSING from ProjectZomboid64.json vmArgs`
+when the launcher lost the argument (a Steam verify or a game update rewrites the file): the game then runs stock,
+and `scripts/pzopt.sh reinstall` puts it back. The final check is the game itself: `~/Zomboid/console.txt` has the
+`[pzopt] loaded override ... active` lines ([check that it loaded](#check-that-it-loaded)). `scripts/test.sh` runs the JVM-only unit tests
 (no game needed); `scripts/release.sh` builds the release zip. `scripts/pzopt.sh` and
 `install.sh` read the same manifest, so either can uninstall what the other installed.
 
