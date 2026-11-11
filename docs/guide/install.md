@@ -144,8 +144,23 @@ No command at all. The files are the same in the Workshop download and in the re
    `workshop\content\108600\3805285544\mods\PZ_Optimization\42\pzopt-classes`.
 2. Copy everything in `pzopt-classes` (Ctrl+A, Ctrl+C).
 3. Open the game folder again (Browse local files) and paste it there, beside `projectzomboid.jar` (Ctrl+V). Skip any
-   file that already exists.
-4. Start the game: the main menu has a **PZ OPTIMIZATION** item.
+   file that already exists. (Linux: the jar is one folder down, in `ProjectZomboid/projectzomboid`. macOS: see below.)
+4. **Add the agent to the launcher file** (Build 42.22 and later; without it the game runs stock). Open
+   `ProjectZomboid64.json`, the file beside `projectzomboid.jar`, in a text editor (Notepad: right-click, Open with) and
+   add `"-javaagent:pzopt/agent/pzopt-agent.jar",` as the first line inside `"vmArgs": [`, comma included:
+
+   ```json
+   "vmArgs": [
+       "-javaagent:pzopt/agent/pzopt-agent.jar",
+       "-Djava.awt.headless=true",
+       ...
+   ```
+
+   Save it. macOS has no such file: use the [launch option](#macos-the-launch-option) instead. A Steam
+   "Verify integrity of game files" or a game update rewrites `ProjectZomboid64.json`; add the line again afterwards.
+5. Start the game: the main menu has a **PZ OPTIMIZATION** item. `~/Zomboid/console.txt` (Windows:
+   `%UserProfile%\Zomboid\console.txt`) has `[pzopt] loaded override ... active` lines ([check that it
+   loaded](#check-that-it-loaded)).
 
 **From the release zip:** download `pzopt-3d39148846-classes.zip` (about 36 MB) from the
 [release page](https://github.com/xD3I/PZ_Optimization/releases/latest) and unpack it into
@@ -156,11 +171,15 @@ On macOS the game folder is inside the app bundle: in
 `~/Library/Application Support/Steam/steamapps/common/ProjectZomboid`, right-click
 `Project Zomboid.app`, Show Package Contents, `Contents/Java`. Both carry `pzopt-files.txt`, the list of everything
 they add, and `Uninstall-PZ-Optimization.cmd` / `uninstall-pz-optimization.bash`. The revision in the zip's name must
-match your game (42.22.2 is `3d39148846`); a build for another revision disables itself at start-up. Copying by hand
-does not add the agent argument: add `"-javaagent:pzopt/agent/pzopt-agent.jar",` as the first entry of `"vmArgs"` in
-`ProjectZomboid64.json` (macOS: the [launch option](#macos-the-launch-option)), or the game runs stock. To remove it, run
-the uninstaller beside `projectzomboid.jar`, or delete the files listed in `pzopt-files.txt` and the empty folders they
-leave, or run either installer's uninstall.
+match your game (42.22.2 is `3d39148846`); a build for another revision loads nothing and the game runs stock. Then
+add the agent line to `ProjectZomboid64.json` as in step 4 above (macOS: the [launch option](#macos-the-launch-option)).
+
+To remove a hand-copied install, run the uninstaller beside `projectzomboid.jar` (it also takes the agent line out of
+`ProjectZomboid64.json`), or run either installer's uninstall. Removing it by hand instead: **first** delete the
+`"-javaagent:pzopt/agent/pzopt-agent.jar",` line from `ProjectZomboid64.json` (macOS: clear the launch option), then
+the files listed in `pzopt-files.txt` and the empty folders they leave. With the line still there and
+`pzopt-agent.jar` gone, Java stops at start (`Error opening zip file or JAR manifest missing`); deleting the line is
+the whole fix.
 
 ## Method D: build from source (Linux)
 

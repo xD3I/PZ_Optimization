@@ -100,7 +100,10 @@ curl -fsSL https://github.com/xD3I/PZ_Optimization/releases/latest/download/inst
 
 **By hand**, no command: Steam: right-click the game, Manage > Browse local files. Go up to **steamapps**, then
 `workshop\content\108600\3805285544\mods\PZ_Optimization\42\pzopt-classes`. Copy everything in it into the game folder
-(where `projectzomboid.jar` is), skipping files that already exist.
+(where `projectzomboid.jar` is), skipping files that already exist. Then, since Build 42.22, open `ProjectZomboid64.json`
+in that folder with a text editor and add `"-javaagent:pzopt/agent/pzopt-agent.jar",` as the first line inside
+`"vmArgs": [` (comma included), or the game runs stock; macOS: the launch option above instead. Uninstalling by hand:
+remove that line first. Details: [Install guide, Method C](docs/guide/install.md#method-c-copy-the-files-by-hand).
 
 Every method, checking that it loaded, building from source: **[Install guide](docs/guide/install.md)**.
 
