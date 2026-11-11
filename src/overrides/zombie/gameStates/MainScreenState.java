@@ -330,9 +330,9 @@ public final class MainScreenState extends GameState {
 
    private static synchronized void writeOutCurrentVersion() {
       versionWrittenWhilePending = IntegrityReport.current() == null;
-      String versionStr = "revision=%s pzbullet=%s".formatted("71e8410c42", Bullet.getPZBulletVersion());
+      String versionStr = "revision=%s pzbullet=%s".formatted("3d39148846", Bullet.getPZBulletVersion());
       DebugType.General.println("version=" + Core.getInstance().getVersion() + " demo=false");
-      if (!"71e8410c42".isEmpty()) {
+      if (!"3d39148846".isEmpty()) {
          DebugType.General.println(versionStr);
       }
 
@@ -340,7 +340,7 @@ public final class MainScreenState extends GameState {
          String versionFileName = ZomboidFileSystem.instance.getCacheDirSub("version.txt");
          FileWriter versionFileWriter = new FileWriter(versionFileName, false);
          versionFileWriter.write(Core.getInstance().getVersion() + "");
-         if (!"71e8410c42".isEmpty()) {
+         if (!"3d39148846".isEmpty()) {
             versionFileWriter.write(10);
             versionFileWriter.write(versionStr);
          }

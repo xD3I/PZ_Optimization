@@ -57,3 +57,11 @@ all for this report.
   stock. Dedicated servers do not get the agent: they run stock. No performance run: AOT off and class loading through the agent are unmeasured.
 - The mod-only classes and transformed classes run under the jar's signed domain, so `Class.getSigners()` names The Indie Stone for code
   they did not write. The report still shows the agent. Whether The Indie Stone accepts any of this is unanswered: ask before a release.
+
+## Build 42.22.2 stable (2026-11-11, revision `3d39148846`)
+
+Same signing; jar SHA-256 `3c4a7c5f149d784758c6fb5f8fa85f3a21d572e38bc081400e89035f8120d287`. Of the shadowed stock classes only
+`MainScreenState` changed against 42.22.1, and only its inlined revision constant (`writeOutCurrentVersion`, the one audit mismatch);
+our copy now carries `3d39148846`. Audit 9,539 unedited methods, 0 mismatches. Flip, `harness/run.sh --mode verify --quit-after 100
+--launcher direct` (`boot-42222-20261111-175801`): every override active for `3d39148846` (same class set as `agent-smoke3`), no
+signer / linkage / verify errors, the game reports `classpath=1598,agents=1`, bench save rendered, timed quit reached.
