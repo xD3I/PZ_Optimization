@@ -4318,14 +4318,17 @@ local PROFILES = {
 local UNINSTALL_TITLE = "Uninstall PZ Optimization..."
 local UNINSTALL_TIP = "Closes the game, then removes every file the installer or the updater put into the game folder and puts "
     .. "back the launcher settings it changed: the next launch is the stock game. projectzomboid.jar was never modified. "
-    .. "Your settings under Zomboid/pzopt/ stay for a reinstall. Do this before you unsubscribe from the Workshop item."
+    .. "Your settings under Zomboid/pzopt/ stay for a reinstall. Do this before you unsubscribe from the Workshop item. "
+    .. "Windows: then clear the Steam launch option that names pzopt-launch.cmd, or Steam cannot start the game."
 -- ISModalDialog draws plain text: lines broken by hand ("\n"), no rich-text tags
 local UNINSTALL_CONFIRM = "Uninstall PZ Optimization?\n\n"
     .. "The game closes now. Once it has, every file the installer\n"
     .. "or the updater put into the game folder is removed and the\n"
     .. "launcher settings it changed are put back: the next launch\n"
     .. "is the stock game. Your settings in Zomboid/pzopt/ stay.\n\n"
-    .. "Afterwards you can unsubscribe from the Workshop item."
+    .. "Afterwards you can unsubscribe from the Workshop item.\n\n"
+    .. "Windows: clear the Steam launch option that names\n"
+    .. "pzopt-launch.cmd too, or Steam cannot start the game."
 
 -- Export / import (2026-10-01), on each of the three tabs, covering all three: the settings as `key=value` lines, only
 -- those that differ from the build's default (an absent key is the default, as in options.ini), under one comment line

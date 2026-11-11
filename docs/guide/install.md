@@ -16,8 +16,9 @@ so **close the game first** whichever method you pick.
 ## Requirements
 
 - Project Zomboid on Steam on **Build 42.22.2** (revision `3d39148846`, the default branch since 2026-11-11; right-click
-  the game, Properties, Betas: none). The Windows, Linux and macOS depots all work; the jar is the same. **macOS needs one
-  Steam launch option** on top of the install: [below](#macos-the-launch-option).
+  the game, Properties, Betas: none). The Windows, Linux and macOS depots all work; the jar is the same. **Windows and
+  macOS need one Steam launch option** on top of the install: [Windows](#windows-the-launch-option),
+  [macOS](#macos-the-launch-option).
 - Windows: Windows PowerShell 5.1 or newer (built in). Linux and macOS: `bash`, `curl` or
   the `gh` CLI, and `unzip` (or `python3`); a stock Mac has all of them, no Xcode or Homebrew
   needed. No JDK anywhere.
@@ -102,6 +103,34 @@ Options go after the script: `& ([scriptblock]::Create((irm <url>))) -Status` on
 On macOS the script finds `Project Zomboid.app` through Steam's library list and installs
 into its `Contents/Java`; nothing in the app is edited, so the agent needs the launch option below.
 
+## Windows: the launch option
+
+Since Build 42.22 the overrides load through a Java agent (`-javaagent:pzopt/agent/pzopt-agent.jar` in
+`ProjectZomboid64.json`). Java loads the agent's `instrument.dll` before anything else, and that DLL needs `java.dll` and
+`jli.dll` from the game's `jre64\bin`. Steam starts `ProjectZomboid64.exe` from the game folder, where Windows does not
+look for them, so the game closes at once and writes no `console.txt` (from a console window the error reads
+`Could not find agent library instrument on the library path, with error: Can't find dependent libraries`). Every
+install since this release puts `pzopt-launch.cmd` in the game folder: it adds `jre64\bin` to the search path for that
+one launch and starts the game. Found and fixed by [tieeeeen1994](https://github.com/tieeeeen1994/PZ_Optimization)
+in their fork; thank you.
+
+1. In Steam, right-click Project Zomboid > **Properties > General > Launch Options**.
+2. Paste the line `install.ps1` printed at its end (it is also on the clipboard). For the default Steam library it is
+
+   ```
+   "C:\Windows\System32\conhost.exe" --headless "C:\Program Files (x86)\Steam\steamapps\common\ProjectZomboid\pzopt-launch.cmd" %command%
+   ```
+
+   Use your own game folder in the middle (Steam > Manage > Browse local files shows it). Both paths must be full
+   paths: Steam does not search Windows' folders for the first word. Keep any options you already had after
+   `%command%` (for example `... %command% -debug`). `--headless` hides the console window; without the `conhost`
+   part the game works too, with a console window open while you play.
+3. Start the game. The main menu has a **PZ OPTIMIZATION** item ([check that it loaded](#check-that-it-loaded)).
+
+**When you uninstall, clear the box again**: the uninstall removes `pzopt-launch.cmd`, and Steam cannot start a missing
+file. Clearing the box is then the whole fix. Without PZ Optimization installed the line still starts the plain game, as
+long as the file is there.
+
 ## macOS: the launch option
 
 The Mac app starts Java from `Contents/MacOS/JavaAppLauncher`, which takes its options from the bundle's `Info.plist`
@@ -140,7 +169,9 @@ No command at all. The files are the same in the Workshop download and in the re
 **From the Workshop download** (subscribed, nothing to download):
 
 1. Find the mod's files. In Steam, right-click Project Zomboid, **Manage > Browse local files**: that opens the game
-   folder (`...\steamapps\common\ProjectZomboid`). Go up to **steamapps**, then
+   folder (`...\steamapps\common\ProjectZomboid`). If an older version of PZ Optimization is installed there, double-click
+   `Uninstall-PZ-Optimization.cmd` in that folder first: copying over it keeps its old files, and the new build can fail beside them.
+   Go up to **steamapps**, then
    `workshop\content\108600\3805285544\mods\PZ_Optimization\42\pzopt-classes`.
 2. Copy everything in `pzopt-classes` (Ctrl+A, Ctrl+C).
 3. Open the game folder again (Browse local files) and paste it there, beside `projectzomboid.jar` (Ctrl+V). Skip any
@@ -158,7 +189,10 @@ No command at all. The files are the same in the Workshop download and in the re
 
    Save it. macOS has no such file: use the [launch option](#macos-the-launch-option) instead. A Steam
    "Verify integrity of game files" or a game update rewrites `ProjectZomboid64.json`; add the line again afterwards.
-5. Start the game: the main menu has a **PZ OPTIMIZATION** item. `~/Zomboid/console.txt` (Windows:
+   If the `"classpath"` list names `"pzopt/aot/pzopt.jar"` (left by a build before 42.22), make it
+   `"classpath": [".", "projectzomboid.jar"]`: that jar stops the game on 42.22.
+5. **Windows: set the [Steam launch option](#windows-the-launch-option)**, or the game closes at once.
+6. Start the game: the main menu has a **PZ OPTIMIZATION** item. `~/Zomboid/console.txt` (Windows:
    `%UserProfile%\Zomboid\console.txt`) has `[pzopt] loaded override ... active` lines ([check that it
    loaded](#check-that-it-loaded)).
 
@@ -172,7 +206,8 @@ On macOS the game folder is inside the app bundle: in
 `Project Zomboid.app`, Show Package Contents, `Contents/Java`. Both carry `pzopt-files.txt`, the list of everything
 they add, and `Uninstall-PZ-Optimization.cmd` / `uninstall-pz-optimization.bash`. The revision in the zip's name must
 match your game (42.22.2 is `3d39148846`); a build for another revision loads nothing and the game runs stock. Then
-add the agent line to `ProjectZomboid64.json` as in step 4 above (macOS: the [launch option](#macos-the-launch-option)).
+add the agent line to `ProjectZomboid64.json` as in step 4 above and, on Windows, the [launch option](#windows-the-launch-option)
+(macOS: only the [launch option](#macos-the-launch-option)). An older version installed? Uninstall it first, as in step 1.
 
 To remove a hand-copied install, run the uninstaller beside `projectzomboid.jar` (it also takes the agent line out of
 `ProjectZomboid64.json`), or run either installer's uninstall. Removing it by hand instead: **first** delete the
@@ -236,6 +271,7 @@ grep -c '\[pzopt\] loaded override' ~/Zomboid/console.txt
 | dozens of lines | the overrides are active. the main menu has a **PZ OPTIMIZATION** item and Options > Display has the **Uncapped** entry. Done. |
 | `0` | the class files did not load. Check that `<game>\pzopt\agent\pzopt-agent.jar` exists, that `ProjectZomboid64.json` has `-javaagent:pzopt/agent/pzopt-agent.jar` under `vmArgs` (macOS: the [launch option](#macos-the-launch-option)) and lists `"."` before `"projectzomboid.jar"` under `classpath`. Steam's "Verify integrity of game files" puts the stock JSON back: run the installer again. |
 | `[pzopt-agent] the overrides were built for revision ...` | your game is not 42.22.2 / `3d39148846`; the game runs as stock. Switch Steam to that branch or wait for a matching release. |
+| Windows: the game closes at once, no `console.txt` written, no `agent.log` | the [Steam launch option](#windows-the-launch-option) is missing. Set it, or take the `-javaagent` line out of `ProjectZomboid64.json` to get the stock game back. (`agent.log` is always under `%USERPROFILE%\Zomboid\pzopt\`, even when your Zomboid folder is elsewhere.) |
 | the game stops before the main menu after updating to 42.22 | an install from before 42.22 (loose game classes beside the now signed jar). Run the install command again, or the uninstall command. |
 | the game stops at start with `NoClassDefFoundError: pzopt/...` | an unfinished install: some override classes are in the game folder without the `pzopt` folder they call. Run the installer again (it replaces what is there), or run it with `-Uninstall` / `--uninstall`. |
 | the game closes at start after a game update, or Uninstall in the menu removed nothing | builds since 2026-10-07 fix both at the next start (`Zomboid/pzopt/boot-repair.log`). Older installs: double-click `Uninstall-PZ-Optimization.cmd` in the game folder if it is there, else the `uninstall.ps1` / `uninstall.sh` line above. |
@@ -248,7 +284,8 @@ the DLSS files the Visuals page fetched and the AOT cache, and the launcher sett
 changed are put back (log: `Zomboid/pzopt/uninstall.log`). If the files are still there at the
 next start, the game removes them then and restarts stock (`Zomboid/pzopt/boot-repair.log`).
 Unsubscribing from the Workshop item and Steam's "Verify integrity of game files" leave the
-installed files in the game folder.
+installed files in the game folder. **Windows: clear the Steam launch option** that names `pzopt-launch.cmd` afterwards
+(every uninstall removes that file).
 
 **Without starting the game:** double-click `Uninstall-PZ-Optimization.cmd` in the game folder
 (Steam: Project Zomboid > Manage > Browse local files; Linux / macOS: `bash

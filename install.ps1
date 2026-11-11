@@ -188,6 +188,26 @@ function Add-AgentArg {
   }
 }
 
+# Windows on a signed jar (42.22 on): Steam starts ProjectZomboid64.exe from the game folder, where Windows does not find
+# java.dll / jli.dll for the agent's instrument.dll, so the game closes at once unless it starts through pzopt-launch.cmd,
+# which puts jre64\bin on PATH for that launch (tieeeeen1994's fix, src/launch/). Steam keeps launch options in its own
+# config and rewrites it while it runs, so the player pastes the line; it goes to the clipboard.
+function Show-LaunchOption {
+  $cmd = Join-Path $Dir 'pzopt-launch.cmd'
+  if (-not (Test-Path -LiteralPath $cmd)) { return }
+  $conhost = Join-Path $env:SystemRoot 'System32\conhost.exe'
+  $line = "`"$conhost`" --headless `"$cmd`" %command%"
+  $copied = $false
+  try { Set-Clipboard -Value $line; $copied = $true } catch { }
+  Write-Host ''
+  Write-Host 'ONE MORE STEP, or the game will not start from Steam:' -ForegroundColor Yellow
+  Write-Host 'Steam > right-click Project Zomboid > Properties > General > Launch Options, paste this line' -ForegroundColor Yellow
+  Write-Host "(it is on your clipboard$(if (-not $copied) { ' - copy it from here' })), and keep any options you already had after %command%:" -ForegroundColor Yellow
+  Write-Host ''
+  Write-Host "  $line" -ForegroundColor Cyan
+  Write-Host ''
+}
+
 function Reset-Aot {
   Remove-AgentArg
   if (Test-Path -LiteralPath $Json) {
@@ -418,6 +438,8 @@ if ($Uninstall) {
   Wait-GameClosed
   if (-not (Remove-Install)) { Clear-GameNotes; Write-Host "PZ Optimization is not installed in $Dir (nothing of it found there)"; Done 0 }
   Write-Host "PZ Optimization is uninstalled: the next launch is the stock game. You can unsubscribe from the Workshop item now."
+  Write-Host 'If you set the Steam launch option for pzopt-launch.cmd, clear it now (Steam > Project Zomboid > Properties >' -ForegroundColor Yellow
+  Write-Host 'General > Launch Options): the file is gone and Steam cannot start the game through it.' -ForegroundColor Yellow
   Write-Host "caches under $env:USERPROFILE\Zomboid\pzopt\ (anims, packs, framecap.ini, options.ini) can be deleted by hand"
   Done 0
 }
@@ -569,4 +591,5 @@ Write-Host "installed $($files.Count) files into $Dir for game revision $zipRev;
 Write-Host "launch from Steam; $env:USERPROFILE\Zomboid\console.txt shows one '[pzopt] loaded override ... active' line per class"
 Write-Host "settings: Options > PZ Optimization in the game, or $Dir\pzopt.properties"
 Write-Host "to remove it: Options > PZ Optimization > Uninstall PZ Optimization, or double-click $Dir\Uninstall-PZ-Optimization.cmd"
+Show-LaunchOption
 Done 0

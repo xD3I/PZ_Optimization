@@ -21,14 +21,15 @@
 [*]Mods (main menu): enable [b]PZ_Optimization[/b]; a window shows your install command.
 [*][b]Copy the command[/b], paste it into PowerShell (Windows) or a terminal (Linux, macOS), Enter.
 [*]Quit the game; the installer copies the files when it has closed.
-[*]Start the game, disable the mod again. Options has a new [b]PZ Optimization[/b] tab.
+[*][b]Windows, Mac:[/b] paste its last line into Steam > Properties > Launch Options (Windows fix: tieeeeen1994).
+[*]Start the game, disable the mod again.
 [/olist]
 No window? Windows: [code]irm https://github.com/xD3I/PZ_Optimization/releases/latest/download/install.ps1 | iex[/code]
 Linux, macOS: [code]curl -fsSL https://github.com/xD3I/PZ_Optimization/releases/latest/download/install.sh | bash[/code]
 
 [b]By hand[/b], no command:
 [img]https://raw.githubusercontent.com/xD3I/PZ_Optimization/master/docs/workshop/images/73-install-manual.avif[/img]
-Steam: right-click the game, Manage > Browse local files. Go up to [b]steamapps[/b], then workshop\content\108600\3805285544\mods\PZ_Optimization\42\pzopt-classes. Copy its contents beside projectzomboid.jar, skipping existing files. Then add [b]"-javaagent:pzopt/agent/pzopt-agent.jar",[/b] as the first line of "vmArgs" in ProjectZomboid64.json there (Mac: GitHub install guide); remove it before deleting the files.
+Steam: right-click the game, Manage > Browse local files. Go up to [b]steamapps[/b], then workshop\content\108600\3805285544\mods\PZ_Optimization\42\pzopt-classes. Uninstall an older version, then copy its contents beside projectzomboid.jar. Add [b]"-javaagent:pzopt/agent/pzopt-agent.jar",[/b] as the first line of "vmArgs" in ProjectZomboid64.json there, and the launch option (GitHub install guide).
 
 [h1]New! A built-in benchmark, one menu for everything[/h1]
 [img]https://raw.githubusercontent.com/xD3I/PZ_Optimization/master/docs/workshop/images/89-new-benchmark-menu.avif[/img]

@@ -54,18 +54,28 @@ Runs: <a href="https://pzo.diegov.dev/d/pzopt-compare/compare?var-runs=daily-sto
 <a id="install"></a>
 
 > [!IMPORTANT]
-> **Mac players, Build 42.22 and later: one extra step.** The game's jar is signed since 42.22.1, so PZ Optimization now
-> loads through a Java agent. On Windows and Linux the installer adds it to the game's launcher file; the Mac app has
-> no such file, so without the step below the game runs stock. After installing, in Steam: right-click Project Zomboid >
-> **Properties > General > Launch Options** and paste the line the installer prints, which looks like this (one line;
-> change the path if your Steam library is elsewhere):
+> **Windows and Mac players, Build 42.22 and later: one extra step, a Steam launch option.** The game's jar is signed
+> since 42.22.1, so PZ Optimization now loads through a Java agent, and on these two systems the game only starts it
+> through a Steam launch option. After installing, in Steam: right-click Project Zomboid > **Properties > General >
+> Launch Options** and paste the line the installer prints (it also copies it to the clipboard on Windows). Keep any
+> options you had after `%command%`.
+>
+> Windows (use your own game folder; both paths in full). Without it the game closes at once with the agent in
+> `ProjectZomboid64.json`: Windows does not find the game's Java libraries for the agent when Steam starts the game.
+> Found and fixed by [tieeeeen1994](https://github.com/tieeeeen1994/PZ_Optimization), thank you.
+>
+> ```
+> "C:\Windows\System32\conhost.exe" --headless "C:\Program Files (x86)\Steam\steamapps\common\ProjectZomboid\pzopt-launch.cmd" %command%
+> ```
+>
+> macOS (the app has no launcher file; without it the game runs stock):
 >
 > ```
 > JAVA_TOOL_OPTIONS="-javaagent:'/Users/<you>/Library/Application Support/Steam/steamapps/common/ProjectZomboid/Project Zomboid.app/Contents/Java/pzopt/agent/pzopt-agent.jar'" %command%
 > ```
 >
-> **Before uninstalling, clear that box again**: with the line there and the files gone, the game does not start.
-> ([Install guide: macOS](docs/guide/install.md#macos-the-launch-option))
+> **Before or right after uninstalling, clear that box again**: with the line there and the files gone, the game does
+> not start. ([Install guide](docs/guide/install.md#windows-the-launch-option))
 
 ## Install (once, about two minutes)
 
@@ -100,10 +110,11 @@ curl -fsSL https://github.com/xD3I/PZ_Optimization/releases/latest/download/inst
 
 **By hand**, no command: Steam: right-click the game, Manage > Browse local files. Go up to **steamapps**, then
 `workshop\content\108600\3805285544\mods\PZ_Optimization\42\pzopt-classes`. Copy everything in it into the game folder
-(where `projectzomboid.jar` is), skipping files that already exist. Then, since Build 42.22, open `ProjectZomboid64.json`
-in that folder with a text editor and add `"-javaagent:pzopt/agent/pzopt-agent.jar",` as the first line inside
-`"vmArgs": [` (comma included), or the game runs stock; macOS: the launch option above instead. Uninstalling by hand:
-remove that line first. Details: [Install guide, Method C](docs/guide/install.md#method-c-copy-the-files-by-hand).
+(where `projectzomboid.jar` is); an older version installed there? Uninstall it first (double-click
+`Uninstall-PZ-Optimization.cmd` in the game folder), its old files would stay beside the new ones. Then, since Build 42.22,
+open `ProjectZomboid64.json` in that folder with a text editor and add `"-javaagent:pzopt/agent/pzopt-agent.jar",` as the
+first line inside `"vmArgs": [` (comma included), and on Windows set the launch option above; macOS: only the launch
+option. Uninstalling by hand: remove that line and the launch option first. Details: [Install guide, Method C](docs/guide/install.md#method-c-copy-the-files-by-hand).
 
 Every method, checking that it loaded, building from source: **[Install guide](docs/guide/install.md)**.
 

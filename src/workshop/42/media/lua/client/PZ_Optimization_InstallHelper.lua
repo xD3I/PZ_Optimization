@@ -135,7 +135,16 @@ function PZOptInstallHelper:new(command, uninstall, notice)
         for _, l in ipairs({
             "2. Open " .. shellName() .. ", paste it, press Enter.",
             "3. Quit the game (QUIT). The installer waits for that, then copies the files.",
-            "4. Start the game: Options now has a PZ Optimization tab.",
+        }) do table.insert(lines, l) end
+        if isSystemWindows() or isSystemMacOS() then
+            -- Build 42.22+: the agent needs a Steam launch option here (Windows: pzopt-launch.cmd, tieeeeen1994's fix)
+            table.insert(lines, "4. Paste the line the installer prints last into Steam > Project Zomboid > Properties >")
+            table.insert(lines, "   General > Launch Options" .. (isSystemWindows() and " (it is on the clipboard), or the game will not start." or ", or the game runs stock."))
+            table.insert(lines, "5. Start the game: the main menu now has a PZ OPTIMIZATION item.")
+        else
+            table.insert(lines, "4. Start the game: the main menu now has a PZ OPTIMIZATION item.")
+        end
+        for _, l in ipairs({
             "",
             "Then disable this mod in the Mods list: it only shows this window.",
             "To uninstall later: Options > PZ Optimization > Uninstall PZ Optimization...,",

@@ -381,4 +381,8 @@ if unzip -Z1 "$JAR" 'META-INF/*' 2>/dev/null | grep -E '^META-INF/[^/]+\.SF$' >/
   javac --release "$RELEASE" -nowarn -Xlint:-options -g -d "$BUILD/agent/classes" "$SRC/agent/pzoptagent/Agent.java"
   printf 'Premain-Class: pzoptagent.Agent\n' > "$BUILD/agent/manifest.txt"
   jar cfm "$OUT/pzopt/agent/pzopt-agent.jar" "$BUILD/agent/manifest.txt" -C "$BUILD/agent/classes" .
+  # Windows: Steam starts ProjectZomboid64.exe from the game folder, where Windows does not find java.dll / jli.dll for the
+  # agent's instrument.dll, and the JVM exits before console.txt. pzopt-launch.cmd (tieeeeen1994's fix, src/launch/) puts
+  # jre64\bin on PATH for one launch; the player sets it as the Steam launch option. A release file like the uninstallers.
+  cp "$SRC/launch/pzopt-launch.cmd" "$OUT/"
 fi
