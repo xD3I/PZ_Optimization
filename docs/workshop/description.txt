@@ -28,7 +28,7 @@ Linux, macOS: [code]curl -fsSL https://github.com/xD3I/PZ_Optimization/releases/
 
 [b]By hand[/b], no command:
 [img]https://raw.githubusercontent.com/xD3I/PZ_Optimization/master/docs/workshop/images/73-install-manual.avif[/img]
-Steam: right-click the game, Manage > Browse local files. Go up to [b]steamapps[/b], then workshop\content\108600\3805285544\mods\PZ_Optimization\42\pzopt-classes. Copy everything in it into the game folder (where projectzomboid.jar is), skipping files that already exist.
+Steam: right-click the game, Manage > Browse local files. Go up to [b]steamapps[/b], then workshop\content\108600\3805285544\mods\PZ_Optimization\42\pzopt-classes. Copy its contents beside projectzomboid.jar, skipping existing files. Then add [b]"-javaagent:pzopt/agent/pzopt-agent.jar",[/b] as the first line of "vmArgs" in ProjectZomboid64.json there (Mac: GitHub install guide); remove it before deleting the files.
 
 [h1]New! A built-in benchmark, one menu for everything[/h1]
 [img]https://raw.githubusercontent.com/xD3I/PZ_Optimization/master/docs/workshop/images/89-new-benchmark-menu.avif[/img]
