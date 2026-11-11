@@ -65,3 +65,31 @@ Same signing; jar SHA-256 `3c4a7c5f149d784758c6fb5f8fa85f3a21d572e38bc081400e890
 our copy now carries `3d39148846`. Audit 9,539 unedited methods, 0 mismatches. Flip, `harness/run.sh --mode verify --quit-after 100
 --launcher direct` (`boot-42222-20261111-175801`): every override active for `3d39148846` (same class set as `agent-smoke3`), no
 signer / linkage / verify errors, the game reports `classpath=1598,agents=1`, bench save rendered, timed quit reached.
+
+## ZombieBuddy 2.3.4 beside the agent (2026-11-11, flip, 42.22.2)
+
+ZombieBuddy's premain loads four classes we replace before any later agent runs: `KahluaThread`, `LuaCaller`,
+`KahluaConverterManager` and `$1` (class-load log of a bare JVM with both agents, `-javaagent:ZombieBuddy.jar` first). Ours add
+fields and methods (29, 15, 3), so they cannot be redefined after the fact, and a mix of its stock copies with the rest of ours
+would fail mid-game. The agent now checks `getAllLoadedClasses()` before it registers its transformer: any of ours already
+loaded means nothing is replaced (stock game) and one line says how to fix the order. Its lines also go to
+`Zomboid/pzopt/agent.log` (premain's stdout reaches neither console.txt nor the launcher's output).
+
+- `zb-after-20261111-181346` (ours first in the JSON, ZombieBuddy appended, its documented Linux / macOS launch-option order):
+  81 overrides active, `agents=2`, ZombieBuddy patched GameWindow / GameLoadingState / DebugLog on top of ours (its
+  transformer is retransform-capable, ours not, so the JVM runs ours first at every load), our mod-compat scan saw its
+  patches, timed quit reached, no linkage errors.
+- `zb-first-20261111-181835` (ZombieBuddy first in the JSON): `agent.log` names the four classes, the game ran stock, timed
+  quit reached, no linkage errors. A `JAVA_TOOL_OPTIONS` form of the same test never started: the launcher script's own
+  `java -version` 64-bit check aborted with ZombieBuddy attached.
+- Not tested: Windows `-agentlib:zbNative` (the native agent loads ZombieBuddy.jar itself; its order against ours unknown).
+
+macOS: `install.sh` now prints the Steam launch option
+`JAVA_TOOL_OPTIONS="-javaagent:'<Contents/Java>/pzopt/agent/pzopt-agent.jar'" %command%` (the JVM reads the variable itself,
+so `JavaAppLauncher` needs no change; the quoted path with spaces checked against the game's JRE on Linux, not on a Mac yet).
+
+Quick check, bench route at max zoom, 240 cap, flip, one run each: `--prop enabled=false` (stock path)
+`v42222-stockpath-20261111-183056` 46.7 fps, p99 51.4 ms, 509 frames > 33 ms, 1 %-low 19; optimized `v42222-opt-20261111-182750`
+68.0 fps, p99 25.6 ms, 17 frames > 33 ms, 1 %-low 39. A stock run with the mod uninstalled (`v42222-stock-20261111-182128`) never
+started its route: without our classes the bench driver (pzopt.Harness) is absent; stock comparisons need the stockrig Lua
+(`harness/pzo-compare/`).

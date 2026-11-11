@@ -15,8 +15,9 @@ so **close the game first** whichever method you pick.
 
 ## Requirements
 
-- Project Zomboid on Steam on **Build 42.21** (the default branch since 2026-09-28; right-click the game, Properties,
-  Betas: none). The Windows, Linux and macOS depots all work; the jar is the same.
+- Project Zomboid on Steam on **Build 42.22.2** (revision `3d39148846`, the default branch since 2026-11-11; right-click
+  the game, Properties, Betas: none). The Windows, Linux and macOS depots all work; the jar is the same. **macOS needs one
+  Steam launch option** on top of the install: [below](#macos-the-launch-option).
 - Windows: Windows PowerShell 5.1 or newer (built in). Linux and macOS: `bash`, `curl` or
   the `gh` CLI, and `unzip` (or `python3`); a stock Mac has all of them, no Xcode or Homebrew
   needed. No JDK anywhere.
@@ -25,8 +26,11 @@ so **close the game first** whichever method you pick.
 Every installer below does the same thing: locate the game through Steam's library list
 (or `-Dir` / `--dir <folder>` / `PZ_DIR`), read the game revision from the jar, check that
 the launcher classpath loads loose classes, record every file in `pzopt-installed.txt` so the
-uninstall is exact, then copy the classes next to `projectzomboid.jar` (on macOS that is
-`Project Zomboid.app/Contents/Java`). The jar is never touched. The list is written before the
+uninstall is exact, then copy the files next to `projectzomboid.jar` (on macOS that is
+`Project Zomboid.app/Contents/Java`) and add one argument to the launcher file `ProjectZomboid64.json`:
+`-javaagent:pzopt/agent/pzopt-agent.jar`. Since 42.22.1 the jar is signed and the game refuses loose game classes
+beside it, so the agent hands our classes to the JVM as the jar's classes load
+([how it works](how-it-works.md#how-the-install-works-without-touching-the-jar)). The jar is never touched. The list is written before the
 copy, so an install that stopped half-way (an antivirus blocking a file, a closed window) is
 replaced by the next run or removed by the uninstall; files of ours that an older unfinished
 install left without a list are replaced too.
@@ -96,8 +100,31 @@ Options go after the script: `& ([scriptblock]::Create((irm <url>))) -Status` on
 (`powershell -ExecutionPolicy Bypass -File install.ps1`, `bash install.sh`).
 
 On macOS the script finds `Project Zomboid.app` through Steam's library list and installs
-into its `Contents/Java`; the bundle's launcher already searches that folder before the jar,
-so nothing in the app is edited.
+into its `Contents/Java`; nothing in the app is edited, so the agent needs the launch option below.
+
+## macOS: the launch option
+
+The Mac app starts Java from `Contents/MacOS/JavaAppLauncher`, which takes its options from the bundle's `Info.plist`
+(editing that would break the app's signature), so there is no launcher file for the installer to add the agent to.
+Steam's launch options can hand it to Java instead. After any install method above:
+
+1. In Steam, right-click Project Zomboid > **Properties > General > Launch Options**.
+2. Paste the line the installer printed at its end (one line). For the default Steam library it is
+
+   ```
+   JAVA_TOOL_OPTIONS="-javaagent:'/Users/<you>/Library/Application Support/Steam/steamapps/common/ProjectZomboid/Project Zomboid.app/Contents/Java/pzopt/agent/pzopt-agent.jar'" %command%
+   ```
+
+   with `<you>` your macOS user name (Finder's home folder name; `echo $HOME` in Terminal prints the start of the
+   path). The quotes are needed: the path has spaces.
+3. Close the window and start the game. `~/Zomboid/console.txt` starts with `Picked up JAVA_TOOL_OPTIONS: ...` and
+   then the `[pzopt] loaded override ... active` lines ([check that it loaded](#check-that-it-loaded)).
+
+Without the line the game runs stock; nothing breaks. **Before uninstalling, clear the box again**: with the line
+there and `pzopt-agent.jar` gone, Java stops at start (`Error opening zip file or JAR manifest missing`). If that
+already happened, clearing the box is the whole fix. A game update leaves the line harmless: an agent built for
+another revision loads nothing and the game runs stock until a matching release is installed. Not yet tested on a Mac
+(the same quoted form was checked against the game's own Java on Linux).
 
 Both scripts take the same options: `-Status` / `--status` (installed for which revision,
 any `MISSING` / `MODIFIED` file, the contents of `pzopt.properties` if present),
@@ -120,7 +147,7 @@ No command at all. The files are the same in the Workshop download and in the re
    file that already exists.
 4. Start the game: the main menu has a **PZ OPTIMIZATION** item.
 
-**From the release zip:** download `pzopt-4a0e9546ec-classes.zip` (about 64 MB) from the
+**From the release zip:** download `pzopt-3d39148846-classes.zip` (about 36 MB) from the
 [release page](https://github.com/xD3I/PZ_Optimization/releases/latest) and unpack it into
 the folder that holds `projectzomboid.jar`, without overwriting anything (`Expand-Archive`
 without `-Force`, or `unzip -n`).
@@ -129,7 +156,9 @@ On macOS the game folder is inside the app bundle: in
 `~/Library/Application Support/Steam/steamapps/common/ProjectZomboid`, right-click
 `Project Zomboid.app`, Show Package Contents, `Contents/Java`. Both carry `pzopt-files.txt`, the list of everything
 they add, and `Uninstall-PZ-Optimization.cmd` / `uninstall-pz-optimization.bash`. The revision in the zip's name must
-match your game (42.21 is `4a0e9546ec`); a build for another revision disables itself at start-up. To remove it, run
+match your game (42.22.2 is `3d39148846`); a build for another revision disables itself at start-up. Copying by hand
+does not add the agent argument: add `"-javaagent:pzopt/agent/pzopt-agent.jar",` as the first entry of `"vmArgs"` in
+`ProjectZomboid64.json` (macOS: the [launch option](#macos-the-launch-option)), or the game runs stock. To remove it, run
 the uninstaller beside `projectzomboid.jar`, or delete the files listed in `pzopt-files.txt` and the empty folders they
 leave, or run either installer's uninstall.
 
@@ -152,7 +181,7 @@ scripts/pzopt.sh status   # must say installed: yes, no MISSING / MODIFIED
 If the game is not in `/games/steamapps/common/ProjectZomboid`, export `PZ_ROOT` first
 (the folder that contains `projectzomboid/` with the jar and `ProjectZomboid64.json`):
 `export PZ_ROOT="$HOME/.local/share/Steam/steamapps/common/ProjectZomboid"`. `build.sh` ends
-with `built N class files into build/classes for game revision 4a0e9546ec` and fails
+with `built N class files into build/classes for game revision 3d39148846` and fails
 loudly on a revision or signature mismatch. `scripts/test.sh` runs the JVM-only unit tests
 (no game needed); `scripts/release.sh` builds the release zip. `scripts/pzopt.sh` and
 `install.sh` read the same manifest, so either can uninstall what the other installed.
@@ -179,8 +208,9 @@ grep -c '\[pzopt\] loaded override' ~/Zomboid/console.txt
 | You see | Meaning |
 |---|---|
 | dozens of lines | the overrides are active. the main menu has a **PZ OPTIMIZATION** item and Options > Display has the **Uncapped** entry. Done. |
-| `0` | the class files did not load. Check that `<game>\pzopt\Overrides.class` exists and that `ProjectZomboid64.json` lists `"."` before `"projectzomboid.jar"` under `classpath` (it does on the stock depot; the macOS bundle has no JSON, its launcher puts `Contents/Java` first by itself). |
-| a line saying the overrides were built for another revision | your game is not 42.21 / `4a0e9546ec`; the game runs as stock. Switch Steam to that branch or wait for a matching release. |
+| `0` | the class files did not load. Check that `<game>\pzopt\agent\pzopt-agent.jar` exists, that `ProjectZomboid64.json` has `-javaagent:pzopt/agent/pzopt-agent.jar` under `vmArgs` (macOS: the [launch option](#macos-the-launch-option)) and lists `"."` before `"projectzomboid.jar"` under `classpath`. Steam's "Verify integrity of game files" puts the stock JSON back: run the installer again. |
+| `[pzopt-agent] the overrides were built for revision ...` | your game is not 42.22.2 / `3d39148846`; the game runs as stock. Switch Steam to that branch or wait for a matching release. |
+| the game stops before the main menu after updating to 42.22 | an install from before 42.22 (loose game classes beside the now signed jar). Run the install command again, or the uninstall command. |
 | the game stops at start with `NoClassDefFoundError: pzopt/...` | an unfinished install: some override classes are in the game folder without the `pzopt` folder they call. Run the installer again (it replaces what is there), or run it with `-Uninstall` / `--uninstall`. |
 | the game closes at start after a game update, or Uninstall in the menu removed nothing | builds since 2026-10-07 fix both at the next start (`Zomboid/pzopt/boot-repair.log`). Older installs: double-click `Uninstall-PZ-Optimization.cmd` in the game folder if it is there, else the `uninstall.ps1` / `uninstall.sh` line above. |
 
@@ -199,9 +229,9 @@ installed files in the game folder.
 uninstall-pz-optimization.bash` there). Every install since 2026-10-07 leaves it there, with its
 own copy of the installer under `pzopt/uninstall/`.
 
-**After a game update** the first start removes a build made for the old game revision (or
-installs the matching one from the Steam Workshop copy) and starts the game again, so the game
-never crashes on an outdated install.
+**After a game update** the agent finds a jar of another revision, loads nothing, and the game runs stock until
+you install a matching release. (Before 42.22 the first start removed the old build itself; with the signed jar that
+repair runs inside our own classes, which are not loaded then.)
 
 **From a terminal** (the game may be running; the script waits for it to close):
 
@@ -261,6 +291,10 @@ lights up, and otherwise it goes grey ("up to date") instead of failing. Switch:
 PZ OPTIMIZATION > Optimizations > System, sound and mods > Updates, `updateFromWorkshop` (default on).
 
 ## After a game update
+
+Since 42.22.2: the agent loads the classes only for the revision they were built for; after an update the game runs
+stock until you run the install command again for a matching release. The rest of this section is about installs from
+before 42.22.
 
 The classes are compiled against one exact jar. They switch their own changes off on another
 revision, but they still stand in for the game's copies of the classes they replace, and a game

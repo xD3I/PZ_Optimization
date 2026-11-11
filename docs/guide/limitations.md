@@ -4,14 +4,25 @@
 
 ## Known limitations
 
-- **Version pin.** One exact game build. Every Build 42 patch needs a new build of these
-  classes; until then they disable themselves.
+- **Version pin.** One exact game build (42.22.2, `3d39148846`). Every Build 42 patch needs a new build of these
+  classes; until then the agent loads none of them and the game runs stock.
 - **Other Java mods.** Only one mod can replace a given class: anything that also ships one of the
   [shadowed classes](how-it-works.md#how-the-install-works-without-touching-the-jar) conflicts, and whichever file is
   found first wins silently. Mods built on ZombieBuddy or Leaf patch methods and can coexist when they do not patch the
   same methods: since 2026-10-01 the build scans the launch's Java mods and switches off its own setting for every edited
   method a mod patches (`modCompat=auto`, [`findings-mod-compat-2026-10-01.md`](../findings-mod-compat-2026-10-01.md);
-  the main menu's Mod compatibility check lists them). ZombieBuddy loads no Java mod on 42.21 at all, stock game too.
+  the main menu's Mod compatibility check lists them). **ZombieBuddy (2.3.4) works beside it when PZ Optimization's agent
+  comes first** (tested 2026-11-11 on Linux, 42.22.2: both active, ZombieBuddy's patches applied on top of ours). Our
+  installers put `-javaagent:pzopt/agent/pzopt-agent.jar` first in `ProjectZomboid64.json`, and ZombieBuddy's documented
+  launch option (`-javaagent:ZombieBuddy.jar --`) comes after it. If ZombieBuddy's agent starts first (its Windows installer
+  can write `-agentlib:zbNative` into the JSON), it has already loaded four Lua classes we replace (`KahluaThread`,
+  `LuaCaller`, `KahluaConverterManager`); then the game runs stock and `Zomboid/pzopt/agent.log` says so. Re-running our
+  installer puts ours first again. Windows with `zbNative` is not tested.
+- **macOS needs a Steam launch option** since 42.22 (the jar is signed and the Mac app has no launcher file for the agent):
+  [install guide](install.md#macos-the-launch-option). Without it the game runs stock. Not yet tested on a Mac.
+- **Dedicated servers** do not get the agent and run stock.
+- **AOT cache off** on the signed jar (42.22.1 on): the cache's jar form would put loose classes ahead of the signed jar.
+  Startup without it is not measured.
   The Lua-only performance mods [measured](benchmarks.md#against-the-other-performance-mods) are harmless but add
   nothing.
 - **Multiplayer is lightly tested.** The files are client side: there is nothing to install on a

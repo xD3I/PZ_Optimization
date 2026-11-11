@@ -276,6 +276,17 @@ in as loose files and removed by deleting them; the jar's checksum never changes
 "manual class replacement" method described on the
 [PZ wiki's Java page](https://pzwiki.net/wiki/Java).
 
+**Since Build 42.22.1 the jar is signed** (`META-INF/PROJECTZ.SF`), and the JVM refuses an unsigned class in a package
+that holds signed ones: a loose game class beside the jar stops the game before `main`. So our classes of the game's
+packages now live in `pzopt/overrides/` (not a class path root) and a small Java agent, `pzopt/agent/pzopt-agent.jar`, hands
+the JVM their bytes when the jar's class of the same name loads. The class keeps the jar's signed origin; the jar is still
+never written. The installers add one launcher argument, `-javaagent:pzopt/agent/pzopt-agent.jar`, first in
+`ProjectZomboid64.json` (macOS: a [Steam launch option](install.md#macos-the-launch-option)). The agent loads nothing for a
+jar of another revision (stock game), and nothing when another agent started first and already loaded classes we replace
+(ZombieBuddy's: [limitations](limitations.md)). It does not touch the game's `IntegrityReport`, which lists it
+(`agents=1`). `pzopt.*` classes stay loose: the jar has no such package. Details:
+[`findings-signed-jar-2026-11-04.md`](../findings-signed-jar-2026-11-04.md).
+
 Shadowed classes: 139 game classes (names below without the leading `zombie.`) plus 1 written from scratch (`zombie.gameStates.TISLogoState`). Every one is listed with what was changed in it in [`docs/override-edits.md`](../override-edits.md).
 
 <details><summary>The 139 classes</summary>

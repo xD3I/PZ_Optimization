@@ -147,7 +147,17 @@ PYEOF
 add_agent() {
   [[ -f "$dir/pzopt/agent/pzopt-agent.jar" ]] || return 0
   if [[ ! -f "$JSON" ]]; then
-    echo "warning: this game's jar is signed and macOS has no launcher JSON for the agent: the game runs without PZ Optimization" >&2
+    # macOS: the .app's JavaAppLauncher takes its JVM options from Info.plist (editing it breaks the bundle's signature),
+    # so the agent comes from a Steam launch option the player sets once (JAVA_TOOL_OPTIONS is read by the JVM itself).
+    echo "" >&2
+    echo "macOS: one more step. The game's jar is signed, so PZ Optimization loads through a Java agent, and the Mac app" >&2
+    echo "has no launcher file to add it to. In Steam: right-click Project Zomboid > Properties > General > Launch Options," >&2
+    echo "paste this line (one line), close the window, start the game:" >&2
+    echo "" >&2
+    echo "  JAVA_TOOL_OPTIONS=\"-javaagent:'$dir/pzopt/agent/pzopt-agent.jar'\" %command%" >&2
+    echo "" >&2
+    echo "Without it the game runs stock. Before you uninstall PZ Optimization, clear that Launch Options box again:" >&2
+    echo "with the line still there and the files gone, the game does not start." >&2
     return 0
   fi
   grep -q 'pzopt-agent\.jar' "$JSON" && return 0
@@ -382,6 +392,7 @@ if [[ $mode == uninstall ]]; then
   wait_game_closed
   remove_install || { clear_game_notes; echo "PZ Optimization is not installed in $dir (nothing of it found there)"; exit 0; }
   echo "PZ Optimization is uninstalled: the next launch is the stock game. You can unsubscribe from the Workshop item now."
+  [[ ! -f "$JSON" && -x "$MAC_LAUNCHER" ]] && echo "macOS: clear Project Zomboid's Launch Options in Steam (the JAVA_TOOL_OPTIONS line), or the game does not start."
   echo "caches under ~/Zomboid/pzopt/ (anims, packs, framecap.ini, options.ini) can be deleted by hand"
   exit 0
 fi

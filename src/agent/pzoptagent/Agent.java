@@ -44,8 +44,20 @@ public final class Agent {
       }
    }
 
+   /** stdout of premain reaches neither console.txt nor the launcher's output, so the line also goes to Zomboid/pzopt/agent.log. */
    private static void log(String s) {
       System.out.println("[pzopt-agent] " + s);
+      try {
+         Path dir = Path.of(System.getProperty("user.home"), "Zomboid", "pzopt");
+         Files.createDirectories(dir);
+         Path file = dir.resolve("agent.log");
+         if (Files.isRegularFile(file) && Files.size(file) > 65536) {
+            Files.delete(file); // a line or two a boot: start over rather than grow without end
+         }
+         Files.writeString(file, java.time.LocalDateTime.now().withNano(0) + " " + s + System.lineSeparator(),
+            StandardCharsets.UTF_8, java.nio.file.StandardOpenOption.CREATE, java.nio.file.StandardOpenOption.APPEND);
+      } catch (Throwable ignored) {
+      }
    }
 
    private static void install(Instrumentation inst) throws Exception {
@@ -82,6 +94,18 @@ public final class Agent {
          }
       }
       ClassLoader system = ClassLoader.getSystemClassLoader();
+      // Another Java agent whose premain ran first may have loaded game classes we replace (ZombieBuddy 2.3.4 loads
+      // KahluaThread, LuaCaller and KahluaConverterManager in its premain). Ours add fields and methods, so they cannot be
+      // redefined afterwards, and a mix of its stock copies with the rest of ours fails with NoSuchMethodError /
+      // NoSuchFieldError mid-game. Then nothing is replaced: the stock game, and a line saying how to fix the order.
+      List<String> early = loadedOfOurs(inst, ours, system);
+      if (!early.isEmpty()) {
+         log("another Java agent started before PZ Optimization's and already loaded " + early.size()
+            + " of the game classes it replaces (" + String.join(", ", early.subList(0, Math.min(4, early.size())))
+            + "): the game runs stock. Fix: put -javaagent:pzopt/agent/pzopt-agent.jar before the other agent"
+            + " (ZombieBuddy's -javaagent / -agentlib:zbNative) in ProjectZomboid64.json or the launch options; the installer does that.");
+         return;
+      }
       inst.addTransformer(new ClassFileTransformer() {
          @Override
          public byte[] transform(ClassLoader loader, String name, Class<?> redefined, ProtectionDomain domain, byte[] stock) {
@@ -130,6 +154,18 @@ public final class Agent {
          pending = next;
       }
       return defined;
+   }
+
+   /** Classes we replace that the system loader already holds (loaded before our transformer existed). */
+   private static List<String> loadedOfOurs(Instrumentation inst, Set<String> ours, ClassLoader system) {
+      List<String> early = new ArrayList<>();
+      for (Class<?> c : inst.getAllLoadedClasses()) {
+         if (c.getClassLoader() == system && ours.contains(c.getName().replace('.', '/'))) {
+            early.add(c.getName());
+         }
+      }
+      early.sort(null);
+      return early;
    }
 
    /** A class of the jar in the package of a new top-level class. */

@@ -1,7 +1,7 @@
 <h1 align="center">Project Zomboid without the stutter</h1>
 
 <p align="center">
-Class overrides for <b>Project Zomboid Build 42.21</b> (Windows, Linux, macOS): smoother frames, faster chunk loading,
+Class overrides for <b>Project Zomboid Build 42.22.2</b> (Windows, Linux, macOS): smoother frames, faster chunk loading,
 a faster boot, and optional modern graphics. <code>projectzomboid.jar</code> is never modified; every change has a switch.
 </p>
 
@@ -52,6 +52,20 @@ Runs: <a href="https://pzo.diegov.dev/d/pzopt-compare/compare?var-runs=daily-sto
 <a href="https://pzo.diegov.dev/d/pzopt-compare/compare?var-runs=lourace-stock1-20261015-215851&var-runs=dlou-1015-1-20261016-005408&var-base=lourace-stock1-20261015-215851">Louisville</a></sub>
 
 <a id="install"></a>
+
+> [!IMPORTANT]
+> **Mac players, Build 42.22 and later: one extra step.** The game's jar is signed since 42.22.1, so PZ Optimization now
+> loads through a Java agent. On Windows and Linux the installer adds it to the game's launcher file; the Mac app has
+> no such file, so without the step below the game runs stock. After installing, in Steam: right-click Project Zomboid >
+> **Properties > General > Launch Options** and paste the line the installer prints, which looks like this (one line;
+> change the path if your Steam library is elsewhere):
+>
+> ```
+> JAVA_TOOL_OPTIONS="-javaagent:'/Users/<you>/Library/Application Support/Steam/steamapps/common/ProjectZomboid/Project Zomboid.app/Contents/Java/pzopt/agent/pzopt-agent.jar'" %command%
+> ```
+>
+> **Before uninstalling, clear that box again**: with the line there and the files gone, the game does not start.
+> ([Install guide: macOS](docs/guide/install.md#macos-the-launch-option))
 
 ## Install (once, about two minutes)
 
@@ -160,8 +174,11 @@ the launcher's garbage collector and heap.</i>
 
 ## Updates, uninstall
 
-Updates arrive in the main menu (**PZ OPTIMIZATION > UPDATE**, one click; the item reads "UPDATE AVAILABLE" when one is offered). After a game update the next start removes a
-build made for the old version by itself (or installs the matching one from the Workshop item) and starts the game again.
+Updates arrive in the main menu (**PZ OPTIMIZATION > UPDATE**, one click; the item reads "UPDATE AVAILABLE" when one is offered). After a game update
+the game runs stock (the overrides only load for the revision they were built for) until you run the install command
+again for a matching release. **Updating from Build 42.21 to 42.22 with an older PZ Optimization installed:** the game
+stops before the main menu (42.22 signs its jar and refuses the old build's files); run the install command (or the
+uninstall command below) once and it starts again.
 
 **To remove it:** main menu > PZ OPTIMIZATION > **Uninstall PZ Optimization**. Game does not start, or already
 unsubscribed? Steam > Project Zomboid > Manage > **Browse local files**, double-click **Uninstall-PZ-Optimization.cmd**
@@ -169,6 +186,7 @@ unsubscribed? Steam > Project Zomboid > Manage > **Browse local files**, double-
 `irm https://github.com/xD3I/PZ_Optimization/releases/latest/download/uninstall.ps1 | iex` into PowerShell
 (Linux, macOS: `curl -fsSL https://github.com/xD3I/PZ_Optimization/releases/latest/download/uninstall.sh | bash`).
 Unsubscribing and "Verify integrity of game files" leave these files in the game folder; the uninstaller removes them.
+On a Mac, clear the Launch Options line in Steam first (above).
 
 ## More
 
@@ -183,6 +201,6 @@ Unsubscribing and "Verify integrity of game files" leave these files in the game
 | [Benchmark harness](docs/guide/harness.md) | the hands-off run rig, the run queue, Jev's verdicts, the repository layout |
 | [Every run, in order](docs/results.md) | the run log since 2026-09-24 ([earlier runs](docs/archive/2026-09-24/)); [every edit to a game class](docs/override-edits.md) in prose |
 
-<sub>Build 42.21, game revision <code>4a0e9546ec</code>. The overrides refuse to run against any other revision: they log one
-line and the game behaves as stock. Project Zomboid is by The Indie Stone. This repository contains no game assets; the
+<sub>Build 42.22.2, game revision <code>3d39148846</code> (the jar is signed: the overrides load through a Java agent, one
+launcher argument). They refuse to run against any other revision: they log one line and the game behaves as stock. Project Zomboid is by The Indie Stone. This repository contains no game assets; the
 edited class sources under <code>src/overrides/</code> are derived from the shipped jar for the sole purpose of these patches.</sub>
