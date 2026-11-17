@@ -147,6 +147,8 @@ while [[ $# -gt 0 ]]; do
     --mod) extra_mods+=("$2"); shift 2 ;;
     --vmarg) vmargs+=("$2"); shift 2 ;;
     --overrides-jar) overrides_jar=1; shift ;;              # the override classes from build/classes as <game>/pzopt-harness/pzopt.jar on the launcher classpath (a path with "pzopt.jar": the build guard skips it when it hashes the game jar) instead of "." (JAR-only classpath: the JDK's AOT cache, -XX:AOTCache / AOTCacheOutput, refuses directories)
+    --cool-below) cool_below="$2"; shift 2 ;;            # wait before the launch until the CPU temperature is below N °C (k10temp Tctl / coretemp package), at most --cool-timeout s (600); laptops throttle when a run starts hot
+    --cool-timeout) cool_timeout="$2"; shift 2 ;;
     --schedmon) schedmon="$2"; shift 2 ;;                # per-thread run / run-queue wait / page faults + PSI every N s -> <run>/schedmon.txt (harness/schedmon.py)
     --asprof) asprof="$2"; shift 2 ;;                    # async-profiler agent (harness/asprof/libasyncProfiler.so) with these options, e.g. event=cpu,interval=5ms,threads -> <run>/asprof.jfr
     --pad) pad_script="$2"; shift 2 ;;               # drive the menus with a virtual pad (see below)
@@ -402,6 +404,19 @@ fi
 LAUNCH_ENV="$HOME/Zomboid/pzopt-launch.env"; mkdir -p "$HOME/Zomboid"
 # native Wayland window (--env JAVA_TOOL_OPTIONS=-Dzomboid.wayland=1): xdotool keypresses cannot reach it
 native_wayland=0; for e in "${game_env[@]}"; do [[ "$e" == *zomboid.wayland=1* ]] && native_wayland=1; done
+# CPU temperature in whole °C: AMD k10temp Tctl, else Intel coretemp's package sensor; empty when neither exists
+cpu_temp_c() {
+  local h l
+  for h in /sys/class/hwmon/hwmon*; do
+    case "$(cat "$h/name" 2>/dev/null)" in
+      k10temp) [[ -r "$h/temp1_input" ]] && { echo $(( $(cat "$h/temp1_input") / 1000 )); return; } ;;
+      coretemp) for l in "$h"/temp*_label; do
+                  [[ "$(cat "$l" 2>/dev/null)" == Package* ]] && { echo $(( $(cat "${l%_label}_input") / 1000 )); return; }
+                done ;;
+    esac
+  done
+}
+
 write_launch_env() {
   {
     [[ -n "$mangohud_secs" ]] && echo "PZOPT_MANGOHUD=1"
@@ -684,6 +699,18 @@ while :; do
   rm -rf "$ZOMBOID/pzopt-capture"   # frame sequence (pzopt.FrameCapture, devCapture) of the previous run
   rm -f "$ZOMBOID"/pzopt-*.out "$ZOMBOID/console.txt" "$ZOMBOID/pzopt-shot.now" "$ZOMBOID/pzopt-shot2.now" "$ZOMBOID/Screenshots/pzopt-shot.png" "$ZOMBOID/Screenshots/pzopt-shot2.png"
   restore_harness_flag; write_flags; write_launch_env
+  # --cool-below (2026-11-17, the flip): a run started on a hot APU measured its power limit (45 W cool, ~33 W hot:
+  # 62 vs 25 fps on the spin route), not the build. Wait for the CPU to cool first; record the temperature at launch.
+  cpu_temp_start=$(cpu_temp_c); cool_wait_s=0
+  if [[ -n "${cool_below:-}" && -n "$cpu_temp_start" ]]; then
+    cool_t0=$(date +%s)
+    while (( cpu_temp_start >= cool_below )) && (( $(date +%s) - cool_t0 < ${cool_timeout:-600} )); do
+      (( cool_wait_s % 30 == 0 )) && echo "cooldown: CPU ${cpu_temp_start} °C, waiting for < ${cool_below} °C"
+      sleep 5; cool_wait_s=$(( $(date +%s) - cool_t0 )); cpu_temp_start=$(cpu_temp_c)
+    done
+    (( cpu_temp_start >= cool_below )) && echo "cooldown: still ${cpu_temp_start} °C after ${cool_wait_s} s; launching anyway (cool_ok=0 in run.opts)" >&2
+    echo "cooldown: CPU ${cpu_temp_start} °C after ${cool_wait_s} s"
+  fi
   launch_epoch=$(date +%s)
   # the CPU power state the run starts under (2026-10-24 governor study: the desktop sat in power-saver, boost off,
   # 4.7 GHz, for every run before; uncapped CPU-bound scenes are 3-19 % faster in balanced)
@@ -950,7 +977,7 @@ cp "$ZOMBOID"/pzopt-*.out "$out/" 2>/dev/null || true
 [[ -f "$ZOMBOID/Screenshots/pzopt-shot2.png" ]] && cp "$ZOMBOID/Screenshots/pzopt-shot2.png" "$out/shot2-game.png"
 cp "$PZ_DIR/pzopt.properties" "$out/pzopt.properties"
 cp "$LAUNCHER" "$out/ProjectZomboid64.json"
-{ echo "layout=$LAYOUT"; echo "mode=$mode"; echo "crashed=$crashed"; echo "attempts=$attempt"; echo "jfr=$jfr"; echo "jfr_period=$jfr_period"; echo "jfr_settings=${jfr_settings[*]:-}"; echo "game_profiler=$game_profiler"; echo "gc=${gc:-default}"; echo "no_dashboard=$no_dashboard"; echo "mangohud_secs=$mangohud_secs"; echo "no_mangohud=${no_mangohud:-0}"; echo "lead=${lead:-dynamic}"; echo "route_seconds=$route_seconds"; echo "renderer=$renderer"; echo "game_env=${game_env[*]:-}"; echo "record=$record"; echo "record_audio=${record_audio:-desktop}"; echo "launcher=$launcher"; echo "game_options=${game_options[*]:-}"; echo "mods=${extra_mods[*]:-}"; echo "vmargs=${vmargs[*]:-}"; echo "mangohud_config=${mangohud_config:-default}"; echo "launch_epoch=$launch_epoch"; echo "power_profile=${power_profile:-unknown}"; echo "cpu_power=${cpu_power:-}"; echo "run_seconds=$((end-start))"; echo "preset=${preset:-none}"; echo "flags=${extra_flags[*]:-}"; } > "$out/run.opts"
+{ echo "layout=$LAYOUT"; echo "mode=$mode"; echo "crashed=$crashed"; echo "attempts=$attempt"; echo "jfr=$jfr"; echo "jfr_period=$jfr_period"; echo "jfr_settings=${jfr_settings[*]:-}"; echo "game_profiler=$game_profiler"; echo "gc=${gc:-default}"; echo "no_dashboard=$no_dashboard"; echo "mangohud_secs=$mangohud_secs"; echo "no_mangohud=${no_mangohud:-0}"; echo "lead=${lead:-dynamic}"; echo "route_seconds=$route_seconds"; echo "renderer=$renderer"; echo "game_env=${game_env[*]:-}"; echo "record=$record"; echo "record_audio=${record_audio:-desktop}"; echo "launcher=$launcher"; echo "game_options=${game_options[*]:-}"; echo "mods=${extra_mods[*]:-}"; echo "vmargs=${vmargs[*]:-}"; echo "mangohud_config=${mangohud_config:-default}"; echo "launch_epoch=$launch_epoch"; echo "power_profile=${power_profile:-unknown}"; echo "cpu_power=${cpu_power:-}"; echo "cool_below=${cool_below:-}"; echo "cpu_temp_start=${cpu_temp_start:-}"; echo "cool_wait_s=${cool_wait_s:-0}"; echo "cool_ok=$([[ -z "${cool_below:-}" || -z "${cpu_temp_start:-}" || "${cpu_temp_start:-0}" -lt "${cool_below:-0}" ]] && echo 1 || echo 0)"; echo "run_seconds=$((end-start))"; echo "preset=${preset:-none}"; echo "flags=${extra_flags[*]:-}"; } > "$out/run.opts"
 # gc.log rolls over (filecount=3); keep the segments that were written during this run
 for g in "$PZ_DIR"/gc.log "$PZ_DIR"/gc.log.[0-9]*; do
   [[ -f "$g" ]] || continue

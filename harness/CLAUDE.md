@@ -15,7 +15,15 @@ harness/run.sh --label <name> [--mode verify|bench|drive|parity|play] [--flag k=
                [--mangohud secs] [--mangohud-config path] [--record] [--record-audio desktop|game] [--no-dashboard] [--no-mangohud]
                [--jfr] [--jfr-period ms] [--jfr-setting event#setting=value] [--game-profiler]
                [--gc g1|zgc|shenandoah] [--lead secs] [--quit-after secs] [--retries N] [--refresh-template]
+               [--cool-below °C [--cool-timeout secs]]
 ```
+
+`--cool-below N` (2026-11-17, the flip): before the launch run.sh waits (5 s polls, at most `--cool-timeout`, 600 s)
+until the CPU temperature (hwmon k10temp Tctl, else coretemp's package sensor) is under N °C; `run.opts` gets
+`cool_below=`, `cpu_temp_start=`, `cool_wait_s=` and `cool_ok=` (0 = launched hot after the timeout). Why: the flip's APU
+drops its power limit from 45 W to ~33 W once hot (fast cores 3.7 -> 2.3 GHz); on the CPU-bound spin route that was 62 vs
+25 fps between runs of the same build (runs `flip-sched-*`, `flip-settle60-*`, `corepower.py` shows it). Pass it on every
+flip measurement run.
 
 What it does: installs the pzopt-harness Lua mod, creates/points at the bench save
 `Saves/Sandbox/pzopt-bench`, writes the flag file the mod reads, launches the game, starts
