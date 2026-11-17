@@ -29,7 +29,9 @@ public class GodRaysDoorShaderTest {
          {"local lights + spill", GodRays.LL_VERT, GodRays.LL_FRAG},
          {"bounce", GodRays.LL_VERT, GodRays.BOUNCE_FRAG}};
       for (String[] p : programs) {
-         link(check, p[0], p[1], p[2]);
+         // pzopt links these itself (FogPass.link: no validate) and gives every sampler its unit before the draw:
+         // validate them that way, not with all samplers on unit 0 (Mesa refuses mixed types on one unit there)
+         link(check, p[0], p[1], p[2], true);
       }
       Path dir = Path.of(System.getenv().getOrDefault("PZ_DIR", "/games/steamapps/common/ProjectZomboid/projectzomboid"), "media", "shaders");
       if (Files.exists(dir.resolve("chunkShader.frag"))) {
@@ -39,15 +41,19 @@ public class GodRaysDoorShaderTest {
          Check.check(code.startsWith("#version 120"), "the stock chunk composite is GLSL 1.20 (else this test's head is wrong)");
          String c = "#version 150 compatibility\n#extension GL_ARB_shading_language_420pack : enable\n#define PZG_OUT gl_FragColor\n#define PZG_TEX3 texture3D"
             + code.substring(nl).replace("void main()", "void pzGrHazeInner()") + "\n" + GodRays.CHUNK_GLSL + "\n";
-         link(check, "chunk haze patch", Files.readString(dir.resolve("chunkShader.vert")), c);
+         link(check, "chunk haze patch", Files.readString(dir.resolve("chunkShader.vert")), c, false);
       }
       System.out.println("GodRaysDoorShaderTest ok (linked)");
    }
 
-   private static void link(Path check, String name, String vert, String frag) throws Exception {
+   private static void link(Path check, String name, String vert, String frag, boolean drawUnits) throws Exception {
       Path v = Files.writeString(Files.createTempFile("pzgrd", ".vert"), vert);
       Path f = Files.writeString(Files.createTempFile("pzgrd", ".frag"), frag);
-      Process p = new ProcessBuilder(check.toString(), v.toString(), f.toString()).redirectErrorStream(true).start();
+      ProcessBuilder pb = new ProcessBuilder(check.toString(), v.toString(), f.toString()).redirectErrorStream(true);
+      if (drawUnits) {
+         pb.environment().put("GLSLCHECK_UNITS", "1");
+      }
+      Process p = pb.start();
       String log = new String(p.getInputStream().readAllBytes());
       p.waitFor();
       Files.deleteIfExists(v);

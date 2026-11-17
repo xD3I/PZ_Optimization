@@ -6,7 +6,13 @@
 #   native Linux : common/ProjectZomboid/projectzomboid/{projectzomboid.jar,ProjectZomboid64,ProjectZomboid64.json}, user dir ~/Zomboid
 #   Windows/Proton: common/ProjectZomboid/{projectzomboid.jar,ProjectZomboid64.exe,ProjectZomboid64.json}, user dir in the compatdata prefix
 # Override with PZ_DIR / ZOMBOID in the environment.
-PZ_ROOT="${PZ_ROOT:-/games/steamapps/common/ProjectZomboid}"
+# Default library /games (the desktop); machines without it (the laptops) use Steam's own library under ~.
+if [[ -z "${PZ_ROOT:-}" ]]; then
+  PZ_ROOT=/games/steamapps/common/ProjectZomboid
+  for c in "$PZ_ROOT" "$HOME/.local/share/Steam/steamapps/common/ProjectZomboid" "$HOME/.steam/steam/steamapps/common/ProjectZomboid"; do
+    if [[ -f "$c/projectzomboid/projectzomboid.jar" || -f "$c/projectzomboid.jar" ]]; then PZ_ROOT="$c"; break; fi
+  done
+fi
 if [[ -z "${PZ_DIR:-}" ]]; then
   if [[ -f "$PZ_ROOT/projectzomboid/projectzomboid.jar" ]]; then
     PZ_DIR="$PZ_ROOT/projectzomboid"

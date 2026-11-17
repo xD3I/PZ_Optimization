@@ -66,6 +66,25 @@ int main(int argc, char **argv) {
    if (!ok) return 1;
    // the game's ShaderProgram.compile also validates, with every sampler still on unit 0: two sampler types on one unit
    // fail there on Mesa (pzopt.PixelLight, 2026-09-25)
+   // GLSLCHECK_UNITS=1: validate as at draw time instead, each active sampler on its own unit. For programs pzopt links
+   // itself (FogPass.link: no validate at link, every sampler given a unit before the draw), 2026-11-17
+   if (getenv("GLSLCHECK_UNITS")) {
+      glUseProgram(p);
+      GLint count; glGetProgramiv(p, GL_ACTIVE_UNIFORMS, &count);
+      int next = 1;
+      for (GLint i = 0; i < count; i++) {
+         char name[256]; GLint size; GLenum type;
+         glGetActiveUniform(p, i, sizeof name, NULL, &size, &type, name);
+         switch (type) {
+            case GL_SAMPLER_1D: case GL_SAMPLER_2D: case GL_SAMPLER_3D: case GL_SAMPLER_CUBE: case GL_SAMPLER_2D_SHADOW:
+            case GL_SAMPLER_2D_ARRAY: case GL_SAMPLER_BUFFER: case GL_SAMPLER_2D_RECT: case GL_SAMPLER_2D_MULTISAMPLE:
+            case GL_INT_SAMPLER_2D: case GL_INT_SAMPLER_3D: case GL_INT_SAMPLER_BUFFER:
+            case GL_UNSIGNED_INT_SAMPLER_2D: case GL_UNSIGNED_INT_SAMPLER_3D: case GL_UNSIGNED_INT_SAMPLER_BUFFER:
+               glUniform1i(glGetUniformLocation(p, name), next++);
+               break;
+         }
+      }
+   }
    glValidateProgram(p);
    glGetProgramiv(p, GL_VALIDATE_STATUS, &ok);
    glGetProgramInfoLog(p, sizeof log, NULL, log);
