@@ -459,6 +459,15 @@ public final class Config {
     */
    public static final boolean FLIES_TOGGLE_FIX = bool("fliesToggleFix", true);
    public static final boolean COMPOSITE_SHADER_RUN = bool("compositeShaderRun", false); // chunk-level textures are composited with one chunk-shader run, not a start / end per chunk (FBORenderCell.pzoptCompositeChunks)
+   // GL 4.3-4.6 API pass (2026-11-17, docs/findings-gl-modern-2026-11-17.md, pzopt.GlModern): measured keys, off by default
+   public static final boolean COMPOSITE_MDI = bool("compositeMdi", false); // the chunk-level composite as glMultiDrawArraysIndirect batches of 16 textures (one program, per-draw records in an SSBO) instead of a shader start, binds and a draw per chunk level
+   public static final boolean GL_DSA = bool("glDsa", false); // direct state access where the render thread binds a buffer only to edit it: the vision-cone polygon upload (own VAO, glNamedBufferSubData)
+   public static final int DEV_GL_ALTERNATE = integer("devGlAlternate", 0); // dev: ms; compositeMdi / glDsa (devGlAlternateKeys) off and on every period (ABBA) within one run; GPU sections get .on / .off
+   public static final int DEV_MDI_K = integer("devMdiK", 16); // dev: textures per multi-draw call of compositeMdi (1 = no switch in the shader: isolates its cost)
+   public static final boolean DEV_MDI_DIRECT = bool("devMdiDirect", false); // dev: compositeMdi's batches through glMultiDrawArrays instead of glMultiDrawArraysIndirect
+   public static final boolean DEV_MDI_NO_SAMPLER = bool("devMdiNoSampler", false); // dev: compositeMdi samples the colour with the textures' own state (no sampler objects)
+   public static final boolean DEV_MDI_FS_FLAT = bool("devMdiFsFlat", false); // dev: compositeMdi's fragment shader reads no texture (cost split; wrong picture)
+   public static final String DEV_GL_ALTERNATE_KEYS = string("devGlAlternateKeys", "compositeMdi,glDsa");
    public static final boolean UNIFORM_CACHE = bool("uniformCache", false); // consecutive shader starts of one program skip uniforms that hold their value already (pzopt.UniformCache)
    public static final boolean UPSCALE_NO_GLGET = bool("upscaleNoGlGet", false); // the upscaler resolve takes the bound framebuffer / viewport from the game's records instead of asking the driver (pzopt.Upscaler.savedState)
    public static final boolean DEV_DLSS_STATE_LOG = bool("devDlssStateLog", false); // dev: log the GL framebuffer / viewport the DLSS resolve finds, next to the game's own records

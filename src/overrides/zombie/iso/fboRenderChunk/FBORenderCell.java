@@ -1887,14 +1887,18 @@ public final class FBORenderCell {
       pzopt.GodRays.beforeComposite(playerIndex); // pzopt: god rays, the camera of this frame for the haze in the chunk composite
       pzopt.Sway.beforeComposite(playerIndex); // pzopt: foliage sway, this frame's wind for the chunk composite
       pzopt.RenderPrep.start(); // pzopt: renderPrepParallel, the characters' sun share and water search on the frame workers while the composite and the players go
-      pzopt.GpuSections.begin(pzopt.Relief.section(pzopt.Sway.section(pzopt.SpriteFilter.section("composite")))); /* pzopt: GPU section: chunk textures into the combined FBO and onto the screen; foliage sway's and relief's alternations split it */
-      if (pzopt.Config.COMPOSITE_SHADER_RUN && pzopt.Overrides.enabled() && !DebugOptions.instance.fboRenderChunk.combinedFbo.getValue()
+      pzopt.GlModern.frameMarker(); // pzopt: glDsa, this frame's choice for the render thread (stream order)
+      boolean pzoptMdi = pzopt.GlModern.mdiNow() && !DebugOptions.instance.fboRenderChunk.combinedFbo.getValue() && DebugOptions.instance.fboRenderChunk.renderChunkTextures.getValue(); // pzopt: compositeMdi
+      pzopt.GpuSections.begin(pzopt.GlModern.section(pzopt.Relief.section(pzopt.Sway.section(pzopt.SpriteFilter.section("composite"))), false)); /* pzopt: GPU section: chunk textures into the combined FBO and onto the screen; foliage sway's and relief's alternations split it, devGlAlternate by compositeMdi */
+      if (pzoptMdi) { // pzopt: compositeMdi, the chunk-level textures in multi-draw batches
+         this.pzoptCompositeMdi(); // pzopt
+      } else if (pzopt.Config.COMPOSITE_SHADER_RUN && pzopt.Overrides.enabled() && !DebugOptions.instance.fboRenderChunk.combinedFbo.getValue()
             && DebugOptions.instance.fboRenderChunk.renderChunkTextures.getValue()) { // pzopt: compositeShaderRun
          this.pzoptCompositeChunks(); // pzopt
       } else { // pzopt
          FBORenderChunkManager.instance.endFrame();
       } // pzopt
-      pzopt.GpuSections.end(pzopt.Relief.section(pzopt.Sway.section(pzopt.SpriteFilter.section("composite")))); // pzopt: sprite filter, devSpriteFilterAlternate splits the section; foliage sway, devSwayAlternate too
+      pzopt.GpuSections.end(pzopt.GlModern.section(pzopt.Relief.section(pzopt.Sway.section(pzopt.SpriteFilter.section("composite"))), false)); // pzopt: sprite filter, devSpriteFilterAlternate splits the section; foliage sway, devSwayAlternate too
       if (!pzopt.ResumeShot.noTranslucent && DebugOptions.instance.fboRenderChunk.renderTranslucentNonFloor.getValue()) { // pzopt: tileRecordAsync, every level's translucent units to the workers while the frame goes on
          IsoChunkMap pzoptCm = IsoWorld.instance.currentCell.getChunkMap(playerIndex); // pzopt
          pzopt.TileRecord.startFrame(this, perPlayerData1.chunksWithTranslucentNonFloor, perPlayerData1.chunksWithTranslucentFloor, playerIndex, pzoptCm.minHeight, pzoptCm.maxHeight, floorRenderShader, wallRenderShader, currentTimeMillis); // pzopt
@@ -2065,11 +2069,11 @@ public final class FBORenderCell {
             ProfileArea var36 = GameProfiler.getInstance().profile("Visibility");
 
             try {
-               pzopt.GpuSections.begin(pzopt.Darkness.section("vispoly")); // pzopt: GPU section (the vision cone: polygon + blur + screen pass; devDarkAlternate splits it by the remembered-places state)
+               pzopt.GpuSections.begin(pzopt.GlModern.section(pzopt.Darkness.section("vispoly"), true)); // pzopt: GPU section (the vision cone: polygon + blur + screen pass; devDarkAlternate splits it by the remembered-places state, devGlAlternate by glDsa)
                long pzoptVp = pzopt.GtAb.begin(); // pzopt: devGtAlternate section timer
                VisibilityPolygon2.getInstance().renderMain(playerIndex);
                pzopt.GtAb.end(pzopt.GtAb.S_VISPOLY, pzoptVp); // pzopt
-               pzopt.GpuSections.end(pzopt.Darkness.section("vispoly")); // pzopt: GPU section
+               pzopt.GpuSections.end(pzopt.GlModern.section(pzopt.Darkness.section("vispoly"), true)); // pzopt: GPU section
             } catch (Throwable var23) {
                if (var36 != null) {
                   try {
@@ -5541,6 +5545,80 @@ public final class FBORenderCell {
       m.submitCachesForFrame();
       SpriteRenderer.instance.releaseFBORenderChunkLock();
    }
+
+   // pzopt: compositeMdi (2026-11-17, pzopt.GlModern): FBORenderChunkManager.endFrame's non-combined path with the per-chunk
+   // renderInWorldMainThread replaced by one record each (the same rectangle, chunk depth and filters it computes) and one
+   // generic drawer that draws them all with glMultiDrawArraysIndirect. The state each chunk set (premultiplied blend,
+   // depth test LEQUAL, depth writes) is set once before it; the chunk shader is never started (the drawer has its own
+   // program with the stock composite's arithmetic).
+   private void pzoptCompositeMdi() { // pzopt
+      FBORenderChunkManager m = FBORenderChunkManager.instance; // pzopt
+      if (!m.toRenderThisFrame.isEmpty() && zombie.core.SceneShaderStore.chunkRenderShader != null) { // pzopt
+         int playerIndex = IsoCamera.frameState.playerIndex; // pzopt
+         int offscreenWidth = Core.getInstance().getOffscreenWidth(playerIndex); // pzopt
+         int offscreenHeight = Core.getInstance().getOffscreenHeight(playerIndex); // pzopt
+         SpriteRenderer.instance.glDoEndFrame(); // pzopt
+         SpriteRenderer.instance.glDoStartFrameNoZoom(offscreenWidth, offscreenHeight, Core.getInstance().getCurrentPlayerZoom(), playerIndex); // pzopt
+         IndieGL.glBlendFuncSeparate(1, 771, 773, 1); // pzopt
+         IndieGL.glDepthFunc(515); // pzopt
+         IndieGL.glDepthMask(true); // pzopt
+         IndieGL.enableDepthTest(); // pzopt
+         pzopt.GlModern.begin(); // pzopt
+         int pcx = PZMath.fastfloor(IsoCamera.frameState.camCharacterX / 8.0F); // pzopt
+         int pcy = PZMath.fastfloor(IsoCamera.frameState.camCharacterY / 8.0F); // pzopt
+         zombie.iso.PlayerCamera camera = IsoCamera.cameras[playerIndex]; // pzopt
+         float zoom = IsoCamera.frameState.zoom; // pzopt
+         boolean mipOption = DebugOptions.instance.fboRenderChunk.mipMaps.getValue(); // pzopt
+         for (int i = 0; i < m.toRenderThisFrame.size(); i++) { // pzopt
+            FBORenderChunk rc = m.toRenderThisFrame.get(i); // pzopt
+            if (rc.getRenderLevels().getPlayerIndex() != playerIndex) { // pzopt
+               continue; // pzopt
+            } // pzopt
+            IsoDepthHelper.Results result = IsoDepthHelper.getChunkDepthData(pcx, pcy, rc.chunk.wx, rc.chunk.wy, rc.getMinLevel()); // pzopt
+            float depthStart = (result.indexX + result.indexY - camera.fixJigglyModelsSquareX - camera.fixJigglyModelsSquareY) / 8.0F / 40.0F; // pzopt
+            depthStart *= 0.46187335F; // pzopt
+            float chunkDepth = depthStart - FBORenderLevels.calculateMinLevel(rc.getMinLevel()) * 0.0028867084F; // pzopt
+            float x = IsoUtils.XToScreen(rc.chunk.wx * 8, rc.chunk.wy * 8, rc.getMinLevel(), 0); // pzopt
+            float y = IsoUtils.YToScreen(rc.chunk.wx * 8, rc.chunk.wy * 8, rc.getMinLevel(), 0); // pzopt
+            float w = rc.w; // pzopt
+            float h = rc.h; // pzopt
+            if (rc.highRes) { // pzopt
+               w /= 2.0F; // pzopt
+               h /= 2.0F; // pzopt
+            } // pzopt
+            y -= FBORenderChunk.PIXELS_PER_LEVEL * (rc.getTopLevel() - rc.getMinLevel() + 1); // pzopt
+            y -= FBORenderLevels.extraHeightForJumboTrees(rc.getMinLevel(), rc.getTopLevel()); // pzopt
+            x -= IsoCamera.getOffX(); // pzopt
+            y -= IsoCamera.getOffY(); // pzopt
+            x /= zoom; // pzopt
+            y /= zoom; // pzopt
+            w /= zoom; // pzopt
+            h /= zoom; // pzopt
+            x -= w / 2.0F; // pzopt
+            x += camera.fixJigglyModelsX; // pzopt
+            y += camera.fixJigglyModelsY; // pzopt
+            boolean mip = mipOption && !rc.highRes; // pzopt
+            boolean magLinear = zoom == 0.75F; // pzopt
+            if (rc.tex.getTextureId() != null) { // pzopt: the stock path's filter records (a later stock bind sends them as before)
+               rc.tex.getTextureId().setMinFilter(mip ? 9987 : 9728); // pzopt
+               rc.tex.getTextureId().setMagFilter(magLinear ? 9729 : 9728); // pzopt
+            } // pzopt
+            Texture tex = rc.getTexture(); // pzopt
+            if (tex != null && tex.isReady()) { // pzopt: SpriteRenderer.render's own skip
+               pzopt.GlModern.add(x, y, w, h, tex, rc.depth, chunkDepth, mip, magLinear); // pzopt
+            } // pzopt
+            rc.renderX = x; // pzopt
+            rc.renderY = y; // pzopt
+            rc.renderW = w; // pzopt
+            rc.renderH = h; // pzopt
+         } // pzopt
+         pzopt.GlModern.end(); // pzopt
+         SpriteRenderer.instance.glDoEndFrame(); // pzopt
+         SpriteRenderer.instance.glDoStartFrame(offscreenWidth, offscreenHeight, Core.getInstance().getCurrentPlayerZoom(), playerIndex); // pzopt
+      } // pzopt
+      m.submitCachesForFrame(); // pzopt
+      SpriteRenderer.instance.releaseFBORenderChunkLock(); // pzopt
+   } // pzopt
 
    /** FBORenderChunk.renderInWorldMainThread without its closing EndShader (non-combined path; see pzoptCompositeChunks). */
    private static void pzoptCompositeOne(FBORenderChunk rc, int playerIndex) {

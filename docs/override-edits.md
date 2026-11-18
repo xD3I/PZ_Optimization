@@ -9041,3 +9041,25 @@ Check on the flip (dedicated server from the game folder, throwaway user folder)
 `a3708b0c...`, a server with the agent `c5358d4a...` (54 overrides active), the same as a stock server with the pzopt Lua
 folders moved away. So the server and every client agree, vanilla clients included. Test: `tests/pzopt/CoopAgentTest`.
 Clicking Host in the menu was not run here.
+
+## GL 4.5 pass: multi-draw chunk composite and DSA vision cone (2026-11-17, `pzopt.GlModern`)
+
+Two measured keys, both off by default and both off on macOS (GL 4.1): `GlModern.available()` needs GL 4.5, multi-bind
+and shader draw parameters, and it is decided on the render thread (a game-thread call queues a probe drawer once and
+answers no until then). Findings: `docs/findings-gl-modern-2026-11-17.md`.
+
+`FBORenderCell` (`compositeMdi`): where the frame composites the chunk-level textures, a new branch ahead of
+`compositeShaderRun` calls `pzoptCompositeMdi`. That is `FBORenderChunkManager.endFrame`'s non-combined path, but the
+per-chunk `renderInWorldMainThread` is replaced by one record per texture. Each record holds the same screen rectangle,
+chunk depth and colour filters as stock, and stock's `renderX/Y/W/H` and filter records are still written. One generic
+drawer then draws all records. The premultiplied blend, `GL_LEQUAL` depth test and depth writes are set once before it.
+The chunk shader is never started (the drawer's program does the stock composite's two fetches), so the branch is taken
+only while none of the passes that patch that program is on (pixel light, relief, reflections, sun shadows, sway, god
+rays, the sprite filter, AO). The frame's `.on` / `.off` half is added to the `composite` GPU section's name. Once a
+frame, `GlModern.frameMarker` tells the render thread whether the vision cone uses DSA.
+
+`VisibilityPolygon2.Drawer.PolygonData.draw` (`glDsa`): when the frame's marker says DSA, the polygon goes through
+`GlModern.visPolyDraw`. A VAO made once with `glCreateVertexArrays` / `glVertexArrayAttribFormat` holds stock's layout,
+`glNamedBufferSubData` uploads, and the draw is followed by unbinding the VAO. Afterwards the same state is left as
+stock leaves it: attributes 0-2 disabled, no array buffer bound. Its `vispoly` GPU section gets `.on` / `.off` as well.
+Every other method is unchanged (audit: 0 mismatches).

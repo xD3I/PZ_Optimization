@@ -2020,6 +2020,10 @@ public final class VisibilityPolygon2 {
          }
 
          public void draw() {
+            if (pzopt.GlModern.rtDsa()) { // pzopt: glDsa, the upload and the layout without binding to edit (own VAO, glNamedBufferSubData)
+               pzopt.GlModern.visPolyDraw(this.bufferId, this.data); // pzopt
+               return; // pzopt
+            } // pzopt
             GL20.glBindBuffer(34962, this.bufferId);
             GL20.glBufferSubData(34962, 0L, this.data);
             GL20.glEnableVertexAttribArray(0);
