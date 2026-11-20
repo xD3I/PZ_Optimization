@@ -194,6 +194,7 @@ public final class FBORenderCell {
    private static int pzoptDevRedrawFrames = -1;
 
    public void renderInternal() {
+      pzopt.WorldPass.drawn(); // pzopt: our world pass runs this frame (a mod's own renderer in place of IsoCell.render leaves it out)
       boolean pzoptWind = pzopt.Sway.windHandoffBegin(); // pzopt: windSpriteSway (issue #41), the game's wind option reads off while the world renders; sway moves the baked plants
       try { // pzopt
          this.pzoptRenderInternal(); // pzopt

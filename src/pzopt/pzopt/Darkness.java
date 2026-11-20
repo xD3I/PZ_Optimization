@@ -221,6 +221,7 @@ public final class Darkness {
    private static boolean alternateOn = true;
    private static final FrameState[] STATES = {new FrameState(), new FrameState(), new FrameState(), new FrameState()};
    private static int stateIndex;
+   private static boolean queuedGrade, queuedMemory; // game thread: the switches the last queued FrameState carries
 
    /** The render-side switches of one frame, set in stream order ahead of its vision pass and composite. */
    private static final class FrameState extends TextureDraw.GenericDrawer {
@@ -256,10 +257,19 @@ public final class Darkness {
          alternateOn = !alternateOn;
       }
       Grade.frame();
-      FrameState st = STATES[stateIndex++ & 3];
-      st.grade = Grade.enabled() && frameOn();
-      st.memory = memoryEnabled() && frameOn();
-      SpriteRenderer.instance.drawGeneric(st);
+      boolean grade = Grade.enabled() && frameOn();
+      boolean memory = memoryEnabled() && frameOn();
+      // Queued only when a switch changes (the render thread keeps the last values, the stream order is the same). A job in
+      // every frame made Project Viewpoint 0.1.7 refuse its in-between frames in first person ("none while a frame holds
+      // pzopt.Darkness$FrameState"): the game then showed its 30 fixed ticks a second (Workshop reports, 2026-11-20).
+      if (grade != queuedGrade || memory != queuedMemory) {
+         queuedGrade = grade;
+         queuedMemory = memory;
+         FrameState st = STATES[stateIndex++ & 3];
+         st.grade = grade;
+         st.memory = memory;
+         SpriteRenderer.instance.drawGeneric(st);
+      }
       long now = System.nanoTime();
       if ((Config.DEV_DARK_STATS || Config.DEV_DARK_ALTERNATE > 0) && now - lastStatsNs > 10_000_000_000L) {
          lastStatsNs = now;

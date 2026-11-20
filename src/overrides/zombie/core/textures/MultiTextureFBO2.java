@@ -301,12 +301,13 @@ public final class MultiTextureFBO2 {
          }
 
          max = Math.max(max, IsoPlayer.numPlayers - 1);
-         pzopt.CapsuleShadow.queueAtlasFlush(); // pzopt: sunShadowMeshes, the frame's sun draws of the casters into their atlas tiles, after the world pass
-         pzopt.DynRes.queueDevLoad(); // pzopt: dynRes dev rig (devDynResLoad), synthetic per-pixel GPU work in the world image
-         pzopt.Upscaler.queueResolve(); // pzopt: upscaler, the low-res world image is resolved to the screen size on the render thread before the quads below
-         pzopt.Hdr.queueWorldStats(); // pzopt: HDR output, the world's average luminance for the composite's expansion
+         boolean pzoptWorld = pzopt.WorldPass.take(); // pzopt: did our world pass draw this frame? Not under a mod's own renderer (Project Viewpoint): no jobs for a world that is not there
+         if (pzoptWorld) pzopt.CapsuleShadow.queueAtlasFlush(); // pzopt: sunShadowMeshes, the frame's sun draws of the casters into their atlas tiles, after the world pass
+         if (pzoptWorld) pzopt.DynRes.queueDevLoad(); // pzopt: dynRes dev rig (devDynResLoad), synthetic per-pixel GPU work in the world image
+         if (pzoptWorld) pzopt.Upscaler.queueResolve(); // pzopt: upscaler, the low-res world image is resolved to the screen size on the render thread before the quads below
+         if (pzoptWorld) pzopt.Hdr.queueWorldStats(); // pzopt: HDR output, the world's average luminance for the composite's expansion
          pzopt.GpuSections.begin(pzopt.Darkness.section("screen")); // pzopt: GPU section (the full-size screen-shader composite; devDarkAlternate splits it by the grade's state)
-         pzopt.GodRays.screenBegin(); // pzopt: god rays, dev timing of the composite (devGodRaysTiming); godRaysLateDraw, the light volumes over the finished world
+         if (pzoptWorld) pzopt.GodRays.screenBegin(); // pzopt: god rays, dev timing of the composite (devGodRaysTiming); godRaysLateDraw, the light volumes over the finished world
 
          for (int playerIndex = 0; playerIndex <= max; playerIndex++) {
             if (SceneShaderStore.weatherShader != null && DebugOptions.instance.fboRenderChunk.useWeatherShader.getValue()) {
@@ -318,7 +319,7 @@ public final class MultiTextureFBO2 {
             int sw = IsoCamera.getScreenWidth(playerIndex);
             int sh = IsoCamera.getScreenHeight(playerIndex);
             if (IsoPlayer.players[playerIndex] != null || GameServer.server && ServerGUI.isCreated()) {
-               if (pzopt.RenderScale.active()) {
+               if (pzoptWorld && pzopt.RenderScale.active()) { // pzopt: upscaler (not for a frame our world pass did not draw)
                   // pzopt: upscaler. fsr1 / dlss: the resolved screen-size texture; bicubic: the stock screen shader's
                   // bicubic filter samples the low-res region of the offscreen buffer straight into the screen rect
                   if (pzopt.Upscaler.drawsOutput() && pzopt.Upscaler.output().hasTexture()) {
@@ -340,10 +341,10 @@ public final class MultiTextureFBO2 {
             IndieGL.EndShader();
          }
 
-         pzopt.Hdr.queueGainAlpha(); // pzopt: HDR output on 8-bit back buffers (macOS EDR bridge): the world gain into alpha
-         pzopt.GodRays.screenEnd(); // pzopt: god rays, dev timing
+         if (pzoptWorld) pzopt.Hdr.queueGainAlpha(); // pzopt: HDR output on 8-bit back buffers (macOS EDR bridge): the world gain into alpha
+         if (pzoptWorld) pzopt.GodRays.screenEnd(); // pzopt: god rays, dev timing
          pzopt.GpuSections.end(pzopt.Darkness.section("screen")); // pzopt: GPU section
-         pzopt.Upscaler.queueCompositeFlush(); // pzopt: upscaler, dlssFlushAfterComposite
+         if (pzoptWorld) pzopt.Upscaler.queueCompositeFlush(); // pzopt: upscaler, dlssFlushAfterComposite
          IsoPlayer.forEachPlayer(MultiTextureFBO2::renderCursor);
       }
    }

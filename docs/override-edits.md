@@ -9063,3 +9063,25 @@ frame, `GlModern.frameMarker` tells the render thread whether the vision cone us
 `glNamedBufferSubData` uploads, and the draw is followed by unbinding the VAO. Afterwards the same state is left as
 stock leaves it: attributes 0-2 disabled, no array buffer bound. Its `vispoly` GPU section gets `.on` / `.off` as well.
 Every other method is unchanged (audit: 0 mismatches).
+
+## Project Viewpoint 0.1.7: 30 fps in first person with both mods (2026-11-20, Workshop reports)
+
+Viewpoint 0.1.7 (Workshop 3809306528, pinned to 42.22.2) runs the simulation at a fixed 30 ticks a second in first person and
+has the render thread draw frames between the game's (`viewpoint.FrameBetween`). It draws none while the frame's sprite list
+holds a `GenericDrawer` it does not know, and logs `frames between the game's: none while a frame holds <class>`. Ours were in
+every frame, so the game showed 30 fps (flip, spin route: 29.5 fps presented; after the changes 48.9, Viewpoint's own rate).
+
+- `pzopt.Darkness.frame` (no override): its `FrameState` job is queued only when one of its two switches changes. It was
+  queued every frame at default settings, which is why every player with both mods was hit.
+- `FBORenderCell.renderInternal`: one marked line, `pzopt.WorldPass.drawn()`.
+- `MultiTextureFBO2.render`: `pzopt.WorldPass.take()` once per call; the jobs queued there for our world image
+  (`CapsuleShadow.queueAtlasFlush`, `DynRes.queueDevLoad`, `Upscaler.queueResolve` / `queueCompositeFlush`,
+  `Hdr.queueWorldStats` / `queueGainAlpha`, `GodRays.screenBegin` / `screenEnd`) and the upscaler's branch of the composite quad
+  run only when our world pass drew this frame. Under Viewpoint's renderer (`IsoCell.render` skipped) there is no world of
+  ours to resolve; with `upscaler=taau` + `dynRes` the blockers were `pzopt.Upscaler$Resolver` and `pzopt.Taau$1`.
+
+Runs (flip, both mods, first person through `Viewpoint.View.cycle()` from a test Lua mod): `vp17-opt-fp2` (before) /
+`vp17-opt-fp3` (defaults), `vp17-enh-1` / `vp17-enh-2` (the flip's Enhancements), `vp17-iso-fsr` (isometric, `upscaler=fsr1`:
+picture unchanged). Not covered: HDR on an HDR screen and the Mac were not run; the performance overlay's texture job
+(4 Hz while the overlay is shown) and the `gpuSections` dev markers are still queued. Our overlay counts only the frames the
+game hands over, so it reads ~30 fps in Viewpoint's first person.
