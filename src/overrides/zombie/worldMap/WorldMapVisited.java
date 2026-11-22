@@ -884,6 +884,13 @@ public class WorldMapVisited {
    }
 
    boolean isCellVisible(int cellX, int cellY) {
+      if (pzopt.Config.MAP_CELL_FAST && pzopt.Overrides.enabled() && this.visited != null) { // pzopt: mapCellFast, the packed flag bytes read directly (pzopt.MapCells)
+         boolean pzoptFast = pzopt.MapCells.cellVisible(this.visited, getWidthInCells(), getHeightInCells(), this.minX, this.minY, cellX, cellY); // pzopt: mapCellFast
+         if (pzopt.Config.DEV_MAP_CELL_CHECK) { // pzopt: devMapCellCheck, the stock answer must be the same
+            pzopt.MapCells.check(pzoptFast, this.hasFlags(cellX * 256 - 1, cellY * 256 - 1, (cellX + 1) * 256 + 1, (cellY + 1) * 256 + 1, 3, true), cellX, cellY); // pzopt: devMapCellCheck
+         } // pzopt: devMapCellCheck
+         return pzoptFast; // pzopt: mapCellFast
+      } // pzopt: mapCellFast
       boolean blur = true;
       int delta = 1;
       return this.hasFlags(cellX * 256 - 1, cellY * 256 - 1, (cellX + 1) * 256 + 1, (cellY + 1) * 256 + 1, 3, true);

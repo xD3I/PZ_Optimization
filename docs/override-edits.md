@@ -5695,6 +5695,12 @@ Keys `uiProfile` (on in instrumented runs), `uiRetained`, `uiRetainedChildren`, 
 - `mapVisitedFast`: `updateTextureData` builds each changed texture row in a byte array (the packed flags read with the
   row span computed once) and puts it in one call; the same bytes as the stock per-texel loop, which stays for the off
   case. `devMapVisitedCheck` re-runs the stock computation over the region and logs differing texels.
+- `mapCellFast` (2026-11-22, `pzopt.MapCells`): `isCellVisible`, asked for every cell in view each frame by
+  `WorldMapRenderer.Drawer.filterFeatures`, answers from the packed flag bytes (one little-endian int read and a mask per
+  32-square block row, the same clamps, unit bounds and early exit as `hasFlags(..., 3, true)`) instead of up to 100
+  `getFlags` calls that each re-derive the span through `IsoWorld.getMetaGrid()`. Reads the live array, caches nothing;
+  a null `visited` keeps the stock path. `devMapCellCheck` runs stock `hasFlags` beside it and logs any difference.
+  `tests/pzopt/MapCellsTest` compares it with a verbatim copy of the stock loop on random maps.
 - Decompiler fix: `setBounds` zeroes the four bounds with one chained assignment, as the jar does.
 ### Relief / parallax textures (`relief`, 2026-09-30; `pzopt.Relief`, `pzopt.ReliefAux`, `docs/findings-relief-2026-09-30.md`)
 

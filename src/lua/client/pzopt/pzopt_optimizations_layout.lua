@@ -88,7 +88,7 @@ PzoptSettingsLayout = {
             { id = "ui", master = "catUiEnabled", title = "Menus, inventory and map", blurb = "Windows that answer in the frame you click.",
               subs = {
                 { title = "Windows", keys = { "uiRetained", "uiRetainedChildren", "uiVerify", "uiAnimate", "uiSlack", "uiMoveReplay", "uiTickStagger", "uiLuaFast", "hotsaveWarmup" } },
-                { title = "Map", keys = { "mapStreetCache", "mapStreetMemo", "mapVisitedFast" } },
+                { title = "Map", keys = { "mapStreetCache", "mapStreetMemo", "mapVisitedFast", "mapCellFast" } },
                 { title = "Lua", keys = { "luaJit", "luaJavaFast", "luaFastTable", "luaPatternFast", "luaStringFast", "luaIndexCache", "luaInternConstants", "luaSkipEmpty" } },
               } },
             { id = "system", master = "catSystemEnabled", title = "System, memory, sound and mods", blurb = "Java memory (heap size), cores and power, the audio mix, other mods, updates.",

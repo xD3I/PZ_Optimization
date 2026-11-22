@@ -1264,6 +1264,11 @@ local SECTIONS = {
               why = {
                   cpu = "Each texture row is built in an array and copied at once instead of four checked writes per pixel: the first map open's long frame 97 to 67 ms.",
               } },
+            { key = "mapCellFast", label = "Map: explored-cell test reads the flags directly",
+              tip = "The map and minimap ask \"has this area been explored?\" for every cell in view, every frame, with up to 100 slow lookups per cell. The answer now comes from a few direct reads of the same flags: the same cells are shown.",
+              why = {
+                  cpu = "One read per row of a cell instead of 100 lookups that each re-derive the map width: the test 6.6 times faster (2.8 to 0.43 ms for 25,600 cells), on a large map zoomed out it was 40 % of the render thread.",
+              } },
             { key = "luaJit", label = "Lua: hot functions compiled to Java code",
               tip = "Lua functions the game and mods call often are compiled to Java bytecode on a background thread, so the Java JIT runs them like Java code. The same results, errors, stack traces and mod profiler entries as the interpreter; functions it cannot compile keep running interpreted.",
               why = {
@@ -3680,6 +3685,7 @@ local EFFECTS = {
     mapStreetMemo = { cpu = -1 },
     mapStreetCache = { cpu = -1 },
     mapVisitedFast = { cpu = -1 },
+    mapCellFast = { cpu = -1 },
     luaJit = { cpu = -2 },
     luaJavaFast = { cpu = -1 },
     luaFastTable = { cpu = -1 },

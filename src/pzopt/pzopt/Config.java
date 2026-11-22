@@ -1265,6 +1265,14 @@ public final class Config {
    public static final boolean MAP_VISITED_FAST = bool("mapVisitedFast", true);
    /** devMapVisitedCheck: the stock loop re-checks every texel mapVisitedFast wrote. */
    public static final boolean DEV_MAP_VISITED_CHECK = bool("devMapVisitedCheck", false);
+   /**
+    * WorldMapVisited.isCellVisible (2026-11-22, pzopt.MapCells): the map's "is this cell explored" test, asked for every
+    * cell in view each frame, reads the packed flag bytes directly (one int a block row) instead of up to 100 getFlags
+    * calls; the same answer. Was 40 % of the render thread zoomed out on a large map.
+    */
+   public static final boolean MAP_CELL_FAST = bool("mapCellFast", true);
+   /** devMapCellCheck: stock hasFlags runs beside mapCellFast on every cell and any difference is logged. */
+   public static final boolean DEV_MAP_CELL_CHECK = bool("devMapCellCheck", false);
    /** devMapStreetCheck: lay the street labels out on every reuse too and log when the kept layout differs. */
    public static final boolean DEV_MAP_STREET_CHECK = bool("devMapStreetCheck", false);
    /**
@@ -3151,7 +3159,7 @@ public final class Config {
             "loaderCpuFixes", "false", "shaderCache", "false", "shaderWarmup", "false", "mipmapArrays", "false", "tileDefPreload", "false",
             "skipIdChecks", "false", "voronoiFast", "false", "texCompress", "driver", "textureBufferMb", "50"},
          {"catUiEnabled", "uiRetained", "false", "uiRetainedChildren", "false", "uiTickStagger", "false", "uiLuaFast", "false",
-            "hotsaveWarmup", "false", "mapStreetCache", "false", "mapStreetMemo", "false", "mapVisitedFast", "false", "luaIndexCache", "false",
+            "hotsaveWarmup", "false", "mapStreetCache", "false", "mapStreetMemo", "false", "mapVisitedFast", "false", "mapCellFast", "false", "luaIndexCache", "false",
             "luaInternConstants", "false", "luaSkipEmpty", "false", "luaJit", "false", "luaJavaFast", "false", "luaFastTable", "false",
             "luaPatternFast", "false", "luaStringFast", "false"},
          {"catSystemEnabled", "corePlacement", "off", "gpuPstate", "off", "jitSteady", "false", "lightingSyncPark", "false",
