@@ -88,15 +88,21 @@ public final class SavefileThumbnail {
       setZoom(playerIndex, oldZoom, oldTargetZoom);
       IsoCamera.cameras[playerIndex].center();
       if (pzopt.ResumeShot.exiting()) {
+         pzoptEndFrame(core); // pzopt: resumeShot, hand the thumbnail frame to the render thread first: the capture frame's prePopulating clears an unpushed one, so thumb.png was never written (issue #32)
          pzoptCaptureFloor(playerIndex); // pzopt: resumeShot, the ground around the player for the next Continue (exit saves only)
       }
-      restoreScreenImage();
-      core.RenderOffScreenBuffer();
-      if (core.StartFrameUI()) {
-         UIManager.render();
-      }
+      pzoptEndFrame(core); // pzopt: the stock tail, now shared with the early push above
+   }
 
-      core.EndFrameUI();
+   // pzopt: the stock tail of create(int): restore the screen image, draw the UI, EndFrameUI (RenderThread.Ready pushes the frame)
+   private static void pzoptEndFrame(Core core) { // pzopt: new helper
+      restoreScreenImage(); // pzopt: stock tail
+      core.RenderOffScreenBuffer(); // pzopt: stock tail
+      if (core.StartFrameUI()) { // pzopt: stock tail
+         UIManager.render(); // pzopt: stock tail
+      } // pzopt: stock tail
+
+      core.EndFrameUI(); // pzopt: stock tail
    }
 
    /**
