@@ -208,6 +208,12 @@ public final class GodRays {
       return !scanIncomplete && scanCamWx != Integer.MIN_VALUE;
    }
 
+   /** Chunk (wx, wy)'s occupancy when it is in the window and built for the current level range (game thread), else null. */
+   static int[] slotDataFor(int wx, int wy) {
+      int slot = (wy & OCC_CHUNKS - 1) * OCC_CHUNKS + (wx & OCC_CHUNKS - 1);
+      return slotOwner[slot] == key(wx, wy) && slotZ0[slot] == occZ0 ? slotData[slot] : null;
+   }
+
    /** The occupancy's first level (game thread). */
    static int occZ0() {
       return occZ0;
@@ -274,6 +280,9 @@ public final class GodRays {
          occZ0 = wantZ0;
          java.util.Arrays.fill(slotOwner, Long.MIN_VALUE); // every slot again for the new level range
          scanIncomplete = true;
+         if (OccMesh.wanted()) {
+            OccMesh.allDirty();
+         }
       }
       scanFrame++;
       if (Config.GOD_RAYS_DOOR_WATCH) {
@@ -284,6 +293,9 @@ public final class GodRays {
       DoorLight.expire(sq -> dirtyChunks.add(key(sq.x >> 3, sq.y >> 3)));
       boolean due = scanIncomplete || !dirtyChunks.isEmpty() || camWx != scanCamWx || camWy != scanCamWy || scanFrame % 10 == 0;
       if (!due) {
+         if (OccMesh.wanted()) {
+            meshInto(f, camWx, camWy);
+         }
          return;
       }
       scanCamWx = camWx;
@@ -327,6 +339,9 @@ public final class GodRays {
          slotEmpty[slot] = c == null;
          buildSerial++;
          f.uploads.add(new Upload(wx, wy, data));
+         if (OccMesh.wanted()) {
+            OccMesh.chunkBuilt(wx, wy);
+         }
          built++;
          if (System.nanoTime() - t0 > budget || f.uploads.size() >= 64) {
             scanIncomplete = true;
@@ -342,6 +357,9 @@ public final class GodRays {
          }
          maxTopLevel = top;
       }
+      if (OccMesh.wanted()) {
+         meshInto(f, camWx, camWy);
+      }
       if (topsDirty) {
          topsDirty = false;
          byte[] t = new byte[levelTops.length];
@@ -350,6 +368,16 @@ public final class GodRays {
          }
          f.tops = t;
       }
+   }
+
+   /** The occupancy mesh (pzopt.OccMesh) brought up to date and handed to the frame (game thread). */
+   private static void meshInto(Frame f, int camWx, int camWy) {
+      OccMesh.update(camWx, camWy);
+      f.meshQuads = OccMesh.snapshot();
+      f.meshSerial = OccMesh.serial();
+      f.meshZ0 = OccMesh.snapshotZ0();
+      f.meshCamWx = camWx;
+      f.meshCamWy = camWy;
    }
 
    /**
@@ -1409,6 +1437,10 @@ public final class GodRays {
       int bounces;
       boolean occOnly; // entity shadows without the god rays: the occupancy alone
       final ArrayList<Upload> uploads = new ArrayList<>();
+      int[] meshQuads; // pzopt.OccMesh: the window's quads (an array the game thread never writes again)
+      long meshSerial = -1L;
+      int meshZ0, meshCamWx, meshCamWy;
+      int vis; // godRaysVis this frame: 0 dda, 1 mesh, 2 mesh-dda (devGodRaysVisAlternate switches it)
       int occZ0;
       int refX, refY; // the camera chunk's corner: the compute works relative to it
       float cu, cv, cz, zLo;
@@ -1499,14 +1531,37 @@ public final class GodRays {
       occNs += System.nanoTime() - o0;
       f.occZ0 = occZ0;
       f.maxTop = Math.min(occZ0 + OCC_L, maxTopLevel + 1);
+      if (OccMesh.wanted() && ++occOnlyFramesGt % 1200 == 1) {
+         Log.info(OccMesh.stats());
+      }
       SpriteRenderer.instance.drawGeneric(f);
+   }
+
+   private static long occOnlyFramesGt;
+
+   private static long visT0;
+
+   /**
+    * godRaysVis this frame: 0 dda, 1 mesh, 2 mesh-dda. devGodRaysVisAlternate=N: the three in turn, N ms each (the
+    * within-run A/B; each switch recomputes every cell, timed as compute.full.dda / .mesh / .meshdda).
+    */
+   static int visThisFrame() {
+      if (Config.DEV_GOD_RAYS_VIS_ALTERNATE > 0) {
+         long now = System.currentTimeMillis();
+         if (visT0 == 0L) {
+            visT0 = now;
+            Log.info("god rays: visibility cycling dda / mesh / mesh-dda every " + Config.DEV_GOD_RAYS_VIS_ALTERNATE + " ms from epoch_ms " + now);
+         }
+         return (int)((now - visT0) / Config.DEV_GOD_RAYS_VIS_ALTERNATE % 3L);
+      }
+      return "mesh".equals(Config.GOD_RAYS_VIS) ? 1 : "mesh-dda".equals(Config.GOD_RAYS_VIS) ? 2 : 0;
    }
 
    private static int heldNx, heldNy;
    private static float heldCu = -1F;
 
    private static void queueInner(int playerIndex) {
-      if (!wanted() && (EntityShadow.wantsOccupancy() || VoxelLight.wantsOccupancy())) {
+      if (!wanted() && (EntityShadow.wantsOccupancy() || VoxelLight.wantsOccupancy() || OccMesh.wanted() && Overrides.enabled() && !CoreGl.legacyMac())) {
          occupancyOnly(playerIndex);
          return;
       }
@@ -1548,6 +1603,7 @@ public final class GodRays {
          doorFxOn = (now - doorT0) / Config.DEV_GOD_RAYS_DOOR_ALTERNATE % 2L == 0L;
       }
       f.doorFx = doorFxOn;
+      f.vis = visThisFrame();
       f.view.capture(playerIndex);
       // the grid: cells of ~godRaysCellPx screen pixels, sizes quantised to powers of two (with hysteresis) so a zoom only
       // rebuilds the volume when it crosses one
@@ -1752,6 +1808,9 @@ public final class GodRays {
       }
       if (frames % 1200 == 1) {
          Log.info("god rays: " + stats());
+         if (OccMesh.wanted()) {
+            Log.info(OccMesh.stats() + ", " + OccMeshMap.stats());
+         }
       }
       SpriteRenderer.instance.drawGeneric(f);
    }
@@ -2174,7 +2233,8 @@ public final class GodRays {
                allocVolumes(f.nx, f.ny, f.nz);
             }
             regions.clear();
-            boolean full = gridChanged || Math.abs(f.i0 - lastI0) >= nx || Math.abs(f.j0 - lastJ0) >= ny;
+            boolean full = gridChanged || Math.abs(f.i0 - lastI0) >= nx || Math.abs(f.j0 - lastJ0) >= ny || f.vis != lastVis; // (godRaysVis switched: every cell again)
+            lastVis = f.vis;
             boolean lightChanged = f.lightKey != lastLightKey;
             boolean sigmaChanged = f.sigmaOut != lastSigmaOut || f.sigmaIn != lastSigmaIn;
             if (full) {
@@ -2251,7 +2311,14 @@ public final class GodRays {
                for (int[] r : regions) {
                   cols += (long)r[2] * r[3];
                }
-               Timing.begin(cols >= (long)nx * ny ? "compute.full" : cols >= (long)nx * ny / 16 ? "compute.band" : "compute.small", true);
+               visReady = false;
+               if (f.vis != 0 && !fragVolume) {
+                  Timing.begin("meshmap", true);
+                  visReady = OccMeshMap.render(f, prevFbo, f.vis == 1);
+                  Timing.end(null);
+               }
+               String vs = f.vis == 0 ? ".dda" : f.vis == 1 ? ".mesh" : ".meshdda";
+               Timing.begin((cols >= (long)nx * ny ? "compute.full" : cols >= (long)nx * ny / 16 ? "compute.band" : "compute.small") + vs, true);
                compute(f);
                Timing.end(null);
             }
@@ -2658,10 +2725,14 @@ public final class GodRays {
          GL13.glActiveTexture(GL13.GL_TEXTURE0 + TOP_UNIT);
          GL11.glBindTexture(GL11.GL_TEXTURE_2D, topTex);
          GL13.glActiveTexture(GL13.GL_TEXTURE0);
+         int vis = meshVis(f);
          for (int pass = 0; pass < 2; pass++) {
-            int prog = pass == 0 ? vProg : fProg;
-            int[] u = pass == 0 ? U_V : U_F;
+            int prog = pass == 0 ? (vis != 0 ? vMeshProg[vis] : vProg) : fProg;
+            int[] u = pass == 0 ? (vis != 0 ? U_VM[vis] : U_V) : U_F;
             GL20.glUseProgram(prog);
+            if (pass == 0 && vis != 0) {
+               OccMeshMap.bind(prog, vis == 1);
+            }
             GL20.glUniform4i(u[1], nx, ny, nz, f.occZ0);
             int iRef = Math.round((f.refX - f.refY) / f.cu), jRef = Math.round((f.refX + f.refY) / f.cv);
             GL20.glUniform4i(u[2], f.refX, f.refY, iRef, jRef);
@@ -2697,9 +2768,36 @@ public final class GodRays {
          GL42.glBindImageTexture(1, 0, 0, false, 0, GL15.GL_READ_ONLY, GL30.GL_R8);
          GL42.glBindImageTexture(2, 0, 0, false, 0, GL15.GL_READ_ONLY, GL30.GL_R8);
          GL42.glBindImageTexture(3, 0, 0, false, 0, GL15.GL_READ_ONLY, GL30.GL_R8);
+         if (vis != 0) {
+            OccMeshMap.unbind();
+         }
          GL20.glUseProgram(0);
          ShaderHelper.forgetCurrentlyBound();
       }
+
+      // godRaysVis: 0 the DDA, 1 mesh (map + crown opacity), 2 mesh-dda (map, then the DDA where it is lit)
+      private static final int[] vMeshProg = new int[3];
+      private static final int[][] U_VM = new int[3][8];
+      static int lastVis;
+      static boolean visReady; // the mesh map is current for this frame's compute
+
+      /** Which visibility the frame's compute runs (render thread): the mesh map's only once it is drawn for this frame. */
+      private static int meshVis(Frame f) {
+         int want = f.vis;
+         if (want == 0 || !visReady) {
+            return 0;
+         }
+         if (vMeshProg[want] == 0) {
+            String src = VIS_CS.replaceFirst("#version 430\n", "#version 430\n#define PZ_MESH\n" + (want == 2 ? "#define PZ_MESH_DDA\n" : ""));
+            int p = computeProgram(src, want == 2 ? "visibility (mesh-dda)" : "visibility (mesh)");
+            vMeshProg[want] = p == 0 ? -1 : p;
+            if (p != 0) {
+               locations(p, U_VM[want]);
+            }
+         }
+         return vMeshProg[want] > 0 ? want : 0;
+      }
+
 
       private static final int[] U_MM = new int[8];
       private static int uVk, uFk, uMk, uFv, uMv;
@@ -6077,6 +6175,13 @@ public final class GodRays {
       "layout(local_size_x = 8, local_size_y = 8, local_size_z = 4) in;",
       "layout(rg8, binding = 0) uniform writeonly image3D uV;",
       COMMON_GLSL,
+      // godRaysVis=mesh*: the occupancy mesh's shadow map (pzopt.OccMeshMap) in place of the DDA
+      "#ifdef PZ_MESH",
+      OccMeshMap.LOOKUP_GLSL,
+      "#define VIS(p) visMesh(p)",
+      "#else",
+      "#define VIS(p) sunVis(p)",
+      "#endif",
       "void main() {",
       "   ivec3 g = ivec3(gl_GlobalInvocationID);",
       "   if (g.x >= uRegion.z || g.y >= uRegion.w || g.z >= uN.z) return;",
@@ -6084,7 +6189,7 @@ public final class GodRays {
       "   vec3 p = cellPos(c);",
       "   uint o = occ(ivec2(floor(p.xy)), int(floor(p.z)));",
       "   float tag = (o & 32u) != 0u ? float(1u + ((o >> 16) % 255u)) / 255.0 : 0.0;", // the room (0 outdoors) for the march
-      "   imageStore(uV, ivec3(imod(c.x, uN.x), imod(c.y, uN.y), c.z), vec4(sunVis(p), tag, 0.0, 0.0));",
+      "   imageStore(uV, ivec3(imod(c.x, uN.x), imod(c.y, uN.y), c.z), vec4(VIS(p), tag, 0.0, 0.0));",
       "}",
       "");
 

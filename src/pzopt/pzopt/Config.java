@@ -2191,6 +2191,13 @@ public final class Config {
    public static final int GOD_RAYS_CELL_PX = integer("godRaysCellPx", 16); // god rays: screen pixels per volume column (each view ray is a column of the rectified volume)
    public static final int GOD_RAYS_SLICES = integer("godRaysSlicesPerLevel", 8); // god rays: volume slices per level of height
    public static final int GOD_RAYS_LEVELS = integer("godRaysLevels", 4); // god rays: levels of height the haze volume covers (above the lowest visible level)
+   // binary greedy meshing of the occupancy (pzopt.GreedyMesher / OccMesh, 2026-11-28)
+   public static final String GOD_RAYS_VIS = string("godRaysVis", "mesh").trim().toLowerCase(java.util.Locale.ROOT); // god rays: each cell's key-light visibility: mesh (default since 2026-11-28: the occupancy's greedy mesh drawn from the light into a shadow map, crowns as an opacity map; 4-5x cheaper volume recomputes), dda (2D DDA through the occupancy grid, the old path), mesh-dda (the map, then the DDA for the cells it finds lit)
+   public static final int GOD_RAYS_MESH_RES = Math.max(512, Math.min(8192, integer("godRaysMeshRes", 4096))); // godRaysVis=mesh*: the shadow map's texels a side (DEPTH16 over the 256-square window; crowns at a quarter)
+   public static final int DEV_GOD_RAYS_VIS_ALTERNATE = integer("devGodRaysVisAlternate", 0); // dev: godRaysVis cycles dda / mesh / mesh-dda every N ms (within-run A/B)
+   public static final boolean DEV_OCC_MESH_NAIVE = bool("devOccMeshNaive", false); // dev: the occupancy mesh with one quad per face (greedy merging off): what the merge saves the passes that draw it
+   public static final boolean DEV_OCC_MESH_STATS = bool("devOccMeshStats", false); // dev: mesh the occupancy and log the mesher's cost and quad counts even when no pass draws it
+   public static final boolean OCC_MESH = !"dda".equals(GOD_RAYS_VIS) || DEV_GOD_RAYS_VIS_ALTERNATE > 0 || DEV_OCC_MESH_STATS; // (derived) a pass would use the occupancy mesh (OccMesh.wanted() adds the live godRays switch)
    public static final int GOD_RAYS_CHUNK_BUDGET_US = integer("godRaysChunkBudgetUs", 400); // god rays: game-thread time a frame for building chunk occupancy (walls, windows, doors, roofs, crowns)
    public static final boolean GOD_RAYS_GL_CACHE = bool("godRaysGlCache", true); // god rays: the world FBO and viewport read back only when the game binds another FBO (no glGet a frame)
    public static final int GOD_RAYS_COARSE = integer("godRaysCoarse", 1); // god rays: the light volumes and local lights shaded once per NxN pixels (NV_shading_rate_image; 1 = every pixel, the default: 2x2 measured the same, the passes are not shading-bound)
